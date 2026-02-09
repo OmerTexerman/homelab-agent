@@ -126,7 +126,7 @@ function derivePendingApprovals(events: ProviderEvent[]): PendingApprovalCard[] 
 
 export default function ChatView() {
   const { state, dispatch } = useStore();
-  const api = useMemo(() => readNativeApi(), []);
+  const api = readNativeApi();
   const [prompt, setPrompt] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);

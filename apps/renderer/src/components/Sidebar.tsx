@@ -1,5 +1,5 @@
 import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { DEFAULT_MODEL } from "../model-logic";
 import { readNativeApi } from "../session-logic";
@@ -27,7 +27,7 @@ function threadStatusLabel(
 
 export default function Sidebar() {
   const { state, dispatch } = useStore();
-  const api = useMemo(() => readNativeApi(), []);
+  const api = readNativeApi();
   const { theme, setTheme } = useTheme();
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
@@ -49,26 +49,23 @@ export default function Sidebar() {
     setAddingProject(false);
   };
 
-  const handleNewThread = useCallback(
-    (projectId: string) => {
-      dispatch({
-        type: "ADD_THREAD",
-        thread: {
-          id: crypto.randomUUID(),
-          codexThreadId: null,
-          projectId,
-          title: "New thread",
-          model: state.projects.find((p) => p.id === projectId)?.model ?? DEFAULT_MODEL,
-          session: null,
-          messages: [],
-          events: [],
-          error: null,
-          createdAt: new Date().toISOString(),
-        },
-      });
-    },
-    [dispatch, state.projects],
-  );
+  const handleNewThread = (projectId: string) => {
+    dispatch({
+      type: "ADD_THREAD",
+      thread: {
+        id: crypto.randomUUID(),
+        codexThreadId: null,
+        projectId,
+        title: "New thread",
+        model: state.projects.find((p) => p.id === projectId)?.model ?? DEFAULT_MODEL,
+        session: null,
+        messages: [],
+        events: [],
+        error: null,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  };
 
   const handlePickFolder = async () => {
     if (!api || isPickingFolder) return;
@@ -117,7 +114,7 @@ export default function Sidebar() {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown);
     };
-  }, [handleNewThread, state.activeThreadId, state.projects, state.threads]);
+  }, [dispatch, state.activeThreadId, state.projects, state.threads]);
 
   return (
     <aside className="sidebar flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-card">
