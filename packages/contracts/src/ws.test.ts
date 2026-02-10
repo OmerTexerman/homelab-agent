@@ -4,6 +4,8 @@ import {
   WS_CLOSE_CODES,
   WS_CLOSE_REASONS,
   WS_EVENT_CHANNELS,
+  WS_METHOD_MAX_CHARS,
+  WS_REQUEST_ID_MAX_CHARS,
   wsClientMessageSchema,
   wsServerMessageSchema,
 } from "./ws";
@@ -36,6 +38,26 @@ describe("wsClientMessageSchema", () => {
         type: "request",
         id: "req-1",
         method: "",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects overly long request ids", () => {
+    expect(() =>
+      wsClientMessageSchema.parse({
+        type: "request",
+        id: "r".repeat(WS_REQUEST_ID_MAX_CHARS + 1),
+        method: "providers.startSession",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects overly long request methods", () => {
+    expect(() =>
+      wsClientMessageSchema.parse({
+        type: "request",
+        id: "req-1",
+        method: "m".repeat(WS_METHOD_MAX_CHARS + 1),
       }),
     ).toThrow();
   });
@@ -122,6 +144,17 @@ describe("wsServerMessageSchema", () => {
         ok: true,
         result: { status: "ok" },
         unexpected: true,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects overly long response ids", () => {
+    expect(() =>
+      wsServerMessageSchema.parse({
+        type: "response",
+        id: "r".repeat(WS_REQUEST_ID_MAX_CHARS + 1),
+        ok: true,
+        result: {},
       }),
     ).toThrow();
   });

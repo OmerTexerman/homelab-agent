@@ -18,10 +18,13 @@ export const WS_CLOSE_REASONS = {
   unauthorized: "unauthorized",
 } as const;
 
+export const WS_REQUEST_ID_MAX_CHARS = 256;
+export const WS_METHOD_MAX_CHARS = 256;
+
 const wsRequestSchema = z.object({
   type: z.literal("request"),
-  id: z.string().min(1),
-  method: z.string().min(1),
+  id: z.string().min(1).max(WS_REQUEST_ID_MAX_CHARS),
+  method: z.string().min(1).max(WS_METHOD_MAX_CHARS),
   params: z.unknown().optional(),
 }).strict();
 
@@ -33,7 +36,7 @@ const wsResponseErrorSchema = z.object({
 const wsResponseSchema = z
   .object({
     type: z.literal("response"),
-    id: z.string().min(1),
+    id: z.string().min(1).max(WS_REQUEST_ID_MAX_CHARS),
     ok: z.boolean(),
     result: z.unknown().optional(),
     error: wsResponseErrorSchema.optional(),
