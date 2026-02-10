@@ -26,46 +26,9 @@ import {
   terminalCommandInputSchema,
   wsClientMessageSchema,
 } from "@acme/contracts";
-import * as processManagerModule from "../../desktop/src/processManager";
-import * as providerManagerModule from "../../desktop/src/providerManager";
-import * as todoStoreModule from "../../desktop/src/todoStore";
-
-function resolveModuleExport<TValue>(
-  moduleRecord: Record<string, unknown>,
-  namedExport: string,
-): TValue {
-  const named = moduleRecord[namedExport];
-  if (named) {
-    return named as TValue;
-  }
-
-  const defaultExport = moduleRecord.default;
-  if (defaultExport && typeof defaultExport === "object") {
-    const nestedNamed = (defaultExport as Record<string, unknown>)[namedExport];
-    if (nestedNamed) {
-      return nestedNamed as TValue;
-    }
-  }
-
-  if (defaultExport) {
-    return defaultExport as TValue;
-  }
-
-  throw new Error(`Could not resolve export '${namedExport}' from module.`);
-}
-
-const ProcessManager = resolveModuleExport<typeof processManagerModule.ProcessManager>(
-  processManagerModule as Record<string, unknown>,
-  "ProcessManager",
-);
-const ProviderManager = resolveModuleExport<typeof providerManagerModule.ProviderManager>(
-  providerManagerModule as Record<string, unknown>,
-  "ProviderManager",
-);
-const TodoStore = resolveModuleExport<typeof todoStoreModule.TodoStore>(
-  todoStoreModule as Record<string, unknown>,
-  "TodoStore",
-);
+import { ProcessManager } from "../../desktop/src/processManager";
+import { ProviderManager } from "../../desktop/src/providerManager";
+import { TodoStore } from "../../desktop/src/todoStore";
 
 const agentWriteInputSchema = z.object({
   sessionId: z.string().min(1),
