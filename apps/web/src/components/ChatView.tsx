@@ -667,6 +667,7 @@ export default function ChatView() {
       const baseTerminalId = activeThread.activeTerminalId;
       const isBaseTerminalBusy = activeThread.runningTerminalIds.includes(baseTerminalId);
       const shouldCreateNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
+      if (shouldCreateNewTerminal && hasReachedTerminalLimit) return;
       const targetTerminalId = shouldCreateNewTerminal
         ? `terminal-${crypto.randomUUID()}`
         : baseTerminalId;
@@ -727,7 +728,7 @@ export default function ChatView() {
         });
       }
     },
-    [activeProject, activeThread, activeThreadId, api, dispatch, gitCwd],
+    [activeProject, activeThread, activeThreadId, api, dispatch, gitCwd, hasReachedTerminalLimit],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput) => {
@@ -1350,6 +1351,7 @@ export default function ChatView() {
         if (setupScript) {
           void runProjectScript(setupScript, {
             cwd: result.worktree.path,
+            env: { T3CODE_WORKTREE_PATH: result.worktree.path },
           });
         }
       } catch (err) {
