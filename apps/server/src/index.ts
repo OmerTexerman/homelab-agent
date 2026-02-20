@@ -11,6 +11,7 @@ import { PersistenceService } from "./persistenceService";
 import { LegacyStateSyncEngine } from "./stateSyncEngineLegacy";
 import { LiveStoreReadPilotStateSyncEngine } from "./stateSyncEngineLiveStoreReadPilot";
 import { ShadowStateSyncEngine } from "./stateSyncEngineShadow";
+import { resolveSyncEngineMode } from "./syncEngineMode";
 import { createServer } from "./wsServer";
 
 fixPath();
@@ -20,7 +21,6 @@ const cwd = process.cwd();
 const logger = createLogger("server");
 
 type RuntimeMode = "web" | "desktop";
-type SyncEngineMode = "legacy" | "shadow" | "livestore-read-pilot";
 
 function parseBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
@@ -37,23 +37,6 @@ function parsePort(value: string | undefined): number | undefined {
     throw new Error(`Invalid T3CODE_PORT: ${value}`);
   }
   return parsed;
-}
-
-function resolveSyncEngineMode(raw: string | undefined): SyncEngineMode {
-  if (!raw || raw.trim().length === 0) {
-    return "livestore-read-pilot";
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (
-    normalized === "legacy" ||
-    normalized === "shadow" ||
-    normalized === "livestore-read-pilot"
-  ) {
-    return normalized;
-  }
-  throw new Error(
-    `Invalid T3CODE_SYNC_ENGINE_MODE: ${raw}. Expected "legacy", "shadow", or "livestore-read-pilot".`,
-  );
 }
 
 function expandHomePath(input: string): string {
