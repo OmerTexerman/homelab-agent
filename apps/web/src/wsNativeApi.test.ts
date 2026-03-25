@@ -357,10 +357,6 @@ describe("wsNativeApi", () => {
       actionId: "action-1",
       cwd: "/repo",
       action: "commit",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5.4-mini",
-      },
     });
 
     expect(requestMock).toHaveBeenCalledWith(
