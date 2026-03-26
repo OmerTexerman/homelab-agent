@@ -4,7 +4,7 @@
  * @module ProviderRegistryLive
  */
 import type { ProviderKind, ServerProvider } from "@t3tools/contracts";
-import { Effect, Layer, PubSub, Ref, Stream } from "effect";
+import { Effect, Equal, Layer, PubSub, Ref, Stream } from "effect";
 
 import { ClaudeProviderLive } from "./ClaudeProvider";
 import { CodexProviderLive } from "./CodexProvider";
@@ -22,6 +22,11 @@ const loadProviders = (
     concurrency: "unbounded",
   });
 
+export const haveProvidersChanged = (
+  previousProviders: ReadonlyArray<ServerProvider>,
+  nextProviders: ReadonlyArray<ServerProvider>,
+): boolean => !Equal.equals(previousProviders, nextProviders);
+
 export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
@@ -35,22 +40,28 @@ export const ProviderRegistryLive = Layer.effect(
       yield* loadProviders(codexProvider, claudeProvider),
     );
 
-    const syncProviders = Effect.gen(function* () {
-      const providers = yield* loadProviders(codexProvider, claudeProvider);
-      yield* Ref.set(providersRef, providers);
-      yield* PubSub.publish(changesPubSub, providers);
-      return providers;
-    });
+    const syncProviders = (options?: { readonly publish?: boolean }) =>
+      Effect.gen(function* () {
+        const previousProviders = yield* Ref.get(providersRef);
+        const providers = yield* loadProviders(codexProvider, claudeProvider);
+        yield* Ref.set(providersRef, providers);
 
-    yield* Stream.runForEach(codexProvider.streamChanges, () => syncProviders).pipe(
+        if (options?.publish !== false && haveProvidersChanged(previousProviders, providers)) {
+          yield* PubSub.publish(changesPubSub, providers);
+        }
+
+        return providers;
+      });
+
+    yield* Stream.runForEach(codexProvider.streamChanges, () => syncProviders()).pipe(
       Effect.forkScoped,
     );
-    yield* Stream.runForEach(claudeProvider.streamChanges, () => syncProviders).pipe(
+    yield* Stream.runForEach(claudeProvider.streamChanges, () => syncProviders()).pipe(
       Effect.forkScoped,
     );
 
     return {
-      getProviders: syncProviders.pipe(
+      getProviders: syncProviders({ publish: false }).pipe(
         Effect.tapError(Effect.logError),
         Effect.orElseSucceed(() => []),
       ),
@@ -69,7 +80,7 @@ export const ProviderRegistryLive = Layer.effect(
               });
               break;
           }
-          return yield* syncProviders;
+          return yield* syncProviders();
         }).pipe(
           Effect.tapError(Effect.logError),
           Effect.orElseSucceed(() => []),

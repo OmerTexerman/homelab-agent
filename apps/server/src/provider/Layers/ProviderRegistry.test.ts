@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
+  type ServerProvider,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
 import * as PlatformError from "effect/PlatformError";
@@ -29,7 +30,7 @@ import {
   readCodexConfigModelProvider,
 } from "./CodexProvider";
 import { checkClaudeProviderStatus, parseClaudeAuthStatusFromOutput } from "./ClaudeProvider";
-import { ProviderRegistryLive } from "./ProviderRegistry";
+import { haveProvidersChanged, ProviderRegistryLive } from "./ProviderRegistry";
 import { ServerSettingsService, type ServerSettingsShape } from "../../serverSettings";
 import { ProviderRegistry } from "../Services/ProviderRegistry";
 
@@ -356,6 +357,33 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
     });
 
     describe("ProviderRegistryLive", () => {
+      it("treats equal provider snapshots as unchanged", () => {
+        const providers = [
+          {
+            provider: "codex",
+            status: "ready",
+            enabled: true,
+            installed: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-03-25T00:00:00.000Z",
+            version: "1.0.0",
+            models: [],
+          },
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            enabled: true,
+            installed: true,
+            authStatus: "unknown",
+            checkedAt: "2026-03-25T00:00:00.000Z",
+            version: "1.0.0",
+            models: [],
+          },
+        ] as const satisfies ReadonlyArray<ServerProvider>;
+
+        assert.strictEqual(haveProvidersChanged(providers, [...providers]), false);
+      });
+
       it.effect("reruns codex health when codex provider settings change", () =>
         Effect.gen(function* () {
           const serverSettings = yield* makeMutableServerSettingsService();
