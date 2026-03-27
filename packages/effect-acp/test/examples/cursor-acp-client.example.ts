@@ -14,6 +14,8 @@ Effect.gen(function* () {
   });
   const handle = yield* spawner.spawn(command);
   const client = yield* AcpClient.fromChildProcess(handle, {
+    logIncoming: true,
+    logOutgoing: true,
     handlers: {
       requestPermission: () =>
         Effect.succeed({
@@ -43,7 +45,13 @@ Effect.gen(function* () {
     cwd: process.cwd(),
     mcpServers: [],
   });
-  yield* Effect.logInfo("created session", { sessionId: session.sessionId });
+
+  const update = yield* client.setSessionConfigOption({
+    sessionId: session.sessionId,
+    configId: "model",
+    value: "gpt-5.4[reasoning=xhigh,context=272k,fast=false]",
+  });
+  yield* Effect.logInfo("updated model", update);
 
   const result = yield* client.prompt({
     sessionId: session.sessionId,

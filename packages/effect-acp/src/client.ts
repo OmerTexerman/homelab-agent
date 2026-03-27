@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -13,26 +14,27 @@ import * as AcpServer from "./server";
 import * as AcpSchema from "./_generated/schema.gen";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { RpcClientError } from "effect/unstable/rpc";
 
-export interface AcpExtensionRequestRegistration<A> {
-  readonly payload: Schema.Schema<A>;
+export interface AcpExtensionRequestRegistration<A, I = unknown> {
+  readonly payload: Schema.Codec<A, I>;
   readonly handler: (payload: A) => Effect.Effect<unknown, AcpError.AcpError>;
 }
 
-export interface AcpExtensionNotificationRegistration<A> {
-  readonly payload: Schema.Schema<A>;
+export interface AcpExtensionNotificationRegistration<A, I = unknown> {
+  readonly payload: Schema.Codec<A, I>;
   readonly handler: (payload: A) => Effect.Effect<void, AcpError.AcpError>;
 }
 
-export const defineExtRequest = <A>(
-  payload: Schema.Schema<A>,
+export const defineExtRequest = <A, I>(
+  payload: Schema.Codec<A, I>,
   handler: (payload: A) => Effect.Effect<unknown, AcpError.AcpError>,
-): AcpExtensionRequestRegistration<A> => ({ payload, handler });
+): AcpExtensionRequestRegistration<A, I> => ({ payload, handler });
 
-export const defineExtNotification = <A>(
-  payload: Schema.Schema<A>,
+export const defineExtNotification = <A, I>(
+  payload: Schema.Codec<A, I>,
   handler: (payload: A) => Effect.Effect<void, AcpError.AcpError>,
-): AcpExtensionNotificationRegistration<A> => ({ payload, handler });
+): AcpExtensionNotificationRegistration<A, I> => ({ payload, handler });
 
 export interface AcpClientHandlers {
   /**
@@ -141,6 +143,9 @@ export interface AcpClientHandlers {
 export interface AcpClientConnectOptions {
   readonly command: ChildProcess.Command;
   readonly handlers?: AcpClientHandlers;
+  readonly logIncoming?: boolean;
+  readonly logOutgoing?: boolean;
+  readonly logger?: (event: AcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
 }
 
 export interface AcpClientConnection {
@@ -270,12 +275,18 @@ export const fromChildProcess = Effect.fnUntraced(function* (
   handle: ChildProcessSpawner.ChildProcessHandle,
   options: {
     readonly handlers?: AcpClientHandlers;
+    readonly logIncoming?: boolean;
+    readonly logOutgoing?: boolean;
+    readonly logger?: (event: AcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
   } = {},
 ): Effect.fn.Return<AcpClientConnection, never, Scope.Scope> {
   const handlers = options.handlers ?? {};
   const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
     stdio: makeStdioFromChildProcess(handle),
     serverRequestMethods: new Set(AcpRpcs.ClientRpcs.requests.keys()),
+    ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
+    ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
     onNotification: (notification) => {
       switch (notification._tag) {
         case "SessionUpdate":
@@ -349,8 +360,20 @@ export const fromChildProcess = Effect.fnUntraced(function* (
     Effect.provideService(RpcClient.Protocol, transport.clientProtocol),
   );
 
-  const callRpc = <A, E>(effect: Effect.Effect<A, E>) =>
-    effect.pipe(Effect.mapError(AcpError.normalizeAcpError));
+  const callRpc = <A>(effect: Effect.Effect<A, RpcClientError.RpcClientError | AcpSchema.Error>) =>
+    effect.pipe(
+      Effect.catchTag("RpcClientError", (error) =>
+        Effect.fail(
+          new AcpError.AcpTransportError({
+            detail: error.message,
+            cause: error,
+          }),
+        ),
+      ),
+      Effect.catchIf(Schema.is(AcpSchema.Error), (error) =>
+        Effect.fail(AcpError.AcpRequestError.fromProtocolError(error)),
+      ),
+    );
 
   const server = AcpServer.makeAcpServerConnection(transport);
 
@@ -388,29 +411,17 @@ const runHandler = Effect.fnUntraced(function* <A, B>(
   }
   return yield* handler(payload).pipe(
     Effect.mapError((error) => {
-      const normalized = AcpError.normalizeAcpError(error);
-      return Schema.is(AcpError.AcpRequestError)(normalized)
-        ? normalized.toProtocolError()
-        : AcpError.AcpRequestError.internalError(normalized.message).toProtocolError();
+      return Schema.is(AcpError.AcpRequestError)(error)
+        ? error.toProtocolError()
+        : AcpError.AcpRequestError.internalError(error.message).toProtocolError();
     }),
   );
 });
 
-const decodeUnknownWith = <A>(
-  schema: Schema.Schema<A>,
-  payload: unknown,
-): Effect.Effect<A, AcpError.AcpError> =>
-  Effect.try({
-    try: () => Schema.decodeUnknownSync(schema as never)(payload) as A,
-    catch: (cause) =>
-      new AcpError.AcpProtocolParseError({
-        detail: "Failed to decode typed ACP extension payload",
-        cause,
-      }),
-  });
+const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
-const runExtRequestHandler = <A>(
-  registration: AcpExtensionRequestRegistration<A> | undefined,
+const runExtRequestHandler = <A, I>(
+  registration: AcpExtensionRequestRegistration<A, I> | undefined,
   fallback:
     | ((method: string, params: unknown) => Effect.Effect<unknown, AcpError.AcpError>)
     | undefined,
@@ -418,8 +429,13 @@ const runExtRequestHandler = <A>(
   params: unknown,
 ): Effect.Effect<unknown, AcpError.AcpError> => {
   if (registration) {
-    return decodeUnknownWith(registration.payload, params).pipe(
-      Effect.mapError(() => AcpError.AcpRequestError.invalidParams(`Invalid ${method} payload`)),
+    return Schema.decodeUnknownEffect(registration.payload)(params).pipe(
+      Effect.mapError((error) =>
+        AcpError.AcpRequestError.invalidParams(
+          `Invalid ${method} payload: ${formatSchemaIssue(error.issue)}`,
+          { issue: error.issue },
+        ),
+      ),
       Effect.flatMap((payload) => registration.handler(payload)),
     );
   }
@@ -429,8 +445,8 @@ const runExtRequestHandler = <A>(
   return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
 };
 
-const runExtNotificationHandler = <A>(
-  registration: AcpExtensionNotificationRegistration<A> | undefined,
+const runExtNotificationHandler = <A, I>(
+  registration: AcpExtensionNotificationRegistration<A, I> | undefined,
   fallback:
     | ((method: string, params: unknown) => Effect.Effect<void, AcpError.AcpError>)
     | undefined,
@@ -438,7 +454,14 @@ const runExtNotificationHandler = <A>(
   params: unknown,
 ): Effect.Effect<void, AcpError.AcpError> => {
   if (registration) {
-    return decodeUnknownWith(registration.payload, params).pipe(
+    return Schema.decodeUnknownEffect(registration.payload)(params).pipe(
+      Effect.mapError(
+        (error) =>
+          new AcpError.AcpProtocolParseError({
+            detail: `Invalid ${method} notification payload: ${formatSchemaIssue(error.issue)}`,
+            cause: error,
+          }),
+      ),
       Effect.flatMap((payload) => registration.handler(payload)),
     );
   }

@@ -1,13 +1,10 @@
 import * as Schema from "effect/Schema";
-import * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 
 import * as AcpSchema from "./_generated/schema.gen";
 
-export type AcpProtocolError = AcpSchema.Error;
-
 export class AcpSpawnError extends Schema.TaggedErrorClass<AcpSpawnError>()("AcpSpawnError", {
   command: Schema.optional(Schema.String),
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.Defect,
 }) {
   override get message() {
     return this.command
@@ -46,16 +43,12 @@ export class AcpTransportError extends Schema.TaggedErrorClass<AcpTransportError
   "AcpTransportError",
   {
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.Defect,
   },
-) {
-  override get message() {
-    return this.detail;
-  }
-}
+) {}
 
 export class AcpRequestError extends Schema.TaggedErrorClass<AcpRequestError>()("AcpRequestError", {
-  code: Schema.Number,
+  code: AcpSchema.ErrorCode,
   errorMessage: Schema.String,
   data: Schema.optional(Schema.Unknown),
 }) {
@@ -63,7 +56,7 @@ export class AcpRequestError extends Schema.TaggedErrorClass<AcpRequestError>()(
     return this.errorMessage;
   }
 
-  static fromProtocolError(error: AcpProtocolError) {
+  static fromProtocolError(error: AcpSchema.Error) {
     return new AcpRequestError({
       code: error.code,
       errorMessage: error.message,
@@ -126,57 +119,21 @@ export class AcpRequestError extends Schema.TaggedErrorClass<AcpRequestError>()(
     });
   }
 
-  toProtocolError(): AcpProtocolError {
-    return {
+  toProtocolError() {
+    return AcpSchema.Error.makeUnsafe({
       code: this.code,
       message: this.errorMessage,
       ...(this.data !== undefined ? { data: this.data } : {}),
-    };
-  }
-}
-
-export type AcpError =
-  | AcpRequestError
-  | AcpSpawnError
-  | AcpProcessExitedError
-  | AcpProtocolParseError
-  | AcpTransportError;
-
-export function normalizeAcpError(error: unknown): AcpError {
-  if (
-    Schema.is(AcpRequestError)(error) ||
-    Schema.is(AcpSpawnError)(error) ||
-    Schema.is(AcpProcessExitedError)(error) ||
-    Schema.is(AcpProtocolParseError)(error) ||
-    Schema.is(AcpTransportError)(error)
-  ) {
-    return error;
-  }
-
-  if (Schema.is(RpcClientError.RpcClientError)(error)) {
-    return new AcpTransportError({
-      detail: error.message,
-      cause: error,
     });
   }
-
-  if (isProtocolError(error)) {
-    return AcpRequestError.fromProtocolError(error);
-  }
-
-  return new AcpTransportError({
-    detail: error instanceof Error ? error.message : String(error),
-    ...(error !== undefined ? { cause: error } : {}),
-  });
 }
 
-function isProtocolError(value: unknown): value is AcpProtocolError {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    typeof value.code === "number" &&
-    "message" in value &&
-    typeof value.message === "string"
-  );
-}
+export const AcpError = Schema.Union([
+  AcpRequestError,
+  AcpSpawnError,
+  AcpProcessExitedError,
+  AcpProtocolParseError,
+  AcpTransportError,
+]);
+
+export type AcpError = typeof AcpError.Type;

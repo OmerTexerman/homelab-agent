@@ -27,12 +27,10 @@ import {
   Layer,
   Queue,
   Random,
-  Schema,
   Stream,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { defineExtRequest } from "effect-acp/client";
-import * as EffectAcpErrors from "effect-acp/errors";
+import { defineExtNotification, defineExtRequest } from "effect-acp/client";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -59,6 +57,7 @@ import {
   type AcpSessionModeState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
+import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -358,6 +357,11 @@ function makeCursorAdapter(options?: CursorAdapterLiveOptions) {
         let ctx!: CursorSessionContext;
 
         const resumeSessionId = parseCursorResume(input.resumeCursor)?.sessionId;
+        const acpNativeLoggers = makeAcpNativeLoggers({
+          nativeEventLogger,
+          provider: PROVIDER,
+          threadId: input.threadId,
+        });
 
         const acp = yield* makeAcpSessionRuntime({
           spawn: spawnOptions,
@@ -365,6 +369,7 @@ function makeCursorAdapter(options?: CursorAdapterLiveOptions) {
           ...(resumeSessionId ? { resumeSessionId } : {}),
           clientInfo: { name: "t3-code", version: "0.0.0" },
           authMethodId: "cursor_login",
+          ...acpNativeLoggers,
           handlers: {
             extRequests: {
               "cursor/ask_question": defineExtRequest(CursorAskQuestionRequest, (params) =>
@@ -431,7 +436,9 @@ function makeCursorAdapter(options?: CursorAdapterLiveOptions) {
                   return { accepted: true } as const;
                 }),
               ),
-              "cursor/update_todos": defineExtRequest(CursorUpdateTodosRequest, (params) =>
+            },
+            extNotifications: {
+              "cursor/update_todos": defineExtNotification(CursorUpdateTodosRequest, (params) =>
                 Effect.gen(function* () {
                   yield* logNative(
                     input.threadId,
@@ -448,7 +455,6 @@ function makeCursorAdapter(options?: CursorAdapterLiveOptions) {
                       "cursor/update_todos",
                     );
                   }
-                  return {};
                 }),
               ),
             },
@@ -502,7 +508,7 @@ function makeCursorAdapter(options?: CursorAdapterLiveOptions) {
                     optionId: acpPermissionOutcome(resolved),
                   },
                 };
-              }).pipe(Effect.mapError(EffectAcpErrors.normalizeAcpError)),
+              }),
           },
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),

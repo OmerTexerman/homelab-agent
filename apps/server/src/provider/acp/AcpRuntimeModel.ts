@@ -86,6 +86,31 @@ export function extractModelConfigId(sessionResponse: AcpSessionSetupResponse): 
   return undefined;
 }
 
+export function findSessionConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  configId: string,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  if (!configOptions) {
+    return undefined;
+  }
+  const normalizedConfigId = configId.trim();
+  if (!normalizedConfigId) {
+    return undefined;
+  }
+  return configOptions.find((option) => option.id.trim() === normalizedConfigId);
+}
+
+export function collectSessionConfigOptionValues(
+  configOption: EffectAcpSchema.SessionConfigOption,
+): ReadonlyArray<string> {
+  if (configOption.type !== "select") {
+    return [];
+  }
+  return configOption.options.flatMap((entry) =>
+    "value" in entry ? [entry.value] : entry.options.map((option) => option.value),
+  );
+}
+
 export function parseSessionModeState(
   sessionResponse: AcpSessionSetupResponse,
 ): AcpSessionModeState | undefined {

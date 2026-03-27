@@ -21,6 +21,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
         },
         cwd: process.cwd(),
         clientInfo: { name: "t3-probe", version: "0.0.0" },
+        authMethodId: "cursor_login",
       });
       expect(runtime.initializeResult).toBeDefined();
       yield* runtime.close;
@@ -30,6 +31,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
   it.effect("session/new returns configOptions with a model selector", () =>
     Effect.gen(function* () {
       const runtime = yield* makeAcpSessionRuntime({
+        authMethodId: "cursor_login",
         spawn: {
           command: "agent",
           args: ["acp"],
@@ -59,6 +61,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
   it.effect("session/set_config_option switches the model in-session", () =>
     Effect.gen(function* () {
       const runtime = yield* makeAcpSessionRuntime({
+        authMethodId: "cursor_login",
         spawn: {
           command: "agent",
           args: ["acp"],

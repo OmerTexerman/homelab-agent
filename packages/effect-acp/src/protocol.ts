@@ -17,6 +17,12 @@ import * as AcpSchema from "./_generated/schema.gen";
 import { CLIENT_METHODS } from "./_generated/meta.gen";
 import * as AcpError from "./errors";
 
+export interface AcpProtocolLogEvent {
+  readonly direction: "incoming" | "outgoing";
+  readonly stage: "raw" | "decoded" | "decode_failed";
+  readonly payload: unknown;
+}
+
 export type AcpIncomingNotification =
   | {
       readonly _tag: "SessionUpdate";
@@ -42,6 +48,9 @@ export type AcpIncomingNotification =
 export interface AcpPatchedProtocolOptions {
   readonly stdio: Stdio.Stdio;
   readonly serverRequestMethods: ReadonlySet<string>;
+  readonly logIncoming?: boolean;
+  readonly logOutgoing?: boolean;
+  readonly logger?: (event: AcpProtocolLogEvent) => Effect.Effect<void, never>;
   readonly onNotification?: (
     notification: AcpIncomingNotification,
   ) => Effect.Effect<void, AcpError.AcpError, never>;
@@ -95,6 +104,19 @@ export const makeAcpPatchedProtocol = (
       new Map<string, Deferred.Deferred<unknown, AcpError.AcpError>>(),
     );
 
+    const logProtocol = (event: AcpProtocolLogEvent) => {
+      if (event.direction === "incoming" && !options.logIncoming) {
+        return Effect.void;
+      }
+      if (event.direction === "outgoing" && !options.logOutgoing) {
+        return Effect.void;
+      }
+      return (
+        options.logger?.(event) ??
+        Effect.logDebug("ACP protocol event").pipe(Effect.annotateLogs({ event }))
+      );
+    };
+
     const offerOutgoing = (message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded) =>
       Effect.try({
         try: () => parser.encode(message),
@@ -104,8 +126,21 @@ export const makeAcpPatchedProtocol = (
             cause,
           }),
       }).pipe(
+        Effect.tap(() =>
+          logProtocol({
+            direction: "outgoing",
+            stage: "decoded",
+            payload: message,
+          }),
+        ),
         Effect.flatMap((encoded) =>
-          encoded === undefined ? Effect.void : Queue.offer(outgoing, encoded).pipe(Effect.asVoid),
+          encoded === undefined
+            ? Effect.void
+            : logProtocol({
+                direction: "outgoing",
+                stage: "raw",
+                payload: typeof encoded === "string" ? encoded : new TextDecoder().decode(encoded),
+              }).pipe(Effect.flatMap(() => Queue.offer(outgoing, encoded).pipe(Effect.asVoid))),
         ),
       );
 
@@ -325,17 +360,41 @@ export const makeAcpPatchedProtocol = (
 
     yield* options.stdio.stdin.pipe(
       Stream.runForEach((data) =>
-        Effect.try({
-          try: () =>
-            parser.decode(data) as ReadonlyArray<
-              RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded
-            >,
-          catch: (cause) =>
-            new AcpError.AcpProtocolParseError({
-              detail: "Failed to decode ACP wire message",
-              cause,
-            }),
+        logProtocol({
+          direction: "incoming",
+          stage: "raw",
+          payload: typeof data === "string" ? data : new TextDecoder().decode(data),
         }).pipe(
+          Effect.flatMap(() =>
+            Effect.try({
+              try: () =>
+                parser.decode(data) as ReadonlyArray<
+                  RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded
+                >,
+              catch: (cause) =>
+                new AcpError.AcpProtocolParseError({
+                  detail: "Failed to decode ACP wire message",
+                  cause,
+                }),
+            }),
+          ),
+          Effect.tap((messages) =>
+            logProtocol({
+              direction: "incoming",
+              stage: "decoded",
+              payload: messages,
+            }),
+          ),
+          Effect.tapErrorTag("AcpProtocolParseError", (error) =>
+            logProtocol({
+              direction: "incoming",
+              stage: "decode_failed",
+              payload: {
+                detail: error.detail,
+                cause: error.cause,
+              },
+            }),
+          ),
           Effect.flatMap((messages) =>
             Effect.forEach(messages, routeDecodedMessage, {
               discard: true,
@@ -344,7 +403,12 @@ export const makeAcpPatchedProtocol = (
         ),
       ),
       Effect.catch((error) => {
-        const normalized = AcpError.normalizeAcpError(error);
+        const normalized: AcpError.AcpError = Schema.is(AcpError.AcpError)(error)
+          ? error
+          : new AcpError.AcpTransportError({
+              detail: error instanceof Error ? error.message : String(error),
+              cause: error,
+            });
         const rpcClientError = new RpcClientError.RpcClientError({
           reason: new RpcClientError.RpcClientDefect({
             message: normalized.message,
@@ -415,7 +479,7 @@ export const makeAcpPatchedProtocol = (
           method,
           ...(payload !== undefined ? { params: payload } : {}),
         })}\n`,
-      ).pipe(Effect.asVoid, Effect.mapError(AcpError.normalizeAcpError));
+      ).pipe(Effect.asVoid);
 
     const sendRequest = (method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -470,11 +534,10 @@ function isProtocolError(
   );
 }
 
-function normalizeToRequestError(error: unknown): AcpError.AcpRequestError {
-  const normalized = AcpError.normalizeAcpError(error);
-  return Schema.is(AcpError.AcpRequestError)(normalized)
-    ? normalized
-    : AcpError.AcpRequestError.internalError(normalized.message);
+function normalizeToRequestError(error: AcpError.AcpError): AcpError.AcpRequestError {
+  return Schema.is(AcpError.AcpRequestError)(error)
+    ? error
+    : AcpError.AcpRequestError.internalError(error.message);
 }
 
 function toRpcClientError(error: AcpError.AcpError): RpcClientError.RpcClientError {

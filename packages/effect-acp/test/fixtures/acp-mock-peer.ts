@@ -15,6 +15,21 @@ function writeMessage(message: unknown) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return String(error);
+}
+
 function respond(id: number | string | null | undefined, result: unknown) {
   writeMessage({
     jsonrpc: "2.0",
@@ -157,7 +172,7 @@ async function handleRequest(message: {
       });
 
       await requestClient("x/typed_request", {
-        message: "hello from typed request",
+        message: process.env.ACP_MOCK_BAD_TYPED_REQUEST === "1" ? 123 : "hello from typed request",
       });
 
       notify("x/typed_notification", {
@@ -216,7 +231,7 @@ rl.on("line", (line) => {
 
   if ("method" in message && "id" in message) {
     void handleRequest(message).catch((error) => {
-      respondError(message.id, -32603, error instanceof Error ? error.message : String(error));
+      respondError(message.id, -32603, errorMessage(error));
     });
     return;
   }

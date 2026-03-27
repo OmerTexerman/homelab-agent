@@ -11,6 +11,8 @@ import { AGENT_METHODS, CLIENT_METHODS } from "effect-acp/schema";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
 const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
+const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
+const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const sessionId = "mock-session-1";
 let currentModeId = "ask";
 let currentModelId = "default";
@@ -181,6 +183,24 @@ rl.on("line", (line) => {
   }
 
   if (method === AGENT_METHODS.session_set_config_option && id !== undefined) {
+    if (exitOnSetConfigOption) {
+      process.exit(7);
+    }
+    if (failSetConfigOption) {
+      send({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32602,
+          message: "Mock invalid params for session/set_config_option",
+          data: {
+            method,
+            params: rpcMessage.params,
+          },
+        },
+      });
+      return;
+    }
     const configId = rpcMessage.params?.configId;
     const value = rpcMessage.params?.value;
     if (configId === "model" && typeof value === "string") {
