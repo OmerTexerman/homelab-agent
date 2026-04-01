@@ -574,6 +574,7 @@ function runStackedAction(
     actionId?: string;
     commitMessage?: string;
     featureBranch?: boolean;
+    prOnlyIfReady?: boolean;
     filePaths?: readonly string[];
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
@@ -1136,7 +1137,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           kind: "run_action",
           label: "Create PR",
           action: "commit_push_pr",
-          forcePushOnlyProgress: true,
+          prOnlyIfReady: true,
           isDefaultBranch: false,
         },
       });
@@ -2568,6 +2569,74 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           }),
         ]),
       );
+    }),
+  );
+
+  it.effect("prOnlyIfReady emits only the PR phase when the branch is already pushed", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-only-follow-up"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fs.writeFileSync(path.join(repoDir, "pr-only.txt"), "pr only\n");
+      yield* runGit(repoDir, ["add", "pr-only.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "PR only branch"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-only-follow-up"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            JSON.stringify([]),
+            JSON.stringify([
+              {
+                number: 201,
+                title: "PR only branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/201",
+                baseRefName: "main",
+                headRefName: "feature/pr-only-follow-up",
+                state: "OPEN",
+                isCrossRepository: false,
+              },
+            ]),
+          ],
+        },
+      });
+      const events: GitActionProgressEvent[] = [];
+
+      const result = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          prOnlyIfReady: true,
+        },
+        {
+          actionId: "action-pr-only",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      );
+
+      expect(result.commit.status).toBe("skipped_no_changes");
+      expect(result.push.status).toBe("skipped_not_requested");
+      expect(result.pr.status).toBe("created");
+      expect(
+        events.filter(
+          (event): event is Extract<GitActionProgressEvent, { kind: "phase_started" }> =>
+            event.kind === "phase_started",
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          kind: "phase_started",
+          phase: "pr",
+          label: "Creating PR...",
+        }),
+      ]);
     }),
   );
 });

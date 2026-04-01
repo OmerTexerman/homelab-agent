@@ -912,7 +912,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
                 kind: "run_action" as const,
                 label: "Create PR",
                 action: "commit_push_pr" as const,
-                forcePushOnlyProgress: true,
+                prOnlyIfReady: true,
                 isDefaultBranch: false,
               }
             : {
@@ -1420,27 +1420,35 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
   const runStackedAction: GitManagerShape["runStackedAction"] = Effect.fn("runStackedAction")(
     function* (input, options) {
       const progress = createProgressEmitter(input, options);
-      const phases: GitActionProgressPhase[] = [
-        ...(input.featureBranch ? (["branch"] as const) : []),
-        "commit",
-        ...(input.action !== "commit" ? (["push"] as const) : []),
-        ...(input.action === "commit_push_pr" ? (["pr"] as const) : []),
-      ];
       const currentPhase = yield* Ref.make<Option.Option<GitActionProgressPhase>>(Option.none());
 
       const runAction = Effect.fn("runStackedAction.runAction")(function* (): Effect.fn.Return<
         GitRunStackedActionResult,
         GitManagerServiceError
       > {
+        const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const prOnlyIfReady =
+          input.action === "commit_push_pr" &&
+          input.prOnlyIfReady === true &&
+          !input.featureBranch &&
+          initialStatus.branch !== null &&
+          !initialStatus.hasWorkingTreeChanges &&
+          initialStatus.hasUpstream &&
+          initialStatus.aheadCount === 0;
+        const wantsPush = input.action !== "commit" && !prOnlyIfReady;
+        const wantsPr = input.action === "commit_push_pr";
+        const phases: GitActionProgressPhase[] = [
+          ...(input.featureBranch ? (["branch"] as const) : []),
+          ...(prOnlyIfReady ? [] : (["commit"] as const)),
+          ...(wantsPush ? (["push"] as const) : []),
+          ...(wantsPr ? (["pr"] as const) : []),
+        ];
+
         yield* progress.emit({
           kind: "action_started",
           phases,
         });
 
-        const wantsPush = input.action !== "commit";
-        const wantsPr = input.action === "commit_push_pr";
-
-        const initialStatus = yield* gitCore.statusDetails(input.cwd);
         if (!input.featureBranch && wantsPush && !initialStatus.branch) {
           return yield* gitManagerError("runStackedAction", "Cannot push from detached HEAD.");
         }
@@ -1485,18 +1493,23 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
 
         const currentBranch = branchStep.name ?? initialStatus.branch;
 
-        yield* Ref.set(currentPhase, Option.some("commit"));
-        const commit = yield* runCommitStep(
-          modelSelection,
-          input.cwd,
-          input.action,
-          currentBranch,
-          commitMessageForStep,
-          preResolvedCommitSuggestion,
-          input.filePaths,
-          options?.progressReporter,
-          progress.actionId,
-        );
+        const commit = prOnlyIfReady
+          ? { status: "skipped_no_changes" as const }
+          : yield* Ref.set(currentPhase, Option.some("commit")).pipe(
+              Effect.flatMap(() =>
+                runCommitStep(
+                  modelSelection,
+                  input.cwd,
+                  input.action,
+                  currentBranch,
+                  commitMessageForStep,
+                  preResolvedCommitSuggestion,
+                  input.filePaths,
+                  options?.progressReporter,
+                  progress.actionId,
+                ),
+              ),
+            );
 
         const push = wantsPush
           ? yield* progress

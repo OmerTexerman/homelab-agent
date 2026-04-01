@@ -90,6 +90,7 @@ interface RunGitActionWithToastInput {
   skipDefaultBranchPrompt?: boolean;
   statusOverride?: GitStatusResult | null;
   featureBranch?: boolean;
+  prOnlyIfReady?: boolean;
   isDefaultBranchOverride?: boolean;
   progressToastId?: GitActionToastId;
   filePaths?: string[];
@@ -411,6 +412,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       skipDefaultBranchPrompt = false,
       statusOverride,
       featureBranch = false,
+      prOnlyIfReady = false,
       isDefaultBranchOverride,
       progressToastId,
       filePaths,
@@ -448,6 +450,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
         forcePushOnly: forcePushOnlyProgress,
         featureBranch,
+        prOnlyIfReady,
       });
       const actionId = randomUUID();
       const resolvedProgressToastId =
@@ -542,6 +545,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
+        ...(prOnlyIfReady ? { prOnlyIfReady } : {}),
         ...(filePaths ? { filePaths } : {}),
         onProgress: applyProgressEvent,
       });
@@ -568,6 +572,9 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 action: toastCta.action,
                 ...(toastCta.forcePushOnlyProgress !== undefined
                   ? { forcePushOnlyProgress: toastCta.forcePushOnlyProgress }
+                  : {}),
+                ...(toastCta.prOnlyIfReady !== undefined
+                  ? { prOnlyIfReady: toastCta.prOnlyIfReady }
                   : {}),
                 ...(toastCta.isDefaultBranch !== undefined
                   ? { isDefaultBranchOverride: toastCta.isDefaultBranch }

@@ -40,7 +40,12 @@ export function buildGitActionProgressStages(input: {
   forcePushOnly?: boolean;
   pushTarget?: string;
   featureBranch?: boolean;
+  prOnlyIfReady?: boolean;
 }): string[] {
+  if (input.action === "commit_push_pr" && input.prOnlyIfReady) {
+    return ["Creating PR..."];
+  }
+
   const branchStages = input.featureBranch ? ["Preparing feature branch..."] : [];
   const shouldIncludeCommitStages =
     !input.forcePushOnly && (input.action === "commit" || input.hasWorkingTreeChanges);

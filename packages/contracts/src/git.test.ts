@@ -66,15 +66,13 @@ describe("GitRunStackedActionInput", () => {
     const parsed = decodeRunStackedActionInput({
       actionId: "action-1",
       cwd: "/repo",
-      action: "commit",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5.4-mini",
-      },
+      action: "commit_push_pr",
+      prOnlyIfReady: true,
     });
 
     expect(parsed.actionId).toBe("action-1");
-    expect(parsed.action).toBe("commit");
+    expect(parsed.action).toBe("commit_push_pr");
+    expect(parsed.prOnlyIfReady).toBe(true);
   });
 });
 
@@ -106,7 +104,7 @@ describe("GitRunStackedActionResult", () => {
           kind: "run_action",
           label: "Create PR",
           action: "commit_push_pr",
-          forcePushOnlyProgress: true,
+          prOnlyIfReady: true,
           isDefaultBranch: false,
         },
       },
@@ -115,6 +113,7 @@ describe("GitRunStackedActionResult", () => {
     expect(parsed.toast.cta.kind).toBe("run_action");
     if (parsed.toast.cta.kind === "run_action") {
       expect(parsed.toast.cta.action).toBe("commit_push_pr");
+      expect(parsed.toast.cta.prOnlyIfReady).toBe(true);
       expect(parsed.toast.cta.isDefaultBranch).toBe(false);
     }
   });

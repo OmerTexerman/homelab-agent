@@ -121,6 +121,7 @@ export function gitRunStackedActionMutationOptions(input: {
       action,
       commitMessage,
       featureBranch,
+      prOnlyIfReady,
       filePaths,
       onProgress,
     }: {
@@ -128,6 +129,7 @@ export function gitRunStackedActionMutationOptions(input: {
       action: GitStackedAction;
       commitMessage?: string;
       featureBranch?: boolean;
+      prOnlyIfReady?: boolean;
       filePaths?: string[];
       onProgress?: (event: GitActionProgressEvent) => void;
     }) => {
@@ -139,6 +141,7 @@ export function gitRunStackedActionMutationOptions(input: {
           action,
           ...(commitMessage ? { commitMessage } : {}),
           ...(featureBranch ? { featureBranch } : {}),
+          ...(prOnlyIfReady ? { prOnlyIfReady } : {}),
           ...(filePaths ? { filePaths } : {}),
         },
         ...(onProgress ? [{ onProgress }] : []),

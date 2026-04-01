@@ -878,6 +878,16 @@ describe("buildGitActionProgressStages", () => {
     assert.deepEqual(stages, ["Pushing to origin/feature/test...", "Creating PR..."]);
   });
 
+  it("shows only PR progress when the follow-up action is already PR-ready", () => {
+    const stages = buildGitActionProgressStages({
+      action: "commit_push_pr",
+      hasCustomCommitMessage: false,
+      hasWorkingTreeChanges: false,
+      prOnlyIfReady: true,
+    });
+    assert.deepEqual(stages, ["Creating PR..."]);
+  });
+
   it("includes commit stages for commit+push when working tree is dirty", () => {
     const stages = buildGitActionProgressStages({
       action: "commit_push",
