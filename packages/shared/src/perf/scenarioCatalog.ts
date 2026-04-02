@@ -23,6 +23,7 @@ export interface PerfProjectScenario {
 
 export interface PerfSeedThreadScenario {
   readonly id: ThreadId;
+  readonly projectId: ProjectId;
   readonly title: string;
   readonly category: "heavy" | "burst" | "light";
   readonly turnCount: number;
@@ -36,7 +37,7 @@ export interface PerfSeedThreadScenario {
 
 export interface PerfSeedScenario {
   readonly id: PerfSeedScenarioId;
-  readonly project: PerfProjectScenario;
+  readonly projects: ReadonlyArray<PerfProjectScenario>;
   readonly threads: ReadonlyArray<PerfSeedThreadScenario>;
 }
 
@@ -63,18 +64,26 @@ const PERF_MODEL_SELECTION: ModelSelection = {
   model: DEFAULT_MODEL_BY_PROVIDER.codex,
 };
 
-const PERF_PROJECT: PerfProjectScenario = {
-  id: ProjectId.makeUnsafe("perf-project-primary"),
-  title: "Performance Workspace",
-  workspaceDirectoryName: "perf-workspace",
+const makeProjectId = (slug: string) => ProjectId.makeUnsafe(`perf-project-${slug}`);
+const makeProject = (slug: string, title: string): PerfProjectScenario => ({
+  id: makeProjectId(slug),
+  title,
+  workspaceDirectoryName: `perf-workspace-${slug}`,
   defaultModelSelection: PERF_MODEL_SELECTION,
-};
+});
 
 const makeThreadId = (slug: string) => ThreadId.makeUnsafe(`perf-thread-${slug}`);
 const makeTurnId = (threadSlug: string, index: number) =>
   TurnId.makeUnsafe(`perf-turn-${threadSlug}-${index.toString().padStart(4, "0")}`);
-const makeMessageId = (threadSlug: string, role: "user" | "assistant", index: number) =>
-  MessageId.makeUnsafe(`perf-message-${threadSlug}-${role}-${index.toString().padStart(4, "0")}`);
+const makeMessageId = (
+  threadSlug: string,
+  role: "user" | "assistant",
+  turnIndex: number,
+  messageIndex = 1,
+) =>
+  MessageId.makeUnsafe(
+    `perf-message-${threadSlug}-${role}-${turnIndex.toString().padStart(4, "0")}-${messageIndex.toString().padStart(2, "0")}`,
+  );
 const makeLiveTurnId = (slug: string) => TurnId.makeUnsafe(`perf-live-turn-${slug}`);
 const makeLiveAssistantItemId = (
   laneKey: string,
@@ -82,6 +91,122 @@ const makeLiveAssistantItemId = (
   segment: "intro" | "followup",
 ) => `perf-assistant-${laneKey}-${cycleIndex.toString().padStart(2, "0")}-${segment}`;
 const makeLiveAssistantMessageId = (itemId: string) => MessageId.makeUnsafe(`assistant:${itemId}`);
+const threadSlugFromId = (threadId: ThreadId) => threadId.replace("perf-thread-", "");
+
+function threadSeedValue(threadSlug: string): number {
+  return Array.from(threadSlug).reduce(
+    (sum, character, index) => sum + character.charCodeAt(0) * (index + 1),
+    0,
+  );
+}
+
+function buildAssistantMessageCountPlan(
+  input: Pick<PerfSeedThreadScenario, "category" | "turnCount" | "messageCount"> & {
+    readonly threadSlug: string;
+  },
+): ReadonlyArray<number> {
+  const assistantMessageCount = input.messageCount - input.turnCount;
+  if (assistantMessageCount < input.turnCount) {
+    throw new Error(
+      `Perf thread '${input.threadSlug}' must retain at least one assistant message per turn.`,
+    );
+  }
+
+  const averageAssistantMessages = Math.floor(assistantMessageCount / input.turnCount);
+  const minPerTurn = Math.max(
+    1,
+    averageAssistantMessages -
+      (input.category === "heavy" ? 4 : input.category === "burst" ? 2 : 1),
+  );
+  const residualAssistantMessages = assistantMessageCount - minPerTurn * input.turnCount;
+  const threadSeed = threadSeedValue(input.threadSlug);
+  const weights = Array.from({ length: input.turnCount }, (_, index) => {
+    const burstBias = input.category === "heavy" && index % 9 === 0 ? 3 : index % 6 === 0 ? 1 : 0;
+    return 1 + ((threadSeed + (index + 1) * 11) % 7) + burstBias;
+  });
+  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+  const quotas = weights.map((weight) => (residualAssistantMessages * weight) / weightTotal);
+  const counts = quotas.map((quota) => minPerTurn + Math.floor(quota));
+  let remainingMessages = assistantMessageCount - counts.reduce((sum, count) => sum + count, 0);
+
+  if (remainingMessages > 0) {
+    const residualOrder = quotas
+      .map((quota, index) => ({
+        index,
+        remainder: quota - Math.floor(quota),
+      }))
+      .toSorted((left, right) => right.remainder - left.remainder || right.index - left.index);
+
+    for (let index = 0; index < residualOrder.length && remainingMessages > 0; index += 1) {
+      const targetIndex = residualOrder[index]?.index;
+      if (targetIndex === undefined) {
+        break;
+      }
+      counts[targetIndex] = (counts[targetIndex] ?? minPerTurn) + 1;
+      remainingMessages -= 1;
+    }
+  }
+
+  return counts;
+}
+
+export function buildPerfAssistantMessageCountPlan(
+  thread: Pick<PerfSeedThreadScenario, "id" | "category" | "turnCount" | "messageCount">,
+): ReadonlyArray<number> {
+  return buildAssistantMessageCountPlan({
+    threadSlug: threadSlugFromId(thread.id),
+    category: thread.category,
+    turnCount: thread.turnCount,
+    messageCount: thread.messageCount,
+  });
+}
+
+function makeSeedThreadScenario(input: {
+  readonly slug: string;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly category: PerfSeedThreadScenario["category"];
+  readonly turnCount: number;
+  readonly messageCount: number;
+  readonly planStride: number | null;
+  readonly activityStride: number | null;
+  readonly diffStride: number | null;
+}): PerfSeedThreadScenario {
+  const assistantMessageCountPlan = buildAssistantMessageCountPlan({
+    threadSlug: input.slug,
+    category: input.category,
+    turnCount: input.turnCount,
+    messageCount: input.messageCount,
+  });
+
+  return {
+    id: makeThreadId(input.slug),
+    projectId: input.projectId,
+    title: input.title,
+    category: input.category,
+    turnCount: input.turnCount,
+    messageCount: input.messageCount,
+    anchorMessageId: makeMessageId(input.slug, "user", 1, 1),
+    terminalMessageId: makeMessageId(
+      input.slug,
+      "assistant",
+      input.turnCount,
+      assistantMessageCountPlan.at(-1) ?? 1,
+    ),
+    planStride: input.planStride,
+    activityStride: input.activityStride,
+    diffStride: input.diffStride,
+  };
+}
+
+const PERF_PROJECTS = {
+  inbox: makeProject("inbox", "Inbox Refactor Workspace"),
+  desktop: makeProject("desktop", "Desktop Release Workspace"),
+  runtime: makeProject("runtime", "Runtime Orchestration Workspace"),
+  marketing: makeProject("marketing", "Marketing Site Workspace"),
+  ops: makeProject("ops", "Ops Automation Workspace"),
+  burstBase: makeProject("burst-base", "Burst Harness Workspace"),
+} as const;
 
 const PERF_PROVIDER_LIVE_TURNS = {
   navigation: makeLiveTurnId("navigation"),
@@ -89,89 +214,159 @@ const PERF_PROVIDER_LIVE_TURNS = {
 } as const;
 
 const LARGE_THREAD_DEFINITIONS = {
-  heavyA: {
-    id: makeThreadId("heavy-a"),
-    title: "Large Thread A",
+  heavyA: makeSeedThreadScenario({
+    slug: "heavy-a",
+    projectId: PERF_PROJECTS.inbox.id,
+    title: "Inbox Search Regression",
     category: "heavy",
-    turnCount: 1_000,
+    turnCount: 84,
     messageCount: 2_000,
-    anchorMessageId: makeMessageId("heavy-a", "user", 1),
-    terminalMessageId: makeMessageId("heavy-a", "assistant", 1_000),
-    planStride: 120,
-    activityStride: 32,
-    diffStride: 12,
-  },
-  heavyB: {
-    id: makeThreadId("heavy-b"),
-    title: "Large Thread B",
+    planStride: 11,
+    activityStride: 4,
+    diffStride: 3,
+  }),
+  heavyB: makeSeedThreadScenario({
+    slug: "heavy-b",
+    projectId: PERF_PROJECTS.desktop.id,
+    title: "Desktop Update Rollout",
     category: "heavy",
-    turnCount: 1_000,
+    turnCount: 96,
     messageCount: 2_000,
-    anchorMessageId: makeMessageId("heavy-b", "user", 1),
-    terminalMessageId: makeMessageId("heavy-b", "assistant", 1_000),
-    planStride: 125,
-    activityStride: 36,
-    diffStride: 14,
-  },
-  burst: {
-    id: makeThreadId("burst"),
-    title: "Burst Target Thread",
+    planStride: 12,
+    activityStride: 5,
+    diffStride: 4,
+  }),
+  burst: makeSeedThreadScenario({
+    slug: "large-burst",
+    projectId: PERF_PROJECTS.runtime.id,
+    title: "Runtime Burst Coordination",
     category: "burst",
-    turnCount: 120,
-    messageCount: 240,
-    anchorMessageId: makeMessageId("burst", "user", 1),
-    terminalMessageId: makeMessageId("burst", "assistant", 120),
-    planStride: 30,
-    activityStride: 10,
-    diffStride: 12,
-  },
+    turnCount: 48,
+    messageCount: 640,
+    planStride: 12,
+    activityStride: 4,
+    diffStride: 5,
+  }),
 } as const satisfies Record<string, PerfSeedThreadScenario>;
 
-const LIGHT_THREADS: ReadonlyArray<PerfSeedThreadScenario> = Array.from(
-  { length: 9 },
-  (_, index) => {
-    const threadNumber = index + 1;
-    const slug = `light-${threadNumber.toString().padStart(2, "0")}`;
-    return {
-      id: makeThreadId(slug),
-      title: `Light Thread ${threadNumber}`,
-      category: "light",
-      turnCount: 12,
-      messageCount: 24,
-      anchorMessageId: makeMessageId(slug, "user", 1),
-      terminalMessageId: makeMessageId(slug, "assistant", 12),
-      planStride: null,
-      activityStride: 6,
-      diffStride: null,
-    } satisfies PerfSeedThreadScenario;
+const LARGE_THREAD_LIGHT_LAYOUT = [
+  {
+    project: PERF_PROJECTS.inbox,
+    label: "Inbox",
+    count: 5,
   },
-);
+  {
+    project: PERF_PROJECTS.desktop,
+    label: "Desktop",
+    count: 6,
+  },
+  {
+    project: PERF_PROJECTS.runtime,
+    label: "Runtime",
+    count: 5,
+  },
+  {
+    project: PERF_PROJECTS.marketing,
+    label: "Marketing",
+    count: 6,
+  },
+  {
+    project: PERF_PROJECTS.ops,
+    label: "Ops",
+    count: 5,
+  },
+] as const;
 
-const BURST_NAVIGATION_THREAD: PerfSeedThreadScenario = {
-  ...LIGHT_THREADS[0]!,
-  title: "Burst Navigation Thread",
-};
+const LARGE_THREAD_LIGHT_THREADS: ReadonlyArray<PerfSeedThreadScenario> =
+  LARGE_THREAD_LIGHT_LAYOUT.flatMap((layout, projectIndex) =>
+    Array.from({ length: layout.count }, (_, localIndex) => {
+      const globalIndex =
+        LARGE_THREAD_LIGHT_LAYOUT.slice(0, projectIndex).reduce(
+          (sum, entry) => sum + entry.count,
+          0,
+        ) + localIndex;
+      const threadNumber = localIndex + 1;
+      const turnCount = 18 + ((globalIndex * 7 + projectIndex * 5 + localIndex * 3) % 8) * 7;
+      const messageDensity = 4 + ((globalIndex + projectIndex + localIndex) % 5);
+      const messageCount = Math.min(
+        900,
+        turnCount * messageDensity + 48 + ((globalIndex + projectIndex) % 5) * 18,
+      );
 
-const BURST_FILLER_THREAD: PerfSeedThreadScenario = {
-  ...LIGHT_THREADS[1]!,
-  title: "Burst Filler Thread",
-};
+      return makeSeedThreadScenario({
+        slug: `${layout.label.toLowerCase()}-light-${threadNumber.toString().padStart(2, "0")}`,
+        projectId: layout.project.id,
+        title: `${layout.label} Thread ${threadNumber}`,
+        category: "light",
+        turnCount,
+        messageCount,
+        planStride: globalIndex % 4 === 0 ? 14 + ((globalIndex + localIndex) % 5) : null,
+        activityStride: 5 + ((globalIndex + localIndex) % 4),
+        diffStride: globalIndex % 3 === 0 ? 6 + ((projectIndex + localIndex) % 4) : null,
+      });
+    }),
+  );
+
+const BURST_BASE_THREAD_DEFINITIONS = {
+  burst: makeSeedThreadScenario({
+    slug: "burst",
+    projectId: PERF_PROJECTS.burstBase.id,
+    title: "Burst Target Thread",
+    category: "burst",
+    turnCount: 36,
+    messageCount: 220,
+    planStride: 12,
+    activityStride: 4,
+    diffStride: 6,
+  }),
+  navigation: makeSeedThreadScenario({
+    slug: "burst-navigation",
+    projectId: PERF_PROJECTS.burstBase.id,
+    title: "Burst Navigation Thread",
+    category: "light",
+    turnCount: 28,
+    messageCount: 112,
+    planStride: null,
+    activityStride: 5,
+    diffStride: null,
+  }),
+  filler: makeSeedThreadScenario({
+    slug: "burst-filler",
+    projectId: PERF_PROJECTS.burstBase.id,
+    title: "Burst Filler Thread",
+    category: "light",
+    turnCount: 24,
+    messageCount: 96,
+    planStride: null,
+    activityStride: 6,
+    diffStride: null,
+  }),
+} as const satisfies Record<string, PerfSeedThreadScenario>;
+
+const BURST_NAVIGATION_THREAD = BURST_BASE_THREAD_DEFINITIONS.navigation;
+const BURST_FILLER_THREAD = BURST_BASE_THREAD_DEFINITIONS.filler;
 
 export const PERF_SEED_SCENARIOS = {
   large_threads: {
     id: "large_threads",
-    project: PERF_PROJECT,
+    projects: [
+      PERF_PROJECTS.inbox,
+      PERF_PROJECTS.desktop,
+      PERF_PROJECTS.runtime,
+      PERF_PROJECTS.marketing,
+      PERF_PROJECTS.ops,
+    ],
     threads: [
       LARGE_THREAD_DEFINITIONS.heavyA,
       LARGE_THREAD_DEFINITIONS.heavyB,
       LARGE_THREAD_DEFINITIONS.burst,
-      ...LIGHT_THREADS,
+      ...LARGE_THREAD_LIGHT_THREADS,
     ],
   },
   burst_base: {
     id: "burst_base",
-    project: PERF_PROJECT,
-    threads: [LARGE_THREAD_DEFINITIONS.burst, BURST_NAVIGATION_THREAD, BURST_FILLER_THREAD],
+    projects: [PERF_PROJECTS.burstBase],
+    threads: [BURST_BASE_THREAD_DEFINITIONS.burst, BURST_NAVIGATION_THREAD, BURST_FILLER_THREAD],
   },
 } as const satisfies Record<PerfSeedScenarioId, PerfSeedScenario>;
 
@@ -899,19 +1094,25 @@ export const PERF_PROVIDER_SCENARIOS = {
 } as const satisfies Record<PerfProviderScenarioId, PerfProviderScenario>;
 
 export const PERF_CATALOG_IDS = {
-  projectId: PERF_PROJECT.id,
+  projectId: PERF_PROJECTS.inbox.id,
   largeThreads: {
     heavyAThreadId: LARGE_THREAD_DEFINITIONS.heavyA.id,
     heavyBThreadId: LARGE_THREAD_DEFINITIONS.heavyB.id,
+    heavyAProjectId: LARGE_THREAD_DEFINITIONS.heavyA.projectId,
+    heavyBProjectId: LARGE_THREAD_DEFINITIONS.heavyB.projectId,
+    heavyAProjectTitle: PERF_PROJECTS.inbox.title,
+    heavyBProjectTitle: PERF_PROJECTS.desktop.title,
     heavyAAnchorMessageId: LARGE_THREAD_DEFINITIONS.heavyA.anchorMessageId,
     heavyBAnchorMessageId: LARGE_THREAD_DEFINITIONS.heavyB.anchorMessageId,
     heavyATerminalMessageId: LARGE_THREAD_DEFINITIONS.heavyA.terminalMessageId,
     heavyBTerminalMessageId: LARGE_THREAD_DEFINITIONS.heavyB.terminalMessageId,
   },
   burstBase: {
-    burstThreadId: LARGE_THREAD_DEFINITIONS.burst.id,
-    burstAnchorMessageId: LARGE_THREAD_DEFINITIONS.burst.anchorMessageId,
-    burstTerminalMessageId: LARGE_THREAD_DEFINITIONS.burst.terminalMessageId,
+    burstProjectId: PERF_PROJECTS.burstBase.id,
+    burstProjectTitle: PERF_PROJECTS.burstBase.title,
+    burstThreadId: BURST_BASE_THREAD_DEFINITIONS.burst.id,
+    burstAnchorMessageId: BURST_BASE_THREAD_DEFINITIONS.burst.anchorMessageId,
+    burstTerminalMessageId: BURST_BASE_THREAD_DEFINITIONS.burst.terminalMessageId,
     navigationThreadId: BURST_NAVIGATION_THREAD.id,
     navigationAnchorMessageId: BURST_NAVIGATION_THREAD.anchorMessageId,
     navigationTerminalMessageId: BURST_NAVIGATION_THREAD.terminalMessageId,
@@ -942,7 +1143,7 @@ export function getPerfProviderScenario(scenarioId: PerfProviderScenarioId): Per
 }
 
 export function perfTurnIdForThread(thread: PerfSeedThreadScenario, turnIndex: number): TurnId {
-  const threadSlug = thread.id.replace("perf-thread-", "");
+  const threadSlug = threadSlugFromId(thread.id);
   return makeTurnId(threadSlug, turnIndex);
 }
 
@@ -950,9 +1151,10 @@ export function perfMessageIdForThread(
   thread: PerfSeedThreadScenario,
   role: "user" | "assistant",
   turnIndex: number,
+  messageIndex = 1,
 ): MessageId {
-  const threadSlug = thread.id.replace("perf-thread-", "");
-  return makeMessageId(threadSlug, role, turnIndex);
+  const threadSlug = threadSlugFromId(thread.id);
+  return makeMessageId(threadSlug, role, turnIndex, messageIndex);
 }
 
 export function perfEventId(prefix: string, threadId: ThreadId, index: number) {

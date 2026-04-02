@@ -22,16 +22,26 @@ test("virtualization stays bounded and heavy thread switches remain snappy", asy
       seedScenarioId: "large_threads",
     });
 
-    const projectTitle = harness.seededState.projectTitle ?? "Performance Workspace";
-    const heavyThreadMessageCount =
-      harness.seededState.threadSummaries.find(
-        (thread) => thread.id === PERF_CATALOG_IDS.largeThreads.heavyAThreadId,
-      )?.messageCount ?? 0;
+    const heavyAThreadSummary = harness.seededState.threadSummaries.find(
+      (thread) => thread.id === PERF_CATALOG_IDS.largeThreads.heavyAThreadId,
+    );
+    const heavyBThreadSummary = harness.seededState.threadSummaries.find(
+      (thread) => thread.id === PERF_CATALOG_IDS.largeThreads.heavyBThreadId,
+    );
+    const heavyAProjectTitle =
+      heavyAThreadSummary?.projectTitle ?? PERF_CATALOG_IDS.largeThreads.heavyAProjectTitle;
+    const heavyBProjectTitle =
+      heavyBThreadSummary?.projectTitle ?? PERF_CATALOG_IDS.largeThreads.heavyBProjectTitle;
+    const heavyThreadMessageCount = heavyAThreadSummary?.messageCount ?? 0;
+    expect(heavyAThreadSummary).toBeDefined();
+    expect(heavyBThreadSummary).toBeDefined();
     expect(heavyThreadMessageCount).toBeGreaterThanOrEqual(2_000);
+    expect(heavyAThreadSummary?.turnCount ?? 0).toBeLessThan(100);
+    expect(heavyBThreadSummary?.turnCount ?? 0).toBeLessThan(100);
 
     await ensureThreadRowVisible(
       harness.page,
-      projectTitle,
+      heavyAProjectTitle,
       PERF_CATALOG_IDS.largeThreads.heavyAThreadId,
     );
     await harness.page
@@ -45,7 +55,7 @@ test("virtualization stays bounded and heavy thread switches remain snappy", asy
 
     await ensureThreadRowVisible(
       harness.page,
-      projectTitle,
+      heavyBProjectTitle,
       PERF_CATALOG_IDS.largeThreads.heavyBThreadId,
     );
     await harness.page
@@ -61,7 +71,7 @@ test("virtualization stays bounded and heavy thread switches remain snappy", asy
 
     await measureThreadSwitch(harness, {
       actionName: "thread-switch-warmup-a",
-      projectTitle,
+      projectTitle: heavyAProjectTitle,
       threadId: PERF_CATALOG_IDS.largeThreads.heavyAThreadId,
       messageId: PERF_CATALOG_IDS.largeThreads.heavyATerminalMessageId,
     });
@@ -105,7 +115,10 @@ test("virtualization stays bounded and heavy thread switches remain snappy", asy
     for (const target of measuredTargets) {
       await measureThreadSwitch(harness, {
         actionName: target.actionName,
-        projectTitle,
+        projectTitle:
+          target.threadId === PERF_CATALOG_IDS.largeThreads.heavyAThreadId
+            ? heavyAProjectTitle
+            : heavyBProjectTitle,
         threadId: target.threadId,
         messageId: target.messageId,
       });

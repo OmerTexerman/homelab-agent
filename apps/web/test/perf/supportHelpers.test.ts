@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { percentile } from "../../../../test/perf/support/artifact";
 import { installBrowserPerfCollector } from "../../../../test/perf/support/browserMetrics";
+import { buildPerfServerEnv, PERF_PROVIDER_ENV, PERF_SCENARIO_ENV } from "./serverEnv";
 
 describe("percentile", () => {
   it("returns the minimum value for the zero percentile", () => {
@@ -48,5 +49,28 @@ describe("installBrowserPerfCollector", () => {
     collector?.reset();
     expect(cancelAnimationFrame).toHaveBeenLastCalledWith(2);
     expect(requestAnimationFrame).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("buildPerfServerEnv", () => {
+  it("does not enable the perf provider when no live provider scenario is requested", () => {
+    const env = buildPerfServerEnv({
+      [PERF_PROVIDER_ENV]: "1",
+      [PERF_SCENARIO_ENV]: "dense_assistant_stream",
+      KEEP_ME: "yes",
+    });
+
+    expect(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD).toBe("false");
+    expect(env[PERF_PROVIDER_ENV]).toBeUndefined();
+    expect(env[PERF_SCENARIO_ENV]).toBeUndefined();
+    expect(env.KEEP_ME).toBe("yes");
+  });
+
+  it("enables the perf provider only when a live provider scenario is requested", () => {
+    const env = buildPerfServerEnv({}, "dense_assistant_stream");
+
+    expect(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD).toBe("false");
+    expect(env[PERF_PROVIDER_ENV]).toBe("1");
+    expect(env[PERF_SCENARIO_ENV]).toBe("dense_assistant_stream");
   });
 });

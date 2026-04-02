@@ -45,21 +45,21 @@ The current implementation is browser-focused, but the harness already reserves 
 
 Seeded app state used by the virtualization benchmark.
 
-- 1 project
-- 12 threads total
+- 5 projects
+- 30 threads total
 - 2 heavy threads
 - 1 burst thread
-- 9 light filler threads
+- 27 light filler threads spread across all projects
 
 The two heavy threads currently seed:
 
-- `1,000` turns
+- `84` and `96` turns
 - `2,000` messages
 - periodic worklog/activity rows
 - periodic proposed-plan rows
 - frequent checkpoint rows with larger changed-file trees
 
-This means the timeline is not just alternating short user/assistant text. The heavy threads include the non-message rows that tend to stress grouping, virtualization, and diff-tree rendering.
+This keeps the thread count and project list closer to a real workspace mix: many projects, many sidebar rows, and heavy conversations that stay under `100` turns while still retaining thousands of messages because each turn fans out into multiple assistant messages. The heavy timelines also include the non-message rows that tend to stress grouping, virtualization, and diff-tree rendering.
 
 ### `burst_base`
 
@@ -199,7 +199,7 @@ For the websocket scenario, open the burst thread and send one message to start 
 
 ### Inspect the seeded topology directly
 
-The seed script prints the generated thread summaries as JSON:
+The seed script prints the generated project and thread summaries as JSON:
 
 ```bash
 bun run apps/server/scripts/seedPerfState.ts large_threads

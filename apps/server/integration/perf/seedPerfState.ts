@@ -10,14 +10,17 @@ import {
   EventId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 
 import {
+  buildPerfAssistantMessageCountPlan,
   getPerfSeedScenario,
   perfEventId,
   perfMessageIdForThread,
   perfTurnIdForThread,
+  type PerfProjectScenario,
   type PerfSeedScenario,
   type PerfSeedScenarioId,
   type PerfSeedThreadScenario,
@@ -73,25 +76,25 @@ function makeCommandId(prefix: string, threadId: string, turnIndex: number): Com
 }
 
 function buildProjectEvent(
-  scenario: PerfSeedScenario,
+  project: PerfProjectScenario,
   workspaceRoot: string,
   createdAt: string,
 ): Omit<OrchestrationEvent, "sequence"> {
   return {
     type: "project.created",
-    eventId: EventId.makeUnsafe(`perf-project-created:${String(scenario.project.id)}`),
+    eventId: EventId.makeUnsafe(`perf-project-created:${String(project.id)}`),
     aggregateKind: "project",
-    aggregateId: scenario.project.id,
+    aggregateId: project.id,
     occurredAt: createdAt,
-    commandId: CommandId.makeUnsafe(`perf-project-create:${String(scenario.project.id)}`),
+    commandId: CommandId.makeUnsafe(`perf-project-create:${String(project.id)}`),
     causationEventId: null,
-    correlationId: CommandId.makeUnsafe(`perf-project-create:${String(scenario.project.id)}`),
+    correlationId: CommandId.makeUnsafe(`perf-project-create:${String(project.id)}`),
     metadata: {},
     payload: {
-      projectId: scenario.project.id,
-      title: scenario.project.title,
+      projectId: project.id,
+      title: project.title,
       workspaceRoot,
-      defaultModelSelection: scenario.project.defaultModelSelection,
+      defaultModelSelection: project.defaultModelSelection,
       scripts: [],
       createdAt,
       updatedAt: createdAt,
@@ -101,7 +104,7 @@ function buildProjectEvent(
 
 function buildThreadCreatedEvent(
   thread: PerfSeedThreadScenario,
-  scenario: PerfSeedScenario,
+  project: PerfProjectScenario,
   createdAt: string,
 ): Omit<OrchestrationEvent, "sequence"> {
   return {
@@ -116,9 +119,9 @@ function buildThreadCreatedEvent(
     metadata: {},
     payload: {
       threadId: thread.id,
-      projectId: scenario.project.id,
+      projectId: thread.projectId,
       title: thread.title,
-      modelSelection: scenario.project.defaultModelSelection,
+      modelSelection: project.defaultModelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: null,
@@ -140,19 +143,36 @@ function buildUserMessageText(thread: PerfSeedThreadScenario, turnIndex: number)
   return base;
 }
 
-function buildAssistantMessageText(thread: PerfSeedThreadScenario, turnIndex: number): string {
-  const prefix = `${thread.title} response ${turnIndex}: `;
-  const paragraphs = [
-    "The render path stays stable when visible rows are capped and background work is batched.",
-    "Navigation remains predictable when thread metadata, message slices, and work log grouping avoid unnecessary churn.",
-    "Websocket-heavy turns should keep incremental UI updates small so the main thread is free for scrolling and input.",
+function buildAssistantMessageText(
+  thread: PerfSeedThreadScenario,
+  turnIndex: number,
+  assistantMessageIndex: number,
+  assistantMessageCount: number,
+): string {
+  const phaseLabel =
+    assistantMessageIndex === 1
+      ? "Opening"
+      : assistantMessageIndex === assistantMessageCount
+        ? "Settled"
+        : assistantMessageIndex % 5 === 0
+          ? "Checkpoint"
+          : "Loop";
+  const focusTopics = [
+    "checked the visible timeline window and sidebar ordering",
+    "trimmed redundant projection work before the next render pass",
+    "reviewed websocket fan-out and message grouping pressure",
+    "verified checkpoint rows stay bounded while hidden threads move",
+    "kept the active route stable while background threads kept streaming",
   ];
-  const paragraphCount = turnIndex % 9 === 0 ? 3 : turnIndex % 4 === 0 ? 2 : 1;
-  return `${prefix}${paragraphs.slice(0, paragraphCount).join(" ")}${
-    turnIndex % 13 === 0
-      ? "\n\n- Keep virtual rows bounded\n- Avoid synchronous bursts\n- Preserve responsive thread switches"
-      : ""
-  }`;
+  const topic = focusTopics[(turnIndex + assistantMessageIndex) % focusTopics.length]!;
+  const threadBias =
+    thread.category === "heavy"
+      ? "The thread is still dense enough to stress virtualization."
+      : thread.category === "burst"
+        ? "This pass is still carrying live burst pressure."
+        : "Background churn is staying active without stealing focus.";
+
+  return `${thread.title} ${phaseLabel.toLowerCase()} ${assistantMessageIndex}/${assistantMessageCount} for turn ${turnIndex}: ${topic}. ${threadBias}`;
 }
 
 function buildProposedPlanMarkdown(thread: PerfSeedThreadScenario, turnIndex: number): string {
@@ -227,25 +247,41 @@ function buildCheckpointFiles(
 }
 
 function buildThreadTurnEvents(
-  scenario: PerfSeedScenario,
   thread: PerfSeedThreadScenario,
   threadOrdinal: number,
   projectStartMs: number,
 ): ReadonlyArray<Omit<OrchestrationEvent, "sequence">> {
   const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
   const threadStartMs = projectStartMs + threadOrdinal * 60_000;
+  const assistantMessageCountPlan = buildPerfAssistantMessageCountPlan(thread);
 
   for (let turnIndex = 1; turnIndex <= thread.turnCount; turnIndex += 1) {
     const turnId = perfTurnIdForThread(thread, turnIndex);
-    const userMessageId = perfMessageIdForThread(thread, "user", turnIndex);
-    const assistantMessageId = perfMessageIdForThread(thread, "assistant", turnIndex);
+    const userMessageId = perfMessageIdForThread(thread, "user", turnIndex, 1);
+    const assistantMessageCount = assistantMessageCountPlan[turnIndex - 1] ?? 1;
     const turnBaseMs = threadStartMs + turnIndex * 1_000;
     const userOccurredAt = plusMs(turnBaseMs, 0);
-    const assistantOccurredAt = plusMs(turnBaseMs, 320);
+    const activityAssistantIndex =
+      thread.activityStride !== null && turnIndex % thread.activityStride === 0
+        ? Math.max(2, Math.floor(assistantMessageCount * 0.35))
+        : null;
+    const planAssistantIndex =
+      thread.planStride !== null && turnIndex % thread.planStride === 0
+        ? Math.max(2, Math.floor(assistantMessageCount * 0.7))
+        : null;
+    let lastAssistantMessageId = perfMessageIdForThread(
+      thread,
+      "assistant",
+      turnIndex,
+      assistantMessageCount,
+    );
+    let turnEventOffset = 0;
+    const nextEventId = (prefix: string) =>
+      perfEventId(prefix, thread.id, turnIndex * 100 + turnEventOffset++);
 
     events.push({
       type: "thread.message-sent",
-      eventId: perfEventId("perf-user-message", thread.id, turnIndex * 10),
+      eventId: nextEventId("perf-user-message"),
       aggregateKind: "thread",
       aggregateId: thread.id,
       occurredAt: userOccurredAt,
@@ -266,92 +302,113 @@ function buildThreadTurnEvents(
       },
     });
 
-    events.push({
-      type: "thread.message-sent",
-      eventId: perfEventId("perf-assistant-message", thread.id, turnIndex * 10 + 1),
-      aggregateKind: "thread",
-      aggregateId: thread.id,
-      occurredAt: assistantOccurredAt,
-      commandId: makeCommandId("perf-assistant-message", String(thread.id), turnIndex),
-      causationEventId: null,
-      correlationId: makeCommandId("perf-turn", String(thread.id), turnIndex),
-      metadata: {},
-      payload: {
-        threadId: thread.id,
-        messageId: assistantMessageId,
-        role: "assistant",
-        text: buildAssistantMessageText(thread, turnIndex),
-        attachments: [],
-        turnId,
-        streaming: false,
-        createdAt: assistantOccurredAt,
-        updatedAt: assistantOccurredAt,
-      },
-    });
+    for (
+      let assistantMessageIndex = 1;
+      assistantMessageIndex <= assistantMessageCount;
+      assistantMessageIndex += 1
+    ) {
+      const assistantOccurredAt = plusMs(turnBaseMs, 120 + assistantMessageIndex * 40);
+      const assistantMessageId = perfMessageIdForThread(
+        thread,
+        "assistant",
+        turnIndex,
+        assistantMessageIndex,
+      );
+      lastAssistantMessageId = assistantMessageId;
 
-    if (thread.activityStride !== null && turnIndex % thread.activityStride === 0) {
-      const activityOccurredAt = plusMs(turnBaseMs, 520);
       events.push({
-        type: "thread.activity-appended",
-        eventId: perfEventId("perf-activity", thread.id, turnIndex * 10 + 2),
+        type: "thread.message-sent",
+        eventId: nextEventId("perf-assistant-message"),
         aggregateKind: "thread",
         aggregateId: thread.id,
-        occurredAt: activityOccurredAt,
-        commandId: makeCommandId("perf-activity", String(thread.id), turnIndex),
+        occurredAt: assistantOccurredAt,
+        commandId: makeCommandId("perf-assistant-message", String(thread.id), turnIndex),
         causationEventId: null,
         correlationId: makeCommandId("perf-turn", String(thread.id), turnIndex),
         metadata: {},
         payload: {
           threadId: thread.id,
-          activity: {
-            id: perfEventId("perf-activity-row", thread.id, turnIndex),
-            tone: "tool",
-            kind: "tool.completed",
-            summary: `Synthetic command batch ${turnIndex}`,
-            payload: {
-              command: "perf-simulated",
-              batch: turnIndex,
-              threadCategory: thread.category,
+          messageId: assistantMessageId,
+          role: "assistant",
+          text: buildAssistantMessageText(
+            thread,
+            turnIndex,
+            assistantMessageIndex,
+            assistantMessageCount,
+          ),
+          attachments: [],
+          turnId,
+          streaming: false,
+          createdAt: assistantOccurredAt,
+          updatedAt: assistantOccurredAt,
+        },
+      });
+
+      if (activityAssistantIndex === assistantMessageIndex) {
+        const activityOccurredAt = plusMs(turnBaseMs, 132 + assistantMessageIndex * 40);
+        events.push({
+          type: "thread.activity-appended",
+          eventId: nextEventId("perf-activity"),
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: activityOccurredAt,
+          commandId: makeCommandId("perf-activity", String(thread.id), turnIndex),
+          causationEventId: null,
+          correlationId: makeCommandId("perf-turn", String(thread.id), turnIndex),
+          metadata: {},
+          payload: {
+            threadId: thread.id,
+            activity: {
+              id: perfEventId("perf-activity-row", thread.id, turnIndex),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: `Synthetic command batch ${turnIndex}.${assistantMessageIndex}`,
+              payload: {
+                command: "perf-simulated",
+                batch: turnIndex,
+                loop: assistantMessageIndex,
+                threadCategory: thread.category,
+              },
+              turnId,
+              createdAt: activityOccurredAt,
             },
-            turnId,
-            createdAt: activityOccurredAt,
           },
-        },
-      });
-    }
+        });
+      }
 
-    if (thread.planStride !== null && turnIndex % thread.planStride === 0) {
-      const planOccurredAt = plusMs(turnBaseMs, 640);
-      events.push({
-        type: "thread.proposed-plan-upserted",
-        eventId: perfEventId("perf-plan", thread.id, turnIndex * 10 + 3),
-        aggregateKind: "thread",
-        aggregateId: thread.id,
-        occurredAt: planOccurredAt,
-        commandId: makeCommandId("perf-plan", String(thread.id), turnIndex),
-        causationEventId: null,
-        correlationId: makeCommandId("perf-turn", String(thread.id), turnIndex),
-        metadata: {},
-        payload: {
-          threadId: thread.id,
-          proposedPlan: {
-            id: `perf-plan:${String(thread.id)}:${turnIndex.toString().padStart(4, "0")}`,
-            turnId,
-            planMarkdown: buildProposedPlanMarkdown(thread, turnIndex),
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: planOccurredAt,
-            updatedAt: planOccurredAt,
+      if (planAssistantIndex === assistantMessageIndex) {
+        const planOccurredAt = plusMs(turnBaseMs, 140 + assistantMessageIndex * 40);
+        events.push({
+          type: "thread.proposed-plan-upserted",
+          eventId: nextEventId("perf-plan"),
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: planOccurredAt,
+          commandId: makeCommandId("perf-plan", String(thread.id), turnIndex),
+          causationEventId: null,
+          correlationId: makeCommandId("perf-turn", String(thread.id), turnIndex),
+          metadata: {},
+          payload: {
+            threadId: thread.id,
+            proposedPlan: {
+              id: `perf-plan:${String(thread.id)}:${turnIndex.toString().padStart(4, "0")}`,
+              turnId,
+              planMarkdown: buildProposedPlanMarkdown(thread, turnIndex),
+              implementedAt: null,
+              implementationThreadId: null,
+              createdAt: planOccurredAt,
+              updatedAt: planOccurredAt,
+            },
           },
-        },
-      });
+        });
+      }
     }
 
     if (thread.diffStride !== null && turnIndex % thread.diffStride === 0) {
-      const diffOccurredAt = plusMs(turnBaseMs, 760);
+      const diffOccurredAt = plusMs(turnBaseMs, 180 + assistantMessageCount * 40);
       events.push({
         type: "thread.turn-diff-completed",
-        eventId: perfEventId("perf-diff", thread.id, turnIndex * 10 + 4),
+        eventId: nextEventId("perf-diff"),
         aggregateKind: "thread",
         aggregateId: thread.id,
         occurredAt: diffOccurredAt,
@@ -368,7 +425,7 @@ function buildThreadTurnEvents(
           ),
           status: "ready",
           files: buildCheckpointFiles(thread, threadOrdinal, turnIndex),
-          assistantMessageId,
+          assistantMessageId: lastAssistantMessageId,
           completedAt: diffOccurredAt,
         },
       });
@@ -380,27 +437,57 @@ function buildThreadTurnEvents(
 
 function buildScenarioEvents(
   scenario: PerfSeedScenario,
-  workspaceRoot: string,
+  workspaceRootsByProjectId: ReadonlyMap<ProjectId, string>,
 ): ReadonlyArray<Omit<OrchestrationEvent, "sequence">> {
   const projectStartMs = Date.parse("2026-03-01T12:00:00.000Z");
-  const projectCreatedAt = plusMs(projectStartMs, 0);
-  return [
-    buildProjectEvent(scenario, workspaceRoot, projectCreatedAt),
-    ...scenario.threads.flatMap((thread, threadOrdinal) => {
-      const threadCreatedAt = plusMs(projectStartMs, threadOrdinal * 60_000 + 50);
-      return [
-        buildThreadCreatedEvent(thread, scenario, threadCreatedAt),
-        ...buildThreadTurnEvents(scenario, thread, threadOrdinal, projectStartMs),
-      ];
-    }),
-  ];
+  const threadsByProjectId = new Map<ProjectId, PerfSeedThreadScenario[]>();
+  for (const thread of scenario.threads) {
+    const existing = threadsByProjectId.get(thread.projectId) ?? [];
+    existing.push(thread);
+    threadsByProjectId.set(thread.projectId, existing);
+  }
+
+  let globalThreadOrdinal = 0;
+  const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+
+  for (const [projectOrdinal, project] of scenario.projects.entries()) {
+    const projectWorkspaceRoot = workspaceRootsByProjectId.get(project.id);
+    if (!projectWorkspaceRoot) {
+      throw new Error(`Missing workspace root for perf project '${String(project.id)}'.`);
+    }
+    const projectBaseMs = projectStartMs + projectOrdinal * 6 * 60_000;
+    const projectCreatedAt = plusMs(projectBaseMs, 0);
+    const projectThreads = threadsByProjectId.get(project.id) ?? [];
+    events.push(buildProjectEvent(project, projectWorkspaceRoot, projectCreatedAt));
+
+    for (const [threadOrdinalWithinProject, thread] of projectThreads.entries()) {
+      const threadCreatedAt = plusMs(projectBaseMs, threadOrdinalWithinProject * 45_000 + 50);
+      const threadEvents = buildThreadTurnEvents(thread, globalThreadOrdinal, projectBaseMs);
+      globalThreadOrdinal += 1;
+      events.push(buildThreadCreatedEvent(thread, project, threadCreatedAt), ...threadEvents);
+    }
+  }
+
+  return events;
 }
 
 async function createTemplateDir(scenarioId: PerfSeedScenarioId): Promise<string> {
   const scenario = getPerfSeedScenario(scenarioId);
   const baseDir = await mkdtemp(join(tmpdir(), `t3-perf-template-${scenarioId}-`));
-  const workspaceRoot = join(baseDir, scenario.project.workspaceDirectoryName);
-  await initializeGitWorkspace(workspaceRoot);
+  const primaryProject = scenario.projects[0];
+  if (!primaryProject) {
+    throw new Error(`Perf scenario '${scenarioId}' has no projects.`);
+  }
+  const workspaceRoot = join(baseDir, primaryProject.workspaceDirectoryName);
+  const workspaceRootsByProjectId = new Map<ProjectId, string>(
+    scenario.projects.map((project) => [project.id, join(baseDir, project.workspaceDirectoryName)]),
+  );
+
+  await Promise.all(
+    scenario.projects.map((project) =>
+      initializeGitWorkspace(join(baseDir, project.workspaceDirectoryName)),
+    ),
+  );
 
   const seedLayer = Layer.empty.pipe(
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
@@ -424,7 +511,7 @@ async function createTemplateDir(scenarioId: PerfSeedScenarioId): Promise<string
         enableAssistantStreaming: scenario.id === "burst_base",
       });
 
-      for (const event of buildScenarioEvents(scenario, workspaceRoot)) {
+      for (const event of buildScenarioEvents(scenario, workspaceRootsByProjectId)) {
         const storedEvent = yield* eventStore.append(event);
         yield* projectionPipeline.projectEvent(storedEvent);
       }
@@ -470,7 +557,11 @@ export async function seedPerfState(scenarioId: PerfSeedScenarioId): Promise<Per
   const runParentDir = await mkdtemp(join(tmpdir(), `t3-perf-run-${scenarioId}-`));
   const baseDir = join(runParentDir, "base");
   await cp(templateDir, baseDir, { recursive: true, force: true });
-  const workspaceRoot = join(baseDir, scenario.project.workspaceDirectoryName);
+  const primaryProject = scenario.projects[0];
+  if (!primaryProject) {
+    throw new Error(`Perf scenario '${scenarioId}' has no projects.`);
+  }
+  const workspaceRoot = join(baseDir, primaryProject.workspaceDirectoryName);
 
   const snapshotLayer = Layer.empty.pipe(
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),

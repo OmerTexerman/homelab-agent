@@ -28,24 +28,33 @@ import {
   NoopServerSampler,
   type PerfServerSampler,
 } from "../../../../test/perf/support/serverSampler";
+import { buildPerfServerEnv } from "./serverEnv";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const serverBinPath = resolve(repoRoot, "apps/server/dist/bin.mjs");
 const serverClientIndexPath = resolve(repoRoot, "apps/server/dist/client/index.html");
 const PERF_ARTIFACT_DIR_ENV = "T3CODE_PERF_ARTIFACT_DIR";
 const PERF_HEADFUL_ENV = "T3CODE_PERF_HEADFUL";
-const PERF_PROVIDER_ENV = "T3CODE_PERF_PROVIDER";
-const PERF_SCENARIO_ENV = "T3CODE_PERF_SCENARIO";
 const PERF_SEED_JSON_START = "__T3_PERF_SEED_JSON_START__";
 const PERF_SEED_JSON_END = "__T3_PERF_SEED_JSON_END__";
 
 interface PerfSeedThreadSummary {
   readonly id: string;
+  readonly projectId: string;
+  readonly projectTitle: string | null;
   readonly title: string;
+  readonly turnCount: number | null;
   readonly messageCount: number;
   readonly activityCount: number;
   readonly proposedPlanCount: number;
   readonly checkpointCount: number;
+}
+
+interface PerfSeedProjectSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly threadCount: number;
 }
 
 export interface PerfSeededState {
@@ -54,6 +63,7 @@ export interface PerfSeededState {
   readonly baseDir: string;
   readonly workspaceRoot: string;
   readonly projectTitle: string | null;
+  readonly projectSummaries: ReadonlyArray<PerfSeedProjectSummary>;
   readonly threadSummaries: ReadonlyArray<PerfSeedThreadSummary>;
 }
 
@@ -265,12 +275,7 @@ export async function startPerfAppHarness(
   const artifactDir = await ensureArtifactDir(options.suite, options.seedScenarioId);
   const port = await pickFreePort();
   const url = `http://127.0.0.1:${port}/`;
-  const env = {
-    ...process.env,
-    T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
-    [PERF_PROVIDER_ENV]: "1",
-    ...(options.providerScenarioId ? { [PERF_SCENARIO_ENV]: options.providerScenarioId } : {}),
-  };
+  const env = buildPerfServerEnv(process.env, options.providerScenarioId);
 
   let stdoutBuffer = "";
   let stderrBuffer = "";
@@ -318,7 +323,9 @@ export async function startPerfAppHarness(
     await page.goto(url, { waitUntil: "domcontentloaded" });
 
     const firstProjectTitle =
-      seededState.projectTitle ?? getPerfSeedScenario(options.seedScenarioId).project.title;
+      seededState.projectSummaries[0]?.title ??
+      seededState.projectTitle ??
+      getPerfSeedScenario(options.seedScenarioId).projects[0]?.title;
     if (!firstProjectTitle) {
       throw new Error(`Seed scenario '${options.seedScenarioId}' produced no projects.`);
     }

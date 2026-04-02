@@ -18,11 +18,21 @@ type PerfProviderScenarioId = "dense_assistant_stream";
 
 interface PerfSeedThreadSummary {
   readonly id: string;
+  readonly projectId: string;
+  readonly projectTitle: string | null;
   readonly title: string;
+  readonly turnCount: number | null;
   readonly messageCount: number;
   readonly activityCount: number;
   readonly proposedPlanCount: number;
   readonly checkpointCount: number;
+}
+
+interface PerfSeedProjectSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly threadCount: number;
 }
 
 interface PerfSeededState {
@@ -31,6 +41,7 @@ interface PerfSeededState {
   readonly baseDir: string;
   readonly workspaceRoot: string;
   readonly projectTitle: string | null;
+  readonly projectSummaries: ReadonlyArray<PerfSeedProjectSummary>;
   readonly threadSummaries: ReadonlyArray<PerfSeedThreadSummary>;
 }
 
@@ -279,15 +290,21 @@ function printSeedSummary(
   process.stdout.write(`\nPerf app ready at ${url}\n`);
   process.stdout.write(`Scenario: ${seededState.scenarioId}\n`);
   process.stdout.write(`Base dir: ${seededState.baseDir}\n`);
-  process.stdout.write(`Workspace: ${seededState.workspaceRoot}\n`);
-  process.stdout.write(`Project: ${seededState.projectTitle ?? "<unknown>"}\n`);
+  process.stdout.write(`Primary workspace: ${seededState.workspaceRoot}\n`);
+  process.stdout.write("Projects:\n");
+  for (const project of seededState.projectSummaries) {
+    process.stdout.write(
+      `  - ${project.title} (${project.id}): ${project.threadCount} threads, ${project.workspaceRoot}\n`,
+    );
+  }
+
   process.stdout.write("Threads:\n");
   for (const thread of seededState.threadSummaries.toSorted(
     (left, right) =>
       right.messageCount - left.messageCount || left.title.localeCompare(right.title),
   )) {
     process.stdout.write(
-      `  - ${thread.title} (${thread.id}): ${thread.messageCount} messages, ${thread.activityCount} worklog rows, ${thread.proposedPlanCount} plans, ${thread.checkpointCount} checkpoints\n`,
+      `  - ${thread.projectTitle ?? "<unknown project>"} / ${thread.title} (${thread.id}): ${thread.turnCount ?? "?"} turns, ${thread.messageCount} messages, ${thread.activityCount} worklog rows, ${thread.proposedPlanCount} plans, ${thread.checkpointCount} checkpoints\n`,
     );
   }
 
