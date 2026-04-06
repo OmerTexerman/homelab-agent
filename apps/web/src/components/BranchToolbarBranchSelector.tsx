@@ -224,6 +224,7 @@ export function BranchToolbarBranchSelector({
     onComposerFocusRequest?.();
 
     runBranchAction(async () => {
+      const previousBranch = resolvedActiveBranch;
       setOptimisticBranch(selectedBranchName);
       try {
         const checkoutResult = await api.git.checkout({
@@ -236,6 +237,7 @@ export function BranchToolbarBranchSelector({
         setOptimisticBranch(nextBranchName);
         onSetThreadBranch(nextBranchName, selectionTarget.nextWorktreePath);
       } catch (error) {
+        setOptimisticBranch(previousBranch);
         toastManager.add({
           type: "error",
           title: "Failed to checkout branch.",
