@@ -460,8 +460,9 @@ export function BranchToolbarBranchSelector({
   }, [isBranchMenuOpen, maybeFetchNextBranchPage]);
 
   useEffect(() => {
+    if (shouldVirtualizeBranchList) return;
     maybeFetchNextBranchPage();
-  }, [branches.length, maybeFetchNextBranchPage]);
+  }, [branches.length, maybeFetchNextBranchPage, shouldVirtualizeBranchList]);
 
   const triggerLabel = getBranchTriggerLabel({
     activeWorktreePath,
