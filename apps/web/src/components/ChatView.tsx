@@ -28,7 +28,7 @@ import {
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useGitStatus } from "~/lib/gitStatusState";
@@ -2424,9 +2424,12 @@ export default function ChatView(props: ChatViewProps) {
       },
     ]);
     // Sending a message should always bring the latest user turn into view.
+    // Use animated: false — an animated scroll can be interrupted by mid-flight
+    // data changes (server response, composer resize) causing the scroll to
+    // land at the wrong position.
     isAtEndRef.current = true;
     requestAnimationFrame(() => {
-      legendListRef.current?.scrollToEnd?.({ animated: true });
+      legendListRef.current?.scrollToEnd?.({ animated: false });
       setShowScrollToBottom(false);
     });
 
@@ -2821,7 +2824,7 @@ export default function ChatView(props: ChatViewProps) {
       ]);
       isAtEndRef.current = true;
       requestAnimationFrame(() => {
-        legendListRef.current?.scrollToEnd?.({ animated: true });
+        legendListRef.current?.scrollToEnd?.({ animated: false });
         setShowScrollToBottom(false);
       });
 
