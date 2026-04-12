@@ -1968,6 +1968,8 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     setExpandedWorkGroups({});
     setPullRequestDialogState(null);
+    isAtEndRef.current = true;
+    setShowScrollToBottom(false);
     if (planSidebarOpenOnNextThreadRef.current) {
       planSidebarOpenOnNextThreadRef.current = false;
       setPlanSidebarOpen(true);
