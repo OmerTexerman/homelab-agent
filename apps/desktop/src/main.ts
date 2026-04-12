@@ -365,8 +365,8 @@ async function waitForBackendHttpReady(
 
   try {
     await waitForHttpReady(baseUrl, {
-      signal: controller.signal,
       ...options,
+      signal: controller.signal,
     });
   } finally {
     if (backendReadinessAbortController === controller) {

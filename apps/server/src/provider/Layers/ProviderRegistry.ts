@@ -108,17 +108,21 @@ export const ProviderRegistryLive = Layer.effect(
         readonly publish?: boolean;
       },
     ) {
-      const previousProviders = yield* Ref.get(providersRef);
-      const mergedProviders = new Map(
-        previousProviders.map((provider) => [provider.provider, provider] as const),
+      const [previousProviders, providers] = yield* Ref.modify(
+        providersRef,
+        (previousProviders) => {
+          const mergedProviders = new Map(
+            previousProviders.map((provider) => [provider.provider, provider] as const),
+          );
+
+          for (const provider of nextProviders) {
+            mergedProviders.set(provider.provider, provider);
+          }
+
+          const providers = orderProviderSnapshots([...mergedProviders.values()]);
+          return [[previousProviders, providers] as const, providers];
+        },
       );
-
-      for (const provider of nextProviders) {
-        mergedProviders.set(provider.provider, provider);
-      }
-
-      const providers = orderProviderSnapshots([...mergedProviders.values()]);
-      yield* Ref.set(providersRef, providers);
 
       if (haveProvidersChanged(previousProviders, providers)) {
         yield* Effect.forEach(nextProviders, persistProvider, {
