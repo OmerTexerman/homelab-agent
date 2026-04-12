@@ -1,55 +1,56 @@
+import path from "node:path";
+import os from "node:os";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,
+  RuntimeSessionId,
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
 } from "@t3tools/contracts";
-import * as Data from "effect/Data";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
-import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
-import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
-import * as Scope from "effect/Scope";
+import {
+  Duration,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  FileSystem,
+  Option,
+  PlatformError,
+  Ref,
+  Schedule,
+  Scope,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vitest";
 
-import * as ProcessRunner from "../../processRunner.ts";
-import type { TerminalManagerShape } from "../Services/Manager.ts";
+import type { TerminalManagerShape } from "../Services/Manager";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime";
+import type {
+  ThreadRuntimeDescriptor,
+  ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime";
 import {
   type PtyAdapterShape,
   type PtyExitEvent,
   type PtyProcess,
   type PtySpawnInput,
   PtySpawnError,
-} from "../Services/PTY.ts";
-import { makeTerminalManagerWithOptions } from "./Manager.ts";
-
-class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
-  readonly message: string;
-}> {}
+} from "../Services/PTY";
+import { makeTerminalManagerWithOptions } from "./Manager";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
   readonly killSignals: Array<string | undefined> = [];
-  readonly pid: number;
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyExitEvent) => void>();
   killed = false;
 
-  constructor(pid: number) {
-    this.pid = pid;
-  }
+  constructor(readonly pid: number) {}
 
   write(data: string): void {
     this.writes.push(data);
@@ -95,12 +96,9 @@ class FakePtyAdapter implements PtyAdapterShape {
   readonly spawnInputs: PtySpawnInput[] = [];
   readonly processes: FakePtyProcess[] = [];
   readonly spawnFailures: Error[] = [];
-  private readonly mode: "sync" | "async";
   private nextPid = 9000;
 
-  constructor(mode: "sync" | "async" = "sync") {
-    this.mode = mode;
-  }
+  constructor(private readonly mode: "sync" | "async" = "sync") {}
 
   spawn(input: PtySpawnInput): Effect.Effect<PtyProcess, PtySpawnError> {
     this.spawnInputs.push(input);
@@ -134,18 +132,17 @@ class FakePtyAdapter implements PtyAdapterShape {
 const waitFor = <E, R>(
   predicate: Effect.Effect<boolean, E, R>,
   timeout: Duration.Input = 800,
-): Effect.Effect<void, WaitForConditionError | E, R> =>
+): Effect.Effect<void, Error | E, R> =>
   predicate.pipe(
     Effect.filterOrFail(
       (done) => done,
-      () => new WaitForConditionError({ message: "Condition not met" }),
+      () => new Error("Condition not met"),
     ),
     Effect.retry(Schedule.spaced("15 millis")),
     Effect.timeoutOption(timeout),
     Effect.flatMap((result) =>
       Option.match(result, {
-        onNone: () =>
-          Effect.fail(new WaitForConditionError({ message: "Timed out waiting for condition" })),
+        onNone: () => Effect.fail(new Error("Timed out waiting for condition")),
         onSome: () => Effect.void,
       }),
     ),
@@ -173,37 +170,38 @@ function restartInput(overrides: Partial<TerminalRestartInput> = {}): TerminalRe
   };
 }
 
-const historyLogPath = (logsDir: string, threadId = "thread-1") =>
-  Effect.service(Path.Path).pipe(
-    Effect.map(({ join }) => join(logsDir, `terminal_${Encoding.encodeBase64Url(threadId)}.log`)),
-  );
+function historyLogName(threadId: string): string {
+  return `terminal_${Encoding.encodeBase64Url(threadId)}.log`;
+}
 
-const multiTerminalHistoryLogPath = (
+function multiTerminalHistoryLogName(threadId: string, terminalId: string): string {
+  const threadPart = `terminal_${Encoding.encodeBase64Url(threadId)}`;
+  if (terminalId === DEFAULT_TERMINAL_ID) {
+    return `${threadPart}.log`;
+  }
+  return `${threadPart}_${Encoding.encodeBase64Url(terminalId)}.log`;
+}
+
+function historyLogPath(logsDir: string, threadId = "thread-1"): string {
+  return path.join(logsDir, historyLogName(threadId));
+}
+
+function multiTerminalHistoryLogPath(
   logsDir: string,
   threadId = "thread-1",
-  terminalId = DEFAULT_TERMINAL_ID,
-) =>
-  Effect.service(Path.Path).pipe(
-    Effect.map(({ join }) => {
-      const threadPart = `terminal_${Encoding.encodeBase64Url(threadId)}`;
-      return join(
-        logsDir,
-        terminalId === DEFAULT_TERMINAL_ID
-          ? `${threadPart}.log`
-          : `${threadPart}_${Encoding.encodeBase64Url(terminalId)}.log`,
-      );
-    }),
-  );
+  terminalId = "default",
+): string {
+  return path.join(logsDir, multiTerminalHistoryLogName(threadId, terminalId));
+}
 
 interface CreateManagerOptions {
   shellResolver?: () => string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
   subprocessChecker?: (terminalPid: number) => Effect.Effect<boolean>;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   ptyAdapter?: FakePtyAdapter;
+  threadRuntime?: ThreadRuntimeShape;
 }
 
 interface ManagerFixture {
@@ -214,19 +212,148 @@ interface ManagerFixture {
   readonly getEvents: Effect.Effect<ReadonlyArray<TerminalEvent>>;
 }
 
+function makePassthroughThreadRuntime(options?: { readonly shell?: string }): ThreadRuntimeShape {
+  const runtimes = new Map<string, ThreadRuntimeDescriptor>();
+
+  const makeDescriptor = (
+    input: Parameters<ThreadRuntimeShape["ensureRuntime"]>[0],
+    status: ThreadRuntimeDescriptor["status"] = "ready",
+  ): ThreadRuntimeDescriptor => {
+    const cwd = input.requestedCwd ?? process.cwd();
+    const runtimeId = RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
+    const homePath = path.join(os.tmpdir(), "homelab-agent-terminal-home", String(input.threadId));
+    const now = new Date().toISOString();
+
+    return {
+      threadId: input.threadId,
+      runtimeId,
+      backend: "docker",
+      status,
+      health: "healthy",
+      provider: input.provider,
+      runtimeMode: input.runtimeMode,
+      imageRef: "ghcr.io/homelab-agent/runtime:test",
+      containerName: `runtime-${String(input.threadId)}`,
+      containerId: null,
+      workspacePath: cwd,
+      homePath,
+      cwd,
+      shell: options?.shell ?? "/bin/bash",
+      env: {
+        HOME: homePath,
+        PWD: cwd,
+        WORKSPACE: cwd,
+        T3_THREAD_ID: String(input.threadId),
+        T3_RUNTIME_ID: String(runtimeId),
+      },
+      createdAt: now,
+      updatedAt: now,
+      lastStartedAt: status === "running" ? now : null,
+      lastStoppedAt: null,
+      lastError: null,
+    };
+  };
+
+  return {
+    ensureRuntime: (input) =>
+      Effect.sync(() => {
+        const descriptor = makeDescriptor(
+          input,
+          runtimes.get(String(input.threadId))?.status ?? "ready",
+        );
+        runtimes.set(String(input.threadId), descriptor);
+        return descriptor;
+      }),
+    getRuntime: (threadId) => Effect.sync(() => runtimes.get(String(threadId))),
+    listRuntimes: () => Effect.sync(() => Array.from(runtimes.values())),
+    startRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing =
+          runtimes.get(key) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        const next: ThreadRuntimeDescriptor = {
+          ...existing,
+          status: "running",
+          health: "healthy",
+          updatedAt: new Date().toISOString(),
+          lastStartedAt: new Date().toISOString(),
+        };
+        runtimes.set(key, next);
+        return next;
+      }),
+    stopRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing = runtimes.get(key);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(key, {
+          ...existing,
+          status: "stopped",
+          updatedAt: new Date().toISOString(),
+          lastStoppedAt: new Date().toISOString(),
+        });
+      }),
+    touchRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing = runtimes.get(key);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(key, {
+          ...existing,
+          updatedAt: new Date().toISOString(),
+        });
+      }),
+    destroyRuntime: (threadId) =>
+      Effect.sync(() => {
+        runtimes.delete(String(threadId));
+      }),
+    resolveExecutionContext: (threadId) =>
+      Effect.sync(() => {
+        const runtime =
+          runtimes.get(String(threadId)) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(String(threadId), runtime);
+        return {
+          threadId: runtime.threadId,
+          runtimeId: runtime.runtimeId,
+          backend: runtime.backend,
+          containerId: runtime.containerId,
+          workspacePath: runtime.workspacePath,
+          homePath: runtime.homePath,
+          cwd: runtime.cwd,
+          shell: runtime.shell,
+          env: runtime.env,
+        };
+      }),
+    streamEvents: Stream.empty,
+  } satisfies ThreadRuntimeShape;
+}
+
 const createManager = (
   historyLineLimit = 5,
   options: CreateManagerOptions = {},
 ): Effect.Effect<
   ManagerFixture,
   PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path | Scope.Scope | ProcessRunner.ProcessRunner
+  FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
     Effect.gen(function* () {
-      const { join } = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-" });
-      const logsDir = join(baseDir, "userdata", "logs", "terminals");
+      const logsDir = path.join(baseDir, "userdata", "logs", "terminals");
       const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
 
       const manager = yield* makeTerminalManagerWithOptions({
@@ -234,19 +361,24 @@ const createManager = (
         historyLineLimit,
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
-        ...(options.platform !== undefined ? { platform: options.platform } : {}),
-        ...(options.env !== undefined ? { env: options.env } : {}),
         ...(options.subprocessChecker !== undefined
           ? { subprocessChecker: options.subprocessChecker }
           : {}),
         ...(options.subprocessPollIntervalMs !== undefined
           ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
           : {}),
-        processKillGraceMs: options.processKillGraceMs ?? 1,
+        ...(options.processKillGraceMs !== undefined
+          ? { processKillGraceMs: options.processKillGraceMs }
+          : {}),
         ...(options.maxRetainedInactiveSessions !== undefined
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
           : {}),
-      });
+      }).pipe(
+        Effect.provideService(
+          ThreadRuntime,
+          options.threadRuntime ?? makePassthroughThreadRuntime(),
+        ),
+      );
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
       const scope = yield* Effect.scope;
       const unsubscribe = yield* manager.subscribe((event) =>
@@ -257,7 +389,6 @@ const createManager = (
       return {
         baseDir,
         logsDir,
-        join,
         ptyAdapter,
         manager,
         getEvents: Ref.get(eventsRef),
@@ -265,12 +396,7 @@ const createManager = (
     }),
   );
 
-it.layer(
-  Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
-  { excludeTestServices: true },
-)("TerminalManager", (it) => {
-  const itEffectSkipOnWindows = process.platform === "win32" ? it.effect.skip : it.effect;
-
+it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (it) => {
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -307,10 +433,8 @@ it.layer(
       fs.writeFileString(filePath, contents),
     );
 
-  itEffectSkipOnWindows("preserves non-notFound cwd stat failures", () =>
+  it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-
       const { manager, baseDir } = yield* createManager();
       const blockedRoot = path.join(baseDir, "blocked-root");
       const blockedCwd = path.join(blockedRoot, "cwd");
@@ -407,27 +531,15 @@ it.layer(
   it.effect("clears transcript and emits cleared event", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager();
-      const path = yield* Path.Path;
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
       expect(process).toBeDefined();
       if (!process) return;
 
       process.emitData("hello\n");
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(historyLogPath(logsDir)));
       yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(readFileString),
-          Effect.map((text) => text === ""),
-        ),
-      );
+      yield* waitFor(Effect.map(readFileString(historyLogPath(logsDir)), (text) => text === ""));
 
       const events = yield* getEvents;
       expect(events.some((event) => event.type === "cleared")).toBe(true);
@@ -450,32 +562,19 @@ it.layer(
       expect(firstProcess).toBeDefined();
       if (!firstProcess) return;
       firstProcess.emitData("before restart\n");
-      const path = yield* Path.Path;
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(historyLogPath(logsDir)));
 
       const snapshot = yield* manager.restart(restartInput());
       assert.equal(snapshot.history, "");
       assert.equal(snapshot.status, "running");
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(readFileString),
-          Effect.map((text) => text === ""),
-        ),
-      );
+      yield* waitFor(Effect.map(readFileString(historyLogPath(logsDir)), (text) => text === ""));
     }),
   );
 
   it.effect("propagates explicit worktree metadata through snapshots and lifecycle events", () =>
     Effect.gen(function* () {
       const { manager, getEvents, baseDir } = yield* createManager();
-      const path = yield* Path.Path;
       const firstWorktreePath = path.join(baseDir, "worktrees", "feature-a");
       const secondWorktreePath = path.join(baseDir, "worktrees", "feature-b");
       yield* makeDirectory(firstWorktreePath);
@@ -513,7 +612,6 @@ it.layer(
   it.effect("preserves worktree metadata when reopening an exited session", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents, baseDir } = yield* createManager();
-      const path = yield* Path.Path;
       const worktreePath = path.join(baseDir, "worktrees", "feature-a");
       yield* makeDirectory(worktreePath);
 
@@ -556,18 +654,12 @@ it.layer(
   it.effect("emits exited event and reopens with clean transcript after exit", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager();
-      const path = yield* Path.Path;
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
       expect(process).toBeDefined();
       if (!process) return;
       process.emitData("old data\n");
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(historyLogPath(logsDir)));
       process.emitExit({ exitCode: 0, signal: 0 });
 
       yield* waitFor(
@@ -577,12 +669,7 @@ it.layer(
 
       assert.equal(reopened.history, "");
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
-      expect(
-        yield* historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(readFileString),
-        ),
-      ).toBe("");
+      expect(yield* readFileString(historyLogPath(logsDir))).toBe("");
     }),
   );
 
@@ -769,21 +856,10 @@ it.layer(
       expect(process).toBeDefined();
       if (!process) return;
       process.emitData("bye\n");
-      const path = yield* Path.Path;
-      yield* waitFor(
-        historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(historyLogPath(logsDir)));
 
       yield* manager.close({ threadId: "thread-1", deleteHistory: true });
-      expect(
-        yield* historyLogPath(logsDir).pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      ).toBe(false);
+      expect(yield* pathExists(historyLogPath(logsDir))).toBe(false);
     }),
   );
 
@@ -800,36 +876,19 @@ it.layer(
 
       defaultProcess.emitData("default\n");
       sidecarProcess.emitData("sidecar\n");
-      const path = yield* Path.Path;
-      yield* waitFor(
-        multiTerminalHistoryLogPath(logsDir, "thread-1", "default").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
-      yield* waitFor(
-        multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(multiTerminalHistoryLogPath(logsDir, "thread-1", "default")));
+      yield* waitFor(pathExists(multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar")));
 
       yield* manager.close({ threadId: "thread-1", deleteHistory: true });
 
       assert.equal(defaultProcess.killed, true);
       assert.equal(sidecarProcess.killed, true);
-      expect(
-        yield* multiTerminalHistoryLogPath(logsDir, "thread-1", "default").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      ).toBe(false);
-      expect(
-        yield* multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      ).toBe(false);
+      expect(yield* pathExists(multiTerminalHistoryLogPath(logsDir, "thread-1", "default"))).toBe(
+        false,
+      );
+      expect(yield* pathExists(multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar"))).toBe(
+        false,
+      );
     }),
   );
 
@@ -868,13 +927,7 @@ it.layer(
 
       first.emitData("first-history\n");
       second.emitData("second-history\n");
-      const path = yield* Path.Path;
-      yield* waitFor(
-        historyLogPath(logsDir, "thread-1").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.flatMap(pathExists),
-        ),
-      );
+      yield* waitFor(pathExists(historyLogPath(logsDir, "thread-1")));
       first.emitExit({ exitCode: 0, signal: 0 });
       yield* Effect.sleep(Duration.millis(5));
       second.emitExit({ exitCode: 0, signal: 0 });
@@ -897,9 +950,8 @@ it.layer(
   it.effect("migrates legacy transcript filenames to terminal-scoped history path on open", () =>
     Effect.gen(function* () {
       const { manager, logsDir } = yield* createManager();
-      const path = yield* Path.Path;
       const legacyPath = path.join(logsDir, "thread-1.log");
-      const nextPath = yield* historyLogPath(logsDir);
+      const nextPath = historyLogPath(logsDir);
       yield* writeFileString(legacyPath, "legacy-line\n");
 
       const snapshot = yield* manager.open(openInput());
@@ -913,12 +965,9 @@ it.layer(
 
   it.effect("retries with fallback shells when preferred shell spawn fails", () =>
     Effect.gen(function* () {
-      const missingShell =
-        process.platform === "win32"
-          ? "C:\\definitely\\missing-shell.exe"
-          : "/definitely/missing-shell -l";
       const { manager, ptyAdapter } = yield* createManager(5, {
-        shellResolver: () => missingShell,
+        shellResolver: () => "/definitely/missing-shell -l",
+        threadRuntime: makePassthroughThreadRuntime({ shell: "" }),
       });
       ptyAdapter.spawnFailures.push(new Error("posix_spawnp failed."));
 
@@ -926,17 +975,12 @@ it.layer(
 
       assert.equal(snapshot.status, "running");
       expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
-      expect(ptyAdapter.spawnInputs[0]?.shell).toBe(
-        process.platform === "win32" ? missingShell : "/definitely/missing-shell",
-      );
+      expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
 
       if (process.platform === "win32") {
         expect(
           ptyAdapter.spawnInputs.some(
-            (input) =>
-              input.shell === "pwsh.exe" ||
-              input.shell === "powershell.exe" ||
-              input.shell === "cmd.exe",
+            (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
           ),
         ).toBe(true);
       } else {
@@ -946,56 +990,6 @@ it.layer(
             .some((input) => input.shell !== "/definitely/missing-shell"),
         ).toBe(true);
       }
-    }),
-  );
-
-  it.effect("prefers PowerShell over ComSpec for Windows terminals", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        platform: "win32",
-        env: {
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-          PATH: "C:\\Windows\\System32",
-          SystemRoot: "C:\\Windows",
-        },
-      });
-
-      yield* manager.open(openInput());
-
-      expect(ptyAdapter.spawnInputs[0]).toEqual(
-        expect.objectContaining({
-          shell: "pwsh.exe",
-          args: ["-NoLogo"],
-        }),
-      );
-    }),
-  );
-
-  it.effect("falls back to built-in PowerShell by absolute path on Windows", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        platform: "win32",
-        env: {
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-          PATH: "C:\\Windows\\System32",
-          SystemRoot: "C:\\Windows",
-        },
-        shellResolver: () => "C:\\missing\\custom-shell.exe",
-      });
-      ptyAdapter.spawnFailures.push(
-        new Error("spawn custom-shell.exe ENOENT"),
-        new Error("spawn pwsh.exe ENOENT"),
-      );
-
-      yield* manager.open(openInput());
-
-      expect(ptyAdapter.spawnInputs.map((input) => input.shell)).toEqual([
-        "C:\\missing\\custom-shell.exe",
-        "pwsh.exe",
-        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      ]);
-      expect(ptyAdapter.spawnInputs[1]?.args).toEqual(["-NoLogo"]);
-      expect(ptyAdapter.spawnInputs[2]?.args).toEqual(["-NoLogo"]);
     }),
   );
 
@@ -1071,6 +1065,7 @@ it.layer(
       if (process.platform === "win32") return;
       const { manager, ptyAdapter } = yield* createManager(5, {
         shellResolver: () => "/bin/zsh",
+        threadRuntime: makePassthroughThreadRuntime({ shell: "" }),
       });
       yield* manager.open(openInput());
       const spawnInput = ptyAdapter.spawnInputs[0];

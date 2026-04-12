@@ -1,13 +1,13 @@
 import * as OS from "node:os";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
+import { Effect, FileSystem, Layer, Path } from "effect";
+import {
+  createLogicalProjectWorkspaceRoot,
+  parseLogicalProjectWorkspaceRoot,
+} from "@t3tools/shared/workspace";
 
 import {
   WorkspacePaths,
   WorkspacePathOutsideRootError,
-  WorkspaceRootCreateFailedError,
   WorkspaceRootNotDirectoryError,
   WorkspaceRootNotExistsError,
   type WorkspacePathsShape,
@@ -33,25 +33,16 @@ export const makeWorkspacePaths = Effect.gen(function* () {
 
   const normalizeWorkspaceRoot: WorkspacePathsShape["normalizeWorkspaceRoot"] = Effect.fn(
     "WorkspacePaths.normalizeWorkspaceRoot",
-  )(function* (workspaceRoot, options) {
+  )(function* (workspaceRoot) {
+    const logicalProjectId = parseLogicalProjectWorkspaceRoot(workspaceRoot);
+    if (logicalProjectId) {
+      return createLogicalProjectWorkspaceRoot(logicalProjectId);
+    }
+
     const normalizedWorkspaceRoot = path.resolve(expandHomePath(workspaceRoot.trim(), path));
-    let workspaceStat = yield* fileSystem
+    const workspaceStat = yield* fileSystem
       .stat(normalizedWorkspaceRoot)
       .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!workspaceStat && options?.createIfMissing) {
-      yield* fileSystem.makeDirectory(normalizedWorkspaceRoot, { recursive: true }).pipe(
-        Effect.mapError(
-          () =>
-            new WorkspaceRootCreateFailedError({
-              workspaceRoot,
-              normalizedWorkspaceRoot,
-            }),
-        ),
-      );
-      workspaceStat = yield* fileSystem
-        .stat(normalizedWorkspaceRoot)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-    }
     if (!workspaceStat) {
       return yield* new WorkspaceRootNotExistsError({
         workspaceRoot,

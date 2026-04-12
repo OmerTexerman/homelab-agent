@@ -3,8 +3,6 @@ import type { EnvironmentId, EnvironmentApi } from "@t3tools/contracts";
 import type { WsRpcClient } from "./rpc/wsRpcClient";
 import { readEnvironmentConnection } from "./environments/runtime";
 
-const environmentApiOverridesForTests = new Map<EnvironmentId, EnvironmentApi>();
-
 export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
   return {
     terminal: {
@@ -20,38 +18,35 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       searchEntries: rpcClient.projects.searchEntries,
       writeFile: rpcClient.projects.writeFile,
     },
-    filesystem: {
-      browse: rpcClient.filesystem.browse,
-    },
-    sourceControl: {
-      lookupRepository: rpcClient.sourceControl.lookupRepository,
-      cloneRepository: rpcClient.sourceControl.cloneRepository,
-      publishRepository: rpcClient.sourceControl.publishRepository,
-    },
-    vcs: {
-      pull: rpcClient.vcs.pull,
-      refreshStatus: rpcClient.vcs.refreshStatus,
-      onStatus: (input, callback, options) => rpcClient.vcs.onStatus(input, callback, options),
-      listRefs: rpcClient.vcs.listRefs,
-      createWorktree: rpcClient.vcs.createWorktree,
-      removeWorktree: rpcClient.vcs.removeWorktree,
-      createRef: rpcClient.vcs.createRef,
-      switchRef: rpcClient.vcs.switchRef,
-      init: rpcClient.vcs.init,
+    threadWorkspace: {
+      listEntries: rpcClient.threadWorkspace.listEntries,
+      readFile: rpcClient.threadWorkspace.readFile,
+      writeFile: rpcClient.threadWorkspace.writeFile,
     },
     git: {
+      pull: rpcClient.git.pull,
+      refreshStatus: rpcClient.git.refreshStatus,
+      onStatus: (input, callback, options) => rpcClient.git.onStatus(input, callback, options),
+      listBranches: rpcClient.git.listBranches,
+      createWorktree: rpcClient.git.createWorktree,
+      removeWorktree: rpcClient.git.removeWorktree,
+      createBranch: rpcClient.git.createBranch,
+      checkout: rpcClient.git.checkout,
+      init: rpcClient.git.init,
       resolvePullRequest: rpcClient.git.resolvePullRequest,
       preparePullRequestThread: rpcClient.git.preparePullRequestThread,
     },
     orchestration: {
+      getSnapshot: rpcClient.orchestration.getSnapshot,
       dispatchCommand: rpcClient.orchestration.dispatchCommand,
       getTurnDiff: rpcClient.orchestration.getTurnDiff,
       getFullThreadDiff: rpcClient.orchestration.getFullThreadDiff,
-      getArchivedShellSnapshot: rpcClient.orchestration.getArchivedShellSnapshot,
-      subscribeShell: (callback, options) =>
-        rpcClient.orchestration.subscribeShell(callback, options),
-      subscribeThread: (input, callback, options) =>
-        rpcClient.orchestration.subscribeThread(input, callback, options),
+      replayEvents: (fromSequenceExclusive) =>
+        rpcClient.orchestration
+          .replayEvents({ fromSequenceExclusive })
+          .then((events) => [...events]),
+      onDomainEvent: (callback, options) =>
+        rpcClient.orchestration.onDomainEvent(callback, options),
     },
   };
 }
@@ -65,11 +60,6 @@ export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi
     return undefined;
   }
 
-  const overriddenApi = environmentApiOverridesForTests.get(environmentId);
-  if (overriddenApi) {
-    return overriddenApi;
-  }
-
   const connection = readEnvironmentConnection(environmentId);
   return connection ? createEnvironmentApi(connection.client) : undefined;
 }
@@ -80,15 +70,4 @@ export function ensureEnvironmentApi(environmentId: EnvironmentId): EnvironmentA
     throw new Error(`Environment API not found for environment ${environmentId}`);
   }
   return api;
-}
-
-export function __setEnvironmentApiOverrideForTests(
-  environmentId: EnvironmentId,
-  api: EnvironmentApi,
-): void {
-  environmentApiOverridesForTests.set(environmentId, api);
-}
-
-export function __resetEnvironmentApiOverridesForTests(): void {
-  environmentApiOverridesForTests.clear();
 }

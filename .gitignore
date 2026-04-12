@@ -9,6 +9,8 @@ apps/*/dist
 packages/*/dist
 .env
 .env.local
+.env.*
+!.env.example
 dist/
 build/
 .logs/
@@ -27,3 +29,10 @@ squashfs-root/
 .gstack/
 dist-electron/
 .electron-runtime/
+.turbo/
+apps/*/.turbo/
+packages/*/.turbo/
+apps/marketing/.astro/
+coverage/
+playwright-report/
+test-results/

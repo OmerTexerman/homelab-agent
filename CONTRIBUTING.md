@@ -1,65 +1,57 @@
 # Contributing
 
-## Read This First
+## Scope
 
-We are not actively accepting contributions right now.
+This fork is still moving quickly. Reliability, maintainability, and clear
+product direction matter more than feature volume.
 
-You can still open an issue or PR, but please do so knowing there is a high chance we close it, defer it forever, or never look at it.
+Small, focused pull requests are preferred.
 
-If that sounds annoying, that is because it is. This project is still early and we are trying to keep scope, quality, and direction under control.
+Before making broad changes, read:
 
-PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
+- `docs/README.md`
+- `docs/product-direction.md`
+- `docs/codebase.md`
+- `docs/codebase-audit.md`
 
-If you are an external contributor, expect `vouch:unvouched` until we explicitly add you to [.github/VOUCHED.td](.github/VOUCHED.td).
+## Before Opening a PR
 
-## What We Are Most Likely To Accept
+- search for an existing issue or discussion first
+- keep the change narrowly scoped
+- explain the operational problem being solved
+- include screenshots for UI changes
+- include validation details
 
-Small, focused bug fixes.
+## What Is Usually Helpful
 
-Small reliability fixes.
+- runtime reliability fixes
+- UX polish that simplifies the homelab workflow
+- maintainability improvements that reduce fork complexity
+- provider integration fixes that stay close to upstream where practical
 
-Small performance improvements.
+## What Usually Needs Discussion First
 
-Tightly scoped maintenance work that clearly improves the project without changing its direction.
+- major product-scope changes
+- large refactors across unrelated subsystems
+- changes that make future upstream merging materially harder
 
-## What We Are Least Likely To Accept
+## Validation
 
-Large PRs.
+Before opening a PR, run:
 
-Drive-by feature work.
+```bash
+bun fmt
+bun lint
+bun typecheck
+```
 
-Opinionated rewrites.
+If tests are relevant, use:
 
-Anything that expands product scope without us asking for it first.
+```bash
+bun run test
+```
 
-If you open a 1,000+ line PR full of new features, we will probably close it quickly and remember that you ignored the clearly written instructions.
+## Attribution
 
-## If You Still Want To Open A PR
-
-Keep it small.
-
-Explain exactly what changed.
-
-Explain exactly why the change should exist.
-
-Do not mix unrelated fixes together.
-
-If the PR makes anything resembling a UI change, include clear before/after images.
-
-If the change depends on motion, timing, transitions, or interaction details, include a short video.
-
-If we have to guess what changed, we are much less likely to review it.
-
-## Issues First
-
-If you are thinking about a non-trivial change, open an issue first.
-
-That still does not mean we will want the PR, but it gives you a chance to avoid wasting your time.
-
-## Be Realistic
-
-Opening a PR does not create an obligation on our side.
-
-We may close it. We may ignore it. We may ask you to shrink it. We may reimplement the idea ourselves later.
-
-If you are fine with that, proceed.
+This repository is a fork of `pingdotgg/t3code`. Keep upstream attribution and
+license information intact when moving or rewriting code derived from upstream.

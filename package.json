@@ -1,6 +1,15 @@
 {
   "name": "@t3tools/monorepo",
   "private": true,
+  "homepage": "https://github.com/OmerTexerman/homelab-agent",
+  "bugs": {
+    "url": "https://github.com/OmerTexerman/homelab-agent/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OmerTexerman/homelab-agent.git"
+  },
   "workspaces": {
     "packages": [
       "apps/*",

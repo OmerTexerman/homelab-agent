@@ -1,54 +1,50 @@
-import * as Schema from "effect/Schema";
+import { Schema } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
-import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
-import { AuthAccessStreamEvent } from "./auth.ts";
-import {
-  FilesystemBrowseInput,
-  FilesystemBrowseResult,
-  FilesystemBrowseError,
-} from "./filesystem.ts";
+import { OpenError, OpenInEditorInput } from "./editor";
+import { AuthAccessStreamEvent } from "./auth";
 import {
   GitActionProgressEvent,
-  VcsSwitchRefInput,
-  VcsSwitchRefResult,
+  GitCheckoutInput,
+  GitCheckoutResult,
   GitCommandError,
-  VcsCreateRefInput,
-  VcsCreateRefResult,
-  VcsCreateWorktreeInput,
-  VcsCreateWorktreeResult,
-  VcsInitInput,
-  VcsListRefsInput,
-  VcsListRefsResult,
+  GitCreateBranchInput,
+  GitCreateBranchResult,
+  GitCreateWorktreeInput,
+  GitCreateWorktreeResult,
+  GitInitInput,
+  GitListBranchesInput,
+  GitListBranchesResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
-  VcsPullInput,
+  GitPullInput,
   GitPullRequestRefInput,
-  VcsPullResult,
-  VcsRemoveWorktreeInput,
+  GitPullResult,
+  GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
-  VcsStatusInput,
-  VcsStatusResult,
-  VcsStatusStreamEvent,
-} from "./git.ts";
-import { KeybindingsConfigError } from "./keybindings.ts";
+  GitStatusInput,
+  GitStatusResult,
+  GitStatusStreamEvent,
+} from "./git";
+import { KeybindingsConfigError } from "./keybindings";
 import {
   ClientOrchestrationCommand,
+  OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
   OrchestrationDispatchCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetSnapshotError,
+  OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsError,
   OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
-} from "./orchestration.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+} from "./orchestration";
 import {
   ProjectSearchEntriesError,
   ProjectSearchEntriesInput,
@@ -56,7 +52,23 @@ import {
   ProjectWriteFileError,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
-} from "./project.ts";
+} from "./project";
+import {
+  ThreadWorkspaceEntriesInput,
+  ThreadWorkspaceEntriesResult,
+  ThreadWorkspaceReadFileInput,
+  ThreadWorkspaceReadFileResult,
+  ThreadWorkspaceWriteFileInput,
+  ThreadWorkspaceWriteFileResult,
+  ThreadWorkspaceError,
+} from "./threadWorkspace";
+import {
+  HomelabSecretDeleteInput,
+  HomelabSecretDescriptor,
+  HomelabSecretError,
+  HomelabSecretsListResult,
+  HomelabSecretUpsertInput,
+} from "./homelabSecrets";
 import {
   TerminalClearInput,
   TerminalCloseInput,
@@ -67,37 +79,16 @@ import {
   TerminalRestartInput,
   TerminalSessionSnapshot,
   TerminalWriteInput,
-} from "./terminal.ts";
+} from "./terminal";
 import {
   ServerConfigStreamEvent,
   ServerConfig,
-  ServerProviderUpdateError,
-  ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
-  ServerRemoveKeybindingInput,
-  ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
-  ServerTraceDiagnosticsResult,
-  ServerProcessDiagnosticsResult,
-  ServerProcessResourceHistoryInput,
-  ServerProcessResourceHistoryResult,
-  ServerSignalProcessInput,
-  ServerSignalProcessResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
-} from "./server.ts";
-import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
-import {
-  SourceControlCloneRepositoryInput,
-  SourceControlCloneRepositoryResult,
-  SourceControlDiscoveryResult,
-  SourceControlPublishRepositoryInput,
-  SourceControlPublishRepositoryResult,
-  SourceControlRepositoryError,
-  SourceControlRepositoryInfo,
-  SourceControlRepositoryLookupInput,
-} from "./sourceControl.ts";
-import { VcsError } from "./vcs.ts";
+} from "./server";
+import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -106,25 +97,23 @@ export const WS_METHODS = {
   projectsRemove: "projects.remove",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  threadWorkspaceListEntries: "threadWorkspace.listEntries",
+  threadWorkspaceReadFile: "threadWorkspace.readFile",
+  threadWorkspaceWriteFile: "threadWorkspace.writeFile",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
 
-  // Filesystem methods
-  filesystemBrowse: "filesystem.browse",
-
-  // VCS methods
-  vcsPull: "vcs.pull",
-  vcsRefreshStatus: "vcs.refreshStatus",
-  vcsListRefs: "vcs.listRefs",
-  vcsCreateWorktree: "vcs.createWorktree",
-  vcsRemoveWorktree: "vcs.removeWorktree",
-  vcsCreateRef: "vcs.createRef",
-  vcsSwitchRef: "vcs.switchRef",
-  vcsInit: "vcs.init",
-
-  // Git workflow methods
+  // Git methods
+  gitPull: "git.pull",
+  gitRefreshStatus: "git.refreshStatus",
   gitRunStackedAction: "git.runStackedAction",
+  gitListBranches: "git.listBranches",
+  gitCreateWorktree: "git.createWorktree",
+  gitRemoveWorktree: "git.removeWorktree",
+  gitCreateBranch: "git.createBranch",
+  gitCheckout: "git.checkout",
+  gitInit: "git.init",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
@@ -139,24 +128,16 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
-  serverUpdateProvider: "server.updateProvider",
   serverUpsertKeybinding: "server.upsertKeybinding",
-  serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
-  serverDiscoverSourceControl: "server.discoverSourceControl",
-  serverGetTraceDiagnostics: "server.getTraceDiagnostics",
-  serverGetProcessDiagnostics: "server.getProcessDiagnostics",
-  serverGetProcessResourceHistory: "server.getProcessResourceHistory",
-  serverSignalProcess: "server.signalProcess",
-
-  // Source control methods
-  sourceControlLookupRepository: "sourceControl.lookupRepository",
-  sourceControlCloneRepository: "sourceControl.cloneRepository",
-  sourceControlPublishRepository: "sourceControl.publishRepository",
+  serverListHomelabSecrets: "server.listHomelabSecrets",
+  serverUpsertHomelabSecret: "server.upsertHomelabSecret",
+  serverDeleteHomelabSecret: "server.deleteHomelabSecret",
 
   // Streaming subscriptions
-  subscribeVcsStatus: "subscribeVcsStatus",
+  subscribeGitStatus: "subscribeGitStatus",
+  subscribeOrchestrationDomainEvents: "subscribeOrchestrationDomainEvents",
   subscribeTerminalEvents: "subscribeTerminalEvents",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
@@ -169,12 +150,6 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
   error: KeybindingsConfigError,
 });
 
-export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
-  payload: ServerRemoveKeybindingInput,
-  success: ServerRemoveKeybindingResult,
-  error: KeybindingsConfigError,
-});
-
 export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -182,22 +157,8 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
-  payload: Schema.Struct({
-    /**
-     * When supplied, only refresh this specific provider instance. When
-     * omitted, refresh all configured instances — the legacy `refresh()`
-     * behaviour retained for transports that still dispatch untargeted
-     * refreshes.
-     */
-    instanceId: Schema.optional(ProviderInstanceId),
-  }),
+  payload: Schema.Struct({}),
   success: ServerProviderUpdatedPayload,
-});
-
-export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
-  payload: ServerProviderUpdateInput,
-  success: ServerProviderUpdatedPayload,
-  error: ServerProviderUpdateError,
 });
 
 export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
@@ -212,57 +173,22 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   error: ServerSettingsError,
 });
 
-export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
+export const WsServerListHomelabSecretsRpc = Rpc.make(WS_METHODS.serverListHomelabSecrets, {
   payload: Schema.Struct({}),
-  success: SourceControlDiscoveryResult,
+  success: HomelabSecretsListResult,
+  error: HomelabSecretError,
 });
 
-export const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
-  payload: Schema.Struct({}),
-  success: ServerTraceDiagnosticsResult,
+export const WsServerUpsertHomelabSecretRpc = Rpc.make(WS_METHODS.serverUpsertHomelabSecret, {
+  payload: HomelabSecretUpsertInput,
+  success: HomelabSecretDescriptor,
+  error: HomelabSecretError,
 });
 
-export const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
-  payload: Schema.Struct({}),
-  success: ServerProcessDiagnosticsResult,
+export const WsServerDeleteHomelabSecretRpc = Rpc.make(WS_METHODS.serverDeleteHomelabSecret, {
+  payload: HomelabSecretDeleteInput,
+  error: HomelabSecretError,
 });
-
-export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
-  WS_METHODS.serverGetProcessResourceHistory,
-  {
-    payload: ServerProcessResourceHistoryInput,
-    success: ServerProcessResourceHistoryResult,
-  },
-);
-
-export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
-  payload: ServerSignalProcessInput,
-  success: ServerSignalProcessResult,
-});
-
-export const WsSourceControlLookupRepositoryRpc = Rpc.make(
-  WS_METHODS.sourceControlLookupRepository,
-  {
-    payload: SourceControlRepositoryLookupInput,
-    success: SourceControlRepositoryInfo,
-    error: SourceControlRepositoryError,
-  },
-);
-
-export const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlCloneRepository, {
-  payload: SourceControlCloneRepositoryInput,
-  success: SourceControlCloneRepositoryResult,
-  error: SourceControlRepositoryError,
-});
-
-export const WsSourceControlPublishRepositoryRpc = Rpc.make(
-  WS_METHODS.sourceControlPublishRepository,
-  {
-    payload: SourceControlPublishRepositoryInput,
-    success: SourceControlPublishRepositoryResult,
-    error: SourceControlRepositoryError,
-  },
-);
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
@@ -276,33 +202,45 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: ProjectWriteFileError,
 });
 
+export const WsThreadWorkspaceListEntriesRpc = Rpc.make(WS_METHODS.threadWorkspaceListEntries, {
+  payload: ThreadWorkspaceEntriesInput,
+  success: ThreadWorkspaceEntriesResult,
+  error: ThreadWorkspaceError,
+});
+
+export const WsThreadWorkspaceReadFileRpc = Rpc.make(WS_METHODS.threadWorkspaceReadFile, {
+  payload: ThreadWorkspaceReadFileInput,
+  success: ThreadWorkspaceReadFileResult,
+  error: ThreadWorkspaceError,
+});
+
+export const WsThreadWorkspaceWriteFileRpc = Rpc.make(WS_METHODS.threadWorkspaceWriteFile, {
+  payload: ThreadWorkspaceWriteFileInput,
+  success: ThreadWorkspaceWriteFileResult,
+  error: ThreadWorkspaceError,
+});
+
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
-  payload: LaunchEditorInput,
-  error: ExternalLauncherError,
+  payload: OpenInEditorInput,
+  error: OpenError,
 });
 
-export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
-  payload: FilesystemBrowseInput,
-  success: FilesystemBrowseResult,
-  error: FilesystemBrowseError,
-});
-
-export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
-  payload: VcsStatusInput,
-  success: VcsStatusStreamEvent,
+export const WsSubscribeGitStatusRpc = Rpc.make(WS_METHODS.subscribeGitStatus, {
+  payload: GitStatusInput,
+  success: GitStatusStreamEvent,
   error: GitManagerServiceError,
   stream: true,
 });
 
-export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
-  payload: VcsPullInput,
-  success: VcsPullResult,
+export const WsGitPullRpc = Rpc.make(WS_METHODS.gitPull, {
+  payload: GitPullInput,
+  success: GitPullResult,
   error: GitCommandError,
 });
 
-export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
-  payload: VcsStatusInput,
-  success: VcsStatusResult,
+export const WsGitRefreshStatusRpc = Rpc.make(WS_METHODS.gitRefreshStatus, {
+  payload: GitStatusInput,
+  success: GitStatusResult,
   error: GitManagerServiceError,
 });
 
@@ -325,38 +263,38 @@ export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePu
   error: GitManagerServiceError,
 });
 
-export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
-  payload: VcsListRefsInput,
-  success: VcsListRefsResult,
+export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
+  payload: GitListBranchesInput,
+  success: GitListBranchesResult,
   error: GitCommandError,
 });
 
-export const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
-  payload: VcsCreateWorktreeInput,
-  success: VcsCreateWorktreeResult,
+export const WsGitCreateWorktreeRpc = Rpc.make(WS_METHODS.gitCreateWorktree, {
+  payload: GitCreateWorktreeInput,
+  success: GitCreateWorktreeResult,
   error: GitCommandError,
 });
 
-export const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
-  payload: VcsRemoveWorktreeInput,
+export const WsGitRemoveWorktreeRpc = Rpc.make(WS_METHODS.gitRemoveWorktree, {
+  payload: GitRemoveWorktreeInput,
   error: GitCommandError,
 });
 
-export const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
-  payload: VcsCreateRefInput,
-  success: VcsCreateRefResult,
+export const WsGitCreateBranchRpc = Rpc.make(WS_METHODS.gitCreateBranch, {
+  payload: GitCreateBranchInput,
+  success: GitCreateBranchResult,
   error: GitCommandError,
 });
 
-export const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
-  payload: VcsSwitchRefInput,
-  success: VcsSwitchRefResult,
+export const WsGitCheckoutRpc = Rpc.make(WS_METHODS.gitCheckout, {
+  payload: GitCheckoutInput,
+  success: GitCheckoutResult,
   error: GitCommandError,
 });
 
-export const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
-  payload: VcsInitInput,
-  error: VcsError,
+export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
+  payload: GitInitInput,
+  error: GitCommandError,
 });
 
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
@@ -391,6 +329,12 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: TerminalError,
 });
 
+export const WsOrchestrationGetSnapshotRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getSnapshot, {
+  payload: OrchestrationGetSnapshotInput,
+  success: OrchestrationRpcSchemas.getSnapshot.output,
+  error: OrchestrationGetSnapshotError,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -421,28 +365,11 @@ export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   error: OrchestrationReplayEventsError,
 });
 
-export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
+export const WsSubscribeOrchestrationDomainEventsRpc = Rpc.make(
+  WS_METHODS.subscribeOrchestrationDomainEvents,
   {
-    payload: OrchestrationRpcSchemas.getArchivedShellSnapshot.input,
-    success: OrchestrationRpcSchemas.getArchivedShellSnapshot.output,
-    error: OrchestrationGetSnapshotError,
-  },
-);
-
-export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
-  payload: OrchestrationRpcSchemas.subscribeShell.input,
-  success: OrchestrationRpcSchemas.subscribeShell.output,
-  error: OrchestrationGetSnapshotError,
-  stream: true,
-});
-
-export const WsOrchestrationSubscribeThreadRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.subscribeThread,
-  {
-    payload: OrchestrationRpcSchemas.subscribeThread.input,
-    success: OrchestrationRpcSchemas.subscribeThread.output,
-    error: OrchestrationGetSnapshotError,
+    payload: Schema.Struct({}),
+    success: OrchestrationEvent,
     stream: true,
   },
 );
@@ -475,50 +402,44 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
-  WsServerUpdateProviderRpc,
   WsServerUpsertKeybindingRpc,
-  WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
-  WsServerDiscoverSourceControlRpc,
-  WsServerGetTraceDiagnosticsRpc,
-  WsServerGetProcessDiagnosticsRpc,
-  WsServerGetProcessResourceHistoryRpc,
-  WsServerSignalProcessRpc,
-  WsSourceControlLookupRepositoryRpc,
-  WsSourceControlCloneRepositoryRpc,
-  WsSourceControlPublishRepositoryRpc,
+  WsServerListHomelabSecretsRpc,
+  WsServerUpsertHomelabSecretRpc,
+  WsServerDeleteHomelabSecretRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsThreadWorkspaceListEntriesRpc,
+  WsThreadWorkspaceReadFileRpc,
+  WsThreadWorkspaceWriteFileRpc,
   WsShellOpenInEditorRpc,
-  WsFilesystemBrowseRpc,
-  WsSubscribeVcsStatusRpc,
-  WsVcsPullRpc,
-  WsVcsRefreshStatusRpc,
+  WsSubscribeGitStatusRpc,
+  WsGitPullRpc,
+  WsGitRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
-  WsVcsListRefsRpc,
-  WsVcsCreateWorktreeRpc,
-  WsVcsRemoveWorktreeRpc,
-  WsVcsCreateRefRpc,
-  WsVcsSwitchRefRpc,
-  WsVcsInitRpc,
+  WsGitListBranchesRpc,
+  WsGitCreateWorktreeRpc,
+  WsGitRemoveWorktreeRpc,
+  WsGitCreateBranchRpc,
+  WsGitCheckoutRpc,
+  WsGitInitRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,
   WsTerminalClearRpc,
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
+  WsSubscribeOrchestrationDomainEventsRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
+  WsOrchestrationGetSnapshotRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
-  WsOrchestrationGetArchivedShellSnapshotRpc,
-  WsOrchestrationSubscribeShellRpc,
-  WsOrchestrationSubscribeThreadRpc,
 );
