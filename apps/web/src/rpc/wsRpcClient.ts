@@ -59,6 +59,11 @@ export interface WsRpcClient {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.projectsWriteFile>;
   };
+  readonly threadWorkspace: {
+    readonly listEntries: RpcUnaryMethod<typeof WS_METHODS.threadWorkspaceListEntries>;
+    readonly readFile: RpcUnaryMethod<typeof WS_METHODS.threadWorkspaceReadFile>;
+    readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.threadWorkspaceWriteFile>;
+  };
   readonly shell: {
     readonly openInEditor: (input: {
       readonly cwd: Parameters<LocalApi["shell"]["openInEditor"]>[0];
@@ -93,6 +98,9 @@ export interface WsRpcClient {
     readonly refreshProviders: RpcUnaryNoArgMethod<typeof WS_METHODS.serverRefreshProviders>;
     readonly upsertKeybinding: RpcUnaryMethod<typeof WS_METHODS.serverUpsertKeybinding>;
     readonly getSettings: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetSettings>;
+    readonly listHomelabSecrets: RpcUnaryNoArgMethod<typeof WS_METHODS.serverListHomelabSecrets>;
+    readonly upsertHomelabSecret: RpcUnaryMethod<typeof WS_METHODS.serverUpsertHomelabSecret>;
+    readonly deleteHomelabSecret: RpcUnaryMethod<typeof WS_METHODS.serverDeleteHomelabSecret>;
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateSettings>>;
@@ -136,6 +144,14 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.projectsSearchEntries](input)),
       writeFile: (input) =>
         transport.request((client) => client[WS_METHODS.projectsWriteFile](input)),
+    },
+    threadWorkspace: {
+      listEntries: (input) =>
+        transport.request((client) => client[WS_METHODS.threadWorkspaceListEntries](input)),
+      readFile: (input) =>
+        transport.request((client) => client[WS_METHODS.threadWorkspaceReadFile](input)),
+      writeFile: (input) =>
+        transport.request((client) => client[WS_METHODS.threadWorkspaceWriteFile](input)),
     },
     shell: {
       openInEditor: (input) =>
@@ -197,6 +213,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       upsertKeybinding: (input) =>
         transport.request((client) => client[WS_METHODS.serverUpsertKeybinding](input)),
       getSettings: () => transport.request((client) => client[WS_METHODS.serverGetSettings]({})),
+      listHomelabSecrets: () =>
+        transport.request((client) => client[WS_METHODS.serverListHomelabSecrets]({})),
+      upsertHomelabSecret: (input) =>
+        transport.request((client) => client[WS_METHODS.serverUpsertHomelabSecret](input)),
+      deleteHomelabSecret: (input) =>
+        transport.request((client) => client[WS_METHODS.serverDeleteHomelabSecret](input)),
       updateSettings: (patch) =>
         transport.request((client) => client[WS_METHODS.serverUpdateSettings]({ patch })),
       subscribeConfig: (listener, options) =>

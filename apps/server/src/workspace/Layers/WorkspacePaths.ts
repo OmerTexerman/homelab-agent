@@ -1,5 +1,9 @@
 import * as OS from "node:os";
 import { Effect, FileSystem, Layer, Path } from "effect";
+import {
+  createLogicalProjectWorkspaceRoot,
+  parseLogicalProjectWorkspaceRoot,
+} from "@t3tools/shared/workspace";
 
 import {
   WorkspacePaths,
@@ -30,6 +34,11 @@ export const makeWorkspacePaths = Effect.gen(function* () {
   const normalizeWorkspaceRoot: WorkspacePathsShape["normalizeWorkspaceRoot"] = Effect.fn(
     "WorkspacePaths.normalizeWorkspaceRoot",
   )(function* (workspaceRoot) {
+    const logicalProjectId = parseLogicalProjectWorkspaceRoot(workspaceRoot);
+    if (logicalProjectId) {
+      return createLogicalProjectWorkspaceRoot(logicalProjectId);
+    }
+
     const normalizedWorkspaceRoot = path.resolve(expandHomePath(workspaceRoot.trim(), path));
     const workspaceStat = yield* fileSystem
       .stat(normalizedWorkspaceRoot)

@@ -19,8 +19,11 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  type ProviderKind as ProviderKindModel,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type RuntimeMode as RuntimeModeModel,
+  type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 
@@ -34,13 +37,19 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { ProviderValidationError } from "../Errors.ts";
+import { ProviderAdapterProcessError, ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
 } from "../Services/ProviderSessionDirectory.ts";
+import {
+  ThreadRuntime,
+  ThreadRuntimeError,
+  ThreadRuntimeNotFoundError,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -48,6 +57,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly threadRuntime?: ThreadRuntimeShape;
 }
 
 const ProviderRollbackConversationInput = Schema.Struct({
@@ -141,6 +151,18 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function describeThreadRuntimeFailure(
+  error: ThreadRuntimeError | ThreadRuntimeNotFoundError,
+): string {
+  if ("message" in error && typeof error.message === "string" && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (error._tag === "ThreadRuntimeNotFoundError") {
+    return `Thread runtime not found for '${error.threadId}'.`;
+  }
+  return "Thread runtime provisioning failed.";
+}
+
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
@@ -156,6 +178,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory;
+  const threadRuntime = options?.threadRuntime ?? (yield* ThreadRuntime);
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -185,13 +208,54 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       runtimePayload: toRuntimePayloadFromSession(session, extra),
     });
 
+  const keepRuntimeAlive = (threadId: ThreadId) =>
+    threadRuntime.touchRuntime(threadId).pipe(
+      Effect.catchTags({
+        ThreadRuntimeError: () => Effect.void,
+        ThreadRuntimeNotFoundError: () => Effect.void,
+      }),
+    );
+
+  const ensureExecutionContext = Effect.fn("provider.ensureExecutionContext")(function* (input: {
+    readonly threadId: ThreadIdModel;
+    readonly provider: ProviderKindModel;
+    readonly runtimeMode: RuntimeModeModel;
+    readonly requestedCwd?: string;
+    readonly operation: string;
+  }) {
+    return yield* Effect.gen(function* () {
+      yield* threadRuntime.ensureRuntime({
+        threadId: input.threadId,
+        provider: input.provider,
+        runtimeMode: input.runtimeMode,
+        ...(input.requestedCwd ? { requestedCwd: input.requestedCwd } : {}),
+      });
+      yield* threadRuntime.startRuntime(input.threadId);
+      yield* keepRuntimeAlive(input.threadId);
+      return yield* threadRuntime.resolveExecutionContext(input.threadId);
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterProcessError({
+            provider: input.provider,
+            threadId: input.threadId,
+            detail: `Runtime provisioning failed during ${input.operation}: ${describeThreadRuntimeFailure(cause)}`,
+            cause,
+          }),
+      ),
+    );
+  });
+
   const providers = yield* registry.listProviders();
   const adapters = yield* Effect.forEach(providers, (provider) => registry.getByProvider(provider));
   const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     increment(providerRuntimeEventsTotal, {
       provider: event.provider,
       eventType: event.type,
-    }).pipe(Effect.andThen(publishRuntimeEvent(event)));
+    }).pipe(
+      Effect.andThen(keepRuntimeAlive(event.threadId)),
+      Effect.andThen(publishRuntimeEvent(event)),
+    );
 
   yield* Effect.forEach(adapters, (adapter) =>
     Stream.runForEach(adapter.streamEvents, processRuntimeEvent).pipe(Effect.forkScoped),
@@ -236,14 +300,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const runtimeMode = input.binding.runtimeMode ?? "full-access";
+      const executionContext = yield* ensureExecutionContext({
+        threadId: input.binding.threadId,
+        provider: input.binding.provider,
+        runtimeMode,
+        operation: input.operation,
+        ...(persistedCwd ? { requestedCwd: persistedCwd } : {}),
+      });
 
       const resumed = yield* adapter.startSession({
         threadId: input.binding.threadId,
         provider: input.binding.provider,
-        ...(persistedCwd ? { cwd: persistedCwd } : {}),
+        cwd: executionContext.cwd,
         ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
         ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
-        runtimeMode: input.binding.runtimeMode ?? "full-access",
+        runtimeMode,
       });
       if (resumed.provider !== adapter.provider) {
         return yield* toValidationError(
@@ -338,9 +410,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (persistedBinding?.provider === input.provider
             ? persistedBinding.resumeCursor
             : undefined);
+        const executionContext = yield* ensureExecutionContext({
+          threadId,
+          provider: input.provider,
+          runtimeMode: input.runtimeMode,
+          operation: "ProviderService.startSession",
+          ...(input.cwd ? { requestedCwd: input.cwd } : {}),
+        });
         const adapter = yield* registry.getByProvider(input.provider);
         const session = yield* adapter.startSession({
           ...input,
+          cwd: executionContext.cwd,
           ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
         });
 
@@ -358,7 +438,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: session.provider,
           runtimeMode: input.runtimeMode,
           hasResumeCursor: session.resumeCursor !== undefined,
-          hasCwd: typeof input.cwd === "string" && input.cwd.trim().length > 0,
+          hasCwd:
+            typeof executionContext.cwd === "string" && executionContext.cwd.trim().length > 0,
           hasModel:
             typeof input.modelSelection?.model === "string" &&
             input.modelSelection.model.trim().length > 0,
@@ -413,6 +494,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
+      yield* keepRuntimeAlive(input.threadId);
       const turn = yield* routed.adapter.sendTurn(input);
       yield* directory.upsert({
         threadId: input.threadId,
@@ -471,6 +553,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
+        yield* keepRuntimeAlive(input.threadId);
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
@@ -508,6 +591,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.request_id": input.requestId,
         });
+        yield* keepRuntimeAlive(input.threadId);
         yield* routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision);
         yield* analytics.record("provider.request.responded", {
           provider: routed.adapter.provider,
@@ -547,6 +631,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.thread_id": input.threadId,
         "provider.request_id": input.requestId,
       });
+      yield* keepRuntimeAlive(input.threadId);
       yield* routed.adapter.respondToUserInput(routed.threadId, input.requestId, input.answers);
     }).pipe(
       withMetrics({

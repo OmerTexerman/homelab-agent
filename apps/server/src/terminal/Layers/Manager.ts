@@ -2,6 +2,7 @@ import path from "node:path";
 
 import {
   DEFAULT_TERMINAL_ID,
+  ThreadId,
   type TerminalEvent,
   type TerminalSessionSnapshot,
   type TerminalSessionStatus,
@@ -37,6 +38,14 @@ import {
   TerminalSessionLookupError,
   type TerminalManagerShape,
 } from "../Services/Manager";
+import {
+  ThreadRuntime,
+  ThreadRuntimeError,
+  ThreadRuntimeNotFoundError,
+  type ThreadExecutionContext,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime";
+import { runtimeWorkspaceDirFromExecutionContext } from "../../runtime/launchers";
 import {
   PtyAdapter,
   PtySpawnError,
@@ -86,6 +95,7 @@ interface TerminalStartInput {
   threadId: string;
   terminalId: string;
   cwd: string;
+  spawnCwd: string;
   worktreePath?: string | null;
   cols: number;
   rows: number;
@@ -96,7 +106,9 @@ interface TerminalSessionState {
   threadId: string;
   terminalId: string;
   cwd: string;
+  spawnCwd: string;
   worktreePath: string | null;
+  runtimeShell: string | null;
   status: TerminalSessionStatus;
   pid: number | null;
   history: string;
@@ -159,6 +171,10 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     exitSignal: session.exitSignal,
     updatedAt: session.updatedAt,
   };
+}
+
+function resolveRuntimeSpawnCwd(executionContext: ThreadExecutionContext): string {
+  return runtimeWorkspaceDirFromExecutionContext(executionContext) ?? executionContext.cwd;
 }
 
 function cleanupProcessHandles(session: TerminalSessionState): void {
@@ -646,10 +662,23 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+function describeThreadRuntimeFailure(
+  error: ThreadRuntimeError | ThreadRuntimeNotFoundError,
+): string {
+  if ("message" in error && typeof error.message === "string" && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (error._tag === "ThreadRuntimeNotFoundError") {
+    return `Thread runtime not found for '${error.threadId}'.`;
+  }
+  return "Thread runtime provisioning failed.";
+}
+
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
   ptyAdapter: PtyAdapterShape;
+  threadRuntime?: ThreadRuntimeShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
   subprocessPollIntervalMs?: number;
@@ -660,15 +689,18 @@ interface TerminalManagerOptions {
 const makeTerminalManager = Effect.fn("makeTerminalManager")(function* () {
   const { terminalLogsDir } = yield* ServerConfig;
   const ptyAdapter = yield* PtyAdapter;
+  const threadRuntime = yield* ThreadRuntime;
   return yield* makeTerminalManagerWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,
+    threadRuntime,
   });
 });
 
 export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWithOptions")(
   function* (options: TerminalManagerOptions) {
     const fileSystem = yield* FileSystem.FileSystem;
+    const threadRuntime = options.threadRuntime ?? (yield* ThreadRuntime);
     const context = yield* Effect.context<never>();
     const runFork = Effect.runForkWith(context);
 
@@ -1043,6 +1075,53 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       }
     });
 
+    const resolveTerminalStartContext = Effect.fn("terminal.resolveTerminalStartContext")(
+      function* (input: {
+        readonly threadId: string;
+        readonly cwd: string;
+        readonly worktreePath?: string | null;
+        readonly env?: Record<string, string>;
+      }) {
+        return yield* Effect.gen(function* () {
+          const runtimeThreadId = ThreadId.make(input.threadId);
+
+          yield* threadRuntime.ensureRuntime({
+            threadId: runtimeThreadId,
+            provider: null,
+            runtimeMode: "full-access",
+            requestedCwd: input.cwd,
+          });
+          yield* threadRuntime.startRuntime(runtimeThreadId);
+          yield* threadRuntime.touchRuntime(runtimeThreadId);
+
+          const executionContext = yield* threadRuntime.resolveExecutionContext(runtimeThreadId);
+          const runtimeEnv = normalizedRuntimeEnv({
+            ...executionContext.env,
+            ...input.env,
+          });
+          const runtimeShell = executionContext.shell.trim();
+
+          return {
+            cwd: executionContext.cwd,
+            spawnCwd: resolveRuntimeSpawnCwd(executionContext),
+            worktreePath: input.worktreePath ?? executionContext.workspacePath,
+            runtimeEnv,
+            runtimeShell: runtimeShell || executionContext.shell,
+          } as const;
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TerminalCwdError({
+                cwd: input.cwd,
+                reason: "statFailed",
+                cause:
+                  cause instanceof Error ? cause : new Error(describeThreadRuntimeFailure(cause)),
+              }),
+          ),
+        );
+      },
+    );
+
     const getSession = Effect.fn("terminal.getSession")(function* (
       threadId: string,
       terminalId: string,
@@ -1191,6 +1270,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         }
 
         if (action.type === "output") {
+          yield* threadRuntime.touchRuntime(ThreadId.make(action.threadId)).pipe(
+            Effect.catchTags({
+              ThreadRuntimeError: () => Effect.void,
+              ThreadRuntimeNotFoundError: () => Effect.void,
+            }),
+          );
           if (action.history !== null) {
             yield* queuePersist(action.threadId, action.terminalId, action.history);
           }
@@ -1279,7 +1364,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         options.ptyAdapter.spawn({
           shell: candidate.shell,
           ...(candidate.args ? { args: candidate.args } : {}),
-          cwd: session.cwd,
+          cwd: session.spawnCwd,
           cols: session.cols,
           rows: session.rows,
           env: spawnEnv,
@@ -1317,6 +1402,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       yield* modifyManagerState((state) => {
         session.status = "starting";
         session.cwd = input.cwd;
+        session.spawnCwd = input.spawnCwd;
         session.worktreePath = input.worktreePath ?? null;
         session.cols = input.cols;
         session.rows = input.rows;
@@ -1337,7 +1423,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         increment(terminalSessionsTotal, { lifecycle: eventType }).pipe(
           Effect.andThen(
             Effect.gen(function* () {
-              const shellCandidates = resolveShellCandidates(shellResolver);
+              const shellCandidates = resolveShellCandidates(() => {
+                const runtimeShell = normalizeShellCommand(session.runtimeShell ?? undefined);
+                return runtimeShell ?? shellResolver();
+              });
               const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv);
               const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
               ptyProcess = spawnResult.process;
@@ -1573,7 +1662,13 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         input.threadId,
         Effect.gen(function* () {
           const terminalId = input.terminalId ?? DEFAULT_TERMINAL_ID;
-          yield* assertValidCwd(input.cwd);
+          const resolvedContext = yield* resolveTerminalStartContext({
+            threadId: input.threadId,
+            cwd: input.cwd,
+            ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+            ...(input.env ? { env: input.env } : {}),
+          });
+          yield* assertValidCwd(resolvedContext.spawnCwd);
 
           const sessionKey = toSessionKey(input.threadId, terminalId);
           const existing = yield* getSession(input.threadId, terminalId);
@@ -1585,8 +1680,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             const session: TerminalSessionState = {
               threadId: input.threadId,
               terminalId,
-              cwd: input.cwd,
-              worktreePath: input.worktreePath ?? null,
+              cwd: resolvedContext.cwd,
+              spawnCwd: resolvedContext.spawnCwd,
+              worktreePath: resolvedContext.worktreePath,
+              runtimeShell: resolvedContext.runtimeShell,
               status: "starting",
               pid: null,
               history,
@@ -1603,7 +1700,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               unsubscribeData: null,
               unsubscribeExit: null,
               hasRunningSubprocess: false,
-              runtimeEnv: normalizedRuntimeEnv(input.env),
+              runtimeEnv: resolvedContext.runtimeEnv,
             };
 
             const createdSession = session;
@@ -1619,11 +1716,14 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               {
                 threadId: input.threadId,
                 terminalId,
-                cwd: input.cwd,
-                ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+                cwd: resolvedContext.cwd,
+                spawnCwd: resolvedContext.spawnCwd,
+                ...(resolvedContext.worktreePath !== undefined
+                  ? { worktreePath: resolvedContext.worktreePath }
+                  : {}),
                 cols,
                 rows,
-                ...(input.env ? { env: input.env } : {}),
+                ...(resolvedContext.runtimeEnv ? { env: resolvedContext.runtimeEnv } : {}),
               },
               "started",
             );
@@ -1631,17 +1731,26 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           }
 
           const liveSession = existing.value;
-          const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
+          const nextRuntimeEnv = resolvedContext.runtimeEnv;
           const currentRuntimeEnv = liveSession.runtimeEnv;
           const targetCols = input.cols ?? liveSession.cols;
           const targetRows = input.rows ?? liveSession.rows;
           const runtimeEnvChanged = !Equal.equals(currentRuntimeEnv, nextRuntimeEnv);
+          const runtimeShellChanged = liveSession.runtimeShell !== resolvedContext.runtimeShell;
+          const runtimeSpawnCwdChanged = liveSession.spawnCwd !== resolvedContext.spawnCwd;
 
-          if (liveSession.cwd !== input.cwd || runtimeEnvChanged) {
+          if (
+            liveSession.cwd !== resolvedContext.cwd ||
+            runtimeSpawnCwdChanged ||
+            runtimeEnvChanged ||
+            runtimeShellChanged
+          ) {
             yield* stopProcess(liveSession);
-            liveSession.cwd = input.cwd;
-            liveSession.worktreePath = input.worktreePath ?? null;
+            liveSession.cwd = resolvedContext.cwd;
+            liveSession.spawnCwd = resolvedContext.spawnCwd;
+            liveSession.worktreePath = resolvedContext.worktreePath;
             liveSession.runtimeEnv = nextRuntimeEnv;
+            liveSession.runtimeShell = resolvedContext.runtimeShell;
             liveSession.history = "";
             liveSession.pendingHistoryControlSequence = "";
             liveSession.pendingProcessEvents = [];
@@ -1654,7 +1763,9 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             );
           } else if (liveSession.status === "exited" || liveSession.status === "error") {
             liveSession.runtimeEnv = nextRuntimeEnv;
-            liveSession.worktreePath = input.worktreePath ?? null;
+            liveSession.spawnCwd = resolvedContext.spawnCwd;
+            liveSession.worktreePath = resolvedContext.worktreePath;
+            liveSession.runtimeShell = resolvedContext.runtimeShell;
             liveSession.history = "";
             liveSession.pendingHistoryControlSequence = "";
             liveSession.pendingProcessEvents = [];
@@ -1673,11 +1784,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               {
                 threadId: input.threadId,
                 terminalId,
-                cwd: input.cwd,
+                cwd: resolvedContext.cwd,
+                spawnCwd: resolvedContext.spawnCwd,
                 worktreePath: liveSession.worktreePath,
                 cols: targetCols,
                 rows: targetRows,
-                ...(input.env ? { env: input.env } : {}),
+                ...(nextRuntimeEnv ? { env: nextRuntimeEnv } : {}),
               },
               "started",
             );
@@ -1706,6 +1818,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           terminalId,
         });
       }
+      yield* threadRuntime.touchRuntime(ThreadId.make(input.threadId)).pipe(
+        Effect.catchTags({
+          ThreadRuntimeError: () => Effect.void,
+          ThreadRuntimeNotFoundError: () => Effect.void,
+        }),
+      );
       yield* Effect.sync(() => process.write(input.data));
     });
 
@@ -1722,6 +1840,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       session.cols = input.cols;
       session.rows = input.rows;
       session.updatedAt = new Date().toISOString();
+      yield* threadRuntime.touchRuntime(ThreadId.make(input.threadId)).pipe(
+        Effect.catchTags({
+          ThreadRuntimeError: () => Effect.void,
+          ThreadRuntimeNotFoundError: () => Effect.void,
+        }),
+      );
       yield* Effect.sync(() => process.resize(input.cols, input.rows));
     });
 
@@ -1753,7 +1877,13 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         Effect.gen(function* () {
           yield* increment(terminalRestartsTotal, { scope: "thread" });
           const terminalId = input.terminalId ?? DEFAULT_TERMINAL_ID;
-          yield* assertValidCwd(input.cwd);
+          const resolvedContext = yield* resolveTerminalStartContext({
+            threadId: input.threadId,
+            cwd: input.cwd,
+            ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+            ...(input.env ? { env: input.env } : {}),
+          });
+          yield* assertValidCwd(resolvedContext.spawnCwd);
 
           const sessionKey = toSessionKey(input.threadId, terminalId);
           const existingSession = yield* getSession(input.threadId, terminalId);
@@ -1764,8 +1894,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             session = {
               threadId: input.threadId,
               terminalId,
-              cwd: input.cwd,
-              worktreePath: input.worktreePath ?? null,
+              cwd: resolvedContext.cwd,
+              spawnCwd: resolvedContext.spawnCwd,
+              worktreePath: resolvedContext.worktreePath,
+              runtimeShell: resolvedContext.runtimeShell,
               status: "starting",
               pid: null,
               history: "",
@@ -1782,7 +1914,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               unsubscribeData: null,
               unsubscribeExit: null,
               hasRunningSubprocess: false,
-              runtimeEnv: normalizedRuntimeEnv(input.env),
+              runtimeEnv: resolvedContext.runtimeEnv,
             };
             const createdSession = session;
             yield* modifyManagerState((state) => {
@@ -1794,9 +1926,11 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           } else {
             session = existingSession.value;
             yield* stopProcess(session);
-            session.cwd = input.cwd;
-            session.worktreePath = input.worktreePath ?? null;
-            session.runtimeEnv = normalizedRuntimeEnv(input.env);
+            session.cwd = resolvedContext.cwd;
+            session.spawnCwd = resolvedContext.spawnCwd;
+            session.worktreePath = resolvedContext.worktreePath;
+            session.runtimeEnv = resolvedContext.runtimeEnv;
+            session.runtimeShell = resolvedContext.runtimeShell;
           }
 
           const cols = input.cols ?? session.cols;
@@ -1813,11 +1947,14 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             {
               threadId: input.threadId,
               terminalId,
-              cwd: input.cwd,
-              ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+              cwd: resolvedContext.cwd,
+              spawnCwd: resolvedContext.spawnCwd,
+              ...(resolvedContext.worktreePath !== undefined
+                ? { worktreePath: resolvedContext.worktreePath }
+                : {}),
               cols,
               rows,
-              ...(input.env ? { env: input.env } : {}),
+              ...(resolvedContext.runtimeEnv ? { env: resolvedContext.runtimeEnv } : {}),
             },
             "restarted",
           );

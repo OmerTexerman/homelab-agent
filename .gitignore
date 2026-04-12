@@ -1,3 +1,14 @@
 node_modules/
 .env
+.env.*
+!.env.example
 dist/
+.turbo/
+apps/*/.turbo/
+packages/*/.turbo/
+apps/marketing/.astro/
+*.tsbuildinfo
+release/
+coverage/
+playwright-report/
+test-results/

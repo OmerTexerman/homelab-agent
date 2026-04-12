@@ -22,7 +22,7 @@ import {
   TurnId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Queue, Schema, Context, Stream } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Queue, Schema, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
@@ -39,6 +39,11 @@ import {
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  runtimeCodexBinaryPath,
+  runtimeWorkspaceDirFromExecutionContext,
+} from "../../runtime/launchers.ts";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -1373,6 +1378,38 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }),
   );
   const serverSettingsService = yield* ServerSettingsService;
+  const resolveRuntimeLaunch = Effect.fn("codexAdapter.resolveRuntimeLaunch")(function* (
+    threadId: ThreadId,
+  ) {
+    const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
+    if (Option.isNone(threadRuntime)) {
+      return undefined;
+    }
+
+    const executionContext = yield* threadRuntime.value.resolveExecutionContext(threadId).pipe(
+      Effect.catchTags({
+        ThreadRuntimeError: () => Effect.as(Effect.void, undefined),
+        ThreadRuntimeNotFoundError: () => Effect.as(Effect.void, undefined),
+      }),
+    );
+    if (!executionContext) {
+      return undefined;
+    }
+
+    const wrapperPath = runtimeCodexBinaryPath(executionContext);
+    const wrapperExists = yield* fileSystem
+      .exists(wrapperPath)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!wrapperExists) {
+      return undefined;
+    }
+
+    return {
+      binaryPath: wrapperPath,
+      cwd: runtimeWorkspaceDirFromExecutionContext(executionContext) ?? executionContext.cwd,
+      homePath: executionContext.env.CODEX_HOME,
+    } as const;
+  });
 
   const startSession: CodexAdapterShape["startSession"] = Effect.fn("startSession")(
     function* (input) {
@@ -1396,12 +1433,14 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             }),
         ),
       );
-      const binaryPath = codexSettings.binaryPath;
-      const homePath = codexSettings.homePath;
+      const runtimeLaunch = yield* resolveRuntimeLaunch(input.threadId);
+      const binaryPath = runtimeLaunch?.binaryPath ?? codexSettings.binaryPath;
+      const homePath = runtimeLaunch?.homePath ?? codexSettings.homePath;
+      const cwd = runtimeLaunch?.cwd ?? input.cwd;
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: input.runtimeMode,
         binaryPath,

@@ -45,6 +45,9 @@ function createTestClient(options?: {
       refreshProviders: vi.fn(async () => undefined),
       upsertKeybinding: vi.fn(async () => undefined),
       getSettings: vi.fn(async () => undefined),
+      listHomelabSecrets: vi.fn(async () => ({ secrets: [] })),
+      upsertHomelabSecret: vi.fn(async () => undefined),
+      deleteHomelabSecret: vi.fn(async () => undefined),
       updateSettings: vi.fn(async () => undefined),
     },
     orchestration: {

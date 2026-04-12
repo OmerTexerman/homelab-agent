@@ -8,6 +8,7 @@ import {
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
   staticAndDevRouteLayer,
+  threadWorkspaceFileRouteLayer,
   browserApiCorsLayer,
 } from "./http";
 import { fixPath } from "./os-jank";
@@ -38,6 +39,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
+import { ThreadRuntimeReactorLive } from "./orchestration/Layers/ThreadRuntimeReactor";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry";
 import { ServerSettingsLive } from "./serverSettings";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
@@ -48,6 +50,22 @@ import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner";
 import { ObservabilityLive } from "./observability/Layers/Observability";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
+import { KnowledgeGraphLive } from "./homelab/Layers/KnowledgeGraph";
+import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistry";
+import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime";
+import { ThreadWorkspaceLive } from "./runtime/Layers/ThreadWorkspace";
+import {
+  homelabEntitiesRouteLayer,
+  homelabEntityRouteLayer,
+  homelabPromotionsRouteLayer,
+  homelabRelationsRouteLayer,
+  homelabRuntimeBootstrapRouteLayer,
+  homelabSearchRouteLayer,
+  homelabSecretRequestsRouteLayer,
+  homelabSecretsRouteLayer,
+  homelabSetupStatusRouteLayer,
+  homelabSnapshotRouteLayer,
+} from "./homelab/http";
 import {
   authBearerBootstrapRouteLayer,
   authBootstrapRouteLayer,
@@ -126,6 +144,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
+  Layer.provideMerge(ThreadRuntimeReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
@@ -194,8 +213,7 @@ const AuthLayerLive = ServerAuthLive.pipe(
   Layer.provide(ServerSecretStoreLive),
 );
 
-const RuntimeDependenciesLive = ReactorLayerLive.pipe(
-  // Core Services
+const RuntimeCoreServicesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
@@ -209,9 +227,14 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProjectFaviconResolverLive),
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
-  Layer.provideMerge(AuthLayerLive),
+  Layer.provideMerge(ThreadRuntimeLive),
+  Layer.provideMerge(ThreadWorkspaceLive.pipe(Layer.provide(WorkspacePathsLive))),
+  Layer.provideMerge(KnowledgeGraphLive),
+);
 
-  // Misc.
+const RuntimeDependenciesLive = RuntimeCoreServicesLive.pipe(
+  Layer.provideMerge(AuthLayerLive),
+  Layer.provideMerge(HomelabSecretRegistryLive.pipe(Layer.provide(ServerSecretStoreLive))),
   Layer.provideMerge(AnalyticsServiceLayerLive),
   Layer.provideMerge(OpenLive),
   Layer.provideMerge(ServerLifecycleEventsLive),
@@ -233,6 +256,17 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  threadWorkspaceFileRouteLayer,
+  homelabEntitiesRouteLayer,
+  homelabEntityRouteLayer,
+  homelabPromotionsRouteLayer,
+  homelabRelationsRouteLayer,
+  homelabRuntimeBootstrapRouteLayer,
+  homelabSearchRouteLayer,
+  homelabSecretRequestsRouteLayer,
+  homelabSecretsRouteLayer,
+  homelabSetupStatusRouteLayer,
+  homelabSnapshotRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,

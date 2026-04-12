@@ -1,9 +1,11 @@
 import path from "node:path";
+import os from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,
+  RuntimeSessionId,
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
@@ -20,11 +22,17 @@ import {
   Ref,
   Schedule,
   Scope,
+  Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vitest";
 
 import type { TerminalManagerShape } from "../Services/Manager";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime";
+import type {
+  ThreadRuntimeDescriptor,
+  ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime";
 import {
   type PtyAdapterShape,
   type PtyExitEvent,
@@ -193,6 +201,7 @@ interface CreateManagerOptions {
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   ptyAdapter?: FakePtyAdapter;
+  threadRuntime?: ThreadRuntimeShape;
 }
 
 interface ManagerFixture {
@@ -201,6 +210,136 @@ interface ManagerFixture {
   readonly ptyAdapter: FakePtyAdapter;
   readonly manager: TerminalManagerShape;
   readonly getEvents: Effect.Effect<ReadonlyArray<TerminalEvent>>;
+}
+
+function makePassthroughThreadRuntime(options?: { readonly shell?: string }): ThreadRuntimeShape {
+  const runtimes = new Map<string, ThreadRuntimeDescriptor>();
+
+  const makeDescriptor = (
+    input: Parameters<ThreadRuntimeShape["ensureRuntime"]>[0],
+    status: ThreadRuntimeDescriptor["status"] = "ready",
+  ): ThreadRuntimeDescriptor => {
+    const cwd = input.requestedCwd ?? process.cwd();
+    const runtimeId = RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
+    const homePath = path.join(os.tmpdir(), "homelab-agent-terminal-home", String(input.threadId));
+    const now = new Date().toISOString();
+
+    return {
+      threadId: input.threadId,
+      runtimeId,
+      backend: "docker",
+      status,
+      health: "healthy",
+      provider: input.provider,
+      runtimeMode: input.runtimeMode,
+      imageRef: "ghcr.io/homelab-agent/runtime:test",
+      containerName: `runtime-${String(input.threadId)}`,
+      containerId: null,
+      workspacePath: cwd,
+      homePath,
+      cwd,
+      shell: options?.shell ?? "/bin/bash",
+      env: {
+        HOME: homePath,
+        PWD: cwd,
+        WORKSPACE: cwd,
+        T3_THREAD_ID: String(input.threadId),
+        T3_RUNTIME_ID: String(runtimeId),
+      },
+      createdAt: now,
+      updatedAt: now,
+      lastStartedAt: status === "running" ? now : null,
+      lastStoppedAt: null,
+      lastError: null,
+    };
+  };
+
+  return {
+    ensureRuntime: (input) =>
+      Effect.sync(() => {
+        const descriptor = makeDescriptor(
+          input,
+          runtimes.get(String(input.threadId))?.status ?? "ready",
+        );
+        runtimes.set(String(input.threadId), descriptor);
+        return descriptor;
+      }),
+    getRuntime: (threadId) => Effect.sync(() => runtimes.get(String(threadId))),
+    listRuntimes: () => Effect.sync(() => Array.from(runtimes.values())),
+    startRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing =
+          runtimes.get(key) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        const next: ThreadRuntimeDescriptor = {
+          ...existing,
+          status: "running",
+          health: "healthy",
+          updatedAt: new Date().toISOString(),
+          lastStartedAt: new Date().toISOString(),
+        };
+        runtimes.set(key, next);
+        return next;
+      }),
+    stopRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing = runtimes.get(key);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(key, {
+          ...existing,
+          status: "stopped",
+          updatedAt: new Date().toISOString(),
+          lastStoppedAt: new Date().toISOString(),
+        });
+      }),
+    touchRuntime: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const existing = runtimes.get(key);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(key, {
+          ...existing,
+          updatedAt: new Date().toISOString(),
+        });
+      }),
+    destroyRuntime: (threadId) =>
+      Effect.sync(() => {
+        runtimes.delete(String(threadId));
+      }),
+    resolveExecutionContext: (threadId) =>
+      Effect.sync(() => {
+        const runtime =
+          runtimes.get(String(threadId)) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(String(threadId), runtime);
+        return {
+          threadId: runtime.threadId,
+          runtimeId: runtime.runtimeId,
+          backend: runtime.backend,
+          containerId: runtime.containerId,
+          workspacePath: runtime.workspacePath,
+          homePath: runtime.homePath,
+          cwd: runtime.cwd,
+          shell: runtime.shell,
+          env: runtime.env,
+        };
+      }),
+    streamEvents: Stream.empty,
+  } satisfies ThreadRuntimeShape;
 }
 
 const createManager = (
@@ -234,7 +373,12 @@ const createManager = (
         ...(options.maxRetainedInactiveSessions !== undefined
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
           : {}),
-      });
+      }).pipe(
+        Effect.provideService(
+          ThreadRuntime,
+          options.threadRuntime ?? makePassthroughThreadRuntime(),
+        ),
+      );
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
       const scope = yield* Effect.scope;
       const unsubscribe = yield* manager.subscribe((event) =>
@@ -823,6 +967,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {
         shellResolver: () => "/definitely/missing-shell -l",
+        threadRuntime: makePassthroughThreadRuntime({ shell: "" }),
       });
       ptyAdapter.spawnFailures.push(new Error("posix_spawnp failed."));
 
@@ -920,6 +1065,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       if (process.platform === "win32") return;
       const { manager, ptyAdapter } = yield* createManager(5, {
         shellResolver: () => "/bin/zsh",
+        threadRuntime: makePassthroughThreadRuntime({ shell: "" }),
       });
       yield* manager.open(openInput());
       const spawnInput = ptyAdapter.spawnInputs[0];

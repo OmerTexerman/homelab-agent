@@ -1,6 +1,4 @@
 import {
-  ArchiveIcon,
-  ArchiveX,
   ChevronDownIcon,
   InfoIcon,
   LoaderIcon,
@@ -12,16 +10,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import {
   PROVIDER_DISPLAY_NAMES,
-  type ScopedThreadRef,
   type ProviderKind,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
-import { APP_VERSION } from "../../branding";
+import { APP_BASE_NAME, APP_VERSION } from "../../branding";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -29,34 +25,19 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
-import { TraitsPicker } from "../chat/TraitsPicker";
-import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
 import { isElectron } from "../../env";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
-import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopUpdateStateQueryData,
   useDesktopUpdateState,
 } from "../../lib/desktopUpdateReactQuery";
-import {
-  MAX_CUSTOM_MODEL_LENGTH,
-  getCustomModelOptionsByProvider,
-  resolveAppModelSelectionState,
-} from "../../modelSelection";
+import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
-import { useShallow } from "zustand/react/shallow";
-import {
-  selectProjectsAcrossEnvironments,
-  selectThreadShellsAcrossEnvironments,
-  useStore,
-} from "../../store";
-import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
+import { formatRelativeTime } from "../../timestampFormat";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -69,13 +50,8 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
-import { ProjectFavicon } from "../ProjectFavicon";
-import {
-  useServerAvailableEditors,
-  useServerKeybindingsConfigPath,
-  useServerObservability,
-  useServerProviders,
-} from "../../rpc/serverState";
+import { HomelabSecretsSection } from "./HomelabSecretsSection";
+import { useServerProviders } from "../../rpc/serverState";
 
 const THEME_OPTIONS = [
   {
@@ -152,7 +128,8 @@ function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: "Disabled",
       detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in T3 Code.",
+        provider.message ??
+        `This provider is installed but disabled for new sessions in ${APP_BASE_NAME}.`,
     };
   }
   if (!provider.installed) {
@@ -352,10 +329,6 @@ export function useSettingsRestore(onRestored?: () => void) {
   const settings = useSettings();
   const { resetSettings } = useUpdateSettings();
 
-  const isGitWritingModelDirty = !Equal.equals(
-    settings.textGenerationModelSelection ?? null,
-    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
-  );
   const areProviderSettingsDirty = PROVIDER_SETTINGS.some((providerSettings) => {
     const currentSettings = settings.providers[providerSettings.provider];
     const defaultSettings = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
@@ -368,31 +341,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
-      ...(settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
-        ? ["Diff line wrapping"]
-        : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
-        : []),
-      ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
-        ? ["New thread mode"]
-        : []),
-      ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
-        ? ["Archive confirmation"]
         : []),
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
-      ...(isGitWritingModelDirty ? ["Git writing model"] : []),
       ...(areProviderSettingsDirty ? ["Providers"] : []),
     ],
     [
       areProviderSettingsDirty,
-      isGitWritingModelDirty,
-      settings.confirmThreadArchive,
       settings.confirmThreadDelete,
-      settings.defaultThreadEnvMode,
-      settings.diffWordWrap,
       settings.enableAssistantStreaming,
       settings.timestampFormat,
       theme,
@@ -424,13 +383,6 @@ export function GeneralSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
-  const [openingPathByTarget, setOpeningPathByTarget] = useState({
-    keybindings: false,
-    logsDirectory: false,
-  });
-  const [openPathErrorByTarget, setOpenPathErrorByTarget] = useState<
-    Partial<Record<"keybindings" | "logsDirectory", string | null>>
-  >({});
   const [openProviderDetails, setOpenProviderDetails] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(
       settings.providers.codex.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.codex.binaryPath ||
@@ -470,82 +422,8 @@ export function GeneralSettingsPanel() {
       });
   }, []);
 
-  const keybindingsConfigPath = useServerKeybindingsConfigPath();
-  const availableEditors = useServerAvailableEditors();
-  const observability = useServerObservability();
   const serverProviders = useServerProviders();
   const codexHomePath = settings.providers.codex.homePath;
-  const logsDirectoryPath = observability?.logsDirectoryPath ?? null;
-  const diagnosticsDescription = (() => {
-    const exports: string[] = [];
-    if (observability?.otlpTracesEnabled && observability.otlpTracesUrl) {
-      exports.push(`traces to ${observability.otlpTracesUrl}`);
-    }
-    if (observability?.otlpMetricsEnabled && observability.otlpMetricsUrl) {
-      exports.push(`metrics to ${observability.otlpMetricsUrl}`);
-    }
-    const mode = observability?.localTracingEnabled ? "Local trace file" : "Terminal logs only";
-    return exports.length > 0 ? `${mode}. OTLP exporting ${exports.join(" and ")}.` : `${mode}.`;
-  })();
-
-  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
-  const textGenProvider = textGenerationModelSelection.provider;
-  const textGenModel = textGenerationModelSelection.model;
-  const textGenModelOptions = textGenerationModelSelection.options;
-  const gitModelOptionsByProvider = getCustomModelOptionsByProvider(
-    settings,
-    serverProviders,
-    textGenProvider,
-    textGenModel,
-  );
-  const isGitWritingModelDirty = !Equal.equals(
-    settings.textGenerationModelSelection ?? null,
-    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
-  );
-
-  const openInPreferredEditor = useCallback(
-    (target: "keybindings" | "logsDirectory", path: string | null, failureMessage: string) => {
-      if (!path) return;
-      setOpenPathErrorByTarget((existing) => ({ ...existing, [target]: null }));
-      setOpeningPathByTarget((existing) => ({ ...existing, [target]: true }));
-
-      const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
-      if (!editor) {
-        setOpenPathErrorByTarget((existing) => ({
-          ...existing,
-          [target]: "No available editors found.",
-        }));
-        setOpeningPathByTarget((existing) => ({ ...existing, [target]: false }));
-        return;
-      }
-
-      void ensureLocalApi()
-        .shell.openInEditor(path, editor)
-        .catch((error) => {
-          setOpenPathErrorByTarget((existing) => ({
-            ...existing,
-            [target]: error instanceof Error ? error.message : failureMessage,
-          }));
-        })
-        .finally(() => {
-          setOpeningPathByTarget((existing) => ({ ...existing, [target]: false }));
-        });
-    },
-    [availableEditors],
-  );
-
-  const openKeybindingsFile = useCallback(() => {
-    openInPreferredEditor("keybindings", keybindingsConfigPath, "Unable to open keybindings file.");
-  }, [keybindingsConfigPath, openInPreferredEditor]);
-
-  const openLogsDirectory = useCallback(() => {
-    openInPreferredEditor("logsDirectory", logsDirectoryPath, "Unable to open logs folder.");
-  }, [logsDirectoryPath, openInPreferredEditor]);
-
-  const openKeybindingsError = openPathErrorByTarget.keybindings ?? null;
-  const openDiagnosticsError = openPathErrorByTarget.logsDirectory ?? null;
-  const isOpeningKeybindings = openingPathByTarget.keybindings;
-  const isOpeningLogsDirectory = openingPathByTarget.logsDirectory;
 
   const addCustomModel = useCallback(
     (provider: ProviderKind) => {
@@ -687,7 +565,7 @@ export function GeneralSettingsPanel() {
       <SettingsSection title="General">
         <SettingsRow
           title="Theme"
-          description="Choose how T3 Code looks across the app."
+          description={`Choose how ${APP_BASE_NAME} looks across the app.`}
           resetAction={
             theme !== "system" ? (
               <SettingResetButton label="theme" onClick={() => setTheme("system")} />
@@ -761,30 +639,6 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Diff line wrapping"
-          description="Set the default wrap state when the diff panel opens."
-          resetAction={
-            settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
-              <SettingResetButton
-                label="diff line wrapping"
-                onClick={() =>
-                  updateSettings({
-                    diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffWordWrap}
-              onCheckedChange={(checked) => updateSettings({ diffWordWrap: Boolean(checked) })}
-              aria-label="Wrap diff lines by default"
-            />
-          }
-        />
-
-        <SettingsRow
           title="Assistant output"
           description="Show token-by-token output while a response is in progress."
           resetAction={
@@ -807,73 +661,6 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableAssistantStreaming: Boolean(checked) })
               }
               aria-label="Stream assistant messages"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
-          resetAction={
-            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
-              <SettingResetButton
-                label="new threads"
-                onClick={() =>
-                  updateSettings({
-                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.defaultThreadEnvMode}
-              onValueChange={(value) => {
-                if (value === "local" || value === "worktree") {
-                  updateSettings({ defaultThreadEnvMode: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
-                <SelectValue>
-                  {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="local">
-                  Local
-                </SelectItem>
-                <SelectItem hideIndicator value="worktree">
-                  New worktree
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <SettingsRow
-          title="Archive confirmation"
-          description="Require a second click on the inline archive action before a thread is archived."
-          resetAction={
-            settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
-              <SettingResetButton
-                label="archive confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadArchive}
-              onCheckedChange={(checked) =>
-                updateSettings({ confirmThreadArchive: Boolean(checked) })
-              }
-              aria-label="Confirm thread archiving"
             />
           }
         />
@@ -903,78 +690,9 @@ export function GeneralSettingsPanel() {
             />
           }
         />
-
-        <SettingsRow
-          title="Text generation model"
-          description="Configure the model used for generated commit messages, PR titles, and similar Git text."
-          resetAction={
-            isGitWritingModelDirty ? (
-              <SettingResetButton
-                label="text generation model"
-                onClick={() =>
-                  updateSettings({
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <ProviderModelPicker
-                provider={textGenProvider}
-                model={textGenModel}
-                lockedProvider={null}
-                providers={serverProviders}
-                modelOptionsByProvider={gitModelOptionsByProvider}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onProviderModelChange={(provider, model) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: { provider, model },
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-              <TraitsPicker
-                provider={textGenProvider}
-                models={
-                  serverProviders.find((provider) => provider.provider === textGenProvider)
-                    ?.models ?? []
-                }
-                model={textGenModel}
-                prompt=""
-                onPromptChange={() => {}}
-                modelOptions={textGenModelOptions}
-                allowPromptInjectedEffort={false}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onModelOptionsChange={(nextOptions) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: {
-                          provider: textGenProvider,
-                          model: textGenModel,
-                          ...(nextOptions ? { options: nextOptions } : {}),
-                        },
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-            </div>
-          }
-        />
       </SettingsSection>
+
+      <HomelabSecretsSection />
 
       <SettingsSection
         title="Providers"
@@ -1075,9 +793,6 @@ export function GeneralSettingsPanel() {
                     <Switch
                       checked={providerCard.providerConfig.enabled}
                       onCheckedChange={(checked) => {
-                        const isDisabling = !checked;
-                        const shouldClearModelSelection =
-                          isDisabling && textGenProvider === providerCard.provider;
                         updateSettings({
                           providers: {
                             ...settings.providers,
@@ -1086,12 +801,6 @@ export function GeneralSettingsPanel() {
                               enabled: Boolean(checked),
                             },
                           },
-                          ...(shouldClearModelSelection
-                            ? {
-                                textGenerationModelSelection:
-                                  DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                              }
-                            : {}),
                         });
                       }}
                       aria-label={`Enable ${providerDisplayName}`}
@@ -1317,35 +1026,6 @@ export function GeneralSettingsPanel() {
         })}
       </SettingsSection>
 
-      <SettingsSection title="Advanced">
-        <SettingsRow
-          title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-          status={
-            <>
-              <span className="block break-all font-mono text-[11px] text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
-              </span>
-              {openKeybindingsError ? (
-                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-              ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
-              )}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!keybindingsConfigPath || isOpeningKeybindings}
-              onClick={openKeybindingsFile}
-            >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
-            </Button>
-          }
-        />
-      </SettingsSection>
-
       <SettingsSection title="About">
         {isElectron ? (
           <AboutVersionSection />
@@ -1355,156 +1035,7 @@ export function GeneralSettingsPanel() {
             description="Current version of the application."
           />
         )}
-        <SettingsRow
-          title="Diagnostics"
-          description={diagnosticsDescription}
-          status={
-            <>
-              <span className="block break-all font-mono text-[11px] text-foreground">
-                {logsDirectoryPath ?? "Resolving logs directory..."}
-              </span>
-              {openDiagnosticsError ? (
-                <span className="mt-1 block text-destructive">{openDiagnosticsError}</span>
-              ) : null}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!logsDirectoryPath || isOpeningLogsDirectory}
-              onClick={openLogsDirectory}
-            >
-              {isOpeningLogsDirectory ? "Opening..." : "Open logs folder"}
-            </Button>
-          }
-        />
       </SettingsSection>
-    </SettingsPageContainer>
-  );
-}
-
-export function ArchivedThreadsPanel() {
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const threads = useStore(useShallow(selectThreadShellsAcrossEnvironments));
-  const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
-  const archivedGroups = useMemo(() => {
-    return projects
-      .map((project) => ({
-        project,
-        threads: threads
-          .filter((thread) => thread.projectId === project.id && thread.archivedAt !== null)
-          .toSorted((left, right) => {
-            const leftKey = left.archivedAt ?? left.createdAt;
-            const rightKey = right.archivedAt ?? right.createdAt;
-            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
-          }),
-      }))
-      .filter((group) => group.threads.length > 0);
-  }, [projects, threads]);
-
-  const handleArchivedThreadContextMenu = useCallback(
-    async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
-      const api = readLocalApi();
-      if (!api) return;
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "unarchive", label: "Unarchive" },
-          { id: "delete", label: "Delete", destructive: true },
-        ],
-        position,
-      );
-
-      if (clicked === "unarchive") {
-        try {
-          await unarchiveThread(threadRef);
-        } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to unarchive thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          });
-        }
-        return;
-      }
-
-      if (clicked === "delete") {
-        await confirmAndDeleteThread(threadRef);
-      }
-    },
-    [confirmAndDeleteThread, unarchiveThread],
-  );
-
-  return (
-    <SettingsPageContainer>
-      {archivedGroups.length === 0 ? (
-        <SettingsSection title="Archived threads">
-          <Empty className="min-h-88">
-            <EmptyMedia variant="icon">
-              <ArchiveIcon />
-            </EmptyMedia>
-            <EmptyHeader>
-              <EmptyTitle>No archived threads</EmptyTitle>
-              <EmptyDescription>Archived threads will appear here.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </SettingsSection>
-      ) : (
-        archivedGroups.map(({ project, threads: projectThreads }) => (
-          <SettingsSection
-            key={project.id}
-            title={project.name}
-            icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
-          >
-            {projectThreads.map((thread) => (
-              <div
-                key={thread.id}
-                className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 first:border-t-0 sm:px-5"
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  void handleArchivedThreadContextMenu(
-                    scopeThreadRef(thread.environmentId, thread.id),
-                    {
-                      x: event.clientX,
-                      y: event.clientY,
-                    },
-                  );
-                }}
-              >
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-medium text-foreground">{thread.title}</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
-                    {formatRelativeTimeLabel(thread.createdAt)}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
-                  onClick={() =>
-                    void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id)).catch(
-                      (error) => {
-                        toastManager.add({
-                          type: "error",
-                          title: "Failed to unarchive thread",
-                          description:
-                            error instanceof Error ? error.message : "An error occurred.",
-                        });
-                      },
-                    )
-                  }
-                >
-                  <ArchiveX className="size-3.5" />
-                  <span>Unarchive</span>
-                </Button>
-              </div>
-            ))}
-          </SettingsSection>
-        ))
-      )}
     </SettingsPageContainer>
   );
 }

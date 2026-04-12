@@ -54,6 +54,22 @@ import {
   ProjectWriteFileResult,
 } from "./project";
 import {
+  ThreadWorkspaceEntriesInput,
+  ThreadWorkspaceEntriesResult,
+  ThreadWorkspaceReadFileInput,
+  ThreadWorkspaceReadFileResult,
+  ThreadWorkspaceWriteFileInput,
+  ThreadWorkspaceWriteFileResult,
+  ThreadWorkspaceError,
+} from "./threadWorkspace";
+import {
+  HomelabSecretDeleteInput,
+  HomelabSecretDescriptor,
+  HomelabSecretError,
+  HomelabSecretsListResult,
+  HomelabSecretUpsertInput,
+} from "./homelabSecrets";
+import {
   TerminalClearInput,
   TerminalCloseInput,
   TerminalError,
@@ -81,6 +97,9 @@ export const WS_METHODS = {
   projectsRemove: "projects.remove",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  threadWorkspaceListEntries: "threadWorkspace.listEntries",
+  threadWorkspaceReadFile: "threadWorkspace.readFile",
+  threadWorkspaceWriteFile: "threadWorkspace.writeFile",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -112,6 +131,9 @@ export const WS_METHODS = {
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverListHomelabSecrets: "server.listHomelabSecrets",
+  serverUpsertHomelabSecret: "server.upsertHomelabSecret",
+  serverDeleteHomelabSecret: "server.deleteHomelabSecret",
 
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
@@ -151,6 +173,23 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   error: ServerSettingsError,
 });
 
+export const WsServerListHomelabSecretsRpc = Rpc.make(WS_METHODS.serverListHomelabSecrets, {
+  payload: Schema.Struct({}),
+  success: HomelabSecretsListResult,
+  error: HomelabSecretError,
+});
+
+export const WsServerUpsertHomelabSecretRpc = Rpc.make(WS_METHODS.serverUpsertHomelabSecret, {
+  payload: HomelabSecretUpsertInput,
+  success: HomelabSecretDescriptor,
+  error: HomelabSecretError,
+});
+
+export const WsServerDeleteHomelabSecretRpc = Rpc.make(WS_METHODS.serverDeleteHomelabSecret, {
+  payload: HomelabSecretDeleteInput,
+  error: HomelabSecretError,
+});
+
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
@@ -161,6 +200,24 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: ProjectWriteFileError,
+});
+
+export const WsThreadWorkspaceListEntriesRpc = Rpc.make(WS_METHODS.threadWorkspaceListEntries, {
+  payload: ThreadWorkspaceEntriesInput,
+  success: ThreadWorkspaceEntriesResult,
+  error: ThreadWorkspaceError,
+});
+
+export const WsThreadWorkspaceReadFileRpc = Rpc.make(WS_METHODS.threadWorkspaceReadFile, {
+  payload: ThreadWorkspaceReadFileInput,
+  success: ThreadWorkspaceReadFileResult,
+  error: ThreadWorkspaceError,
+});
+
+export const WsThreadWorkspaceWriteFileRpc = Rpc.make(WS_METHODS.threadWorkspaceWriteFile, {
+  payload: ThreadWorkspaceWriteFileInput,
+  success: ThreadWorkspaceWriteFileResult,
+  error: ThreadWorkspaceError,
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -348,8 +405,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpsertKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerListHomelabSecretsRpc,
+  WsServerUpsertHomelabSecretRpc,
+  WsServerDeleteHomelabSecretRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsThreadWorkspaceListEntriesRpc,
+  WsThreadWorkspaceReadFileRpc,
+  WsThreadWorkspaceWriteFileRpc,
   WsShellOpenInEditorRpc,
   WsSubscribeGitStatusRpc,
   WsGitPullRpc,

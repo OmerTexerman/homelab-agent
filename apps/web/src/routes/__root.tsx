@@ -13,6 +13,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
+import { HomelabSecretRequestCoordinator } from "../components/HomelabSecretRequestCoordinator";
 import {
   SlowRpcAckToastCoordinator,
   WebSocketConnectionCoordinator,
@@ -93,6 +94,7 @@ function RootRouteView() {
         <EventRouter />
         <WebSocketConnectionCoordinator />
         <SlowRpcAckToastCoordinator />
+        <HomelabSecretRequestCoordinator />
         <WebSocketConnectionSurface>
           <CommandPalette>
             <AppSidebarLayout>

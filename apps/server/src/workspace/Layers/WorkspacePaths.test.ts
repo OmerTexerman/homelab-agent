@@ -71,6 +71,18 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
         expect(error.message).toContain("Workspace root is not a directory:");
       }),
     );
+
+    it.effect("accepts logical project workspace roots without requiring a host directory", () =>
+      Effect.gen(function* () {
+        const workspacePaths = yield* WorkspacePaths;
+
+        const resolved = yield* workspacePaths.normalizeWorkspaceRoot(
+          " homelab://project/project-alpha ",
+        );
+
+        expect(resolved).toBe("homelab://project/project-alpha");
+      }),
+    );
   });
 
   describe("resolveRelativePathWithinRoot", () => {

@@ -4,6 +4,7 @@ import {
   AuthSessionId,
   CommandId,
   EventId,
+  HomelabSecretError,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -16,6 +17,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
+  ThreadWorkspaceError,
   ThreadId,
   type TerminalEvent,
   WS_METHODS,
@@ -45,6 +47,9 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
 import { TerminalManager } from "./terminal/Services/Manager";
+import { ThreadRuntime } from "./runtime/Services/ThreadRuntime";
+import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace";
+import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths";
@@ -118,9 +123,12 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const config = yield* ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
+      const homelabSecretRegistry = yield* HomelabSecretRegistry;
       const startup = yield* ServerRuntimeStartup;
+      const threadRuntime = yield* ThreadRuntime;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
+      const threadWorkspace = yield* ThreadWorkspace;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment;
@@ -178,6 +186,19 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               cause,
             });
       };
+
+      const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const runtime = yield* threadRuntime
+            .getRuntime(threadId)
+            .pipe(Effect.catch(() => Effect.void.pipe(Effect.as(undefined))));
+          if (!runtime) {
+            return;
+          }
+
+          yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+          yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+        });
 
       const enrichProjectEvent = (
         event: OrchestrationEvent,
@@ -647,6 +668,49 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(WS_METHODS.serverGetSettings, serverSettings.getSettings, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverListHomelabSecrets]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListHomelabSecrets,
+            homelabSecretRegistry.listSecrets().pipe(
+              Effect.map((secrets) => ({ secrets })),
+              Effect.mapError(
+                (cause) =>
+                  new HomelabSecretError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverUpsertHomelabSecret]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverUpsertHomelabSecret,
+            homelabSecretRegistry.upsertSecret(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new HomelabSecretError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverDeleteHomelabSecret]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverDeleteHomelabSecret,
+            homelabSecretRegistry.deleteSecret(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new HomelabSecretError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(WS_METHODS.serverUpdateSettings, serverSettings.updateSettings(patch), {
             "rpc.aggregate": "server",
@@ -680,6 +744,51 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               }),
             ),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.threadWorkspaceListEntries]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadWorkspaceListEntries,
+            wakeThreadWorkspaceRuntime(input.threadId).pipe(
+              Effect.flatMap(() => threadWorkspace.listEntries(input)),
+              Effect.mapError(
+                (cause) =>
+                  new ThreadWorkspaceError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "threadWorkspace" },
+          ),
+        [WS_METHODS.threadWorkspaceReadFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadWorkspaceReadFile,
+            wakeThreadWorkspaceRuntime(input.threadId).pipe(
+              Effect.flatMap(() => threadWorkspace.readFile(input)),
+              Effect.mapError(
+                (cause) =>
+                  new ThreadWorkspaceError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "threadWorkspace" },
+          ),
+        [WS_METHODS.threadWorkspaceWriteFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadWorkspaceWriteFile,
+            wakeThreadWorkspaceRuntime(input.threadId).pipe(
+              Effect.flatMap(() => threadWorkspace.writeFile(input)),
+              Effect.mapError(
+                (cause) =>
+                  new ThreadWorkspaceError({
+                    message: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "threadWorkspace" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, open.openInEditor(input), {

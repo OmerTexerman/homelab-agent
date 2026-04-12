@@ -130,6 +130,9 @@ vi.mock("../../environments/runtime", () => {
       server: {
         subscribeAuthAccess: (listener: Parameters<typeof authAccessHarness.subscribe>[0]) =>
           authAccessHarness.subscribe(listener),
+        listHomelabSecrets: vi.fn(async () => ({ secrets: [] })),
+        upsertHomelabSecret: vi.fn(async () => undefined),
+        deleteHomelabSecret: vi.fn(async () => undefined),
       },
     },
     ensureBootstrapped: async () => undefined,

@@ -114,6 +114,9 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
       refreshProviders: rpcClient.server.refreshProviders,
       upsertKeybinding: rpcClient.server.upsertKeybinding,
       getSettings: rpcClient.server.getSettings,
+      listHomelabSecrets: rpcClient.server.listHomelabSecrets,
+      upsertHomelabSecret: rpcClient.server.upsertHomelabSecret,
+      deleteHomelabSecret: rpcClient.server.deleteHomelabSecret,
       updateSettings: rpcClient.server.updateSettings,
     },
   };

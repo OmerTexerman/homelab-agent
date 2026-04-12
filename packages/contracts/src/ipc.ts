@@ -25,6 +25,20 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type {
+  ThreadWorkspaceEntriesInput,
+  ThreadWorkspaceEntriesResult,
+  ThreadWorkspaceReadFileInput,
+  ThreadWorkspaceReadFileResult,
+  ThreadWorkspaceWriteFileInput,
+  ThreadWorkspaceWriteFileResult,
+} from "./threadWorkspace";
+import type {
+  HomelabSecretDeleteInput,
+  HomelabSecretDescriptor,
+  HomelabSecretsListResult,
+  HomelabSecretUpsertInput,
+} from "./homelabSecrets";
+import type {
   ServerConfig,
   ServerProviderUpdatedPayload,
   ServerUpsertKeybindingResult,
@@ -201,6 +215,9 @@ export interface LocalApi {
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
+    listHomelabSecrets: () => Promise<HomelabSecretsListResult>;
+    upsertHomelabSecret: (input: HomelabSecretUpsertInput) => Promise<HomelabSecretDescriptor>;
+    deleteHomelabSecret: (input: HomelabSecretDeleteInput) => Promise<void>;
   };
 }
 
@@ -226,6 +243,11 @@ export interface EnvironmentApi {
   projects: {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
+  };
+  threadWorkspace: {
+    listEntries: (input: ThreadWorkspaceEntriesInput) => Promise<ThreadWorkspaceEntriesResult>;
+    readFile: (input: ThreadWorkspaceReadFileInput) => Promise<ThreadWorkspaceReadFileResult>;
+    writeFile: (input: ThreadWorkspaceWriteFileInput) => Promise<ThreadWorkspaceWriteFileResult>;
   };
   git: {
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;

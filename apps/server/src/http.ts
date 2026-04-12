@@ -1,5 +1,6 @@
 import Mime from "@effect/platform-node/Mime";
-import { Data, Effect, FileSystem, Option, Path } from "effect";
+import { ThreadId } from "@t3tools/contracts";
+import { Cause, Data, Effect, Exit, FileSystem, Option, Path } from "effect";
 import { cast } from "effect/Function";
 import {
   HttpBody,
@@ -24,6 +25,8 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
+import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
@@ -50,6 +53,11 @@ export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
   redirectUrl.search = requestUrl.search;
   redirectUrl.hash = requestUrl.hash;
   return redirectUrl.toString();
+}
+
+function contentDispositionAttachment(filename: string): string {
+  const fallback = filename.replace(/["\\]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 const requireAuthenticatedRequest = Effect.gen(function* () {
@@ -170,6 +178,69 @@ export const attachmentsRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": "public, max-age=31536000, immutable",
+      },
+    }).pipe(
+      Effect.catch(() =>
+        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      ),
+    );
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+export const threadWorkspaceFileRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/thread-workspace/file",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    const threadIdParam = url.value.searchParams.get("threadId")?.trim() ?? "";
+    const workspacePath = url.value.searchParams.get("path")?.trim() ?? "";
+    if (!threadIdParam || !workspacePath) {
+      return HttpServerResponse.text("Missing threadId or path parameter", { status: 400 });
+    }
+
+    const threadId = ThreadId.make(threadIdParam);
+    const threadRuntime = yield* ThreadRuntime;
+    const runtime = yield* threadRuntime.getRuntime(threadId);
+    if (runtime) {
+      yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+      yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+    }
+
+    const threadWorkspace = yield* ThreadWorkspace;
+    const resolvedEntryExit = yield* Effect.exit(
+      threadWorkspace.resolveEntryPath({
+        threadId,
+        path: workspacePath,
+      }),
+    );
+    if (Exit.isFailure(resolvedEntryExit)) {
+      const error = Cause.squash(resolvedEntryExit.cause);
+      return HttpServerResponse.text(
+        error instanceof Error ? error.message : "Unable to resolve workspace file.",
+        { status: 400 },
+      );
+    }
+    const resolvedEntry = resolvedEntryExit.value;
+
+    if (resolvedEntry.kind !== "file") {
+      return HttpServerResponse.text("Directory downloads are not available yet.", {
+        status: 400,
+      });
+    }
+
+    const downloadName = resolvedEntry.relativePath.split("/").pop() ?? "download";
+
+    return yield* HttpServerResponse.file(resolvedEntry.absolutePath, {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Disposition": contentDispositionAttachment(downloadName),
       },
     }).pipe(
       Effect.catch(() =>

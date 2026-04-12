@@ -28,6 +28,7 @@ import {
   codexTurnToolFixture,
   codexTurnTextFixture,
 } from "./fixtures/providerRuntime.ts";
+import { makeTestThreadRuntimeLayer } from "./TestThreadRuntime.integration.ts";
 
 const makeWorkspaceDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -66,7 +67,10 @@ const makeIntegrationFixture = Effect.gen(function* () {
     AnalyticsService.layerTest,
   ).pipe(Layer.provide(SqlitePersistenceMemory));
 
-  const layer = makeProviderServiceLive().pipe(Layer.provide(shared));
+  const layer = makeProviderServiceLive().pipe(
+    Layer.provide(shared),
+    Layer.provide(makeTestThreadRuntimeLayer()),
+  );
 
   return {
     cwd,

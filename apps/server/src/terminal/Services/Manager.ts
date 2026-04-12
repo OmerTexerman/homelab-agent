@@ -38,6 +38,7 @@ export interface TerminalSessionState {
   terminalId: string;
   cwd: string;
   worktreePath: string | null;
+  runtimeShell: string | null;
   status: TerminalSessionStatus;
   pid: number | null;
   history: string;

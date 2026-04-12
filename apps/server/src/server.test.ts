@@ -8,6 +8,9 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  HomelabEntity,
+  HomelabPromotionEnvelope,
+  HomelabSnapshot,
   KeybindingRule,
   MessageId,
   OpenError,
@@ -16,6 +19,7 @@ import {
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
+  RuntimeSessionId,
   ResolvedKeybindingRule,
   ThreadId,
   WS_METHODS,
@@ -32,6 +36,7 @@ import {
   Layer,
   ManagedRuntime,
   Path,
+  Schema,
   Stream,
 } from "effect";
 import {
@@ -59,6 +64,15 @@ import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
 import { Keybindings, type KeybindingsShape } from "./keybindings.ts";
 import { Open, type OpenShape } from "./open.ts";
+import { KnowledgeGraph, type KnowledgeGraphShape } from "./homelab/Services/KnowledgeGraph.ts";
+import {
+  HomelabSecretRegistry,
+  type HomelabSecretRegistryShape,
+} from "./homelab/Services/HomelabSecretRegistry.ts";
+import {
+  RuntimeBootstrapRegistry,
+  type RuntimeBootstrapRegistryShape,
+} from "./runtime/Services/RuntimeBootstrapRegistry.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -78,6 +92,13 @@ import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./server
 import { ServerRuntimeStartup, type ServerRuntimeStartupShape } from "./serverRuntimeStartup.ts";
 import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
 import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/Manager.ts";
+import { ThreadWorkspace, type ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
+import {
+  type ThreadExecutionContext,
+  type ThreadRuntimeDescriptor,
+  ThreadRuntime,
+  type ThreadRuntimeShape,
+} from "./runtime/Services/ThreadRuntime.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -104,10 +125,58 @@ import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
 const defaultDesktopBootstrapToken = "test-desktop-bootstrap-token";
+const decodeHomelabEntity = Schema.decodeUnknownSync(HomelabEntity);
+const decodeHomelabPromotionEnvelope = Schema.decodeUnknownSync(HomelabPromotionEnvelope);
+const decodeHomelabSnapshot = Schema.decodeUnknownSync(HomelabSnapshot);
 const defaultModelSelection = {
   provider: "codex",
   model: "gpt-5-codex",
 } as const;
+
+function makeMockThreadRuntimeDescriptor(
+  threadId: ThreadId = defaultThreadId,
+): ThreadRuntimeDescriptor {
+  return {
+    threadId,
+    runtimeId: RuntimeSessionId.make(`runtime-${threadId}`),
+    backend: "docker",
+    status: "running",
+    health: "healthy",
+    provider: null,
+    runtimeMode: "full-access",
+    imageRef: "homelab-agent-runtime:test",
+    containerName: `runtime-${threadId}`,
+    containerId: `container-${threadId}`,
+    workspacePath: `/workspace/${threadId}`,
+    homePath: `/runtime/home/${threadId}`,
+    cwd: "/workspace",
+    shell: "/bin/bash",
+    env: {},
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    lastStartedAt: new Date(0).toISOString(),
+    lastStoppedAt: null,
+    lastError: null,
+  };
+}
+
+function makeMockThreadExecutionContext(
+  threadId: ThreadId = defaultThreadId,
+): ThreadExecutionContext {
+  const runtime = makeMockThreadRuntimeDescriptor(threadId);
+  return {
+    threadId: runtime.threadId,
+    runtimeId: runtime.runtimeId,
+    backend: runtime.backend,
+    containerId: runtime.containerId,
+    workspacePath: runtime.workspacePath,
+    homePath: runtime.homePath,
+    cwd: runtime.cwd,
+    shell: runtime.shell,
+    env: runtime.env,
+  };
+}
+
 const testEnvironmentDescriptor = {
   environmentId: EnvironmentId.make("environment-test"),
   label: "Test environment",
@@ -161,6 +230,14 @@ const makeDefaultOrchestrationReadModel = () => {
     ],
   };
 };
+
+const makeDefaultHomelabSnapshot = () =>
+  decodeHomelabSnapshot({
+    entities: [],
+    relations: [],
+    observations: [],
+    updatedAt: new Date().toISOString(),
+  });
 
 const workspaceAndProjectServicesLayer = Layer.mergeAll(
   WorkspacePathsLive,
@@ -298,11 +375,16 @@ const buildAppUnderTest = (options?: {
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
+    knowledgeGraph?: Partial<KnowledgeGraphShape>;
+    homelabSecretRegistry?: Partial<HomelabSecretRegistryShape>;
+    runtimeBootstrapRegistry?: Partial<RuntimeBootstrapRegistryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
+    threadRuntime?: Partial<ThreadRuntimeShape>;
+    threadWorkspace?: Partial<ThreadWorkspaceShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -399,6 +481,50 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
+        Layer.mock(ThreadRuntime)({
+          ensureRuntime: (input) => Effect.succeed(makeMockThreadRuntimeDescriptor(input.threadId)),
+          getRuntime: () => Effect.void.pipe(Effect.as(undefined)),
+          listRuntimes: () => Effect.succeed([]),
+          startRuntime: (threadId) => Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
+          stopRuntime: () => Effect.void,
+          touchRuntime: () => Effect.void,
+          destroyRuntime: () => Effect.void,
+          resolveExecutionContext: (threadId) =>
+            Effect.succeed(makeMockThreadExecutionContext(threadId)),
+          streamEvents: Stream.empty,
+          ...options?.layers?.threadRuntime,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ThreadWorkspace)({
+          listEntries: () =>
+            Effect.succeed({
+              entries: [],
+              truncated: false,
+            }),
+          readFile: (input) =>
+            Effect.succeed({
+              path: input.path,
+              contents: null,
+              sizeBytes: 0,
+              isBinary: false,
+              truncated: false,
+              unsupportedReason: null,
+            }),
+          writeFile: (input) =>
+            Effect.succeed({
+              path: input.path,
+            }),
+          resolveEntryPath: (input) =>
+            Effect.succeed({
+              absolutePath: `/tmp/${input.threadId}/${input.path}`,
+              relativePath: input.path,
+              kind: "file",
+            }),
+          ...options?.layers?.threadWorkspace,
+        }),
+      ),
+      Layer.provide(
         Layer.mock(OrchestrationEngineService)({
           getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
           readEvents: () => Stream.empty,
@@ -430,6 +556,83 @@ const buildAppUnderTest = (options?: {
               diff: "",
             }),
           ...options?.layers?.checkpointDiffQuery,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(HomelabSecretRegistry)({
+          listSecrets: () => Effect.succeed([]),
+          upsertSecret: (input) =>
+            Effect.succeed({
+              key: input.key,
+              placeholder: `$${input.key}`,
+              ...(input.label !== undefined ? { label: input.label } : {}),
+              ...(input.summary !== undefined ? { summary: input.summary } : {}),
+              hasValue: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }),
+          requestSecret: (input) =>
+            Effect.succeed({
+              key: input.key,
+              placeholder: `$${input.key}`,
+              ...(input.label !== undefined ? { label: input.label } : {}),
+              ...(input.summary !== undefined ? { summary: input.summary } : {}),
+              hasValue: false,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }),
+          deleteSecret: () => Effect.void,
+          materializeEnvironment: () => Effect.succeed({}),
+          ...options?.layers?.homelabSecretRegistry,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(RuntimeBootstrapRegistry)({
+          getActiveBlueprint: () =>
+            Effect.succeed({
+              backend: "docker",
+              imageRef: "homelab-agent-runtime:local",
+              bootstrapVersion: "bootstrap-test",
+              mutations: [],
+              updatedAt: new Date().toISOString(),
+            }),
+          recordMutation: () =>
+            Effect.succeed({
+              backend: "docker",
+              imageRef: "homelab-agent-runtime:local",
+              bootstrapVersion: "bootstrap-test",
+              mutations: [],
+              updatedAt: new Date().toISOString(),
+            }),
+          replaceActiveBlueprint: () => Effect.void,
+          materializeForThread: () =>
+            Effect.succeed({
+              imageRef: "homelab-agent-runtime:local",
+              bootstrapVersion: "bootstrap-test",
+              env: {},
+              mutations: [],
+            }),
+          ...options?.layers?.runtimeBootstrapRegistry,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(KnowledgeGraph)({
+          getSnapshot: () => Effect.succeed(makeDefaultHomelabSnapshot()),
+          listEntities: () => Effect.succeed([]),
+          getEntity: () => Effect.void.pipe(Effect.as(undefined)),
+          listRelationsForEntity: () => Effect.succeed([]),
+          getRelation: () => Effect.void.pipe(Effect.as(undefined)),
+          search: () => Effect.succeed([]),
+          upsertEntity: () => Effect.void,
+          upsertRelation: () => Effect.void,
+          recordObservation: () => Effect.void,
+          applyPromotion: (promotion) =>
+            Effect.succeed({
+              eventId: EventId.make("homelab-promotion-test"),
+              promotion,
+              recordedAt: new Date().toISOString(),
+            }),
+          ...options?.layers?.knowledgeGraph,
         }),
       ),
     );
@@ -1578,6 +1781,144 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           contentType: "application/json",
         },
       ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves homelab snapshots over HTTP for authenticated owner sessions", () =>
+    Effect.gen(function* () {
+      const snapshot = decodeHomelabSnapshot({
+        entities: [
+          {
+            id: "service-grafana",
+            kind: "service" as const,
+            name: "grafana",
+            summary: "Metrics dashboard",
+            createdAt: "2026-04-12T00:00:00.000Z",
+            updatedAt: "2026-04-12T00:00:00.000Z",
+          },
+        ],
+        relations: [],
+        observations: [],
+        updatedAt: "2026-04-12T00:00:00.000Z",
+      });
+
+      yield* buildAppUnderTest({
+        layers: {
+          knowledgeGraph: {
+            getSnapshot: () => Effect.succeed(snapshot),
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/api/homelab/snapshot");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          headers: {
+            cookie,
+          },
+        }),
+      );
+      const body = (yield* Effect.promise(() => response.json())) as typeof snapshot;
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body, snapshot);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("filters homelab entities over HTTP", () =>
+    Effect.gen(function* () {
+      const entities = [
+        decodeHomelabEntity({
+          id: "service-grafana",
+          kind: "service" as const,
+          name: "grafana",
+          createdAt: "2026-04-12T00:00:00.000Z",
+          updatedAt: "2026-04-12T00:00:00.000Z",
+        }),
+      ];
+
+      yield* buildAppUnderTest({
+        layers: {
+          knowledgeGraph: {
+            listEntities: (options) => {
+              assert.deepEqual(options, { kinds: ["service"] });
+              return Effect.succeed(entities);
+            },
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/api/homelab/entities?kinds=service");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          headers: {
+            cookie,
+          },
+        }),
+      );
+      const body = (yield* Effect.promise(() => response.json())) as typeof entities;
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body, entities);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("records homelab promotions over HTTP", () =>
+    Effect.gen(function* () {
+      const promotion = decodeHomelabPromotionEnvelope({
+        id: "promotion-1",
+        threadId: ThreadId.make("thread-knowledge"),
+        summary: "Promote grafana service",
+        createdAt: "2026-04-12T00:00:00.000Z",
+        entries: [
+          {
+            action: "upsert_entity" as const,
+            entity: {
+              id: "service-grafana",
+              kind: "service" as const,
+              name: "grafana",
+              createdAt: "2026-04-12T00:00:00.000Z",
+              updatedAt: "2026-04-12T00:00:00.000Z",
+            },
+          },
+        ],
+      });
+
+      const recorded = {
+        eventId: EventId.make("homelab-promotion-1"),
+        promotion,
+        recordedAt: "2026-04-12T00:01:00.000Z",
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          knowledgeGraph: {
+            applyPromotion: (input) => {
+              assert.deepEqual(input, promotion);
+              return Effect.succeed(recorded);
+            },
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/api/homelab/promotions");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            cookie,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(promotion),
+        }),
+      );
+      const body = (yield* Effect.promise(() => response.json())) as typeof recorded;
+
+      assert.equal(response.status, 201);
+      assert.deepEqual(body, recorded);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

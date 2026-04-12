@@ -22,7 +22,6 @@ import {
 } from "effect";
 
 import { ServerConfig } from "./config";
-import { Keybindings } from "./keybindings";
 import { Open } from "./open";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
@@ -273,7 +272,6 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
 
 const makeServerRuntimeStartup = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
-  const keybindings = yield* Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
@@ -286,21 +284,6 @@ const makeServerRuntimeStartup = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Scope.close(reactorScope, Exit.void));
 
   const startup = Effect.gen(function* () {
-    yield* Effect.logDebug("startup phase: starting keybindings runtime");
-    yield* runStartupPhase(
-      "keybindings.start",
-      keybindings.start.pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to start keybindings runtime", {
-            path: error.configPath,
-            detail: error.detail,
-            cause: error.cause,
-          }),
-        ),
-        Effect.forkScoped,
-      ),
-    );
-
     yield* Effect.logDebug("startup phase: starting server settings runtime");
     yield* runStartupPhase(
       "settings.start",

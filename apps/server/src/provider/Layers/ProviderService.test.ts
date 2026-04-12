@@ -14,6 +14,7 @@ import {
   EventId,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeSessionId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -33,6 +34,11 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import {
+  ThreadRuntime,
+  type ThreadRuntimeDescriptor,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -243,6 +249,139 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
+function makePassthroughThreadRuntime(): ThreadRuntimeShape {
+  const runtimes = new Map<ThreadId, ThreadRuntimeDescriptor>();
+
+  const makeDescriptor = (
+    input: Parameters<ThreadRuntimeShape["ensureRuntime"]>[0],
+    status: ThreadRuntimeDescriptor["status"] = "ready",
+  ): ThreadRuntimeDescriptor => {
+    const cwd = input.requestedCwd ?? process.cwd();
+    const runtimeId = RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
+    const homePath = path.join(os.tmpdir(), "homelab-agent-test-home", String(input.threadId));
+    const now = new Date().toISOString();
+
+    return {
+      threadId: input.threadId,
+      runtimeId,
+      backend: "docker",
+      status,
+      health: "healthy",
+      provider: input.provider,
+      runtimeMode: input.runtimeMode,
+      imageRef: "ghcr.io/homelab-agent/runtime:test",
+      containerName: `runtime-${String(input.threadId)}`,
+      containerId: null,
+      workspacePath: cwd,
+      homePath,
+      cwd,
+      shell: "/bin/bash",
+      env: {
+        HOME: homePath,
+        PWD: cwd,
+        WORKSPACE: cwd,
+        T3_THREAD_ID: String(input.threadId),
+        T3_RUNTIME_ID: String(runtimeId),
+      },
+      createdAt: now,
+      updatedAt: now,
+      lastStartedAt: status === "running" ? now : null,
+      lastStoppedAt: null,
+      lastError: null,
+    };
+  };
+
+  return {
+    ensureRuntime: (input) =>
+      Effect.sync(() => {
+        const descriptor = makeDescriptor(input, runtimes.get(input.threadId)?.status ?? "ready");
+        runtimes.set(input.threadId, descriptor);
+        return descriptor;
+      }),
+    getRuntime: (threadId) => Effect.sync(() => runtimes.get(threadId)),
+    listRuntimes: () => Effect.sync(() => Array.from(runtimes.values())),
+    startRuntime: (threadId) =>
+      Effect.sync(() => {
+        const existing = runtimes.get(threadId);
+        const next = existing
+          ? {
+              ...existing,
+              status: "running" as const,
+              health: "healthy" as const,
+              updatedAt: new Date().toISOString(),
+              lastStartedAt: new Date().toISOString(),
+            }
+          : makeDescriptor(
+              {
+                threadId,
+                provider: null,
+                runtimeMode: "full-access",
+              },
+              "running",
+            );
+        runtimes.set(threadId, next);
+        return next;
+      }),
+    stopRuntime: (threadId) =>
+      Effect.sync(() => {
+        const existing = runtimes.get(threadId);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(threadId, {
+          ...existing,
+          status: "stopped",
+          updatedAt: new Date().toISOString(),
+          lastStoppedAt: new Date().toISOString(),
+        });
+      }),
+    touchRuntime: (threadId) =>
+      Effect.sync(() => {
+        const existing = runtimes.get(threadId);
+        if (!existing) {
+          return;
+        }
+        runtimes.set(threadId, {
+          ...existing,
+          updatedAt: new Date().toISOString(),
+        });
+      }),
+    destroyRuntime: (threadId) =>
+      Effect.sync(() => {
+        runtimes.delete(threadId);
+      }),
+    resolveExecutionContext: (threadId) =>
+      Effect.sync(() => {
+        const runtime =
+          runtimes.get(threadId) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(threadId, runtime);
+        return {
+          threadId: runtime.threadId,
+          runtimeId: runtime.runtimeId,
+          backend: runtime.backend,
+          containerId: runtime.containerId,
+          workspacePath: runtime.workspacePath,
+          homePath: runtime.homePath,
+          cwd: runtime.cwd,
+          shell: runtime.shell,
+          env: runtime.env,
+        };
+      }),
+    streamEvents: Stream.empty,
+  } satisfies ThreadRuntimeShape;
+}
+
+function makeTestProviderServiceLive() {
+  return makeProviderServiceLive().pipe(
+    Layer.provide(Layer.succeed(ThreadRuntime, makePassthroughThreadRuntime())),
+  );
+}
+
 function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
@@ -264,7 +403,7 @@ function makeProviderServiceLayer() {
 
   const layer = it.layer(
     Layer.mergeAll(
-      makeProviderServiceLive().pipe(
+      makeTestProviderServiceLive().pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -309,7 +448,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
       Layer.provide(SqlitePersistenceMemory),
     );
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
-    const providerLayer = makeProviderServiceLive().pipe(
+    const providerLayer = makeTestProviderServiceLive().pipe(
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
       Layer.provide(serverSettingsLayer),
@@ -362,7 +501,7 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
       });
     }).pipe(Effect.provide(directoryLayer));
 
-    const providerLayer = makeProviderServiceLive().pipe(
+    const providerLayer = makeTestProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
       Layer.provide(defaultServerSettingsLayer),
@@ -422,7 +561,7 @@ it.effect(
       const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
       );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
+      const firstProviderLayer = makeTestProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -474,7 +613,7 @@ it.effect(
       const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
       );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
+      const secondProviderLayer = makeTestProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -835,7 +974,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
       );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
+      const firstProviderLayer = makeTestProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -868,7 +1007,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
       );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
+      const secondProviderLayer = makeTestProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
         Layer.provide(defaultServerSettingsLayer),

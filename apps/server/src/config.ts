@@ -72,6 +72,7 @@ export const deriveServerPaths = Effect.fn(function* (
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
   const stateDir = join(baseDir, devUrl !== undefined ? "dev" : "userdata");
+  const configDir = join(stateDir, "config");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
@@ -79,8 +80,8 @@ export const deriveServerPaths = Effect.fn(function* (
   return {
     stateDir,
     dbPath,
-    keybindingsConfigPath: join(stateDir, "keybindings.json"),
-    settingsPath: join(stateDir, "settings.json"),
+    keybindingsConfigPath: join(configDir, "keybindings.json"),
+    settingsPath: join(configDir, "settings.json"),
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
     logsDir,

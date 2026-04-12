@@ -55,6 +55,7 @@ import {
   FileSystem,
   Fiber,
   Layer,
+  Option,
   Queue,
   Random,
   Ref,
@@ -63,6 +64,11 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  runtimeClaudeBinaryPath,
+  runtimeWorkspaceDirFromExecutionContext,
+} from "../../runtime/launchers.ts";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { getClaudeModelCapabilities } from "./ClaudeProvider.ts";
 import {
@@ -932,6 +938,45 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const serverSettingsService = yield* ServerSettingsService;
+  const resolveRuntimeLaunch = Effect.fn("claudeAdapter.resolveRuntimeLaunch")(function* (
+    threadId: ThreadId,
+  ) {
+    const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
+    if (Option.isNone(threadRuntime)) {
+      return undefined;
+    }
+
+    const executionContext = yield* threadRuntime.value.resolveExecutionContext(threadId).pipe(
+      Effect.catchTags({
+        ThreadRuntimeError: () => Effect.as(Effect.void, undefined),
+        ThreadRuntimeNotFoundError: () => Effect.as(Effect.void, undefined),
+      }),
+    );
+    if (!executionContext) {
+      return undefined;
+    }
+
+    const wrapperPath = runtimeClaudeBinaryPath(executionContext);
+    const wrapperExists = yield* fileSystem
+      .exists(wrapperPath)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!wrapperExists) {
+      return undefined;
+    }
+
+    const hostWorkspacePath =
+      runtimeWorkspaceDirFromExecutionContext(executionContext) ?? executionContext.cwd;
+
+    return {
+      binaryPath: wrapperPath,
+      cwd: hostWorkspacePath,
+      additionalDirectories: [hostWorkspacePath],
+      env: {
+        ...process.env,
+        ...executionContext.env,
+      },
+    };
+  });
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.make(id));
@@ -2680,7 +2725,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             }),
         ),
       );
-      const claudeBinaryPath = claudeSettings.binaryPath;
+      const runtimeLaunch = yield* resolveRuntimeLaunch(input.threadId);
+      const claudeBinaryPath = runtimeLaunch?.binaryPath ?? claudeSettings.binaryPath;
+      const cwd = runtimeLaunch?.cwd ?? input.cwd;
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
@@ -2704,7 +2751,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       };
 
       const queryOptions: ClaudeQueryOptions = {
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(cwd ? { cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         settingSources: [...CLAUDE_SETTING_SOURCES],
@@ -2718,8 +2765,12 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: process.env,
-        ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+        env: runtimeLaunch?.env ?? process.env,
+        ...(runtimeLaunch?.additionalDirectories
+          ? { additionalDirectories: runtimeLaunch.additionalDirectories }
+          : cwd
+            ? { additionalDirectories: [cwd] }
+            : {}),
       };
 
       const queryRuntime = yield* Effect.try({

@@ -31,7 +31,6 @@ import { truncate } from "@t3tools/shared/String";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
-import { useGitStatus } from "~/lib/gitStatusState";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
@@ -94,6 +93,7 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import { ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
 import { ChevronDownIcon } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
@@ -162,11 +162,7 @@ import {
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
-import {
-  useServerAvailableEditors,
-  useServerConfig,
-  useServerKeybindings,
-} from "~/rpc/serverState";
+import { useServerConfig, useServerKeybindings } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
@@ -176,6 +172,8 @@ const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID: Record<string, boolean> = {};
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_TURN_DIFF_SUMMARY_BY_ASSISTANT_MESSAGE_ID = new Map<MessageId, TurnDiffSummary>();
+const HIDE_REPOSITORY_EDITOR_SCAFFOLDING = true;
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
@@ -675,6 +673,7 @@ export default function ChatView(props: ChatViewProps) {
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1417,9 +1416,7 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const gitStatusQuery = useGitStatus({ environmentId, cwd: gitCwd });
   const keybindings = useServerKeybindings();
-  const availableEditors = useServerAvailableEditors();
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
@@ -1431,8 +1428,6 @@ export default function ChatView(props: ChatViewProps) {
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
       : (storeServerTerminalLaunchContext ?? null);
-  // Default true while loading to avoid toolbar flicker.
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
   const terminalShortcutLabelOptions = useMemo(
     () => ({
       context: {
@@ -1441,19 +1436,6 @@ export default function ChatView(props: ChatViewProps) {
       },
     }),
     [terminalState.terminalOpen],
-  );
-  const nonTerminalShortcutLabelOptions = useMemo(
-    () => ({
-      context: {
-        terminalFocus: false,
-        terminalOpen: Boolean(terminalState.terminalOpen),
-      },
-    }),
-    [terminalState.terminalOpen],
-  );
-  const terminalToggleShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "terminal.toggle"),
-    [keybindings],
   );
   const splitTerminalShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "terminal.split", terminalShortcutLabelOptions),
@@ -1466,10 +1448,6 @@ export default function ChatView(props: ChatViewProps) {
   const closeTerminalShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "terminal.close", terminalShortcutLabelOptions),
     [keybindings, terminalShortcutLabelOptions],
-  );
-  const diffPanelShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
-    [keybindings, nonTerminalShortcutLabelOptions],
   );
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
@@ -2145,6 +2123,13 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     setIsRevertingCheckpoint(false);
   }, [activeThread?.id]);
+
+  useEffect(() => {
+    if (isServerThread) {
+      return;
+    }
+    setWorkspacePanelOpen(false);
+  }, [isServerThread]);
 
   useEffect(() => {
     if (!activeThread?.id || terminalState.terminalOpen) return;
@@ -3288,6 +3273,10 @@ export default function ChatView(props: ChatViewProps) {
     return <NoActiveThreadState />;
   }
 
+  const visibleTurnDiffSummaryByAssistantMessageId = HIDE_REPOSITORY_EDITOR_SCAFFOLDING
+    ? EMPTY_TURN_DIFF_SUMMARY_BY_ASSISTANT_MESSAGE_ID
+    : turnDiffSummaryByAssistantMessageId;
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
@@ -3298,31 +3287,14 @@ export default function ChatView(props: ChatViewProps) {
         )}
       >
         <ChatHeader
-          activeThreadEnvironmentId={activeThread.environmentId}
-          activeThreadId={activeThread.id}
-          {...(routeKind === "draft" && draftId ? { draftId } : {})}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
-          isGitRepo={isGitRepo}
-          openInCwd={gitCwd}
-          activeProjectScripts={activeProject?.scripts}
-          preferredScriptId={
-            activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-          }
-          keybindings={keybindings}
-          availableEditors={availableEditors}
           terminalAvailable={activeProject !== undefined}
           terminalOpen={terminalState.terminalOpen}
-          terminalToggleShortcutLabel={terminalToggleShortcutLabel}
-          diffToggleShortcutLabel={diffPanelShortcutLabel}
-          gitCwd={gitCwd}
-          diffOpen={diffOpen}
-          onRunProjectScript={runProjectScript}
-          onAddProjectScript={saveProjectScript}
-          onUpdateProjectScript={updateProjectScript}
-          onDeleteProjectScript={deleteProjectScript}
+          workspaceAvailable={isServerThread}
+          workspaceOpen={workspacePanelOpen}
           onToggleTerminal={toggleTerminalVisibility}
-          onToggleDiff={onToggleDiff}
+          onToggleWorkspace={() => setWorkspacePanelOpen((open) => !open)}
         />
       </header>
 
@@ -3364,19 +3336,19 @@ export default function ChatView(props: ChatViewProps) {
                 timelineEntries={timelineEntries}
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
                 completionSummary={completionSummary}
-                turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                turnDiffSummaryByAssistantMessageId={visibleTurnDiffSummaryByAssistantMessageId}
                 nowIso={nowIso}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 expandedWorkGroups={expandedWorkGroups}
                 onToggleWorkGroup={onToggleWorkGroup}
                 changedFilesExpandedByTurnId={changedFilesExpandedByTurnId}
                 onSetChangedFilesExpanded={handleSetChangedFilesExpanded}
-                onOpenTurnDiff={onOpenTurnDiff}
+                onOpenTurnDiff={HIDE_REPOSITORY_EDITOR_SCAFFOLDING ? () => {} : onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
-                markdownCwd={gitCwd ?? undefined}
+                markdownCwd={undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
@@ -3399,7 +3371,7 @@ export default function ChatView(props: ChatViewProps) {
           </div>
 
           {/* Input bar */}
-          <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+          <div className="px-3 pt-1.5 pb-3 sm:px-5 sm:pt-2 sm:pb-4">
             <ChatComposer
               ref={composerRef}
               composerDraftTarget={composerDraftTarget}
@@ -3467,7 +3439,7 @@ export default function ChatView(props: ChatViewProps) {
             />
           </div>
 
-          {isGitRepo && (
+          {!HIDE_REPOSITORY_EDITOR_SCAFFOLDING && (
             <BranchToolbar
               environmentId={activeThread.environmentId}
               threadId={activeThread.id}
@@ -3486,7 +3458,7 @@ export default function ChatView(props: ChatViewProps) {
                 : {})}
             />
           )}
-          {pullRequestDialogState ? (
+          {!HIDE_REPOSITORY_EDITOR_SCAFFOLDING && pullRequestDialogState ? (
             <PullRequestThreadDialog
               key={pullRequestDialogState.key}
               open
@@ -3505,13 +3477,23 @@ export default function ChatView(props: ChatViewProps) {
         </div>
         {/* end chat column */}
 
+        {isServerThread && workspacePanelOpen ? (
+          <ThreadWorkspacePanel
+            environmentId={environmentId}
+            threadId={activeThread.id}
+            open={workspacePanelOpen}
+            onClose={() => setWorkspacePanelOpen(false)}
+            resolvedTheme={resolvedTheme === "light" ? "light" : "dark"}
+          />
+        ) : null}
+
         {/* Plan sidebar */}
         {planSidebarOpen ? (
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
             environmentId={environmentId}
-            markdownCwd={gitCwd ?? undefined}
+            markdownCwd={undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}
             onClose={() => {

@@ -262,12 +262,14 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadMetaUpdatedPayload({
       threadId: "thread-1",
+      projectId: "project-2",
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
+    assert.strictEqual(parsed.projectId, "project-2");
     assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
   }),
 );
