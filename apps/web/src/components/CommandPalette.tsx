@@ -7,9 +7,11 @@ import {
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowUpIcon,
+  FolderClosedIcon,
   MessageSquareIcon,
   SettingsIcon,
   SquarePenIcon,
+  TerminalSquareIcon,
 } from "lucide-react";
 import {
   useDeferredValue,
@@ -68,6 +70,10 @@ import { Kbd, KbdGroup } from "./ui/kbd";
 import { toastManager } from "./ui/toast";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
+import {
+  selectThreadWorkspacePanelOpen,
+  useWorkspacePanelStateStore,
+} from "../workspacePanelStateStore";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   const open = useCommandPaletteStore((store) => store.open);
@@ -143,9 +149,26 @@ function OpenCommandPaletteDialog() {
   const settings = useSettings();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const currentServerThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const keybindings = useServerKeybindings();
+  const terminalOpen = useTerminalStateStore((state) =>
+    currentServerThreadRef
+      ? selectThreadTerminalState(state.terminalStateByThreadKey, currentServerThreadRef)
+          .terminalOpen
+      : false,
+  );
+  const setTerminalOpen = useTerminalStateStore((state) => state.setTerminalOpen);
+  const workspacePanelOpen = useWorkspacePanelStateStore((state) =>
+    selectThreadWorkspacePanelOpen(state.workspacePanelOpenByThreadKey, currentServerThreadRef),
+  );
+  const setWorkspacePanelOpen = useWorkspacePanelStateStore((state) => state.setWorkspacePanelOpen);
+  const toggleWorkspacePanel = useWorkspacePanelStateStore((state) => state.toggleWorkspacePanel);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const paletteMode = getCommandPaletteMode({ currentView });
@@ -284,6 +307,86 @@ function OpenCommandPaletteDialog() {
   }
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (currentServerThreadRef) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:terminal-open",
+        searchTerms: ["open terminal", "terminal", "shell", "cli"],
+        title: "Open terminal",
+        description: terminalOpen ? "Already open for this thread." : "Open the terminal drawer.",
+        icon: <TerminalSquareIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          setTerminalOpen(currentServerThreadRef, true);
+        },
+      },
+      {
+        kind: "action",
+        value: "action:terminal-close",
+        searchTerms: ["close terminal", "hide terminal", "terminal", "shell", "cli"],
+        title: "Close terminal",
+        description: terminalOpen
+          ? "Close the terminal drawer."
+          : "Already closed for this thread.",
+        icon: <TerminalSquareIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          setTerminalOpen(currentServerThreadRef, false);
+        },
+      },
+      {
+        kind: "action",
+        value: "action:terminal-toggle",
+        searchTerms: ["toggle terminal", "terminal", "shell", "cli"],
+        title: "Toggle terminal",
+        description: terminalOpen ? "Hide the terminal drawer." : "Show the terminal drawer.",
+        icon: <TerminalSquareIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "terminal.toggle",
+        run: async () => {
+          setTerminalOpen(currentServerThreadRef, !terminalOpen);
+        },
+      },
+      {
+        kind: "action",
+        value: "action:file-manager-open",
+        searchTerms: ["open file manager", "open files", "workspace", "file manager", "files"],
+        title: "Open file manager",
+        description: workspacePanelOpen
+          ? "Already open for this thread."
+          : "Open the thread file manager.",
+        icon: <FolderClosedIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          setWorkspacePanelOpen(currentServerThreadRef, true);
+        },
+      },
+      {
+        kind: "action",
+        value: "action:file-manager-close",
+        searchTerms: ["close file manager", "close files", "workspace", "file manager", "files"],
+        title: "Close file manager",
+        description: workspacePanelOpen
+          ? "Close the thread file manager."
+          : "Already closed for this thread.",
+        icon: <FolderClosedIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          setWorkspacePanelOpen(currentServerThreadRef, false);
+        },
+      },
+      {
+        kind: "action",
+        value: "action:file-manager-toggle",
+        searchTerms: ["toggle file manager", "toggle files", "workspace", "file manager", "files"],
+        title: "Toggle file manager",
+        description: workspacePanelOpen
+          ? "Hide the thread file manager."
+          : "Show the thread file manager.",
+        icon: <FolderClosedIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          toggleWorkspacePanel(currentServerThreadRef);
+        },
+      },
+    );
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle = currentProjectId

@@ -42,10 +42,8 @@ import {
   ThreadRuntime,
   ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
-  type ThreadExecutionContext,
   type ThreadRuntimeShape,
 } from "../../runtime/Services/ThreadRuntime";
-import { runtimeWorkspaceDirFromExecutionContext } from "../../runtime/launchers";
 import {
   PtyAdapter,
   PtySpawnError,
@@ -171,10 +169,6 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     exitSignal: session.exitSignal,
     updatedAt: session.updatedAt,
   };
-}
-
-function resolveRuntimeSpawnCwd(executionContext: ThreadExecutionContext): string {
-  return runtimeWorkspaceDirFromExecutionContext(executionContext) ?? executionContext.cwd;
 }
 
 function cleanupProcessHandles(session: TerminalSessionState): void {
@@ -1094,19 +1088,20 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           yield* threadRuntime.startRuntime(runtimeThreadId);
           yield* threadRuntime.touchRuntime(runtimeThreadId);
 
-          const executionContext = yield* threadRuntime.resolveExecutionContext(runtimeThreadId);
+          const launchContext = yield* threadRuntime.resolveLaunchContext(runtimeThreadId);
+          const executionContext = launchContext.execution;
           const runtimeEnv = normalizedRuntimeEnv({
             ...executionContext.env,
             ...input.env,
           });
-          const runtimeShell = executionContext.shell.trim();
+          const runtimeShell = launchContext.shellWrapperPath.trim();
 
           return {
             cwd: executionContext.cwd,
-            spawnCwd: resolveRuntimeSpawnCwd(executionContext),
+            spawnCwd: launchContext.hostWorkspacePath,
             worktreePath: input.worktreePath ?? executionContext.workspacePath,
             runtimeEnv,
-            runtimeShell: runtimeShell || executionContext.shell,
+            runtimeShell: runtimeShell || launchContext.shellWrapperPath,
           } as const;
         }).pipe(
           Effect.mapError(

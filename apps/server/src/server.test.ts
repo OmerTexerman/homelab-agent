@@ -95,6 +95,7 @@ import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/
 import { ThreadWorkspace, type ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
 import {
   type ThreadExecutionContext,
+  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeDescriptor,
   ThreadRuntime,
   type ThreadRuntimeShape,
@@ -174,6 +175,19 @@ function makeMockThreadExecutionContext(
     cwd: runtime.cwd,
     shell: runtime.shell,
     env: runtime.env,
+  };
+}
+
+function makeMockThreadRuntimeLaunchContext(
+  threadId: ThreadId = defaultThreadId,
+): ThreadRuntimeLaunchContext {
+  return {
+    execution: makeMockThreadExecutionContext(threadId),
+    hostRuntimePath: `/tmp/runtime/${threadId}`,
+    hostWorkspacePath: `/tmp/runtime/${threadId}/workspace`,
+    hostHomePath: `/tmp/runtime/${threadId}/home`,
+    hostBinDir: `/tmp/runtime/${threadId}/bin`,
+    shellWrapperPath: `/tmp/runtime/${threadId}/bin/runtime-shell`,
   };
 }
 
@@ -488,9 +502,13 @@ const buildAppUnderTest = (options?: {
           startRuntime: (threadId) => Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
           stopRuntime: () => Effect.void,
           touchRuntime: () => Effect.void,
+          refreshRuntimeEnvironment: (threadId) =>
+            Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
           destroyRuntime: () => Effect.void,
           resolveExecutionContext: (threadId) =>
             Effect.succeed(makeMockThreadExecutionContext(threadId)),
+          resolveLaunchContext: (threadId) =>
+            Effect.succeed(makeMockThreadRuntimeLaunchContext(threadId)),
           streamEvents: Stream.empty,
           ...options?.layers?.threadRuntime,
         }),
@@ -2078,6 +2096,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refreshes runtime env files after websocket rpc server.upsertHomelabSecret", () =>
+    Effect.gen(function* () {
+      const refreshRuntimeEnvironment = vi.fn((threadId: ThreadId) =>
+        Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          threadRuntime: {
+            listRuntimes: () =>
+              Effect.succeed([
+                makeMockThreadRuntimeDescriptor(ThreadId.make("thread-secret-1")),
+                makeMockThreadRuntimeDescriptor(ThreadId.make("thread-secret-2")),
+              ]),
+            refreshRuntimeEnvironment,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverUpsertHomelabSecret]({
+            key: "TEST_SECRET_FLOW",
+            value: "dummy-value",
+            label: "Test secret",
+            summary: "Testing runtime env refresh",
+          }),
+        ),
+      );
+
+      assert.equal(response.key, "TEST_SECRET_FLOW");
+      assert.deepEqual(refreshRuntimeEnvironment.mock.calls, [
+        [ThreadId.make("thread-secret-1")],
+        [ThreadId.make("thread-secret-2")],
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("rejects websocket rpc handshake when session authentication is missing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -3135,6 +3192,86 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.deepEqual(replayResult, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("provisions a missing thread runtime before listing thread workspace entries", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-workspace-bootstrap");
+      const ensureRuntimeCalls: ThreadId[] = [];
+      const startRuntimeCalls: ThreadId[] = [];
+      const touchRuntimeCalls: ThreadId[] = [];
+      const snapshot = makeDefaultOrchestrationReadModel();
+      const bootstrapThread = snapshot.threads[0]!;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            getReadModel: () =>
+              Effect.succeed({
+                ...snapshot,
+                threads: [
+                  {
+                    ...bootstrapThread,
+                    id: threadId,
+                    session: null,
+                    deletedAt: null,
+                  },
+                ],
+              }),
+          },
+          threadRuntime: {
+            getRuntime: () => Effect.as(Effect.void, undefined),
+            ensureRuntime: (input) =>
+              Effect.sync(() => {
+                ensureRuntimeCalls.push(input.threadId);
+                return makeMockThreadRuntimeDescriptor(input.threadId);
+              }),
+            startRuntime: (inputThreadId) =>
+              Effect.sync(() => {
+                startRuntimeCalls.push(inputThreadId);
+                return makeMockThreadRuntimeDescriptor(inputThreadId);
+              }),
+            touchRuntime: (inputThreadId) =>
+              Effect.sync(() => {
+                touchRuntimeCalls.push(inputThreadId);
+              }),
+          },
+          threadWorkspace: {
+            listEntries: () =>
+              Effect.succeed({
+                entries: [
+                  {
+                    path: "AGENTS.md",
+                    name: "AGENTS.md",
+                    kind: "file" as const,
+                    sizeBytes: 128,
+                  },
+                ],
+                truncated: false,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.threadWorkspaceListEntries]({
+            threadId,
+            query: "",
+            limit: 100,
+          }),
+        ),
+      );
+
+      assert.deepEqual(
+        response.entries.map((entry) => entry.path),
+        ["AGENTS.md"],
+      );
+      assert.deepEqual(ensureRuntimeCalls, [threadId]);
+      assert.deepEqual(startRuntimeCalls, [threadId]);
+      assert.deepEqual(touchRuntimeCalls, [threadId]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

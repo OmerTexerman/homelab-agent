@@ -128,6 +128,10 @@ import {
   type TerminalContextSelection,
 } from "../lib/terminalContext";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import {
+  selectThreadWorkspacePanelOpen,
+  useWorkspacePanelStateStore,
+} from "../workspacePanelStateStore";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -673,7 +677,6 @@ export default function ChatView(props: ChatViewProps) {
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
-  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -731,6 +734,11 @@ export default function ChatView(props: ChatViewProps) {
   const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
   const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
+  const workspacePanelOpen = useWorkspacePanelStateStore((state) =>
+    selectThreadWorkspacePanelOpen(state.workspacePanelOpenByThreadKey, routeThreadRef),
+  );
+  const storeSetWorkspacePanelOpen = useWorkspacePanelStateStore((s) => s.setWorkspacePanelOpen);
+  const storeToggleWorkspacePanel = useWorkspacePanelStateStore((s) => s.toggleWorkspacePanel);
   const serverThreadKeys = useStore(
     useShallow((state) =>
       selectThreadsAcrossEnvironments(state).map((thread) =>
@@ -1552,6 +1560,17 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     setTerminalOpen(!terminalState.terminalOpen);
   }, [activeThreadRef, setTerminalOpen, terminalState.terminalOpen]);
+  const setWorkspacePanelOpen = useCallback(
+    (open: boolean) => {
+      if (!routeThreadRef) return;
+      storeSetWorkspacePanelOpen(routeThreadRef, open);
+    },
+    [routeThreadRef, storeSetWorkspacePanelOpen],
+  );
+  const toggleWorkspacePanelVisibility = useCallback(() => {
+    if (!routeThreadRef) return;
+    storeToggleWorkspacePanel(routeThreadRef);
+  }, [routeThreadRef, storeToggleWorkspacePanel]);
   const splitTerminal = useCallback(() => {
     if (!activeThreadRef || hasReachedSplitLimit) return;
     const terminalId = `terminal-${randomUUID()}`;
@@ -2123,13 +2142,6 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     setIsRevertingCheckpoint(false);
   }, [activeThread?.id]);
-
-  useEffect(() => {
-    if (isServerThread) {
-      return;
-    }
-    setWorkspacePanelOpen(false);
-  }, [isServerThread]);
 
   useEffect(() => {
     if (!activeThread?.id || terminalState.terminalOpen) return;
@@ -3294,7 +3306,7 @@ export default function ChatView(props: ChatViewProps) {
           workspaceAvailable={isServerThread}
           workspaceOpen={workspacePanelOpen}
           onToggleTerminal={toggleTerminalVisibility}
-          onToggleWorkspace={() => setWorkspacePanelOpen((open) => !open)}
+          onToggleWorkspace={toggleWorkspacePanelVisibility}
         />
       </header>
 

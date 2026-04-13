@@ -15,13 +15,15 @@ import {
   ProviderItemId,
   ProviderRuntimeEvent,
   type RuntimeMode,
+  RuntimeSessionId,
   ThreadId,
 } from "@t3tools/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { afterAll, assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Random, Stream } from "effect";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { ThreadRuntime, type ThreadRuntimeShape } from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
@@ -239,8 +241,77 @@ async function readFirstPromptMessage(
 
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
+const RUNTIME_THREAD_ID = ThreadId.make("thread-claude-runtime");
+const MISSING_RUNTIME_WRAPPER_THREAD_ID = ThreadId.make("thread-claude-runtime-missing-wrapper");
+const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), "claude-adapter-runtime-"));
+const runtimeBinDir = path.join(runtimeRoot, "bin");
+const runtimeHostWorkspace = path.join(runtimeRoot, "workspace");
+mkdirSync(runtimeBinDir, { recursive: true });
+mkdirSync(runtimeHostWorkspace, { recursive: true });
+writeFileSync(path.join(runtimeBinDir, "claude"), "#!/usr/bin/env bash\n", "utf8");
+const missingRuntimeWrapperRoot = mkdtempSync(
+  path.join(os.tmpdir(), "claude-adapter-runtime-missing-wrapper-"),
+);
+const missingRuntimeWrapperBinDir = path.join(missingRuntimeWrapperRoot, "bin");
+const missingRuntimeWrapperHostWorkspace = path.join(missingRuntimeWrapperRoot, "workspace");
+mkdirSync(missingRuntimeWrapperBinDir, { recursive: true });
+mkdirSync(missingRuntimeWrapperHostWorkspace, { recursive: true });
+
+function makeThreadRuntimeStub(config: {
+  readonly threadId: ThreadId;
+  readonly runtimeId: string;
+  readonly hostRuntimePath: string;
+  readonly hostWorkspacePath: string;
+  readonly hostBinDir: string;
+}) {
+  const execution = {
+    threadId: config.threadId,
+    runtimeId: RuntimeSessionId.make(config.runtimeId),
+    backend: "docker" as const,
+    containerId: `container-${config.runtimeId}`,
+    workspacePath: "/workspace",
+    homePath: "/home/codex",
+    cwd: "/workspace",
+    shell: path.join(config.hostBinDir, "runtime-shell"),
+    env: {
+      CLAUDE_CONFIG_DIR: "/home/codex/.claude",
+    },
+  };
+
+  return {
+    ensureRuntime: () => Effect.die("unused"),
+    getRuntime: () => Effect.die("unused"),
+    listRuntimes: () => Effect.die("unused"),
+    startRuntime: () => Effect.die("unused"),
+    stopRuntime: () => Effect.die("unused"),
+    touchRuntime: () => Effect.die("unused"),
+    refreshRuntimeEnvironment: () => Effect.die("unused"),
+    destroyRuntime: () => Effect.die("unused"),
+    resolveExecutionContext: (threadId: ThreadId) =>
+      threadId === config.threadId
+        ? Effect.succeed(execution)
+        : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+    resolveLaunchContext: (threadId: ThreadId) =>
+      threadId === config.threadId
+        ? Effect.succeed({
+            execution,
+            hostRuntimePath: config.hostRuntimePath,
+            hostWorkspacePath: config.hostWorkspacePath,
+            hostHomePath: path.join(config.hostRuntimePath, "home"),
+            hostBinDir: config.hostBinDir,
+            shellWrapperPath: path.join(config.hostBinDir, "runtime-shell"),
+          })
+        : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+    streamEvents: Stream.empty,
+  } satisfies ThreadRuntimeShape;
+}
 
 describe("ClaudeAdapterLive", () => {
+  afterAll(() => {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    rmSync(missingRuntimeWrapperRoot, { recursive: true, force: true });
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -264,6 +335,91 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("uses the runtime wrapper and host launch cwd for thread runtimes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: RUNTIME_THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(
+        createInput?.options.pathToClaudeCodeExecutable,
+        path.join(runtimeBinDir, "claude"),
+      );
+      assert.equal(createInput?.options.cwd, runtimeHostWorkspace);
+      assert.deepEqual(createInput?.options.additionalDirectories, [runtimeHostWorkspace]);
+      assert.equal(createInput?.options.env?.CLAUDE_CONFIG_DIR, "/home/codex/.claude");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(
+            Layer.succeed(
+              ThreadRuntime,
+              makeThreadRuntimeStub({
+                threadId: RUNTIME_THREAD_ID,
+                runtimeId: "runtime-claude-1",
+                hostRuntimePath: runtimeRoot,
+                hostWorkspacePath: runtimeHostWorkspace,
+                hostBinDir: runtimeBinDir,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("fails fast when a thread runtime wrapper is missing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter
+        .startSession({
+          threadId: MISSING_RUNTIME_WRAPPER_THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+
+      assert.equal(result.failure._tag, "ProviderAdapterProcessError");
+      if (result.failure._tag !== "ProviderAdapterProcessError") {
+        return;
+      }
+
+      assert.equal(result.failure.provider, "claudeAgent");
+      assert.match(result.failure.detail, /Runtime wrapper is missing/);
+      assert.equal(harness.getLastCreateQueryInput(), undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(
+            Layer.succeed(
+              ThreadRuntime,
+              makeThreadRuntimeStub({
+                threadId: MISSING_RUNTIME_WRAPPER_THREAD_ID,
+                runtimeId: "runtime-claude-missing-wrapper",
+                hostRuntimePath: missingRuntimeWrapperRoot,
+                hostWorkspacePath: missingRuntimeWrapperHostWorkspace,
+                hostBinDir: missingRuntimeWrapperBinDir,
+              }),
+            ),
+          ),
+        ),
+      ),
     );
   });
 

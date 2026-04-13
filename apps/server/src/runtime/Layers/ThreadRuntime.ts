@@ -33,6 +33,7 @@ import {
   ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
   type ThreadExecutionContext,
+  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
@@ -192,9 +193,11 @@ const CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS = [
 ];
 const FORWARDED_ENV_DENYLIST = new Set([
   "_",
+  "BASH_ENV",
   "BASHOPTS",
   "BASHPID",
   "CODEX_HOME",
+  "ENV",
   "EUID",
   "GROUPS",
   "HOME",
@@ -269,6 +272,22 @@ function runtimeHomelabRootPath(homePath: string): string {
 
 function runtimeHomelabBinPath(homePath: string): string {
   return nodePath.join(runtimeHomelabRootPath(homePath), "bin");
+}
+
+function runtimeBashProfilePath(homePath: string): string {
+  return nodePath.join(homePath, ".bash_profile");
+}
+
+function runtimeBashRcPath(homePath: string): string {
+  return nodePath.join(homePath, ".bashrc");
+}
+
+function runtimeProfilePath(homePath: string): string {
+  return nodePath.join(homePath, ".profile");
+}
+
+function runtimeZshEnvPath(homePath: string): string {
+  return nodePath.join(homePath, ".zshenv");
 }
 
 function normalizeRequestedCwd(
@@ -480,7 +499,10 @@ function buildRuntimeEnvironment(input: {
   readonly baseEnvironment?: Readonly<Record<string, string>>;
   readonly containerShellPath: string;
 }): Readonly<Record<string, string>> {
+  const runtimeEnvPath = runtimeSecretEnvPath(input.homePath);
   return {
+    BASH_ENV: runtimeEnvPath,
+    ENV: runtimeEnvPath,
     HOME: input.homePath,
     PWD: input.cwd,
     SHELL: input.containerShellPath,
@@ -504,6 +526,20 @@ function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExecutionCo
     cwd: runtime.cwd,
     shell: runtime.shell,
     env: runtime.env,
+  };
+}
+
+function toLaunchContext(
+  threadRuntimesDir: string,
+  runtime: ThreadRuntimeDescriptor,
+): ThreadRuntimeLaunchContext {
+  return {
+    execution: toExecutionContext(runtime),
+    hostRuntimePath: runtimeRootPath(threadRuntimesDir, runtime.threadId),
+    hostWorkspacePath: managedWorkspacePath(threadRuntimesDir, runtime.threadId),
+    hostHomePath: homePathForThread(threadRuntimesDir, runtime.threadId),
+    hostBinDir: runtimeBinDirForThread(threadRuntimesDir, runtime.threadId),
+    shellWrapperPath: runtime.shell,
   };
 }
 
@@ -537,12 +573,58 @@ function renderSecretEnvFile(env: Readonly<Record<string, string>>): string {
   ].join("\n");
 }
 
+function renderShellInitFile(input: {
+  readonly homePath: string;
+  readonly shell: "bash" | "profile" | "zsh";
+}): string {
+  const envPath = runtimeSecretEnvPath(input.homePath);
+  if (input.shell === "profile") {
+    return [
+      "# managed by homelab-agent",
+      `[ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
+      "",
+    ].join("\n");
+  }
+
+  if (input.shell === "bash") {
+    return [
+      "# managed by homelab-agent",
+      "__homelab_runtime_refresh_env() {",
+      `  [ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
+      "}",
+      "__homelab_runtime_refresh_env",
+      'case ";${PROMPT_COMMAND:-};" in',
+      '  *";__homelab_runtime_refresh_env;"*) ;;',
+      '  "") PROMPT_COMMAND="__homelab_runtime_refresh_env" ;;',
+      '  *) PROMPT_COMMAND="__homelab_runtime_refresh_env;${PROMPT_COMMAND}" ;;',
+      "esac",
+      "",
+    ].join("\n");
+  }
+
+  return [
+    "# managed by homelab-agent",
+    "function __homelab_runtime_refresh_env() {",
+    `  [[ -f ${shQuote(envPath)} ]] && source ${shQuote(envPath)}`,
+    "}",
+    "__homelab_runtime_refresh_env",
+    "if [[ -o interactive ]]; then",
+    "  typeset -ga precmd_functions",
+    "  if (( ${precmd_functions[(Ie)__homelab_runtime_refresh_env]} == 0 )); then",
+    "    precmd_functions+=(__homelab_runtime_refresh_env)",
+    "  fi",
+    "fi",
+    "",
+  ].join("\n");
+}
+
 function renderHomelabCliScript(): string {
   return `#!/usr/bin/env python3
 import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -636,13 +718,46 @@ def cmd_secrets(_args):
     print_json(request_json("GET", "/api/homelab/secrets"))
 
 
+def find_secret_descriptor(key: str):
+    response = request_json("GET", "/api/homelab/secrets")
+    secrets = response.get("secrets") if isinstance(response, dict) else None
+    if not isinstance(secrets, list):
+        fail("Invalid secret list response from homelab server.")
+    for secret in secrets:
+        if isinstance(secret, dict) and secret.get("key") == key:
+            return secret
+    return None
+
+
 def cmd_secret_request(args):
     payload = {"key": args.key}
     if args.label:
         payload["label"] = args.label
     if args.summary:
         payload["summary"] = args.summary
-    print_json(request_json("POST", "/api/homelab/secrets/request", payload=payload))
+    secret = request_json("POST", "/api/homelab/secrets/request", payload=payload)
+    if args.no_wait or not isinstance(secret, dict) or secret.get("hasValue") is True:
+        print_json(secret)
+        return
+
+    timeout_seconds = None if args.timeout_seconds <= 0 else args.timeout_seconds
+    poll_started_at = time.monotonic()
+    print(
+        f"Waiting for secret {args.key} to be supplied in the UI...",
+        file=sys.stderr,
+    )
+
+    while True:
+        current = find_secret_descriptor(args.key)
+        if isinstance(current, dict) and current.get("hasValue") is True:
+            print_json(current)
+            return
+        if timeout_seconds is not None and time.monotonic() - poll_started_at >= timeout_seconds:
+            fail(
+                f"Timed out waiting for secret {args.key}. Re-run with --timeout-seconds 0 to wait indefinitely.",
+                124,
+            )
+        time.sleep(args.poll_interval_seconds)
 
 
 def cmd_bootstrap(_args):
@@ -689,11 +804,28 @@ def build_parser():
 
     secret_request_parser = subparsers.add_parser(
         "secret-request",
-        help="Create or update a secret placeholder without supplying the raw value.",
+        help="Create or update a secret placeholder and wait for the value unless --no-wait is set.",
     )
     secret_request_parser.add_argument("key", help="Secret env var name, for example API_KEY.")
     secret_request_parser.add_argument("--label", help="Human-friendly label.")
     secret_request_parser.add_argument("--summary", help="Why the secret is needed.")
+    secret_request_parser.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="Return immediately after creating the placeholder instead of waiting for the value.",
+    )
+    secret_request_parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=600.0,
+        help="How long to wait for the value. Use 0 to wait indefinitely.",
+    )
+    secret_request_parser.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=2.0,
+        help="How often to poll for fulfillment while waiting.",
+    )
     secret_request_parser.set_defaults(func=cmd_secret_request)
 
     bootstrap_parser = subparsers.add_parser(
@@ -819,8 +951,9 @@ homelab secret-request TRUENAS_API_KEY \\
 \`\`\`
 
 The user gets a secure prompt in the UI. Once they provide the value, it
-appears as an environment variable in your shell. Check availability with
-\`homelab secrets\`.
+appears in new shells inside this runtime as an environment variable. The
+\`homelab secret-request\` command waits for fulfillment by default, then you can
+continue. Check availability with \`homelab secrets\`.
 
 ## How to work
 
@@ -1681,6 +1814,41 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
+  const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
+    function* (runtime: ThreadRuntimeDescriptor) {
+      const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+      const writeFile = (filePath: string, contents: string) =>
+        fileSystem.writeFileString(filePath, contents).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ThreadRuntimeError({
+                message: `Failed to write runtime shell init file '${filePath}'.`,
+                cause,
+              }),
+          ),
+        );
+
+      yield* Effect.all([
+        writeFile(
+          runtimeProfilePath(runtimeHomePath),
+          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
+        ),
+        writeFile(
+          runtimeBashProfilePath(runtimeHomePath),
+          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
+        ),
+        writeFile(
+          runtimeBashRcPath(runtimeHomePath),
+          renderShellInitFile({ homePath: runtime.homePath, shell: "bash" }),
+        ),
+        writeFile(
+          runtimeZshEnvPath(runtimeHomePath),
+          renderShellInitFile({ homePath: runtime.homePath, shell: "zsh" }),
+        ),
+      ]);
+    },
+  );
+
   const writeRuntimeWrapperScripts = Effect.fn("threadRuntime.writeRuntimeWrapperScripts")(
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
       const binDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
@@ -1750,6 +1918,17 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ]);
     },
   );
+
+  const refreshRuntimeEnvironment = Effect.fn("threadRuntime.refreshRuntimeEnvironment")(function* (
+    threadId: ThreadIdModel,
+  ) {
+    const runtime = yield* getRuntimeOrNotFound(threadId);
+    const refreshedRuntime = yield* refreshRuntimeDescriptor(runtime);
+    yield* ensureRuntimeDirectories(refreshedRuntime);
+    yield* syncRuntimeControlEnvIntoRuntimeHome(refreshedRuntime);
+    yield* writeRuntimeShellInitFiles(refreshedRuntime);
+    return refreshedRuntime;
+  });
 
   const inspectContainerByName = Effect.fn("threadRuntime.inspectContainerByName")(function* (
     containerName: string,
@@ -2168,6 +2347,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         });
 
         yield* ensureRuntimeDirectories(runtime);
+        yield* writeRuntimeInstructionFiles(runtime);
         const persistedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime = {
             ...runtime,
@@ -2201,6 +2381,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* ensureRuntimeDirectories(normalizedRuntime);
         yield* syncHostAuthIntoRuntimeHome(normalizedRuntime, hostBindings);
         yield* syncRuntimeControlEnvIntoRuntimeHome(normalizedRuntime);
+        yield* writeRuntimeShellInitFiles(normalizedRuntime);
         yield* writeRuntimeInstructionFiles(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
@@ -2234,6 +2415,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       }),
     stopRuntime,
     touchRuntime,
+    refreshRuntimeEnvironment,
     destroyRuntime: (threadId) =>
       Effect.gen(function* () {
         const runtime = yield* getRuntimeOrNotFound(threadId);
@@ -2257,6 +2439,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       }),
     resolveExecutionContext: (threadId) =>
       getRuntimeOrNotFound(threadId).pipe(Effect.map(toExecutionContext)),
+    resolveLaunchContext: (threadId) =>
+      getRuntimeOrNotFound(threadId).pipe(
+        Effect.map((runtime) => toLaunchContext(threadRuntimesDir, runtime)),
+      ),
     streamEvents: Stream.fromPubSub(events),
   } satisfies ThreadRuntimeShape;
 });

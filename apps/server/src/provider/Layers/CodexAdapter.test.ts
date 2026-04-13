@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   ApprovalRequestId,
   EventId,
@@ -8,6 +11,7 @@ import {
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
+  RuntimeSessionId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -22,6 +26,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
@@ -208,6 +213,212 @@ validationLayer("CodexAdapterLive validation", (it) => {
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
+    }),
+  );
+});
+
+const runtimeManager = new FakeCodexManager();
+const runtimeThreadId = asThreadId("thread-runtime");
+const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), "codex-adapter-runtime-"));
+const runtimeBinDir = path.join(runtimeRoot, "bin");
+const runtimeHostWorkspace = path.join(runtimeRoot, "workspace");
+mkdirSync(runtimeBinDir, { recursive: true });
+mkdirSync(runtimeHostWorkspace, { recursive: true });
+writeFileSync(path.join(runtimeBinDir, "codex"), "#!/usr/bin/env bash\n", "utf8");
+
+const runtimeLayer = it.layer(
+  makeCodexAdapterLive({ manager: runtimeManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(
+      Layer.succeed(ThreadRuntime, {
+        ensureRuntime: () => Effect.die("unused"),
+        getRuntime: () => Effect.die("unused"),
+        listRuntimes: () => Effect.die("unused"),
+        startRuntime: () => Effect.die("unused"),
+        stopRuntime: () => Effect.die("unused"),
+        touchRuntime: () => Effect.die("unused"),
+        refreshRuntimeEnvironment: () => Effect.die("unused"),
+        destroyRuntime: () => Effect.die("unused"),
+        resolveExecutionContext: (threadId: ThreadId) =>
+          threadId === runtimeThreadId
+            ? Effect.succeed({
+                threadId,
+                runtimeId: RuntimeSessionId.make("runtime-1"),
+                backend: "docker" as const,
+                containerId: "container-1",
+                workspacePath: "/workspace",
+                homePath: "/home/codex",
+                cwd: "/workspace",
+                shell: path.join(runtimeBinDir, "runtime-shell"),
+                env: {
+                  CODEX_HOME: "/home/codex/.codex",
+                },
+              })
+            : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+        resolveLaunchContext: (threadId: ThreadId) =>
+          threadId === runtimeThreadId
+            ? Effect.succeed({
+                execution: {
+                  threadId,
+                  runtimeId: RuntimeSessionId.make("runtime-1"),
+                  backend: "docker" as const,
+                  containerId: "container-1",
+                  workspacePath: "/workspace",
+                  homePath: "/home/codex",
+                  cwd: "/workspace",
+                  shell: path.join(runtimeBinDir, "runtime-shell"),
+                  env: {
+                    CODEX_HOME: "/home/codex/.codex",
+                  },
+                },
+                hostRuntimePath: runtimeRoot,
+                hostWorkspacePath: runtimeHostWorkspace,
+                hostHomePath: path.join(runtimeRoot, "home"),
+                hostBinDir: runtimeBinDir,
+                shellWrapperPath: path.join(runtimeBinDir, "runtime-shell"),
+              })
+            : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+        streamEvents: Stream.empty,
+      }),
+    ),
+  ),
+);
+
+runtimeLayer("CodexAdapterLive runtime launch", (it) => {
+  afterAll(() => {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  });
+
+  it.effect("uses host cwd only to launch the wrapper and keeps the model cwd in-container", () =>
+    Effect.gen(function* () {
+      runtimeManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: runtimeThreadId,
+        cwd: "/workspace/ignored-by-runtime-wrapper",
+        runtimeMode: "full-access",
+      });
+
+      assert.deepStrictEqual(runtimeManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: runtimeThreadId,
+        binaryPath: path.join(runtimeBinDir, "codex"),
+        homePath: "/home/codex/.codex",
+        cwd: "/workspace",
+        processCwd: runtimeHostWorkspace,
+        runtimeMode: "full-access",
+      });
+    }),
+  );
+});
+
+const missingWrapperManager = new FakeCodexManager();
+const missingWrapperThreadId = asThreadId("thread-runtime-missing-wrapper");
+const missingWrapperRoot = mkdtempSync(
+  path.join(os.tmpdir(), "codex-adapter-runtime-missing-wrapper-"),
+);
+const missingWrapperBinDir = path.join(missingWrapperRoot, "bin");
+const missingWrapperHostWorkspace = path.join(missingWrapperRoot, "workspace");
+mkdirSync(missingWrapperBinDir, { recursive: true });
+mkdirSync(missingWrapperHostWorkspace, { recursive: true });
+
+const missingWrapperLayer = it.layer(
+  makeCodexAdapterLive({ manager: missingWrapperManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(
+      Layer.succeed(ThreadRuntime, {
+        ensureRuntime: () => Effect.die("unused"),
+        getRuntime: () => Effect.die("unused"),
+        listRuntimes: () => Effect.die("unused"),
+        startRuntime: () => Effect.die("unused"),
+        stopRuntime: () => Effect.die("unused"),
+        touchRuntime: () => Effect.die("unused"),
+        refreshRuntimeEnvironment: () => Effect.die("unused"),
+        destroyRuntime: () => Effect.die("unused"),
+        resolveExecutionContext: (threadId: ThreadId) =>
+          threadId === missingWrapperThreadId
+            ? Effect.succeed({
+                threadId,
+                runtimeId: RuntimeSessionId.make("runtime-missing-wrapper"),
+                backend: "docker" as const,
+                containerId: "container-missing-wrapper",
+                workspacePath: "/workspace",
+                homePath: "/home/codex",
+                cwd: "/workspace",
+                shell: path.join(missingWrapperBinDir, "runtime-shell"),
+                env: {
+                  CODEX_HOME: "/home/codex/.codex",
+                },
+              })
+            : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+        resolveLaunchContext: (threadId: ThreadId) =>
+          threadId === missingWrapperThreadId
+            ? Effect.succeed({
+                execution: {
+                  threadId,
+                  runtimeId: RuntimeSessionId.make("runtime-missing-wrapper"),
+                  backend: "docker" as const,
+                  containerId: "container-missing-wrapper",
+                  workspacePath: "/workspace",
+                  homePath: "/home/codex",
+                  cwd: "/workspace",
+                  shell: path.join(missingWrapperBinDir, "runtime-shell"),
+                  env: {
+                    CODEX_HOME: "/home/codex/.codex",
+                  },
+                },
+                hostRuntimePath: missingWrapperRoot,
+                hostWorkspacePath: missingWrapperHostWorkspace,
+                hostHomePath: path.join(missingWrapperRoot, "home"),
+                hostBinDir: missingWrapperBinDir,
+                shellWrapperPath: path.join(missingWrapperBinDir, "runtime-shell"),
+              })
+            : Effect.die(new Error(`unexpected thread id: ${threadId}`)),
+        streamEvents: Stream.empty,
+      }),
+    ),
+  ),
+);
+
+missingWrapperLayer("CodexAdapterLive runtime launch failures", (it) => {
+  afterAll(() => {
+    rmSync(missingWrapperRoot, { recursive: true, force: true });
+  });
+
+  it.effect("fails fast when the runtime wrapper is missing", () =>
+    Effect.gen(function* () {
+      missingWrapperManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      const result = yield* adapter
+        .startSession({
+          provider: "codex",
+          threadId: missingWrapperThreadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+
+      assert.equal(result.failure._tag, "ProviderAdapterProcessError");
+      if (result.failure._tag !== "ProviderAdapterProcessError") {
+        return;
+      }
+
+      assert.equal(result.failure.provider, "codex");
+      assert.match(result.failure.detail, /Runtime wrapper is missing/);
+      assert.equal(missingWrapperManager.startSessionImpl.mock.calls.length, 0);
     }),
   );
 });

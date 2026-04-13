@@ -60,7 +60,11 @@ export const ChatHeader = memo(function ChatHeader({
             }
           />
           <TooltipPopup side="bottom">
-            {!workspaceAvailable ? "Workspace is unavailable." : "Open workspace"}
+            {!workspaceAvailable
+              ? "File manager is unavailable."
+              : workspaceOpen
+                ? "Close file manager"
+                : "Open file manager"}
           </TooltipPopup>
         </Tooltip>
         <Tooltip>
@@ -80,7 +84,11 @@ export const ChatHeader = memo(function ChatHeader({
             }
           />
           <TooltipPopup side="bottom">
-            {!terminalAvailable ? "Terminal is unavailable." : "Open terminal"}
+            {!terminalAvailable
+              ? "Terminal is unavailable."
+              : terminalOpen
+                ? "Close terminal"
+                : "Open terminal"}
           </TooltipPopup>
         </Tooltip>
       </div>

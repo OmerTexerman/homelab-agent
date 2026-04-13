@@ -119,6 +119,7 @@ export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
   readonly provider?: "codex";
   readonly cwd?: string;
+  readonly processCwd?: string;
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
@@ -450,14 +451,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const threadCwd = input.cwd ?? process.cwd();
+      const processCwd = input.processCwd ?? threadCwd;
 
       const session: ProviderSession = {
         provider: "codex",
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
-        cwd: resolvedCwd,
+        cwd: threadCwd,
         threadId,
         createdAt: now,
         updatedAt: now,
@@ -467,11 +469,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexHomePath = input.homePath;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
+        cwd: processCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
-        cwd: resolvedCwd,
+        cwd: processCwd,
         env: {
           ...process.env,
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
@@ -532,7 +534,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const sessionOverrides = {
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-        cwd: input.cwd ?? null,
+        cwd: threadCwd,
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
@@ -552,7 +554,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId,
         requestedRuntimeMode: input.runtimeMode,
         requestedModel: normalizedModel ?? null,
-        requestedCwd: resolvedCwd,
+        requestedCwd: threadCwd,
+        processCwd,
         resumeThreadId: resumeThreadId ?? null,
       }).pipe(this.runPromise);
 
