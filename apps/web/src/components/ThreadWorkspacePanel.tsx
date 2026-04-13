@@ -1,5 +1,6 @@
 import type { EnvironmentId, ThreadId, ThreadWorkspaceEntry } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as Schema from "effect/Schema";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -12,10 +13,19 @@ import {
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ensureEnvironmentApi } from "~/environmentApi";
 import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
+import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import {
   threadWorkspaceEntriesQueryOptions,
   threadWorkspaceQueryKeys,
@@ -35,6 +45,43 @@ interface ThreadWorkspaceTreeNode {
   readonly parentPath?: string;
   readonly sizeBytes?: number;
   readonly children: ThreadWorkspaceTreeNode[];
+}
+
+const WORKSPACE_PANEL_WIDTH_STORAGE_KEY = "t3code:thread-workspace-panel-width:v1";
+const WORKSPACE_TREE_WIDTH_STORAGE_KEY = "t3code:thread-workspace-tree-width:v1";
+const DEFAULT_WORKSPACE_PANEL_WIDTH = 420;
+const MIN_WORKSPACE_PANEL_WIDTH = 320;
+const DEFAULT_WORKSPACE_TREE_WIDTH = 220;
+const MIN_WORKSPACE_TREE_WIDTH = 190;
+const MIN_WORKSPACE_EDITOR_WIDTH = 220;
+
+function maxWorkspacePanelWidth(): number {
+  if (typeof window === "undefined") {
+    return 820;
+  }
+  return Math.max(MIN_WORKSPACE_PANEL_WIDTH, Math.min(960, Math.floor(window.innerWidth * 0.6)));
+}
+
+function clampWorkspacePanelWidth(width: number): number {
+  return Math.max(MIN_WORKSPACE_PANEL_WIDTH, Math.min(width, maxWorkspacePanelWidth()));
+}
+
+function maxWorkspaceTreeWidth(panelWidth: number): number {
+  return Math.max(MIN_WORKSPACE_TREE_WIDTH, panelWidth - MIN_WORKSPACE_EDITOR_WIDTH - 16);
+}
+
+function clampWorkspaceTreeWidth(width: number, panelWidth: number): number {
+  return Math.max(MIN_WORKSPACE_TREE_WIDTH, Math.min(width, maxWorkspaceTreeWidth(panelWidth)));
+}
+
+function readPersistedWorkspacePanelWidth(): number {
+  const storedWidth = getLocalStorageItem(WORKSPACE_PANEL_WIDTH_STORAGE_KEY, Schema.Finite);
+  return clampWorkspacePanelWidth(storedWidth ?? DEFAULT_WORKSPACE_PANEL_WIDTH);
+}
+
+function readPersistedWorkspaceTreeWidth(panelWidth: number): number {
+  const storedWidth = getLocalStorageItem(WORKSPACE_TREE_WIDTH_STORAGE_KEY, Schema.Finite);
+  return clampWorkspaceTreeWidth(storedWidth ?? DEFAULT_WORKSPACE_TREE_WIDTH, panelWidth);
 }
 
 function buildThreadWorkspaceTree(
@@ -243,8 +290,27 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     readonly y: number;
     readonly node: ThreadWorkspaceTreeNode;
   } | null>(null);
+  const [panelWidth, setPanelWidth] = useState(() => readPersistedWorkspacePanelWidth());
+  const [treeWidth, setTreeWidth] = useState(() =>
+    readPersistedWorkspaceTreeWidth(readPersistedWorkspacePanelWidth()),
+  );
   const selectedPathRef = useRef<string | null>(null);
+  const panelResizeStateRef = useRef<{
+    pointerId: number;
+    startWidth: number;
+    startX: number;
+  } | null>(null);
+  const treeResizeStateRef = useRef<{
+    pointerId: number;
+    startWidth: number;
+    startX: number;
+  } | null>(null);
   selectedPathRef.current = selectedPath;
+
+  const stopDocumentResizeState = useCallback(() => {
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }, []);
 
   useEffect(() => {
     setSearchQuery("");
@@ -257,6 +323,35 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     setTreeInitialized(false);
     setContextMenu(null);
   }, [props.environmentId, props.threadId]);
+
+  useEffect(() => {
+    setTreeWidth((current) => clampWorkspaceTreeWidth(current, panelWidth));
+  }, [panelWidth]);
+
+  useEffect(() => {
+    setLocalStorageItem(WORKSPACE_PANEL_WIDTH_STORAGE_KEY, panelWidth, Schema.Finite);
+  }, [panelWidth]);
+
+  useEffect(() => {
+    setLocalStorageItem(WORKSPACE_TREE_WIDTH_STORAGE_KEY, treeWidth, Schema.Finite);
+  }, [treeWidth]);
+
+  useEffect(() => {
+    const onWindowResize = () => {
+      setPanelWidth((current) => clampWorkspacePanelWidth(current));
+    };
+    window.addEventListener("resize", onWindowResize);
+    return () => {
+      window.removeEventListener("resize", onWindowResize);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      stopDocumentResizeState();
+    },
+    [stopDocumentResizeState],
+  );
 
   const entriesQuery = useQuery(
     threadWorkspaceEntriesQueryOptions({
@@ -428,9 +523,123 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     return items;
   }, [contextMenu, downloadFile, expandedDirectories, selectNode, toggleDirectory]);
 
+  const handlePanelResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      panelResizeStateRef.current = {
+        pointerId: event.pointerId,
+        startWidth: panelWidth,
+        startX: event.clientX,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [panelWidth],
+  );
+
+  const handlePanelResizePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const resizeState = panelResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      setPanelWidth(
+        clampWorkspacePanelWidth(resizeState.startWidth + (resizeState.startX - event.clientX)),
+      );
+    },
+    [],
+  );
+
+  const handlePanelResizePointerEnd = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const resizeState = panelResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      panelResizeStateRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      stopDocumentResizeState();
+    },
+    [stopDocumentResizeState],
+  );
+
+  const handleTreeResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      treeResizeStateRef.current = {
+        pointerId: event.pointerId,
+        startWidth: treeWidth,
+        startX: event.clientX,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [treeWidth],
+  );
+
+  const handleTreeResizePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const resizeState = treeResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      setTreeWidth(
+        clampWorkspaceTreeWidth(
+          resizeState.startWidth + (event.clientX - resizeState.startX),
+          panelWidth,
+        ),
+      );
+    },
+    [panelWidth],
+  );
+
+  const handleTreeResizePointerEnd = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const resizeState = treeResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      treeResizeStateRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      stopDocumentResizeState();
+    },
+    [stopDocumentResizeState],
+  );
+
   return (
-    <aside className="flex min-h-0 w-[420px] min-w-[320px] max-w-[48vw] shrink-0 border-l border-border bg-background/96">
-      <div className="flex min-h-0 w-[44%] min-w-[190px] flex-col border-r border-border">
+    <aside
+      className="relative flex min-h-0 shrink-0 border-l border-border bg-background/96"
+      style={{ width: `${panelWidth}px` }}
+    >
+      <button
+        type="button"
+        aria-label="Resize file manager panel"
+        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
+        onPointerDown={handlePanelResizePointerDown}
+        onPointerMove={handlePanelResizePointerMove}
+        onPointerUp={handlePanelResizePointerEnd}
+        onPointerCancel={handlePanelResizePointerEnd}
+      />
+      <div
+        className="flex min-h-0 flex-col border-r border-border"
+        style={{ width: `${treeWidth}px` }}
+      >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-foreground">Workspace</div>
@@ -523,6 +732,16 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           )}
         </div>
       </div>
+
+      <button
+        type="button"
+        aria-label="Resize workspace file tree"
+        className="relative z-10 w-2 shrink-0 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
+        onPointerDown={handleTreeResizePointerDown}
+        onPointerMove={handleTreeResizePointerMove}
+        onPointerUp={handleTreeResizePointerEnd}
+        onPointerCancel={handleTreeResizePointerEnd}
+      />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {selectedKind !== "file" || !selectedPath ? (

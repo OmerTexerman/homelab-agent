@@ -19,6 +19,7 @@ import {
   OrchestrationReplayEventsError,
   ThreadWorkspaceError,
   ThreadId,
+  ProviderKind,
   type TerminalEvent,
   WS_METHODS,
   WsRpcGroup,
@@ -189,16 +190,60 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
 
       const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
         Effect.gen(function* () {
-          const runtime = yield* threadRuntime
+          let runtime = yield* threadRuntime
             .getRuntime(threadId)
             .pipe(Effect.catch(() => Effect.void.pipe(Effect.as(undefined))));
           if (!runtime) {
-            return;
+            const readModel = yield* orchestrationEngine.getReadModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === threadId && entry.deletedAt === null,
+            );
+            if (!thread) {
+              return;
+            }
+
+            const provider = Schema.is(ProviderKind)(thread.session?.providerName)
+              ? thread.session.providerName
+              : thread.modelSelection.provider;
+            runtime = yield* threadRuntime
+              .ensureRuntime({
+                threadId,
+                provider,
+                runtimeMode: thread.runtimeMode,
+              })
+              .pipe(Effect.catch(() => Effect.void.pipe(Effect.as(undefined))));
+            if (!runtime) {
+              return;
+            }
           }
 
           yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
           yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
         });
+
+      const refreshHomelabSecretRuntimeEnvironments = () =>
+        threadRuntime.listRuntimes().pipe(
+          Effect.flatMap((runtimes) =>
+            Effect.forEach(
+              runtimes,
+              (runtime) =>
+                threadRuntime.refreshRuntimeEnvironment(runtime.threadId).pipe(
+                  Effect.catchTags({
+                    ThreadRuntimeError: (error) =>
+                      Effect.logWarning(
+                        "failed to refresh thread runtime environment after secret update",
+                        {
+                          threadId: runtime.threadId,
+                          message: error.message,
+                        },
+                      ),
+                    ThreadRuntimeNotFoundError: () => Effect.void,
+                  }),
+                ),
+              { discard: true, concurrency: 8 },
+            ),
+          ),
+        );
 
       const enrichProjectEvent = (
         event: OrchestrationEvent,
@@ -687,6 +732,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverUpsertHomelabSecret,
             homelabSecretRegistry.upsertSecret(input).pipe(
+              Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
               Effect.mapError(
                 (cause) =>
                   new HomelabSecretError({
@@ -701,6 +747,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverDeleteHomelabSecret,
             homelabSecretRegistry.deleteSecret(input).pipe(
+              Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
               Effect.mapError(
                 (cause) =>
                   new HomelabSecretError({

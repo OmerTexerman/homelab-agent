@@ -71,6 +71,15 @@ export interface ThreadExecutionContext {
   readonly env: Readonly<Record<string, string>>;
 }
 
+export interface ThreadRuntimeLaunchContext {
+  readonly execution: ThreadExecutionContext;
+  readonly hostRuntimePath: string;
+  readonly hostWorkspacePath: string;
+  readonly hostHomePath: string;
+  readonly hostBinDir: string;
+  readonly shellWrapperPath: string;
+}
+
 export interface ThreadRuntimeEvent {
   readonly kind:
     | "runtime.created"
@@ -126,6 +135,11 @@ export interface ThreadRuntimeShape {
     threadId: ThreadId,
   ) => Effect.Effect<void, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
 
+  /** Refresh runtime-scoped env files and shell bootstrap without restarting the container. */
+  readonly refreshRuntimeEnvironment: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
+
   /** Destroy one runtime and any durable runtime-specific resources. */
   readonly destroyRuntime: (
     threadId: ThreadId,
@@ -135,6 +149,11 @@ export interface ThreadRuntimeShape {
   readonly resolveExecutionContext: (
     threadId: ThreadId,
   ) => Effect.Effect<ThreadExecutionContext, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
+
+  /** Resolve the host-side launch context for wrapper-based provider and terminal processes. */
+  readonly resolveLaunchContext: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadRuntimeLaunchContext, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
 
   /** Stream lifecycle updates for runtime orchestration and UI projections. */
   readonly streamEvents: Stream.Stream<ThreadRuntimeEvent>;

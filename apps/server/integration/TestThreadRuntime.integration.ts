@@ -6,9 +6,31 @@ import { Effect, Layer, Stream } from "effect";
 
 import {
   ThreadRuntime,
+  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeShape,
 } from "../src/runtime/Services/ThreadRuntime.ts";
+
+function toPassthroughLaunchContext(runtime: ThreadRuntimeDescriptor): ThreadRuntimeLaunchContext {
+  return {
+    execution: {
+      threadId: runtime.threadId,
+      runtimeId: runtime.runtimeId,
+      backend: runtime.backend,
+      containerId: runtime.containerId,
+      workspacePath: runtime.workspacePath,
+      homePath: runtime.homePath,
+      cwd: runtime.cwd,
+      shell: runtime.shell,
+      env: runtime.env,
+    },
+    hostRuntimePath: runtime.workspacePath,
+    hostWorkspacePath: runtime.workspacePath,
+    hostHomePath: runtime.homePath,
+    hostBinDir: runtime.workspacePath,
+    shellWrapperPath: runtime.shell,
+  };
+}
 
 function makeTestThreadRuntime(): ThreadRuntimeShape {
   const runtimes = new Map<string, ThreadRuntimeDescriptor>();
@@ -112,6 +134,19 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
           updatedAt: new Date().toISOString(),
         });
       }),
+    refreshRuntimeEnvironment: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const runtime =
+          runtimes.get(key) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(key, runtime);
+        return runtime;
+      }),
     destroyRuntime: (threadId) =>
       Effect.sync(() => {
         runtimes.delete(String(threadId));
@@ -127,17 +162,20 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
             runtimeMode: "full-access",
           });
         runtimes.set(key, runtime);
-        return {
-          threadId: runtime.threadId,
-          runtimeId: runtime.runtimeId,
-          backend: runtime.backend,
-          containerId: runtime.containerId,
-          workspacePath: runtime.workspacePath,
-          homePath: runtime.homePath,
-          cwd: runtime.cwd,
-          shell: runtime.shell,
-          env: runtime.env,
-        };
+        return toPassthroughLaunchContext(runtime).execution;
+      }),
+    resolveLaunchContext: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        const runtime =
+          runtimes.get(key) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(key, runtime);
+        return toPassthroughLaunchContext(runtime);
       }),
     streamEvents: Stream.empty,
   } satisfies ThreadRuntimeShape;

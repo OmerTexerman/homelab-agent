@@ -53,6 +53,7 @@ import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.t
 import {
   ThreadRuntime,
   type ThreadRuntimeDescriptor,
+  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeShape,
 } from "../../runtime/Services/ThreadRuntime.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
@@ -80,6 +81,27 @@ const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+
+function toPassthroughLaunchContext(runtime: ThreadRuntimeDescriptor): ThreadRuntimeLaunchContext {
+  return {
+    execution: {
+      threadId: runtime.threadId,
+      runtimeId: runtime.runtimeId,
+      backend: runtime.backend,
+      containerId: runtime.containerId,
+      workspacePath: runtime.workspacePath,
+      homePath: runtime.homePath,
+      cwd: runtime.cwd,
+      shell: runtime.shell,
+      env: runtime.env,
+    },
+    hostRuntimePath: runtime.workspacePath,
+    hostWorkspacePath: runtime.workspacePath,
+    hostHomePath: runtime.homePath,
+    hostBinDir: runtime.workspacePath,
+    shellWrapperPath: runtime.shell,
+  };
+}
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -374,6 +396,18 @@ function makePassthroughThreadRuntime(): ThreadRuntimeShape {
           updatedAt: new Date().toISOString(),
         });
       }),
+    refreshRuntimeEnvironment: (threadId) =>
+      Effect.sync(() => {
+        const runtime =
+          runtimes.get(threadId) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(threadId, runtime);
+        return runtime;
+      }),
     destroyRuntime: (threadId) =>
       Effect.sync(() => {
         runtimes.delete(threadId);
@@ -388,17 +422,19 @@ function makePassthroughThreadRuntime(): ThreadRuntimeShape {
             runtimeMode: "full-access",
           });
         runtimes.set(threadId, runtime);
-        return {
-          threadId: runtime.threadId,
-          runtimeId: runtime.runtimeId,
-          backend: runtime.backend,
-          containerId: runtime.containerId,
-          workspacePath: runtime.workspacePath,
-          homePath: runtime.homePath,
-          cwd: runtime.cwd,
-          shell: runtime.shell,
-          env: runtime.env,
-        };
+        return toPassthroughLaunchContext(runtime).execution;
+      }),
+    resolveLaunchContext: (threadId) =>
+      Effect.sync(() => {
+        const runtime =
+          runtimes.get(threadId) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          });
+        runtimes.set(threadId, runtime);
+        return toPassthroughLaunchContext(runtime);
       }),
     streamEvents: Stream.empty,
   } satisfies ThreadRuntimeShape;

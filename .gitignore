@@ -36,3 +36,4 @@ apps/marketing/.astro/
 coverage/
 playwright-report/
 test-results/
+.codex

@@ -10,12 +10,8 @@ import { Effect, FileSystem, Layer } from "effect";
 
 import { type ProcessRunResult } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
+import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import {
-  runtimeHomeDirFromExecutionContext,
-  runtimeRootDirFromExecutionContext,
-  runtimeWorkspaceDirFromExecutionContext,
-} from "../launchers.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { makeThreadRuntimeLive } from "./ThreadRuntime.ts";
 
@@ -262,6 +258,41 @@ function makeRuntimeLayer(
 }
 
 const runtimeLayer = makeRuntimeLayer();
+let mutableRuntimeSecretEnv: Readonly<Record<string, string>> = {};
+
+const runtimeLayerWithSecrets = it.layer(
+  makeThreadRuntimeLive({
+    dockerBinaryPath: "docker",
+    dockerNetwork: "homelab-agent-test",
+    containerShellPath: "/bin/zsh",
+    dockerRunner: docker.run,
+  }).pipe(
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-secret-test-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providers: {
+          codex: {
+            homePath: makeCodexAuthDirPath(),
+          },
+        },
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(HomelabSecretRegistry, {
+        listSecrets: () => Effect.succeed([]),
+        upsertSecret: () => Effect.die("unused"),
+        requestSecret: () => Effect.die("unused"),
+        deleteSecret: () => Effect.void,
+        materializeEnvironment: () => Effect.succeed(mutableRuntimeSecretEnv),
+      }),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
 
 runtimeLayer("ThreadRuntimeLive", (it) => {
   it.effect("creates wrapper launchers and syncs host auth into the runtime home", () =>
@@ -288,38 +319,62 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       });
       const started = yield* runtime.startRuntime(descriptor.threadId);
       const executionContext = yield* runtime.resolveExecutionContext(descriptor.threadId);
-      const runtimeRoot = runtimeRootDirFromExecutionContext(executionContext);
-      const runtimeHome = runtimeHomeDirFromExecutionContext(executionContext);
-      const runtimeWorkspace = runtimeWorkspaceDirFromExecutionContext(executionContext);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const runtimeRoot = launchContext.hostRuntimePath;
+      const runtimeHome = launchContext.hostHomePath;
+      const runtimeWorkspace = launchContext.hostWorkspacePath;
 
       assert.equal(started.status, "running");
       assert.equal(started.env.CODEX_HOME, path.join(started.homePath, ".codex"));
-      assert.ok(runtimeRoot);
-      assert.ok(runtimeHome);
-      assert.ok(runtimeWorkspace);
-      assert.equal(executionContext.shell, path.join(runtimeRoot, "bin", "runtime-shell"));
+      assert.equal(launchContext.execution.cwd, executionContext.cwd);
+      assert.equal(launchContext.execution.workspacePath, executionContext.workspacePath);
+      assert.equal(launchContext.execution.homePath, executionContext.homePath);
+      assert.equal(launchContext.shellWrapperPath, path.join(runtimeRoot, "bin", "runtime-shell"));
 
       const codexWrapperPath = path.join(runtimeRoot, "bin", "codex");
-      const shellWrapperPath = executionContext.shell;
+      const shellWrapperPath = launchContext.shellWrapperPath;
+      const bashProfilePath = path.join(runtimeHome, ".bash_profile");
+      const bashRcPath = path.join(runtimeHome, ".bashrc");
+      const homelabCliPath = path.join(runtimeHome, ".homelab", "bin", "homelab");
+      const profilePath = path.join(runtimeHome, ".profile");
+      const zshEnvPath = path.join(runtimeHome, ".zshenv");
       const agentsPath = path.join(runtimeWorkspace, "AGENTS.md");
       const claudePath = path.join(runtimeWorkspace, "CLAUDE.md");
       assert.equal(yield* fileSystem.exists(codexWrapperPath), true);
       assert.equal(yield* fileSystem.exists(shellWrapperPath), true);
+      assert.equal(yield* fileSystem.exists(bashProfilePath), true);
+      assert.equal(yield* fileSystem.exists(bashRcPath), true);
+      assert.equal(yield* fileSystem.exists(homelabCliPath), true);
+      assert.equal(yield* fileSystem.exists(profilePath), true);
+      assert.equal(yield* fileSystem.exists(zshEnvPath), true);
       assert.equal(yield* fileSystem.exists(agentsPath), true);
       assert.equal(yield* fileSystem.exists(claudePath), true);
 
       const shellWrapperContents = yield* fileSystem.readFileString(shellWrapperPath);
       assert.match(shellWrapperContents, /docker_args=\(exec -i -t -w "\$workdir"\)/);
       assert.match(shellWrapperContents, /\/bin\/zsh/);
+      assert.match(shellWrapperContents, /BASH_ENV=\/runtime\/home\/\.homelab-runtime\.env/);
       assert.match(shellWrapperContents, /container_workspace='\/workspace'/);
-      assert.match(shellWrapperContents, /PATH=\/opt\/homelab\/bin:/);
+      assert.match(
+        shellWrapperContents,
+        /PATH=\/runtime\/home\/\.homelab\/bin:\/opt\/homelab\/bin:/,
+      );
+      assert.match(yield* fileSystem.readFileString(bashRcPath), /__homelab_runtime_refresh_env/);
+      assert.match(
+        yield* fileSystem.readFileString(zshEnvPath),
+        /precmd_functions\+=\(__homelab_runtime_refresh_env\)/,
+      );
 
       const codexWrapperContents = yield* fileSystem.readFileString(codexWrapperPath);
+      const homelabCliContents = yield* fileSystem.readFileString(homelabCliPath);
       assert.match(codexWrapperContents, /\/opt\/homelab\/bin\/codex/);
+      assert.match(homelabCliContents, /--no-wait/);
+      assert.match(homelabCliContents, /--timeout-seconds/);
+      assert.match(homelabCliContents, /Waiting for secret/);
       assert.match(yield* fileSystem.readFileString(agentsPath), /homelab secret-request/);
       assert.match(
         yield* fileSystem.readFileString(claudePath),
-        /Shared state lives outside the thread/,
+        /The knowledge graph, secrets, and bootstrap registry are shared across all threads/,
       );
 
       const runCall = findRunCall(docker.calls);
@@ -372,9 +427,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         runtimeMode: "full-access",
       });
       yield* runtime.startRuntime(descriptor.threadId);
-      const executionContext = yield* runtime.resolveExecutionContext(descriptor.threadId);
-      const runtimeHome = runtimeHomeDirFromExecutionContext(executionContext);
-      assert.ok(runtimeHome);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const runtimeHome = launchContext.hostHomePath;
       const runtimeCodexHome = path.join(runtimeHome, ".codex");
 
       yield* fileSystem.writeFileString(
@@ -457,9 +511,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         runtimeMode: "full-access",
       });
       yield* runtime.startRuntime(descriptor.threadId);
-      const executionContext = yield* runtime.resolveExecutionContext(descriptor.threadId);
-      const runtimeRoot = runtimeRootDirFromExecutionContext(executionContext);
-      assert.ok(runtimeRoot);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const runtimeRoot = launchContext.hostRuntimePath;
 
       yield* runtime.destroyRuntime(descriptor.threadId);
 
@@ -467,5 +520,48 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(yield* fileSystem.exists(runtimeRoot), false);
       assert.equal(yield* runtime.getRuntime(descriptor.threadId), undefined);
     }),
+  );
+});
+
+runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
+  it.effect(
+    "rewrites the runtime secret env file after secrets change without restarting docker",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        mutableRuntimeSecretEnv = {};
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-secret-refresh"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+
+        assert.equal(
+          (yield* fileSystem.readFileString(secretEnvPath)).includes("TEST_SECRET_FLOW"),
+          false,
+        );
+
+        docker.calls.length = 0;
+        mutableRuntimeSecretEnv = { TEST_SECRET_FLOW: "dummy-value" };
+        yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
+
+        assert.match(
+          yield* fileSystem.readFileString(secretEnvPath),
+          /export TEST_SECRET_FLOW='dummy-value'/,
+        );
+        assert.equal(
+          docker.calls.some((call) => call[0] === "run" || call[0] === "start"),
+          false,
+        );
+      }),
   );
 });

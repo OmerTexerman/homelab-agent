@@ -55,7 +55,6 @@ import {
   FileSystem,
   Fiber,
   Layer,
-  Option,
   Queue,
   Random,
   Ref,
@@ -64,11 +63,7 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  runtimeClaudeBinaryPath,
-  runtimeWorkspaceDirFromExecutionContext,
-} from "../../runtime/launchers.ts";
-import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
+import { runtimeClaudeBinaryPath } from "../../runtime/launchers.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { getClaudeModelCapabilities } from "./ClaudeProvider.ts";
 import {
@@ -81,6 +76,7 @@ import {
 } from "../Errors.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { resolveProviderRuntimeLaunchContext } from "./runtimeLaunch.ts";
 
 const PROVIDER = "claudeAgent" as const;
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
@@ -941,31 +937,18 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const resolveRuntimeLaunch = Effect.fn("claudeAdapter.resolveRuntimeLaunch")(function* (
     threadId: ThreadId,
   ) {
-    const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
-    if (Option.isNone(threadRuntime)) {
+    const launchContext = yield* resolveProviderRuntimeLaunchContext({
+      fileSystem,
+      provider: PROVIDER,
+      threadId,
+      wrapperPathFor: runtimeClaudeBinaryPath,
+    });
+    if (!launchContext) {
       return undefined;
     }
 
-    const executionContext = yield* threadRuntime.value.resolveExecutionContext(threadId).pipe(
-      Effect.catchTags({
-        ThreadRuntimeError: () => Effect.as(Effect.void, undefined),
-        ThreadRuntimeNotFoundError: () => Effect.as(Effect.void, undefined),
-      }),
-    );
-    if (!executionContext) {
-      return undefined;
-    }
-
-    const wrapperPath = runtimeClaudeBinaryPath(executionContext);
-    const wrapperExists = yield* fileSystem
-      .exists(wrapperPath)
-      .pipe(Effect.orElseSucceed(() => false));
-    if (!wrapperExists) {
-      return undefined;
-    }
-
-    const hostWorkspacePath =
-      runtimeWorkspaceDirFromExecutionContext(executionContext) ?? executionContext.cwd;
+    const wrapperPath = runtimeClaudeBinaryPath(launchContext);
+    const hostWorkspacePath = launchContext.hostWorkspacePath;
 
     return {
       binaryPath: wrapperPath,
@@ -973,7 +956,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       additionalDirectories: [hostWorkspacePath],
       env: {
         ...process.env,
-        ...executionContext.env,
+        ...launchContext.execution.env,
       },
     };
   });

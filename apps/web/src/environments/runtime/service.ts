@@ -63,6 +63,7 @@ import {
 } from "~/store";
 import { useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
+import { useWorkspacePanelStateStore } from "~/workspacePanelStateStore";
 import type { WsProtocolCloseContext } from "../../rpc/protocol";
 import { getServerConfig } from "../../rpc/serverState";
 import { WsTransport } from "../../rpc/wsTransport";
@@ -941,6 +942,7 @@ function reconcileSnapshotDerivedState() {
     draftThreadKeys: useComposerDraftStore.getState().listDraftThreadKeys(),
   });
   useTerminalStateStore.getState().removeOrphanedTerminalStates(activeThreadKeys);
+  useWorkspacePanelStateStore.getState().removeOrphanedWorkspacePanels(activeThreadKeys);
 }
 
 export function shouldApplyTerminalEvent(input: {
