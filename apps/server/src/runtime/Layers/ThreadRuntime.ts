@@ -12,6 +12,7 @@ import {
   type RuntimeSessionId as RuntimeSessionIdModel,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
+import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -288,6 +289,16 @@ function normalizeRequestedCwd(
   const normalized = requestedCwd?.trim();
   if (!normalized) {
     return undefined;
+  }
+  const logicalProjectPath = parseLogicalProjectWorkspacePath(normalized);
+  if (logicalProjectPath) {
+    if (!logicalProjectPath.relativePath) {
+      return CONTAINER_WORKSPACE_PATH;
+    }
+    const mappedPath = nodePath.posix.normalize(
+      nodePath.posix.join(CONTAINER_WORKSPACE_PATH, logicalProjectPath.relativePath),
+    );
+    return isWithinContainerWorkspace(mappedPath) ? mappedPath : CONTAINER_WORKSPACE_PATH;
   }
 
   const normalizedContainerPath = nodePath.posix.normalize(normalized.replace(/\\/g, "/"));
@@ -1022,19 +1033,19 @@ def build_parser():
         "promote",
         help="Submit a promotion envelope from JSON, or print the expected schema/example.",
         description=(
-            "Submit a homelab promotion envelope.\n\n"
-            "The payload must be an object with: id, threadId, summary, createdAt, and entries[].\n"
-            "Each entry must be one of:\n"
-            '  - {"action": "upsert_entity", "entity": {...}}\n'
-            '  - {"action": "upsert_relation", "relation": {...}}\n'
-            '  - {"action": "record_observation", "observation": {...}}\n\n'
+            "Submit a homelab promotion envelope.\\n\\n"
+            "The payload must be an object with: id, threadId, summary, createdAt, and entries[].\\n"
+            "Each entry must be one of:\\n"
+            '  - {"action": "upsert_entity", "entity": {...}}\\n'
+            '  - {"action": "upsert_relation", "relation": {...}}\\n'
+            '  - {"action": "record_observation", "observation": {...}}\\n\\n'
             "Use --example for a valid payload and --schema for a machine-readable overview."
         ),
         epilog=(
-            "Examples:\n"
-            "  homelab promote --example\n"
-            "  homelab promote --schema\n"
-            "  cat payload.json | homelab promote --stdin\n"
+            "Examples:\\n"
+            "  homelab promote --example\\n"
+            "  homelab promote --schema\\n"
+            "  cat payload.json | homelab promote --stdin\\n"
             "  homelab promote --file payload.json"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1075,9 +1086,11 @@ function renderRuntimeInstructionMarkdown(
   return `# Homelab Agent Runtime
 ${filename === RUNTIME_CLAUDE_FILENAME ? "\nClaude Code reads this file automatically." : "\nThis file is the runtime guide for this agent session."}
 
-You are an infrastructure operations agent. You run inside an isolated container
-with SSH access, CLI tools, and API credentials for a homelab. Your job is to
-help the user manage, debug, extend, and understand their infrastructure.
+You are an infrastructure operations agent. You run inside an isolated Linux
+container with shell access, outbound network access, the \`homelab\` CLI, and
+runtime-provided tools or credentials when the environment exposes them. Your
+job is to help the user manage, debug, extend, and understand their
+infrastructure.
 
 **You start knowing nothing about this homelab.** Do not assume or invent any
 details about what exists, how it's configured, or what credentials are
@@ -1102,14 +1115,18 @@ curl -s https://api.github.com/rate_limit | jq .
   everything out in your head.
 - Clean up or overwrite scratch artifacts freely. This container is disposable; only promoted
   knowledge survives.
+- The workspace may be sparse. Seeing only runtime helper files such as \`AGENTS.md\` and
+  \`CLAUDE.md\` is normal.
 
 ## First thing: orient yourself
 
 Run this before doing anything else:
 
 \`\`\`bash
+homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
 homelab secrets         # See what credentials are available
+homelab bootstrap       # See inherited tools, packages, and runtime bootstrap data
 pwd && ls -la           # See the runtime workspace you can use freely
 \`\`\`
 
@@ -1128,6 +1145,11 @@ If the browser shows a "Thread Workspace" panel, it is a view into this same
 
 Your primary tool for reading and writing shared knowledge. It talks to the
 platform's knowledge graph, which persists across threads.
+
+The \`homelab\` CLI is already installed on \`PATH\`. Use \`homelab --help\`,
+subcommand help, \`homelab promote --schema\`, and \`homelab promote --example\`
+when you need the exact command shape. Do not search the workspace for the CLI's
+source code or wrapper scripts before using it.
 
 ### Reading
 
@@ -1161,19 +1183,31 @@ homelab promote --example
 \`\`\`bash
 cat <<'EOF' | homelab promote --stdin
 {
-  "id": "promotion-grafana-demo",
-  "summary": "Register Grafana on the TrueNAS host",
+  "id": "promotion-example-service",
+  "summary": "Register a service discovered from this thread",
   "createdAt": "2026-04-13T20:00:00.000Z",
   "entries": [
     {
       "action": "upsert_entity",
       "entity": {
-        "id": "service-grafana",
+        "id": "host-main",
+        "kind": "host",
+        "name": "main-host",
+        "title": "Main Host",
+        "summary": "Primary machine in the homelab",
+        "createdAt": "2026-04-13T20:00:00.000Z",
+        "updatedAt": "2026-04-13T20:00:00.000Z"
+      }
+    },
+    {
+      "action": "upsert_entity",
+      "entity": {
+        "id": "service-example",
         "kind": "service",
-        "name": "grafana",
-        "title": "Grafana",
-        "summary": "Monitoring dashboards on TrueNAS",
-        "properties": {"port": 3000, "host": "192.168.1.5"},
+        "name": "example-service",
+        "title": "Example Service",
+        "summary": "HTTP service discovered during investigation",
+        "properties": {"port": 443, "url": "https://example.internal"},
         "createdAt": "2026-04-13T20:00:00.000Z",
         "updatedAt": "2026-04-13T20:00:00.000Z"
       }
@@ -1181,10 +1215,10 @@ cat <<'EOF' | homelab promote --stdin
     {
       "action": "upsert_relation",
       "relation": {
-        "id": "service-grafana-runs-on-host-truenas",
+        "id": "service-example-runs-on-host-main",
         "kind": "runs_on",
-        "fromEntityId": "service-grafana",
-        "toEntityId": "host-truenas",
+        "fromEntityId": "service-example",
+        "toEntityId": "host-main",
         "createdAt": "2026-04-13T20:00:00.000Z",
         "updatedAt": "2026-04-13T20:00:00.000Z"
       }
@@ -1192,11 +1226,11 @@ cat <<'EOF' | homelab promote --stdin
     {
       "action": "record_observation",
       "observation": {
-        "id": "observation-grafana-http-check",
+        "id": "observation-example-service-http-check",
         "sourceKind": "manual",
-        "summary": "Grafana responded on port 3000",
+        "summary": "The service responded successfully",
         "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
-        "entityIds": ["service-grafana"],
+        "entityIds": ["service-example", "host-main"],
         "createdAt": "2026-04-13T20:00:00.000Z"
       }
     }
@@ -1214,9 +1248,9 @@ learned the fact.
 **Never ask the user to paste credentials into chat.** Use the secret broker:
 
 \`\`\`bash
-homelab secret-request TRUENAS_API_KEY \\
-  --label "TrueNAS API Key" \\
-  --summary "Needed to query TrueNAS REST API"
+homelab secret-request SERVICE_API_TOKEN \\
+  --label "Service API token" \\
+  --summary "Needed to query a service API from this thread"
 \`\`\`
 
 The user gets a secure prompt in the UI. Once they provide the value, it
@@ -1235,19 +1269,24 @@ continue. Check availability with \`homelab secrets\`.
 
 ## How to work
 
-You have a full Linux environment. Use it directly:
+Prefer the least-assumptive interface that is actually available in this
+environment. Start with the homelab graph, the runtime container, and live
+HTTP/DNS/TCP probes. Reach for SSH or vendor-specific tooling only when the
+environment clearly exposes it and the task actually requires it.
 
 \`\`\`bash
-ssh root@192.168.1.60                    # SSH into a host
-curl -s -H "Authorization: Bearer $KEY" \\
-  https://host/api/endpoint | jq .       # Query an API
-nmap -sn 192.168.0.0/22                  # Scan the network
-docker ps                                # Check containers on a remote host
-systemctl status nginx                   # Check a service
+homelab entity some-id                   # Inspect one object in detail
+homelab relations some-id                # See what it is connected to
+curl -fsS "$SERVICE_URL/health" | jq .   # Probe an API when you have a URL
+dig +short example.internal              # Resolve DNS when names matter
+nc -vz example.internal 443              # Check TCP reachability
+python3 - <<'PY'                         # Write a quick repro or parser
+print("scratch work belongs in the container")
+PY
 \`\`\`
 
-Always verify before acting. If the knowledge graph says a service runs on a
-host, SSH in and confirm. If you discover something new, promote it.
+Always verify before acting. If the graph says something exists, confirm it
+through the best available interface. If you discover something new, promote it.
 
 ## What NOT to do
 
@@ -1256,7 +1295,8 @@ host, SSH in and confirm. If you discover something new, promote it.
 - **Don't avoid writing quick scratch code when it would clarify the problem.**
 - **Don't paste credentials in chat.** Use \`homelab secret-request\`.
 - **Don't hoard knowledge.** Promote what you learn so the next thread has it.
-- **Don't guess at IPs, ports, or configs.** Use \`homelab snapshot\`, SSH, or ask.
+- **Don't guess at IPs, ports, configs, or access methods.** Use \`homelab snapshot\`,
+  \`homelab entity\`, \`homelab relations\`, live probes, or ask.
 
 ## Thread model
 

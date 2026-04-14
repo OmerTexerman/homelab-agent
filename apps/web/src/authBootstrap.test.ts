@@ -353,31 +353,46 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("surfaces a friendly error message when an invalid pairing token is submitted", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse(
-        {
-          error: "Invalid bootstrap credential.",
-        },
-        {
-          status: 401,
-        },
-      ),
-    );
+  it("surfaces the backend auth error message when manual pairing fails", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        sessionResponse({
+          authenticated: false,
+          auth: {
+            policy: "loopback-browser",
+            bootstrapMethods: ["one-time-token"],
+            sessionMethods: ["browser-session-cookie"],
+            sessionCookieName: "t3_session",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Invalid bootstrap credential.",
+          },
+          { status: 401 },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
+    installTestBrowser("http://localhost/");
 
-    const { submitServerAuthCredential } = await import("./environments/primary");
+    const { resolveInitialServerAuthGateState, submitServerAuthCredential } =
+      await import("./environments/primary");
 
-    await expect(submitServerAuthCredential("bad-token")).rejects.toThrow(
-      "Invalid pairing token. Check the token and try again.",
-    );
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/bootstrap", {
-      body: JSON.stringify({ credential: "bad-token" }),
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: {
+        policy: "loopback-browser",
+        bootstrapMethods: ["one-time-token"],
+        sessionMethods: ["browser-session-cookie"],
+        sessionCookieName: "t3_session",
       },
-      method: "POST",
+    });
+    await expect(submitServerAuthCredential("expired-token")).rejects.toMatchObject({
+      message: "Invalid bootstrap credential.",
+      status: 401,
     });
   });
 
@@ -452,7 +467,7 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(fetchMock.mock.calls[3]?.[0]).toBe("http://localhost:3773/api/auth/session");
   });
 
-  it("memoizes the authenticated gate state after the first successful read", async () => {
+  it("revalidates the server session state after a previous authenticated result", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -487,9 +502,15 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
-      status: "authenticated",
+      status: "requires-auth",
+      auth: {
+        policy: "loopback-browser",
+        bootstrapMethods: ["one-time-token"],
+        sessionMethods: ["browser-session-cookie"],
+        sessionCookieName: "t3_session",
+      },
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("creates a pairing credential from the authenticated auth endpoint", async () => {

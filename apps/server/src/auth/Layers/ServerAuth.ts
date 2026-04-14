@@ -3,10 +3,12 @@ import {
   type AuthClientSession,
   type AuthBootstrapResult,
   type AuthPairingCredentialResult,
+  AuthSessionId,
   type AuthSessionState,
   type AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -26,6 +28,7 @@ import {
 import {
   SessionCredentialError,
   SessionCredentialService,
+  type SessionCredentialServiceShape,
 } from "../Services/SessionCredentialService.ts";
 import { AuthControlPlaneLive, AuthCoreLive } from "./AuthControlPlane.ts";
 
@@ -36,6 +39,7 @@ type BootstrapExchangeResult = {
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
+const STARTUP_OWNER_PAIRING_TTL = Duration.minutes(30);
 
 export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): AuthError {
   if (cause.status === 500) {
@@ -316,15 +320,28 @@ export const makeServerAuth = Effect.gen(function* () {
     );
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
-    issuePairingCredential({ role: "owner" }).pipe(
-      Effect.map((issued) => {
-        const url = new URL(baseUrl);
-        url.pathname = "/pair";
-        url.searchParams.delete("token");
-        url.hash = new URLSearchParams([["token", issued.credential]]).toString();
-        return url.toString();
-      }),
-    );
+    authControlPlane
+      .createPairingLink({
+        role: "owner",
+        subject: "owner-bootstrap",
+        ttl: STARTUP_OWNER_PAIRING_TTL,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new AuthError({
+              message: "Failed to issue pairing credential.",
+              cause,
+            }),
+        ),
+        Effect.map((issued) => {
+          const url = new URL(baseUrl);
+          url.pathname = "/pair";
+          url.searchParams.delete("token");
+          url.hash = new URLSearchParams([["token", issued.credential]]).toString();
+          return url.toString();
+        }),
+      );
 
   const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
     sessions.issueWebSocketToken(session.sessionId).pipe(

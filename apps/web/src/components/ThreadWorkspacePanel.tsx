@@ -361,6 +361,14 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   } | null>(null);
   selectedPathRef.current = selectedPath;
 
+  const clearSelectedFile = useCallback(() => {
+    setSelectedPath(null);
+    setSelectedKind(null);
+    setEditorValue("");
+    setSavedValue("");
+    setSyncedFilePath(null);
+  }, []);
+
   const stopDocumentResizeState = useCallback(() => {
     document.body.style.removeProperty("cursor");
     document.body.style.removeProperty("user-select");
@@ -371,14 +379,10 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     setCurrentPath(DEFAULT_CONTAINER_WORKSPACE_PATH);
     setPathDraft(DEFAULT_CONTAINER_WORKSPACE_PATH);
     setExpandedDirectories(new Set());
-    setSelectedPath(null);
-    setSelectedKind(null);
-    setEditorValue("");
-    setSavedValue("");
-    setSyncedFilePath(null);
+    clearSelectedFile();
     setTreeInitialized(false);
     setContextMenu(null);
-  }, [props.environmentId, props.threadId]);
+  }, [clearSelectedFile, props.environmentId, props.threadId]);
 
   useEffect(() => {
     setTreeWidth((current) => clampWorkspaceTreeWidth(current, panelWidth));
@@ -477,31 +481,30 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     });
   }, []);
 
-  const selectNode = useCallback((node: ThreadWorkspaceTreeNode) => {
-    setContextMenu(null);
-    if (node.kind === "directory") {
-      setCurrentPath(node.path);
-      setPathDraft(node.path);
-      setTreeInitialized(false);
-      setExpandedDirectories(new Set());
-      setSelectedPath(null);
-      setSelectedKind(null);
-      setEditorValue("");
-      setSavedValue("");
+  const selectNode = useCallback(
+    (node: ThreadWorkspaceTreeNode) => {
+      setContextMenu(null);
+      if (node.kind === "directory") {
+        setCurrentPath(node.path);
+        setPathDraft(node.path);
+        setTreeInitialized(false);
+        setExpandedDirectories(new Set());
+        clearSelectedFile();
+        return;
+      }
+      setSelectedPath(node.path);
+      setSelectedKind(node.kind);
+      if (node.parentPath) {
+        setExpandedDirectories((current) => {
+          const next = new Set(current);
+          next.add(node.parentPath!);
+          return next;
+        });
+      }
       setSyncedFilePath(null);
-      return;
-    }
-    setSelectedPath(node.path);
-    setSelectedKind(node.kind);
-    if (node.parentPath) {
-      setExpandedDirectories((current) => {
-        const next = new Set(current);
-        next.add(node.parentPath!);
-        return next;
-      });
-    }
-    setSyncedFilePath(null);
-  }, []);
+    },
+    [clearSelectedFile],
+  );
 
   const refreshWorkspace = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: threadWorkspaceQueryKeys.all });
@@ -512,12 +515,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     setPathDraft(DEFAULT_CONTAINER_WORKSPACE_PATH);
     setTreeInitialized(false);
     setExpandedDirectories(new Set());
-    setSelectedPath(null);
-    setSelectedKind(null);
-    setEditorValue("");
-    setSavedValue("");
-    setSyncedFilePath(null);
-  }, []);
+    clearSelectedFile();
+  }, [clearSelectedFile]);
 
   const openParentDirectory = useCallback(() => {
     const nextPath = dirnameContainerPath(currentPath);
@@ -525,12 +524,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     setPathDraft(nextPath);
     setTreeInitialized(false);
     setExpandedDirectories(new Set());
-    setSelectedPath(null);
-    setSelectedKind(null);
-    setEditorValue("");
-    setSavedValue("");
-    setSyncedFilePath(null);
-  }, [currentPath]);
+    clearSelectedFile();
+  }, [clearSelectedFile, currentPath]);
 
   const submitPathDraft = useCallback(() => {
     const nextPath = normalizeContainerNavigationPath(pathDraft, currentPath);
@@ -538,12 +533,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     setPathDraft(nextPath);
     setTreeInitialized(false);
     setExpandedDirectories(new Set());
-    setSelectedPath(null);
-    setSelectedKind(null);
-    setEditorValue("");
-    setSavedValue("");
-    setSyncedFilePath(null);
-  }, [currentPath, pathDraft]);
+    clearSelectedFile();
+  }, [clearSelectedFile, currentPath, pathDraft]);
 
   const downloadFile = useCallback(
     async (path: string) => {
@@ -603,6 +594,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   });
 
   const isDirty = selectedKind === "file" && editorValue !== savedValue;
+  const editorOpen = selectedKind === "file" && Boolean(selectedPath);
+  const selectedFilePath = selectedPath ?? "";
   const selectedFileUnsupported =
     selectedKind === "file" ? fileQuery.data?.contents === null : false;
   const selectedFileSize =
@@ -750,8 +743,11 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         onPointerCancel={handlePanelResizePointerEnd}
       />
       <div
-        className="flex min-h-0 flex-col border-r border-border"
-        style={{ width: `${treeWidth}px` }}
+        className={cn(
+          "flex min-h-0 flex-col",
+          editorOpen ? "border-r border-border" : "min-w-0 flex-1",
+        )}
+        style={editorOpen ? { width: `${treeWidth}px` } : undefined}
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
@@ -890,27 +886,25 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         </div>
       </div>
 
-      <button
-        type="button"
-        aria-label="Resize workspace file tree"
-        className="relative z-10 w-2 shrink-0 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
-        onPointerDown={handleTreeResizePointerDown}
-        onPointerMove={handleTreeResizePointerMove}
-        onPointerUp={handleTreeResizePointerEnd}
-        onPointerCancel={handleTreeResizePointerEnd}
-      />
+      {editorOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Resize workspace file tree"
+            className="relative z-10 w-2 shrink-0 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
+            onPointerDown={handleTreeResizePointerDown}
+            onPointerMove={handleTreeResizePointerMove}
+            onPointerUp={handleTreeResizePointerEnd}
+            onPointerCancel={handleTreeResizePointerEnd}
+          />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {selectedKind !== "file" || !selectedPath ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-            Browse to a directory or select a file to view or edit it here.
-          </div>
-        ) : (
-          <>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <FileIcon className="size-4 shrink-0 text-muted-foreground/80" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">{selectedPath}</div>
+                <div className="truncate text-sm font-medium text-foreground">
+                  {selectedFilePath}
+                </div>
                 <div className="text-[11px] text-muted-foreground">
                   {typeof selectedFileSize === "number" ? formatFileSize(selectedFileSize) : "File"}
                 </div>
@@ -920,11 +914,21 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 variant="outline"
                 size="xs"
                 onClick={() => {
-                  void downloadFile(selectedPath);
+                  void downloadFile(selectedFilePath);
                 }}
               >
                 <DownloadIcon className="size-3.5" />
                 Download
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={clearSelectedFile}
+                aria-label="Close file viewer"
+              >
+                <XIcon className="size-3.5" />
               </Button>
             </div>
             <div className="min-h-0 flex-1 p-3">
@@ -981,9 +985,9 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 </Button>
               </div>
             </div>
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      ) : null}
 
       {contextMenu && contextMenuItems.length > 0 ? (
         <WorkspaceContextMenu

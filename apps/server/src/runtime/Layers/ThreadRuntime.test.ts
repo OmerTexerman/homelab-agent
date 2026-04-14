@@ -6,6 +6,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { type ProcessRunResult } from "../../processRunner.ts";
@@ -375,7 +376,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.match(homelabCliContents, /--example/);
       assert.match(homelabCliContents, /--schema/);
       assert.match(homelabCliContents, /Waiting for secret/);
+      assert.match(homelabCliContents, /"Submit a homelab promotion envelope\.\\n\\n"/);
+      assert.match(homelabCliContents, /"Examples:\\n"/);
       assert.match(agentsContents, /homelab secret-request/);
+      assert.match(agentsContents, /homelab --help\s+# Confirm the installed CLI surface/);
       assert.match(
         agentsContents,
         /You have outbound network access\. Use web search, vendor docs, GitHub, package registries/,
@@ -384,8 +388,16 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         agentsContents,
         /Write scratch scripts, temporary files, and quick repros inside the container/,
       );
+      assert.match(
+        agentsContents,
+        /The workspace may be sparse\. Seeing only runtime helper files such as `AGENTS\.md` and/,
+      );
+      assert.match(
+        agentsContents,
+        /Do not search the workspace for the CLI's\s+source code or wrapper scripts before using it\./,
+      );
       assert.match(agentsContents, /homelab promote --schema/);
-      assert.match(agentsContents, /"action": "upsert_entity"/);
+      assert.match(agentsContents, /"id": "host-main"/);
       assert.match(
         agentsContents,
         /`\/workspace` is this thread's scratch area inside the container\./,
@@ -394,6 +406,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         claudeContents,
         /Don't avoid searching when current external information matters\./,
       );
+      assert.doesNotMatch(agentsContents, /ssh root@192\.168\.1\.60/);
 
       const runCall = findRunCall(docker.calls);
       assert.ok(runCall);
@@ -423,6 +436,25 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         docker.calls.some((call) => call[0] === "build"),
         true,
       );
+    }),
+  );
+
+  it.effect("maps logical project roots back to /workspace for runtime cwd", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+
+      const runtime = yield* ThreadRuntime;
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-logical-project"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        requestedCwd: createLogicalProjectWorkspaceRoot("project-alpha"),
+      });
+
+      assert.equal(descriptor.cwd, "/workspace");
+      assert.equal(descriptor.workspacePath, "/workspace");
     }),
   );
 
