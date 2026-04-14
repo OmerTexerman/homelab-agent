@@ -15,6 +15,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { TextGenerationError } from "@t3tools/contracts";
+import { resolveProviderCliWorkingDirectory } from "../git/providerCliWorkingDirectory.ts";
 import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationResult,
@@ -182,6 +183,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     );
     const schemaPath = yield* writeTempFile(operation, "codex-schema", schemaJson);
     const outputPath = yield* writeTempFile(operation, "codex-output", "");
+    const resolvedCwd = yield* resolveProviderCliWorkingDirectory({ cwd, operation });
 
     const runCodexCommand = Effect.fn("runCodexJson.runCodexCommand")(function* () {
       const reasoningEffort =
@@ -214,7 +216,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             ...environment,
             ...(codexConfig.homePath ? { CODEX_HOME: expandHomePath(codexConfig.homePath) } : {}),
           },
-          cwd,
+          cwd: resolvedCwd,
           shell: process.platform === "win32",
           stdin: {
             stream: Stream.encodeText(Stream.make(prompt)),

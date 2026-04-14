@@ -1,6 +1,8 @@
 import { memo } from "react";
-import { FolderClosedIcon, TerminalSquareIcon } from "lucide-react";
+import { DownloadIcon, FolderClosedIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
@@ -14,6 +16,8 @@ interface ChatHeaderProps {
   workspaceOpen: boolean;
   onToggleTerminal: () => void;
   onToggleWorkspace: () => void;
+  onExportMarkdown: () => void;
+  onExportJson: () => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -25,6 +29,8 @@ export const ChatHeader = memo(function ChatHeader({
   workspaceOpen,
   onToggleTerminal,
   onToggleWorkspace,
+  onExportMarkdown,
+  onExportJson,
 }: ChatHeaderProps) {
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
@@ -43,6 +49,26 @@ export const ChatHeader = memo(function ChatHeader({
         )}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3">
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="shrink-0"
+                aria-label="Export chat"
+              />
+            }
+          >
+            <DownloadIcon className="size-3.5" />
+            Export
+          </MenuTrigger>
+          <MenuPopup align="end">
+            <MenuItem onClick={onExportMarkdown}>Download markdown</MenuItem>
+            <MenuItem onClick={onExportJson}>Download JSON</MenuItem>
+          </MenuPopup>
+        </Menu>
         <Tooltip>
           <TooltipTrigger
             render={

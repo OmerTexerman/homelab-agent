@@ -2,12 +2,14 @@ import type { EnvironmentId, ThreadId, ThreadWorkspaceEntry } from "@t3tools/con
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Schema from "effect/Schema";
 import {
+  ArrowUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   DownloadIcon,
   FileIcon,
   FolderClosedIcon,
   FolderIcon,
+  HouseIcon,
   LoaderIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -54,6 +56,8 @@ const MIN_WORKSPACE_PANEL_WIDTH = 320;
 const DEFAULT_WORKSPACE_TREE_WIDTH = 220;
 const MIN_WORKSPACE_TREE_WIDTH = 190;
 const MIN_WORKSPACE_EDITOR_WIDTH = 220;
+const DEFAULT_CONTAINER_WORKSPACE_PATH = "/workspace";
+const DEFAULT_CONTAINER_HOME_PATH = "/runtime/home";
 
 function maxWorkspacePanelWidth(): number {
   if (typeof window === "undefined") {
@@ -133,6 +137,53 @@ function formatFileSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function normalizeAbsoluteContainerPath(pathValue: string): string {
+  const trimmed = pathValue.trim();
+  if (trimmed.length === 0) {
+    return DEFAULT_CONTAINER_WORKSPACE_PATH;
+  }
+  const rawSegments = trimmed.split("/");
+  const normalizedSegments: string[] = [];
+  for (const segment of rawSegments) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      normalizedSegments.pop();
+      continue;
+    }
+    normalizedSegments.push(segment);
+  }
+  return `/${normalizedSegments.join("/")}`.replace(/\/{2,}/g, "/") || "/";
+}
+
+function normalizeContainerNavigationPath(input: string, currentPath: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return currentPath;
+  }
+  if (trimmed === "~") {
+    return DEFAULT_CONTAINER_HOME_PATH;
+  }
+  if (trimmed.startsWith("~/")) {
+    return normalizeAbsoluteContainerPath(`${DEFAULT_CONTAINER_HOME_PATH}/${trimmed.slice(2)}`);
+  }
+  if (trimmed.startsWith("/")) {
+    return normalizeAbsoluteContainerPath(trimmed);
+  }
+  return normalizeAbsoluteContainerPath(`${currentPath}/${trimmed}`);
+}
+
+function dirnameContainerPath(pathValue: string): string {
+  const normalizedPath = normalizeAbsoluteContainerPath(pathValue);
+  if (normalizedPath === "/") {
+    return "/";
+  }
+  const segments = normalizedPath.split("/").filter(Boolean);
+  segments.pop();
+  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
+}
+
 function triggerDownload(url: string, filename?: string) {
   const link = document.createElement("a");
   link.href = url;
@@ -202,7 +253,8 @@ const WorkspaceTreeItem = memo(function WorkspaceTreeItem(props: {
   readonly onContextMenu: (event: React.MouseEvent, node: ThreadWorkspaceTreeNode) => void;
 }) {
   const isDirectory = props.node.kind === "directory";
-  const isExpanded = props.expandedDirectories.has(props.node.path);
+  const hasChildren = props.node.children.length > 0;
+  const isExpanded = hasChildren && props.expandedDirectories.has(props.node.path);
   const isSelected = props.selectedPath === props.node.path;
   const indent = 10 + props.depth * 14;
 
@@ -225,7 +277,7 @@ const WorkspaceTreeItem = memo(function WorkspaceTreeItem(props: {
         }}
         onContextMenu={(event) => props.onContextMenu(event, props.node)}
       >
-        {isDirectory ? (
+        {isDirectory && hasChildren ? (
           isExpanded ? (
             <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/70" />
           ) : (
@@ -250,7 +302,7 @@ const WorkspaceTreeItem = memo(function WorkspaceTreeItem(props: {
         )}
         <span className="min-w-0 flex-1 truncate">{props.node.name}</span>
       </button>
-      {isDirectory && isExpanded
+      {isDirectory && hasChildren && isExpanded
         ? props.node.children.map((child) => (
             <WorkspaceTreeItem
               key={child.path}
@@ -278,6 +330,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
 }) {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPath, setCurrentPath] = useState(DEFAULT_CONTAINER_WORKSPACE_PATH);
+  const [pathDraft, setPathDraft] = useState(DEFAULT_CONTAINER_WORKSPACE_PATH);
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<ThreadWorkspaceEntry["kind"] | null>(null);
@@ -314,6 +368,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
 
   useEffect(() => {
     setSearchQuery("");
+    setCurrentPath(DEFAULT_CONTAINER_WORKSPACE_PATH);
+    setPathDraft(DEFAULT_CONTAINER_WORKSPACE_PATH);
     setExpandedDirectories(new Set());
     setSelectedPath(null);
     setSelectedKind(null);
@@ -357,6 +413,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     threadWorkspaceEntriesQueryOptions({
       environmentId: props.environmentId,
       threadId: props.threadId,
+      basePath: currentPath,
       query: searchQuery.trim(),
       enabled: props.open,
       limit: 1_000,
@@ -367,6 +424,14 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     () => buildThreadWorkspaceTree(entriesQuery.data?.entries ?? []),
     [entriesQuery.data?.entries],
   );
+
+  useEffect(() => {
+    if (!entriesQuery.data?.basePath) {
+      return;
+    }
+    setCurrentPath(entriesQuery.data.basePath);
+    setPathDraft(entriesQuery.data.basePath);
+  }, [entriesQuery.data?.basePath]);
 
   useEffect(() => {
     if (treeInitialized || searchQuery.trim().length > 0 || tree.length === 0) {
@@ -413,9 +478,21 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   }, []);
 
   const selectNode = useCallback((node: ThreadWorkspaceTreeNode) => {
+    setContextMenu(null);
+    if (node.kind === "directory") {
+      setCurrentPath(node.path);
+      setPathDraft(node.path);
+      setTreeInitialized(false);
+      setExpandedDirectories(new Set());
+      setSelectedPath(null);
+      setSelectedKind(null);
+      setEditorValue("");
+      setSavedValue("");
+      setSyncedFilePath(null);
+      return;
+    }
     setSelectedPath(node.path);
     setSelectedKind(node.kind);
-    setContextMenu(null);
     if (node.parentPath) {
       setExpandedDirectories((current) => {
         const next = new Set(current);
@@ -423,14 +500,50 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         return next;
       });
     }
-    if (node.kind === "file") {
-      setSyncedFilePath(null);
-    }
+    setSyncedFilePath(null);
   }, []);
 
   const refreshWorkspace = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: threadWorkspaceQueryKeys.all });
   }, [queryClient]);
+
+  const openWorkspaceHome = useCallback(() => {
+    setCurrentPath(DEFAULT_CONTAINER_WORKSPACE_PATH);
+    setPathDraft(DEFAULT_CONTAINER_WORKSPACE_PATH);
+    setTreeInitialized(false);
+    setExpandedDirectories(new Set());
+    setSelectedPath(null);
+    setSelectedKind(null);
+    setEditorValue("");
+    setSavedValue("");
+    setSyncedFilePath(null);
+  }, []);
+
+  const openParentDirectory = useCallback(() => {
+    const nextPath = dirnameContainerPath(currentPath);
+    setCurrentPath(nextPath);
+    setPathDraft(nextPath);
+    setTreeInitialized(false);
+    setExpandedDirectories(new Set());
+    setSelectedPath(null);
+    setSelectedKind(null);
+    setEditorValue("");
+    setSavedValue("");
+    setSyncedFilePath(null);
+  }, [currentPath]);
+
+  const submitPathDraft = useCallback(() => {
+    const nextPath = normalizeContainerNavigationPath(pathDraft, currentPath);
+    setCurrentPath(nextPath);
+    setPathDraft(nextPath);
+    setTreeInitialized(false);
+    setExpandedDirectories(new Set());
+    setSelectedPath(null);
+    setSelectedKind(null);
+    setEditorValue("");
+    setSavedValue("");
+    setSyncedFilePath(null);
+  }, [currentPath, pathDraft]);
 
   const downloadFile = useCallback(
     async (path: string) => {
@@ -515,13 +628,13 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       });
     } else {
       items.push({
-        id: "toggle",
-        label: expandedDirectories.has(contextMenu.node.path) ? "Collapse" : "Expand",
-        onSelect: () => toggleDirectory(contextMenu.node.path),
+        id: "open-folder",
+        label: "Open folder",
+        onSelect: () => selectNode(contextMenu.node),
       });
     }
     return items;
-  }, [contextMenu, downloadFile, expandedDirectories, selectNode, toggleDirectory]);
+  }, [contextMenu, downloadFile, selectNode]);
 
   const handlePanelResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -642,8 +755,10 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-foreground">Workspace</div>
-            <div className="truncate text-[11px] text-muted-foreground">{props.threadId}</div>
+            <div className="text-sm font-medium text-foreground">Thread Filesystem</div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              Real paths inside the runtime container
+            </div>
           </div>
           <Button
             type="button"
@@ -672,12 +787,54 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           </Button>
         </div>
         <div className="border-b border-border px-3 py-2">
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPathDraft();
+            }}
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7"
+              onClick={openWorkspaceHome}
+              aria-label="Open workspace root"
+            >
+              <HouseIcon className="size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7"
+              onClick={openParentDirectory}
+              aria-label="Open parent directory"
+              disabled={currentPath === "/"}
+            >
+              <ArrowUpIcon className="size-3.5" />
+            </Button>
+            <Input
+              value={pathDraft}
+              onChange={(event) => setPathDraft(event.target.value)}
+              placeholder="/workspace"
+              className="h-8 min-w-0 flex-1 font-mono text-xs"
+              aria-label="Container path"
+            />
+            <Button type="submit" variant="outline" size="xs">
+              Go
+            </Button>
+          </form>
+          <div className="mt-2 text-[11px] text-muted-foreground">{currentPath}</div>
+        </div>
+        <div className="border-b border-border px-3 py-2">
           <label className="relative block">
             <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <Input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search files"
+              placeholder="Filter current directory"
               className="pl-7 text-xs"
             />
           </label>
@@ -697,8 +854,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           ) : tree.length === 0 ? (
             <div className="px-2 py-3 text-xs text-muted-foreground">
               {searchQuery.trim().length > 0
-                ? "No files match that search."
-                : "This thread workspace is empty."}
+                ? "No entries in this directory match that filter."
+                : "This directory is empty."}
             </div>
           ) : (
             <>
@@ -746,7 +903,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {selectedKind !== "file" || !selectedPath ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-            Select a file to view or edit it here.
+            Browse to a directory or select a file to view or edit it here.
           </div>
         ) : (
           <>

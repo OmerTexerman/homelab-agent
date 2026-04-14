@@ -14,7 +14,7 @@ import {
   type HomelabSetupStatus,
   type RuntimeBlueprintDescriptor,
 } from "@t3tools/contracts";
-import { Data, Effect, Option, Schema } from "effect";
+import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { respondToAuthError } from "../auth/http.ts";
@@ -31,6 +31,7 @@ class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
 
 const decodeHomelabEntityId = Schema.decodeUnknownSync(HomelabEntityId);
 const decodeHomelabEntityKind = Schema.decodeUnknownSync(HomelabEntityKind);
+const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
 const respondToHomelabHttpError = (error: HomelabHttpError) =>
   Effect.gen(function* () {
@@ -383,14 +384,22 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
     yield* authenticateOwnerSession;
     const knowledgeGraph = yield* KnowledgeGraph;
     const promotion = yield* HttpServerRequest.schemaBodyJson(HomelabPromotionEnvelope).pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Invalid homelab promotion payload.",
-            status: 400,
-            cause,
-          }),
-      ),
+      Effect.mapError((cause) => {
+        const detail =
+          cause && typeof cause === "object" && "issue" in cause
+            ? formatSchemaIssue((cause as Schema.SchemaError).issue)
+            : cause instanceof Error
+              ? cause.message
+              : "Request body could not be decoded.";
+        return new HomelabHttpError({
+          message:
+            "Invalid homelab promotion payload: " +
+            detail +
+            " Run `homelab promote --schema` or `homelab promote --example` in the runtime for a valid shape.",
+          status: 400,
+          cause,
+        });
+      }),
     );
     const recorded = yield* knowledgeGraph.applyPromotion(promotion);
     return HttpServerResponse.jsonUnsafe(recorded satisfies HomelabPromotionRecorded, {
