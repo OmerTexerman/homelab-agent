@@ -2,6 +2,7 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
+  PencilIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -923,7 +924,23 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const [renamingTitle, setRenamingTitle] = useState("");
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
+  const [isRenamingProject, setIsRenamingProject] = useState(false);
+  const [renamingProjectTitle, setRenamingProjectTitle] = useState("");
+  const [optimisticProjectTitle, setOptimisticProjectTitle] = useState<string | null>(null);
+  const renamingProjectCommittedRef = useRef(false);
+  const renamingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [isThreadDropTarget, setIsThreadDropTarget] = useState(false);
+  const displayedProjectName = optimisticProjectTitle ?? project.name;
+  const projectRenameTargets = useMemo(
+    () => [scopeProjectRef(project.environmentId, project.id), ...otherMemberRefs],
+    [otherMemberRefs, project.environmentId, project.id],
+  );
+
+  useEffect(() => {
+    if (optimisticProjectTitle !== null && project.name === optimisticProjectTitle) {
+      setOptimisticProjectTitle(null);
+    }
+  }, [optimisticProjectTitle, project.name]);
 
   const { projectStatus, visibleProjectThreads, orderedProjectThreadKeys } = useMemo(() => {
     const lastVisitedAtByThreadKey = new Map(
@@ -1098,6 +1115,133 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [suppressProjectClickAfterDragRef, suppressProjectClickForContextMenuRef],
   );
 
+  const finishProjectRename = useCallback(() => {
+    setIsRenamingProject(false);
+    renamingProjectInputRef.current = null;
+  }, []);
+
+  const startProjectRename = useCallback(() => {
+    setRenamingProjectTitle(displayedProjectName);
+    renamingProjectCommittedRef.current = false;
+    setIsRenamingProject(true);
+  }, [displayedProjectName]);
+
+  const cancelProjectRename = useCallback(() => {
+    renamingProjectCommittedRef.current = true;
+    finishProjectRename();
+  }, [finishProjectRename]);
+
+  const commitProjectRename = useCallback(
+    async (nextTitle: string) => {
+      const trimmed = nextTitle.trim();
+      if (trimmed.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Project name cannot be empty",
+        });
+        finishProjectRename();
+        return;
+      }
+
+      if (trimmed === project.name && projectRenameTargets.length === 1) {
+        finishProjectRename();
+        return;
+      }
+
+      const failures: string[] = [];
+      let representativeSucceeded = false;
+
+      for (const [index, ref] of projectRenameTargets.entries()) {
+        const api = readEnvironmentApi(ref.environmentId);
+        if (!api) {
+          failures.push(`Environment '${ref.environmentId}' is unavailable.`);
+          continue;
+        }
+
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "project.meta.update",
+            commandId: newCommandId(),
+            projectId: ref.projectId,
+            title: trimmed,
+          });
+          if (index === 0) {
+            representativeSucceeded = true;
+          }
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : "An unknown error occurred.");
+        }
+      }
+
+      if (representativeSucceeded) {
+        setOptimisticProjectTitle(trimmed);
+      }
+
+      if (failures.length > 0) {
+        toastManager.add({
+          type: "error",
+          title:
+            failures.length === projectRenameTargets.length
+              ? "Failed to rename project"
+              : "Renamed project with partial failures",
+          description: failures.join(" "),
+        });
+      }
+
+      finishProjectRename();
+    },
+    [finishProjectRename, project.name, projectRenameTargets],
+  );
+
+  const handleProjectRenameInputRef = useCallback((element: HTMLInputElement | null) => {
+    if (element && renamingProjectInputRef.current !== element) {
+      renamingProjectInputRef.current = element;
+      element.focus();
+      element.select();
+    }
+  }, []);
+
+  const handleProjectRenameInputChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setRenamingProjectTitle(event.target.value);
+    },
+    [],
+  );
+
+  const handleProjectRenameInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        renamingProjectCommittedRef.current = true;
+        void commitProjectRename(renamingProjectTitle);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelProjectRename();
+      }
+    },
+    [cancelProjectRename, commitProjectRename, renamingProjectTitle],
+  );
+
+  const handleProjectRenameInputBlur = useCallback(() => {
+    if (!renamingProjectCommittedRef.current) {
+      void commitProjectRename(renamingProjectTitle);
+    }
+  }, [commitProjectRename, renamingProjectTitle]);
+
+  const handleProjectRenameInputClick = useCallback((event: React.MouseEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+  }, []);
+
+  const handleRenameProjectClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startProjectRename();
+    },
+    [startProjectRename],
+  );
+
   const attemptDeleteProject = useCallback(async () => {
     const api = readLocalApi();
     if (!api) {
@@ -1108,10 +1252,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const confirmed = await api.dialogs.confirm(
       projectThreadCount > 0
         ? [
-            `Delete project "${project.name}" and all ${projectThreadCount} thread${projectThreadCount === 1 ? "" : "s"}?`,
+            `Delete project "${displayedProjectName}" and all ${projectThreadCount} thread${projectThreadCount === 1 ? "" : "s"}?`,
             "This permanently clears the project's conversation history.",
           ].join("\n")
-        : `Remove project "${project.name}"?`,
+        : `Remove project "${displayedProjectName}"?`,
     );
     if (!confirmed) {
       return;
@@ -1152,17 +1296,17 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       console.error("Failed to remove project", { projectId: project.id, error });
       toastManager.add({
         type: "error",
-        title: `Failed to remove "${project.name}"`,
+        title: `Failed to remove "${displayedProjectName}"`,
         description: message,
       });
     }
   }, [
     clearComposerDraftForThread,
     clearProjectDraftThreadId,
+    displayedProjectName,
     getDraftThreadByProjectRef,
     project.environmentId,
     project.id,
-    project.name,
     projectThreads,
     deleteThread,
   ]);
@@ -1337,6 +1481,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const clicked = await api.contextMenu.show(
           [
+            { id: "rename", label: "Rename project" },
             { id: "new-thread", label: "New thread" },
             ...(isLogicalProject
               ? []
@@ -1348,6 +1493,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             y: event.clientY,
           },
         );
+        if (clicked === "rename") {
+          startProjectRename();
+          return;
+        }
         if (clicked === "new-thread") {
           createProjectThread();
           return;
@@ -1366,6 +1515,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       createProjectThread,
       isLogicalProject,
       project.cwd,
+      startProjectRename,
       suppressProjectClickForContextMenuRef,
     ],
   );
@@ -1655,6 +1805,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       <div className="group/project-header relative">
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+          data-testid={`project-row-${project.id}`}
           size="sm"
           className={`gap-2 px-2 py-1.5 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground ${
             isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
@@ -1689,9 +1840,22 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             />
           )}
           <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
-          <span className="flex-1 truncate text-xs font-medium text-foreground/90">
-            {project.name}
-          </span>
+          {isRenamingProject ? (
+            <input
+              ref={handleProjectRenameInputRef}
+              data-testid={`project-rename-input-${project.id}`}
+              className="min-w-0 flex-1 truncate rounded border border-ring bg-transparent px-0.5 text-xs font-medium text-foreground/90 outline-none"
+              value={renamingProjectTitle}
+              onChange={handleProjectRenameInputChange}
+              onKeyDown={handleProjectRenameInputKeyDown}
+              onBlur={handleProjectRenameInputBlur}
+              onClick={handleProjectRenameInputClick}
+            />
+          ) : (
+            <span className="flex-1 truncate text-xs font-medium text-foreground/90">
+              {displayedProjectName}
+            </span>
+          )}
         </SidebarMenuButton>
         {/* Environment badge – visible by default, crossfades with the
             "new thread" button on hover using the same pointer-events +
@@ -1739,7 +1903,23 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               render={
                 <button
                   type="button"
-                  aria-label={`Delete ${project.name}`}
+                  aria-label={`Rename ${displayedProjectName}`}
+                  data-testid={`project-rename-${project.id}`}
+                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={handleRenameProjectClick}
+                />
+              }
+            >
+              <PencilIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Rename project</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={`Delete ${displayedProjectName}`}
                   data-testid={`project-delete-${project.id}`}
                   className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-secondary hover:text-destructive focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={handleDeleteProjectClick}

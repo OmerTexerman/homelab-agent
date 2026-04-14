@@ -1,4 +1,5 @@
 import {
+  ThreadId,
   ThreadWorkspaceEntriesInput,
   ThreadWorkspaceEntriesResult,
   ThreadWorkspaceReadFileInput,
@@ -17,10 +18,10 @@ export class ThreadWorkspaceServiceError extends Schema.TaggedErrorClass<ThreadW
   },
 ) {}
 
-export interface ThreadWorkspaceResolvedEntry {
-  readonly absolutePath: string;
-  readonly relativePath: string;
-  readonly kind: "file" | "directory";
+export interface ThreadWorkspaceDownloadFileResult {
+  readonly path: string;
+  readonly name: string;
+  readonly bytes: Uint8Array;
 }
 
 export interface ThreadWorkspaceShape {
@@ -33,10 +34,10 @@ export interface ThreadWorkspaceShape {
   readonly writeFile: (
     input: ThreadWorkspaceWriteFileInput,
   ) => Effect.Effect<ThreadWorkspaceWriteFileResult, ThreadWorkspaceServiceError>;
-  readonly resolveEntryPath: (input: {
-    readonly threadId: string;
+  readonly downloadFile: (input: {
+    readonly threadId: ThreadId;
     readonly path: string;
-  }) => Effect.Effect<ThreadWorkspaceResolvedEntry, ThreadWorkspaceServiceError>;
+  }) => Effect.Effect<ThreadWorkspaceDownloadFileResult, ThreadWorkspaceServiceError>;
 }
 
 export class ThreadWorkspace extends Context.Service<ThreadWorkspace, ThreadWorkspaceShape>()(

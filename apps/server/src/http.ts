@@ -213,40 +213,29 @@ export const threadWorkspaceFileRouteLayer = HttpRouter.add(
     }
 
     const threadWorkspace = yield* ThreadWorkspace;
-    const resolvedEntryExit = yield* Effect.exit(
-      threadWorkspace.resolveEntryPath({
+    const downloadExit = yield* Effect.exit(
+      threadWorkspace.downloadFile({
         threadId,
         path: workspacePath,
       }),
     );
-    if (Exit.isFailure(resolvedEntryExit)) {
-      const error = Cause.squash(resolvedEntryExit.cause);
+    if (Exit.isFailure(downloadExit)) {
+      const error = Cause.squash(downloadExit.cause);
       return HttpServerResponse.text(
-        error instanceof Error ? error.message : "Unable to resolve workspace file.",
+        error instanceof Error ? error.message : "Unable to download workspace file.",
         { status: 400 },
       );
     }
-    const resolvedEntry = resolvedEntryExit.value;
+    const downloadedFile = downloadExit.value;
 
-    if (resolvedEntry.kind !== "file") {
-      return HttpServerResponse.text("Directory downloads are not available yet.", {
-        status: 400,
-      });
-    }
-
-    const downloadName = resolvedEntry.relativePath.split("/").pop() ?? "download";
-
-    return yield* HttpServerResponse.file(resolvedEntry.absolutePath, {
+    return HttpServerResponse.uint8Array(downloadedFile.bytes, {
       status: 200,
       headers: {
         "Cache-Control": "no-store",
-        "Content-Disposition": contentDispositionAttachment(downloadName),
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": contentDispositionAttachment(downloadedFile.name),
       },
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
-    );
+    });
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 

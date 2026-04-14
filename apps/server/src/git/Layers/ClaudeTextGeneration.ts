@@ -16,6 +16,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 
 import { TextGenerationError } from "@t3tools/contracts";
 import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
+import { resolveProviderCliWorkingDirectory } from "../providerCliWorkingDirectory.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -88,6 +89,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       getClaudeModelCapabilities(modelSelection.model),
       modelSelection.options,
     );
+    const resolvedCwd = yield* resolveProviderCliWorkingDirectory({ cwd, operation });
     const settings = {
       ...(typeof normalizedOptions?.thinking === "boolean"
         ? { alwaysThinkingEnabled: normalizedOptions.thinking }
@@ -116,7 +118,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
           "--dangerously-skip-permissions",
         ],
         {
-          cwd,
+          cwd: resolvedCwd,
           shell: process.platform === "win32",
           stdin: {
             stream: Stream.encodeText(Stream.make(prompt)),

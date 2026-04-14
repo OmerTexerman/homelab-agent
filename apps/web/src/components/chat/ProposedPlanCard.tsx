@@ -1,5 +1,6 @@
 import { memo, useState, useId } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import {
   buildCollapsedProposedPlanPreviewMarkdown,
   buildProposedPlanMarkdownFilename,
@@ -31,11 +32,13 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 export const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   environmentId,
+  threadId,
   cwd,
   workspaceRoot,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
+  threadId: ThreadId;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
 }) {
@@ -62,6 +65,12 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     : null;
   const downloadFilename = buildProposedPlanMarkdownFilename(planMarkdown);
   const saveContents = normalizePlanMarkdownForExport(planMarkdown);
+  const usesThreadWorkspace = Boolean(
+    workspaceRoot && isLogicalProjectWorkspaceRoot(workspaceRoot),
+  );
+  const workspaceLabel = usesThreadWorkspace
+    ? "this thread workspace (/workspace)"
+    : (workspaceRoot ?? "the workspace");
 
   const handleDownload = () => {
     downloadPlanAsTextFile(downloadFilename, saveContents);
@@ -99,18 +108,24 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     }
 
     setIsSavingToWorkspace(true);
-    void api.projects
-      .writeFile({
-        cwd: workspaceRoot,
-        relativePath,
-        contents: saveContents,
-      })
+    const writeRequest = usesThreadWorkspace
+      ? api.threadWorkspace.writeFile({
+          threadId,
+          path: relativePath,
+          contents: saveContents,
+        })
+      : api.projects.writeFile({
+          cwd: workspaceRoot,
+          relativePath,
+          contents: saveContents,
+        });
+    void writeRequest
       .then((result) => {
         setIsSaveDialogOpen(false);
         toastManager.add({
           type: "success",
           title: "Plan saved to workspace",
-          description: result.relativePath,
+          description: "relativePath" in result ? result.relativePath : result.path,
         });
       })
       .catch((error) => {
@@ -191,7 +206,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
           <DialogHeader>
             <DialogTitle>Save plan to workspace</DialogTitle>
             <DialogDescription>
-              Enter a path relative to <code>{workspaceRoot ?? "the workspace"}</code>.
+              Enter a path relative to <code>{workspaceLabel}</code>.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">

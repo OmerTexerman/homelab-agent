@@ -9,6 +9,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
+import { resolveProviderCliWorkingDirectory } from "../providerCliWorkingDirectory.ts";
 import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationResult,
@@ -148,6 +149,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
     );
     const outputPath = yield* writeTempFile(operation, "codex-output", "");
+    const resolvedCwd = yield* resolveProviderCliWorkingDirectory({ cwd, operation });
 
     const codexSettings = yield* Effect.map(
       serverSettingsService.getSettings,
@@ -185,7 +187,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             ...process.env,
             ...(codexSettings?.homePath ? { CODEX_HOME: codexSettings.homePath } : {}),
           },
-          cwd,
+          cwd: resolvedCwd,
           shell: process.platform === "win32",
           stdin: {
             stream: Stream.encodeText(Stream.make(prompt)),

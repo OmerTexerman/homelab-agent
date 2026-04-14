@@ -351,15 +351,15 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
     },
   );
 
-  const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
-    cwd: string,
-  ): Effect.fn.Return<string, WorkspaceEntriesError> {
-    return yield* workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
+  const resolveFilesystemWorkspaceRoot = Effect.fn(
+    "WorkspaceEntries.resolveFilesystemWorkspaceRoot",
+  )(function* (cwd: string): Effect.fn.Return<string, WorkspaceEntriesError> {
+    return yield* workspacePaths.resolveFilesystemWorkspaceRoot(cwd).pipe(
       Effect.mapError(
         (cause) =>
           new WorkspaceEntriesError({
             cwd,
-            operation: "workspaceEntries.normalizeWorkspaceRoot",
+            operation: "workspaceEntries.resolveFilesystemWorkspaceRoot",
             detail: cause.message,
             cause,
           }),
@@ -369,7 +369,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
 
   const invalidate: WorkspaceEntriesShape["invalidate"] = Effect.fn("WorkspaceEntries.invalidate")(
     function* (cwd) {
-      const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
+      const normalizedCwd = yield* resolveFilesystemWorkspaceRoot(cwd).pipe(
         Effect.catch(() => Effect.succeed(cwd)),
       );
       yield* Cache.invalidate(workspaceIndexCache, cwd);
@@ -381,7 +381,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
 
   const search: WorkspaceEntriesShape["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
-      const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      const normalizedCwd = yield* resolveFilesystemWorkspaceRoot(input.cwd);
       return yield* Cache.get(workspaceIndexCache, normalizedCwd).pipe(
         Effect.map((index) => {
           const normalizedQuery = normalizeSearchQuery(input.query, {

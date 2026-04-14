@@ -517,6 +517,7 @@ const buildAppUnderTest = (options?: {
         Layer.mock(ThreadWorkspace)({
           listEntries: () =>
             Effect.succeed({
+              basePath: "/workspace",
               entries: [],
               truncated: false,
             }),
@@ -533,11 +534,11 @@ const buildAppUnderTest = (options?: {
             Effect.succeed({
               path: input.path,
             }),
-          resolveEntryPath: (input) =>
+          downloadFile: (input) =>
             Effect.succeed({
-              absolutePath: `/tmp/${input.threadId}/${input.path}`,
-              relativePath: input.path,
-              kind: "file",
+              path: input.path,
+              name: input.path.split("/").pop() || "download",
+              bytes: new TextEncoder().encode(`download:${input.path}`),
             }),
           ...options?.layers?.threadWorkspace,
         }),
@@ -1940,6 +1941,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("returns promotion schema detail for invalid homelab promotion payloads", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const url = yield* getHttpServerUrl("/api/homelab/promotions");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            cookie,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            id: "promotion-invalid",
+            summary: "Broken payload",
+            createdAt: "2026-04-12T00:00:00.000Z",
+            entries: [],
+          }),
+        }),
+      );
+      const body = (yield* Effect.promise(() => response.json())) as { error: string };
+
+      assert.equal(response.status, 400);
+      assertInclude(body.error, "Invalid homelab promotion payload:");
+      assertInclude(body.error, "threadId");
+      assertInclude(body.error, "homelab promote --schema");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("responds to browser OTLP trace preflight requests with CORS headers", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -2409,6 +2440,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         result.failure.message,
         "Workspace file path must stay within the project root.",
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects logical project roots for websocket rpc projects.writeFile", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsWriteFile]({
+            cwd: "homelab://project/project-alpha",
+            relativePath: "notes.md",
+            contents: "nope",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "ProjectWriteFileError");
+      assertInclude(result.failure.message, "Logical project roots are not filesystem paths:");
+      assertInclude(result.failure.message, "thread workspace");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3240,6 +3293,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           threadWorkspace: {
             listEntries: () =>
               Effect.succeed({
+                basePath: "/workspace",
                 entries: [
                   {
                     path: "AGENTS.md",

@@ -49,6 +49,7 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -3313,6 +3314,98 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("renames a project from the sidebar", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-rename-test" as MessageId,
+        targetText: "project rename test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const projectRow = page.getByTestId(`project-row-${PROJECT_ID}`);
+      await expect.element(projectRow).toBeInTheDocument();
+      await projectRow.hover();
+
+      const renameButton = page.getByTestId(`project-rename-${PROJECT_ID}`);
+      await expect.element(renameButton).toBeVisible();
+      await renameButton.click();
+
+      const renameInput = page.getByTestId(`project-rename-input-${PROJECT_ID}`);
+      await expect.element(renameInput).toBeVisible();
+      await renameInput.fill("Renamed Project");
+      const renameInputElement = await waitForElement(
+        () =>
+          document.querySelector(
+            `[data-testid="project-rename-input-${PROJECT_ID}"]`,
+          ) as HTMLInputElement | null,
+        "Project rename input did not render.",
+      );
+      renameInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "project.meta.update",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                projectId?: string;
+                title?: string;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "project.meta.update",
+            projectId: PROJECT_ID,
+            title: "Renamed Project",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      sendOrchestrationDomainEvent({
+        sequence: fixture.snapshot.snapshotSequence + 1,
+        eventId: EventId.make("event-project-renamed"),
+        aggregateKind: "project",
+        aggregateId: PROJECT_ID,
+        occurredAt: NOW_ISO,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.meta-updated",
+        payload: {
+          projectId: PROJECT_ID,
+          title: "Renamed Project",
+          updatedAt: NOW_ISO,
+        },
+      });
+
+      await expect.element(page.getByText("Renamed Project", { exact: true })).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("canonicalizes stale promoted draft routes to the server thread route", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -4122,6 +4215,173 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain(
             "Enter a path relative to /repo/worktrees/plan-thread.",
           );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("saves proposed plans into the thread workspace for logical projects", async () => {
+    const snapshot = createSnapshotWithLongProposedPlan();
+    let projectWriteAttempted = false;
+    const threadWorkspaceWrites: Array<{
+      threadId: string;
+      path: string;
+      contents: string;
+    }> = [];
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        projects: snapshot.projects.map((project) =>
+          project.id === PROJECT_ID
+            ? Object.assign({}, project, {
+                workspaceRoot: createLogicalProjectWorkspaceRoot(project.id),
+              })
+            : project,
+        ),
+      },
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsWriteFile) {
+          projectWriteAttempted = true;
+          return {
+            relativePath:
+              typeof body.relativePath === "string" ? body.relativePath : "unexpected-project.md",
+          };
+        }
+        if (body._tag === WS_METHODS.threadWorkspaceWriteFile) {
+          threadWorkspaceWrites.push({
+            threadId: String(body.threadId),
+            path: String(body.path),
+            contents: String(body.contents),
+          });
+          return {
+            path: typeof body.path === "string" ? body.path : "unexpected-thread-workspace.md",
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const planActionsButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Plan actions"]'),
+        "Unable to find proposed plan actions button.",
+      );
+      planActionsButton.click();
+
+      const saveToWorkspaceItem = await waitForElement(
+        () =>
+          (Array.from(document.querySelectorAll('[data-slot="menu-item"]')).find(
+            (item) => item.textContent?.trim() === "Save to workspace",
+          ) ?? null) as HTMLElement | null,
+        'Unable to find "Save to workspace" menu item.',
+      );
+      saveToWorkspaceItem.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(
+            "Enter a path relative to this thread workspace (/workspace).",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const saveButton = await waitForButtonByText("Save");
+      saveButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(threadWorkspaceWrites).toHaveLength(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(projectWriteAttempted).toBe(false);
+      expect(threadWorkspaceWrites[0]).toMatchObject({
+        threadId: THREAD_ID,
+        path: "ship-plan-mode-follow-up.md",
+      });
+      expect(threadWorkspaceWrites[0]?.contents).toContain("# Ship plan mode follow-up");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("navigates the thread filesystem using container paths", async () => {
+    const requestedBasePaths: string[] = [];
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-thread-filesystem-path-nav" as MessageId,
+        targetText: "filesystem navigation",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.threadWorkspaceListEntries) {
+          const basePath =
+            typeof body.basePath === "string" && body.basePath.length > 0
+              ? body.basePath
+              : "/workspace";
+          requestedBasePaths.push(basePath);
+          return {
+            basePath,
+            entries:
+              basePath === "/etc"
+                ? [{ path: "/etc/hosts", name: "hosts", kind: "file" as const, sizeBytes: 64 }]
+                : [
+                    {
+                      path: "/workspace/notes.md",
+                      name: "notes.md",
+                      kind: "file" as const,
+                      sizeBytes: 32,
+                    },
+                  ],
+            truncated: false,
+          };
+        }
+        if (body._tag === WS_METHODS.threadWorkspaceReadFile) {
+          return {
+            path: String(body.path),
+            contents: "127.0.0.1 localhost\n",
+            sizeBytes: 20,
+            isBinary: false,
+            truncated: false,
+            unsupportedReason: null,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "Toggle workspace panel" }).click();
+
+      await vi.waitFor(
+        () => {
+          expect(requestedBasePaths).toContain("/workspace");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await page.getByRole("textbox", { name: "Container path" }).fill("/etc");
+      await waitForButtonByText("Go");
+      await page.getByRole("button", { name: "Go", exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          expect(requestedBasePaths).toContain("/etc");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("/etc");
+          expect(document.body.textContent).toContain("hosts");
         },
         { timeout: 8_000, interval: 16 },
       );

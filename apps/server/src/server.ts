@@ -228,7 +228,12 @@ const RuntimeCoreServicesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(ThreadRuntimeLive),
-  Layer.provideMerge(ThreadWorkspaceLive.pipe(Layer.provide(WorkspacePathsLive))),
+  Layer.provideMerge(
+    ThreadWorkspaceLive.pipe(
+      Layer.provideMerge(ThreadRuntimeLive),
+      Layer.provide(WorkspacePathsLive),
+    ),
+  ),
   Layer.provideMerge(KnowledgeGraphLive),
 );
 

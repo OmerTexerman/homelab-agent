@@ -17,8 +17,20 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const writeFile: WorkspaceFileSystemShape["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
   )(function* (input) {
+    const filesystemRoot = yield* workspacePaths.resolveFilesystemWorkspaceRoot(input.cwd).pipe(
+      Effect.mapError(
+        (cause) =>
+          new WorkspaceFileSystemError({
+            cwd: input.cwd,
+            relativePath: input.relativePath,
+            operation: "workspaceFileSystem.resolveFilesystemWorkspaceRoot",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
-      workspaceRoot: input.cwd,
+      workspaceRoot: filesystemRoot,
       relativePath: input.relativePath,
     });
 

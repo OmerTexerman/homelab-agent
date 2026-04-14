@@ -53,6 +53,7 @@ import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import { WorkspaceFileSystemError } from "./workspace/Services/WorkspaceFileSystem";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths";
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver";
@@ -783,7 +784,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               Effect.mapError((cause) => {
                 const message = Schema.is(WorkspacePathOutsideRootError)(cause)
                   ? "Workspace file path must stay within the project root."
-                  : "Failed to write workspace file";
+                  : Schema.is(WorkspaceFileSystemError)(cause)
+                    ? cause.detail
+                    : "Failed to write workspace file";
                 return new ProjectWriteFileError({
                   message,
                   cause,

@@ -1,6 +1,7 @@
 import { memo, useState, useCallback } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -55,6 +56,7 @@ interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
   environmentId: EnvironmentId;
+  threadId: ThreadId;
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
@@ -65,6 +67,7 @@ const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
   environmentId,
+  threadId,
   markdownCwd,
   workspaceRoot,
   timestampFormat,
@@ -77,6 +80,9 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
+  const usesThreadWorkspace = Boolean(
+    workspaceRoot && isLogicalProjectWorkspaceRoot(workspaceRoot),
+  );
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -94,17 +100,23 @@ const PlanSidebar = memo(function PlanSidebar({
     if (!api || !workspaceRoot || !planMarkdown) return;
     const filename = buildProposedPlanMarkdownFilename(planMarkdown);
     setIsSavingToWorkspace(true);
-    void api.projects
-      .writeFile({
-        cwd: workspaceRoot,
-        relativePath: filename,
-        contents: normalizePlanMarkdownForExport(planMarkdown),
-      })
+    const writeRequest = usesThreadWorkspace
+      ? api.threadWorkspace.writeFile({
+          threadId,
+          path: filename,
+          contents: normalizePlanMarkdownForExport(planMarkdown),
+        })
+      : api.projects.writeFile({
+          cwd: workspaceRoot,
+          relativePath: filename,
+          contents: normalizePlanMarkdownForExport(planMarkdown),
+        });
+    void writeRequest
       .then((result) => {
         toastManager.add({
           type: "success",
           title: "Plan saved",
-          description: result.relativePath,
+          description: "relativePath" in result ? result.relativePath : result.path,
         });
       })
       .catch((error) => {
@@ -118,7 +130,7 @@ const PlanSidebar = memo(function PlanSidebar({
         () => setIsSavingToWorkspace(false),
         () => setIsSavingToWorkspace(false),
       );
-  }, [environmentId, planMarkdown, workspaceRoot]);
+  }, [environmentId, planMarkdown, threadId, usesThreadWorkspace, workspaceRoot]);
 
   return (
     <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">

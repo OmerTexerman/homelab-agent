@@ -10,14 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   dnsutils \
   docker.io \
   git \
+  gnupg \
   iproute2 \
   iputils-ping \
   jq \
   less \
   nano \
   netcat-openbsd \
-  nodejs \
-  npm \
   openssh-client \
   procps \
   python3 \
@@ -30,6 +29,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   vim-tiny \
   wget \
   zip \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update && apt-get install -y --no-install-recommends \
+  nodejs \
+  && npm install -g @anthropic-ai/claude-code @openai/codex \
+  && npm cache clean --force \
   && rm -rf /var/lib/apt/lists/*
 
 CMD ["/bin/bash", "-lc", "trap : TERM INT; while sleep 3600; do :; done"]

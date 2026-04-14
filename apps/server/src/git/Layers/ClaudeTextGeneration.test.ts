@@ -281,6 +281,32 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("uses a real fallback cwd for logical homelab thread title generation", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: {
+            title: "Logical workspace thread title",
+          },
+        }),
+      },
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateThreadTitle({
+          cwd: "homelab://project/project-alpha",
+          message: "Name this logical workspace thread.",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+          },
+        });
+
+        expect(generated.title).toBe("Logical workspace thread title");
+      }),
+    ),
+  );
+
   it.effect("falls back when Claude thread title normalization becomes whitespace-only", () =>
     withFakeClaudeEnv(
       {

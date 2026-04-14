@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { MessageId, type TurnId } from "@t3tools/contracts";
+import { MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { useCallback, useState, type ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +20,7 @@ const DEFAULT_VIEWPORT = {
 };
 const MARKDOWN_CWD = "/repo/project";
 const ACTIVE_THREAD_ENVIRONMENT_ID = "environment-local" as never;
+const ACTIVE_THREAD_ID = ThreadId.make("thread-messages-timeline-browser");
 
 interface RowMeasurement {
   actualHeightPx: number;
@@ -34,7 +35,7 @@ interface VirtualizationScenario {
   targetRowId: string;
   props: Omit<
     ComponentProps<typeof MessagesTimeline>,
-    "scrollContainer" | "activeThreadEnvironmentId"
+    "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
   >;
   maxEstimateDeltaPx: number;
 }
@@ -54,7 +55,7 @@ interface VirtualizerSnapshot {
 function MessagesTimelineBrowserHarness(
   props: Omit<
     ComponentProps<typeof MessagesTimeline>,
-    "scrollContainer" | "activeThreadEnvironmentId"
+    "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
   >,
 ) {
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
@@ -94,6 +95,7 @@ function MessagesTimelineBrowserHarness(
       <MessagesTimeline
         {...props}
         activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        activeThreadId={ACTIVE_THREAD_ID}
         scrollContainer={scrollContainer}
         expandedWorkGroups={expandedWorkGroups}
         onToggleWorkGroup={handleToggleWorkGroup}
@@ -166,7 +168,10 @@ function createBaseTimelineProps(input: {
   completionDividerBeforeEntryId?: string | null;
   turnDiffSummaryByAssistantMessageId?: Map<MessageId, TurnDiffSummary>;
   onVirtualizerSnapshot?: ComponentProps<typeof MessagesTimeline>["onVirtualizerSnapshot"];
-}): Omit<ComponentProps<typeof MessagesTimeline>, "scrollContainer" | "activeThreadEnvironmentId"> {
+}): Omit<
+  ComponentProps<typeof MessagesTimeline>,
+  "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
+> {
   return {
     hasMessages: true,
     isWorking: false,
@@ -508,7 +513,7 @@ async function measureTimelineRow(input: {
   host: HTMLElement;
   props: Omit<
     ComponentProps<typeof MessagesTimeline>,
-    "scrollContainer" | "activeThreadEnvironmentId"
+    "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
   >;
   targetRowId: string;
 }): Promise<RowMeasurement> {
@@ -580,7 +585,7 @@ async function measureTimelineRow(input: {
 async function mountMessagesTimeline(input: {
   props: Omit<
     ComponentProps<typeof MessagesTimeline>,
-    "scrollContainer" | "activeThreadEnvironmentId"
+    "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
   >;
   viewport?: { width: number; height: number };
 }) {
@@ -609,7 +614,7 @@ async function mountMessagesTimeline(input: {
     rerender: async (
       nextProps: Omit<
         ComponentProps<typeof MessagesTimeline>,
-        "scrollContainer" | "activeThreadEnvironmentId"
+        "scrollContainer" | "activeThreadEnvironmentId" | "activeThreadId"
       >,
     ) => {
       await screen.rerender(<MessagesTimelineBrowserHarness {...nextProps} />);

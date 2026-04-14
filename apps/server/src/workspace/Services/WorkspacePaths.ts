@@ -33,6 +33,20 @@ export class WorkspaceRootNotDirectoryError extends Schema.TaggedErrorClass<Work
   }
 }
 
+export class LogicalWorkspaceRootError extends Schema.TaggedErrorClass<LogicalWorkspaceRootError>()(
+  "LogicalWorkspaceRootError",
+  {
+    workspaceRoot: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `Logical project roots are not filesystem paths: ${this.workspaceRoot}. ` +
+      "Use the thread workspace for per-thread files instead."
+    );
+  }
+}
+
 export class WorkspacePathOutsideRootError extends Schema.TaggedErrorClass<WorkspacePathOutsideRootError>()(
   "WorkspacePathOutsideRootError",
   {
@@ -48,6 +62,7 @@ export class WorkspacePathOutsideRootError extends Schema.TaggedErrorClass<Works
 export const WorkspacePathsError = Schema.Union([
   WorkspaceRootNotExistsError,
   WorkspaceRootNotDirectoryError,
+  LogicalWorkspaceRootError,
   WorkspacePathOutsideRootError,
 ]);
 export type WorkspacePathsError = typeof WorkspacePathsError.Type;
@@ -62,6 +77,19 @@ export interface WorkspacePathsShape {
   readonly normalizeWorkspaceRoot: (
     workspaceRoot: string,
   ) => Effect.Effect<string, WorkspaceRootNotExistsError | WorkspaceRootNotDirectoryError>;
+
+  /**
+   * Resolve a workspace root to a concrete filesystem directory.
+   *
+   * Logical project roots are intentionally rejected here because they are
+   * identifiers, not real paths on disk.
+   */
+  readonly resolveFilesystemWorkspaceRoot: (
+    workspaceRoot: string,
+  ) => Effect.Effect<
+    string,
+    WorkspaceRootNotExistsError | WorkspaceRootNotDirectoryError | LogicalWorkspaceRootError
+  >;
 
   /**
    * Resolve a relative path within a validated workspace root.

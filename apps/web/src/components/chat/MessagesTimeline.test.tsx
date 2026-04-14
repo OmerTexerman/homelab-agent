@@ -1,4 +1,4 @@
-import { MessageId } from "@t3tools/contracts";
+import { MessageId, ThreadId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +43,7 @@ beforeAll(() => {
 });
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = "environment-local" as never;
+const ACTIVE_THREAD_ID = ThreadId.make("thread-messages-timeline-test");
 
 describe("MessagesTimeline", () => {
   it("renders inline terminal labels with the composer chip UI", async () => {
@@ -90,6 +91,7 @@ describe("MessagesTimeline", () => {
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        activeThreadId={ACTIVE_THREAD_ID}
         markdownCwd={undefined}
         resolvedTheme="light"
         timestampFormat="locale"
@@ -138,6 +140,7 @@ describe("MessagesTimeline", () => {
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        activeThreadId={ACTIVE_THREAD_ID}
         markdownCwd={undefined}
         resolvedTheme="light"
         timestampFormat="locale"

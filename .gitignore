@@ -13,3 +13,5 @@ coverage/
 playwright-report/
 test-results/
 .codex
+apps/web/.vitest-attachments/
+apps/web/src/components/__screenshots__/

@@ -9,6 +9,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { ensureEnvironmentApi } from "~/environmentApi";
 
 const EMPTY_THREAD_WORKSPACE_ENTRIES_RESULT: ThreadWorkspaceEntriesResult = {
+  basePath: "/workspace",
   entries: [],
   truncated: false,
 };
@@ -27,9 +28,18 @@ export const threadWorkspaceQueryKeys = {
   listEntries: (
     environmentId: EnvironmentId | null,
     threadId: ThreadId | null,
+    basePath: string | null,
     query: string,
     limit: number,
-  ) => ["threadWorkspace", "listEntries", environmentId ?? null, threadId ?? null, query, limit],
+  ) => [
+    "threadWorkspace",
+    "listEntries",
+    environmentId ?? null,
+    threadId ?? null,
+    basePath ?? null,
+    query,
+    limit,
+  ],
   readFile: (environmentId: EnvironmentId | null, threadId: ThreadId | null, path: string | null) =>
     ["threadWorkspace", "readFile", environmentId ?? null, threadId ?? null, path] as const,
 };
@@ -37,6 +47,7 @@ export const threadWorkspaceQueryKeys = {
 export function threadWorkspaceEntriesQueryOptions(input: {
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  basePath?: string | null;
   query: string;
   enabled?: boolean;
   limit?: number;
@@ -47,6 +58,7 @@ export function threadWorkspaceEntriesQueryOptions(input: {
     queryKey: threadWorkspaceQueryKeys.listEntries(
       input.environmentId,
       input.threadId,
+      input.basePath ?? null,
       input.query,
       limit,
     ),
@@ -59,6 +71,7 @@ export function threadWorkspaceEntriesQueryOptions(input: {
         threadId: input.threadId,
         query: input.query,
         limit,
+        ...(input.basePath ? { basePath: input.basePath } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.threadId !== null,

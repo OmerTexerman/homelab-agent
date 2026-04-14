@@ -65,15 +65,7 @@ interface RuntimeAuthBindings {
   readonly dockerSocketPath?: string;
 }
 
-interface ResolvedHostBinary {
-  readonly executablePath: string;
-  readonly containerPath: string;
-}
-
-interface RuntimeHostBindings extends RuntimeAuthBindings {
-  readonly codexBinary?: ResolvedHostBinary;
-  readonly claudeBinary?: ResolvedHostBinary;
-}
+interface RuntimeHostBindings extends RuntimeAuthBindings {}
 
 interface DockerContainerInspectMount {
   readonly Source?: string;
@@ -173,8 +165,6 @@ const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
 const CONTAINER_WORKSPACE_PATH = "/workspace";
 const CONTAINER_HOMELAB_BIN_PATH = `${CONTAINER_HOME_PATH}/.homelab/bin`;
 const CONTAINER_TOOL_BIN_PATH = "/opt/homelab/bin";
-const CONTAINER_CODEX_BINARY_PATH = `${CONTAINER_TOOL_BIN_PATH}/${CODEX_RUNTIME_WRAPPER}`;
-const CONTAINER_CLAUDE_BINARY_PATH = `${CONTAINER_TOOL_BIN_PATH}/${CLAUDE_RUNTIME_WRAPPER}`;
 const DEFAULT_CONTAINER_PATH = `${CONTAINER_HOMELAB_BIN_PATH}:${CONTAINER_TOOL_BIN_PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
 const RUNTIME_SECRET_ENV_BASENAME = ".homelab-runtime.env";
 const RUNTIME_ACCESS_TOKEN_BASENAME = ".homelab-runtime-token";
@@ -407,50 +397,6 @@ function addRuntimeAuthSyncEntries(
       mode: "if-missing",
     });
   }
-}
-
-function resolveHostBinary(
-  binaryPath: string | undefined,
-  containerPath: string,
-): ResolvedHostBinary | undefined {
-  const requested = trimToUndefined(binaryPath);
-  if (!requested) {
-    return undefined;
-  }
-
-  const resolveCandidate = (candidatePath: string): ResolvedHostBinary | undefined => {
-    if (!nodeFs.existsSync(candidatePath)) {
-      return undefined;
-    }
-
-    try {
-      const executablePath = nodeFs.realpathSync(candidatePath);
-      return {
-        executablePath,
-        containerPath,
-      };
-    } catch {
-      return undefined;
-    }
-  };
-
-  if (nodePath.isAbsolute(requested)) {
-    return resolveCandidate(requested);
-  }
-
-  for (const pathEntry of (process.env.PATH ?? "").split(nodePath.delimiter)) {
-    const trimmedPathEntry = pathEntry.trim();
-    if (!trimmedPathEntry) {
-      continue;
-    }
-
-    const resolved = resolveCandidate(nodePath.join(trimmedPathEntry, requested));
-    if (resolved) {
-      return resolved;
-    }
-  }
-
-  return undefined;
 }
 
 function buildRuntimeAuthSyncEntries(
@@ -691,6 +637,238 @@ def read_json_input(path: str | None, use_stdin: bool):
     fail("Provide --file or --stdin for the promotion payload.")
 
 
+PROMOTION_ENTITY_KINDS = [
+    "host",
+    "service",
+    "stack",
+    "container",
+    "volume",
+    "network",
+    "domain",
+    "endpoint",
+    "secret_ref",
+    "tool",
+    "artifact",
+    "runbook",
+    "finding",
+]
+
+PROMOTION_RELATION_KINDS = [
+    "runs_on",
+    "managed_by",
+    "part_of",
+    "depends_on",
+    "exposes",
+    "routes_to",
+    "uses_secret",
+    "stores_data_in",
+    "connected_to_network",
+    "monitored_by",
+    "backed_up_by",
+    "installed_by",
+    "documented_by",
+    "discovered_in",
+    "derived_from",
+    "owns",
+]
+
+PROMOTION_OBSERVATION_SOURCE_KINDS = [
+    "thread",
+    "command",
+    "file",
+    "api",
+    "manual",
+    "import",
+    "scan",
+]
+
+
+def iso_utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+
+def promotion_example_payload():
+    now = iso_utc_now()
+    thread_id = THREAD_ID or "thread-your-thread-id"
+    return {
+        "id": "promotion-grafana-demo",
+        "threadId": thread_id,
+        "summary": "Register Grafana on the TrueNAS host",
+        "createdAt": now,
+        "entries": [
+            {
+                "action": "upsert_entity",
+                "entity": {
+                    "id": "host-truenas",
+                    "kind": "host",
+                    "name": "truenas",
+                    "title": "TrueNAS",
+                    "summary": "Primary NAS and app host",
+                    "properties": {"ip": "192.168.1.5"},
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            },
+            {
+                "action": "upsert_entity",
+                "entity": {
+                    "id": "service-grafana",
+                    "kind": "service",
+                    "name": "grafana",
+                    "title": "Grafana",
+                    "summary": "Monitoring dashboards exposed on port 3000",
+                    "properties": {"url": "http://192.168.1.5:3000", "port": 3000},
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            },
+            {
+                "action": "upsert_relation",
+                "relation": {
+                    "id": "service-grafana-runs-on-host-truenas",
+                    "kind": "runs_on",
+                    "fromEntityId": "service-grafana",
+                    "toEntityId": "host-truenas",
+                    "summary": "Grafana runs on the TrueNAS host",
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            },
+            {
+                "action": "record_observation",
+                "observation": {
+                    "id": "observation-grafana-http-check",
+                    "sourceKind": "manual",
+                    "summary": "Grafana responded successfully on port 3000",
+                    "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+                    "threadId": thread_id,
+                    "entityIds": ["service-grafana", "host-truenas"],
+                    "createdAt": now,
+                },
+            },
+        ],
+    }
+
+
+def promotion_schema_overview():
+    return {
+        "envelope": {
+            "id": "string",
+            "threadId": "string (auto-filled from the runtime when omitted)",
+            "summary": "string",
+            "commandId": "optional string",
+            "createdAt": "ISO-8601 timestamp",
+            "entries": [
+                {
+                    "action": "upsert_entity | upsert_relation | record_observation",
+                    "entity": "required when action == upsert_entity",
+                    "relation": "required when action == upsert_relation",
+                    "observation": "required when action == record_observation",
+                }
+            ],
+        },
+        "entity": {
+            "required": ["id", "kind", "name", "createdAt", "updatedAt"],
+            "optional": [
+                "title",
+                "summary",
+                "aliases",
+                "tags",
+                "status",
+                "properties",
+                "confidence",
+                "observedAt",
+                "lastVerifiedAt",
+            ],
+            "kindValues": PROMOTION_ENTITY_KINDS,
+        },
+        "relation": {
+            "required": ["id", "kind", "fromEntityId", "toEntityId", "createdAt", "updatedAt"],
+            "optional": ["summary", "properties", "confidence", "observedAt", "lastVerifiedAt"],
+            "kindValues": PROMOTION_RELATION_KINDS,
+        },
+        "observation": {
+            "required": ["id", "sourceKind", "summary", "createdAt"],
+            "optional": [
+                "detail",
+                "threadId",
+                "commandId",
+                "entityIds",
+                "relationIds",
+                "sourceRef",
+                "payload",
+            ],
+            "sourceKindValues": PROMOTION_OBSERVATION_SOURCE_KINDS,
+        },
+        "notes": [
+            "Use 'homelab promote --example' to print a valid envelope.",
+            "The runtime auto-fills threadId when it is omitted and the current thread is known.",
+            "Entity ids, relation ids, and observation ids should be stable and human-readable.",
+        ],
+    }
+
+
+def prepare_promotion_payload(payload):
+    if not isinstance(payload, dict):
+        fail(
+            "Promotion payload must be a JSON object. Run 'homelab promote --schema' or '--example' for guidance."
+        )
+
+    normalized = dict(payload)
+    if "threadId" not in normalized:
+        if THREAD_ID:
+            normalized["threadId"] = THREAD_ID
+        else:
+            fail(
+                "Promotion payload is missing 'threadId' and this runtime does not know the current thread id."
+            )
+
+    missing = [
+        field
+        for field in ("id", "summary", "createdAt", "entries")
+        if field not in normalized
+    ]
+    if missing:
+        fail(
+            "Promotion payload is missing required fields: "
+            + ", ".join(missing)
+            + ". Run 'homelab promote --schema' or '--example' for guidance."
+        )
+
+    entries = normalized.get("entries")
+    if not isinstance(entries, list) or len(entries) == 0:
+        fail("Promotion payload field 'entries' must be a non-empty array.")
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            fail(f"Promotion entry {index} must be an object.")
+        action = entry.get("action")
+        if action == "upsert_entity":
+            if not isinstance(entry.get("entity"), dict):
+                fail(
+                    f"Promotion entry {index} with action 'upsert_entity' must include an 'entity' object."
+                )
+            continue
+        if action == "upsert_relation":
+            if not isinstance(entry.get("relation"), dict):
+                fail(
+                    f"Promotion entry {index} with action 'upsert_relation' must include a 'relation' object."
+                )
+            continue
+        if action == "record_observation":
+            if not isinstance(entry.get("observation"), dict):
+                fail(
+                    f"Promotion entry {index} with action 'record_observation' must include an 'observation' object."
+                )
+            continue
+        fail(
+            f"Promotion entry {index} has invalid action {action!r}. "
+            "Expected one of: upsert_entity, upsert_relation, record_observation."
+        )
+
+    return normalized
+
+
 def cmd_snapshot(_args):
     print_json(request_json("GET", "/api/homelab/snapshot"))
 
@@ -765,16 +943,23 @@ def cmd_bootstrap(_args):
 
 
 def cmd_promote(args):
-    payload = read_json_input(args.file, args.stdin)
-    if isinstance(payload, dict) and "threadId" not in payload and THREAD_ID:
-        payload["threadId"] = THREAD_ID
+    if args.example:
+        print_json(promotion_example_payload())
+        return
+    if args.schema:
+        print_json(promotion_schema_overview())
+        return
+    payload = prepare_promotion_payload(read_json_input(args.file, args.stdin))
     print_json(request_json("POST", "/api/homelab/promotions", payload=payload))
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="homelab",
-        description="Search homelab knowledge, inspect runtime bootstrap, and manage secret refs.",
+        description=(
+            "Search homelab knowledge, inspect runtime bootstrap, request secrets, "
+            "and promote durable findings back into the shared graph."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -834,11 +1019,39 @@ def build_parser():
     bootstrap_parser.set_defaults(func=cmd_bootstrap)
 
     promote_parser = subparsers.add_parser(
-        "promote", help="Submit a promotion envelope from a JSON file or stdin."
+        "promote",
+        help="Submit a promotion envelope from JSON, or print the expected schema/example.",
+        description=(
+            "Submit a homelab promotion envelope.\n\n"
+            "The payload must be an object with: id, threadId, summary, createdAt, and entries[].\n"
+            "Each entry must be one of:\n"
+            '  - {"action": "upsert_entity", "entity": {...}}\n'
+            '  - {"action": "upsert_relation", "relation": {...}}\n'
+            '  - {"action": "record_observation", "observation": {...}}\n\n'
+            "Use --example for a valid payload and --schema for a machine-readable overview."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  homelab promote --example\n"
+            "  homelab promote --schema\n"
+            "  cat payload.json | homelab promote --stdin\n"
+            "  homelab promote --file payload.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     promote_parser.add_argument("--file", help="Path to a JSON promotion envelope.")
     promote_parser.add_argument(
         "--stdin", action="store_true", help="Read the promotion envelope from stdin."
+    )
+    promote_parser.add_argument(
+        "--example",
+        action="store_true",
+        help="Print a complete valid promotion example and exit.",
+    )
+    promote_parser.add_argument(
+        "--schema",
+        action="store_true",
+        help="Print a machine-readable overview of the promotion envelope shape and exit.",
     )
     promote_parser.set_defaults(func=cmd_promote)
 
@@ -870,6 +1083,26 @@ help the user manage, debug, extend, and understand their infrastructure.
 details about what exists, how it's configured, or what credentials are
 available. Everything you need is discoverable through the tools below.
 
+## Use the container aggressively
+
+This runtime is not just a shell prompt. Use it fully.
+
+- You have outbound network access. Use web search, vendor docs, GitHub, package registries,
+  and API references when local evidence is incomplete.
+- Prefer verifying internet access early if the task may require external research:
+
+\`\`\`bash
+curl -I https://example.com
+curl -s https://api.github.com/rate_limit | jq .
+\`\`\`
+
+- Write scratch scripts, temporary files, and quick repros inside the container whenever that is
+  the fastest path to confidence.
+- Use the workspace for notes, throwaway automation, and tiny probes instead of trying to reason
+  everything out in your head.
+- Clean up or overwrite scratch artifacts freely. This container is disposable; only promoted
+  knowledge survives.
+
 ## First thing: orient yourself
 
 Run this before doing anything else:
@@ -877,11 +1110,19 @@ Run this before doing anything else:
 \`\`\`bash
 homelab snapshot        # See all known infrastructure at a glance
 homelab secrets         # See what credentials are available
+pwd && ls -la           # See the runtime workspace you can use freely
 \`\`\`
 
 This tells you what hosts, services, networks, and secrets the user has
 registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
+
+\`/workspace\` is this thread's scratch area inside the container. It is useful
+for notes, probes, temporary scripts, and exported artifacts. It is not
+guaranteed to be a checked-out app repository.
+
+If the browser shows a "Thread Workspace" panel, it is a view into this same
+\`/workspace\` directory.
 
 ## The homelab CLI
 
@@ -910,26 +1151,54 @@ When you discover something about the homelab that should persist — a new
 service, a dependency, a finding, a useful tool — promote it so future threads
 see it immediately.
 
+Use these first if you are unsure about the payload shape:
+
+\`\`\`bash
+homelab promote --schema
+homelab promote --example
+\`\`\`
+
 \`\`\`bash
 cat <<'EOF' | homelab promote --stdin
 {
-  "entities": [
+  "id": "promotion-grafana-demo",
+  "summary": "Register Grafana on the TrueNAS host",
+  "createdAt": "2026-04-13T20:00:00.000Z",
+  "entries": [
     {
-      "id": "service:grafana",
-      "kind": "service",
-      "label": "Grafana",
-      "description": "Monitoring dashboards on TrueNAS",
-      "meta": {"port": 3000, "host": "192.168.1.5"}
-    }
-  ],
-  "relations": [
-    {"source": "service:grafana", "target": "host:truenas", "kind": "runs_on"}
-  ],
-  "observations": [
+      "action": "upsert_entity",
+      "entity": {
+        "id": "service-grafana",
+        "kind": "service",
+        "name": "grafana",
+        "title": "Grafana",
+        "summary": "Monitoring dashboards on TrueNAS",
+        "properties": {"port": 3000, "host": "192.168.1.5"},
+        "createdAt": "2026-04-13T20:00:00.000Z",
+        "updatedAt": "2026-04-13T20:00:00.000Z"
+      }
+    },
     {
-      "entityId": "service:grafana",
-      "content": "Grafana accessible at http://192.168.1.5:3000, version 11.2",
-      "source": "curl"
+      "action": "upsert_relation",
+      "relation": {
+        "id": "service-grafana-runs-on-host-truenas",
+        "kind": "runs_on",
+        "fromEntityId": "service-grafana",
+        "toEntityId": "host-truenas",
+        "createdAt": "2026-04-13T20:00:00.000Z",
+        "updatedAt": "2026-04-13T20:00:00.000Z"
+      }
+    },
+    {
+      "action": "record_observation",
+      "observation": {
+        "id": "observation-grafana-http-check",
+        "sourceKind": "manual",
+        "summary": "Grafana responded on port 3000",
+        "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+        "entityIds": ["service-grafana"],
+        "createdAt": "2026-04-13T20:00:00.000Z"
+      }
     }
   ]
 }
@@ -937,8 +1206,8 @@ EOF
 \`\`\`
 
 Promote liberally. Entity upserts are idempotent — promoting the same entity
-twice just updates it. Include observations with a \`source\` field so there is
-provenance for how you learned the fact.
+twice just updates it. Include observations so there is provenance for how you
+learned the fact.
 
 ## Secrets
 
@@ -954,6 +1223,15 @@ The user gets a secure prompt in the UI. Once they provide the value, it
 appears in new shells inside this runtime as an environment variable. The
 \`homelab secret-request\` command waits for fulfillment by default, then you can
 continue. Check availability with \`homelab secrets\`.
+
+## Research and scratch-work expectations
+
+- If a task depends on current vendor behavior, current package versions, or live service status,
+  search for it instead of guessing.
+- If you are unsure, inspect first, then search, then ask the user.
+- When a problem is easier to understand with a quick script, write the script and run it.
+- When comparing options or debugging a protocol, create a minimal repro inside the container.
+- Treat web research and scratch code as normal working methods, not last resorts.
 
 ## How to work
 
@@ -974,6 +1252,8 @@ host, SSH in and confirm. If you discover something new, promote it.
 ## What NOT to do
 
 - **Don't invent infrastructure details.** Look them up or ask.
+- **Don't avoid searching when current external information matters.** Use the internet.
+- **Don't avoid writing quick scratch code when it would clarify the problem.**
 - **Don't paste credentials in chat.** Use \`homelab secret-request\`.
 - **Don't hoard knowledge.** Promote what you learn so the next thread has it.
 - **Don't guess at IPs, ports, or configs.** Use \`homelab snapshot\`, SSH, or ask.
@@ -1015,7 +1295,13 @@ function renderDockerExecWrapper(input: {
     )
     .toSorted(([left], [right]) => left.localeCompare(right));
   const dockerExecFlags = input.interactive
-    ? 'docker_args=(exec -i -t -w "$workdir")'
+    ? [
+        "if [ -t 0 ] && [ -t 1 ]; then",
+        '  docker_args=(exec -i -t -w "$workdir")',
+        "else",
+        '  docker_args=(exec -i -w "$workdir")',
+        "fi",
+      ].join("\n")
     : 'docker_args=(exec -i -w "$workdir")';
   const explicitEnvLines = [
     `docker_args+=(-e "HOME=${input.runtime.homePath}")`,
@@ -1444,15 +1730,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const hostClaudeAuthJsonPath = nodePath.join(nodeOs.homedir(), ".claude.json");
       const sshAuthSockPath = trimToUndefined(process.env.SSH_AUTH_SOCK);
       const dockerSocketPath = "/var/run/docker.sock";
-      const codexBinary =
-        resolveHostBinary(settings.providers.codex.binaryPath, CONTAINER_CODEX_BINARY_PATH) ??
-        resolveHostBinary("codex", CONTAINER_CODEX_BINARY_PATH);
-      const claudeBinary =
-        resolveHostBinary(
-          settings.providers.claudeAgent.binaryPath,
-          CONTAINER_CLAUDE_BINARY_PATH,
-        ) ?? resolveHostBinary("claude", CONTAINER_CLAUDE_BINARY_PATH);
-
       const codexExists = yield* fileSystem
         .exists(configuredCodexAuthPath)
         .pipe(Effect.orElseSucceed(() => false));
@@ -1475,8 +1752,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ...(claudeJsonExists ? { claudeHostAuthJsonPath: hostClaudeAuthJsonPath } : {}),
         ...(sshAuthSockExists && sshAuthSockPath ? { sshAuthSockPath } : {}),
         ...(dockerSocketExists ? { dockerSocketPath } : {}),
-        ...(codexBinary ? { codexBinary } : {}),
-        ...(claudeBinary ? { claudeBinary } : {}),
       };
     },
   );
@@ -1504,24 +1779,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             {
               source: hostBindings.dockerSocketPath,
               target: hostBindings.dockerSocketPath,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-      ...(hostBindings.codexBinary
-        ? [
-            {
-              source: hostBindings.codexBinary.executablePath,
-              target: hostBindings.codexBinary.containerPath,
-              readOnly: true,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-      ...(hostBindings.claudeBinary
-        ? [
-            {
-              source: hostBindings.claudeBinary.executablePath,
-              target: hostBindings.claudeBinary.containerPath,
-              readOnly: true,
             } satisfies DockerMountSpec,
           ]
         : []),
@@ -1850,7 +2107,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   );
 
   const writeRuntimeWrapperScripts = Effect.fn("threadRuntime.writeRuntimeWrapperScripts")(
-    function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
+    function* (runtime: ThreadRuntimeDescriptor, _hostBindings: RuntimeHostBindings) {
       const binDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
       const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
       const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
@@ -1873,7 +2130,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         containerName: runtime.containerName,
         runtime,
         hostWorkspacePath,
-        command: hostBindings.codexBinary?.containerPath ?? CODEX_RUNTIME_WRAPPER,
+        command: CODEX_RUNTIME_WRAPPER,
         interactive: false,
         sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
         ...(containerPathValue ? { pathValue: containerPathValue } : {}),
@@ -1883,7 +2140,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         containerName: runtime.containerName,
         runtime,
         hostWorkspacePath,
-        command: hostBindings.claudeBinary?.containerPath ?? CLAUDE_RUNTIME_WRAPPER,
+        command: CLAUDE_RUNTIME_WRAPPER,
         interactive: false,
         sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
         ...(containerPathValue ? { pathValue: containerPathValue } : {}),

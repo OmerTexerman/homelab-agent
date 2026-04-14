@@ -15,6 +15,7 @@ export const ThreadWorkspaceEntriesInput = Schema.Struct({
   threadId: ThreadId,
   query: ThreadWorkspaceSearchQuery,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(THREAD_WORKSPACE_SEARCH_MAX_LIMIT)),
+  basePath: Schema.optional(ThreadWorkspacePath),
 });
 export type ThreadWorkspaceEntriesInput = typeof ThreadWorkspaceEntriesInput.Type;
 
@@ -28,6 +29,7 @@ export const ThreadWorkspaceEntry = Schema.Struct({
 export type ThreadWorkspaceEntry = typeof ThreadWorkspaceEntry.Type;
 
 export const ThreadWorkspaceEntriesResult = Schema.Struct({
+  basePath: ThreadWorkspacePath,
   entries: Schema.Array(ThreadWorkspaceEntry),
   truncated: Schema.Boolean,
 });

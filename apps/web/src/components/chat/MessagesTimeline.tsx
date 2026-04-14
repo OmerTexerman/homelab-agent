@@ -1,4 +1,4 @@
-import { type EnvironmentId, type MessageId, type TurnId } from "@t3tools/contracts";
+import { type EnvironmentId, type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
 import {
   memo,
   useCallback,
@@ -88,6 +88,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  activeThreadId: ThreadId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -127,6 +128,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  activeThreadId,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -560,6 +562,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <ProposedPlanCard
             planMarkdown={row.proposedPlan.planMarkdown}
             environmentId={activeThreadEnvironmentId}
+            threadId={activeThreadId}
             cwd={markdownCwd}
             workspaceRoot={workspaceRoot}
           />

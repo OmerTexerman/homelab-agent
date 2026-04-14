@@ -114,6 +114,12 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
+import {
+  buildChatExportBaseFilename,
+  buildChatExportJson,
+  buildChatExportMarkdown,
+  downloadTextFile,
+} from "../chatExport";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
@@ -1571,6 +1577,56 @@ export default function ChatView(props: ChatViewProps) {
     if (!routeThreadRef) return;
     storeToggleWorkspacePanel(routeThreadRef);
   }, [routeThreadRef, storeToggleWorkspacePanel]);
+  const exportChatAsMarkdown = useCallback(() => {
+    if (!activeThread) {
+      return;
+    }
+    const exportInput = {
+      threadId: activeThread.id,
+      title: activeThread.title,
+      exportedAt: new Date().toISOString(),
+      runtimeMode: activeThread.runtimeMode,
+      interactionMode: activeThread.interactionMode,
+      branch: activeThread.branch,
+      worktreePath: activeThread.worktreePath,
+      messages: timelineMessages,
+      proposedPlans: activeThread.proposedPlans,
+      activities: activeThread.activities,
+      turnDiffSummaries: activeThread.turnDiffSummaries,
+      ...(activeProject?.name ? { projectName: activeProject.name } : {}),
+    };
+    const filename = `${buildChatExportBaseFilename({
+      title: exportInput.title,
+      threadId: exportInput.threadId,
+    })}.md`;
+    const contents = buildChatExportMarkdown(exportInput);
+    downloadTextFile(filename, contents, "text/markdown;charset=utf-8");
+  }, [activeProject?.name, activeThread, timelineMessages]);
+  const exportChatAsJson = useCallback(() => {
+    if (!activeThread) {
+      return;
+    }
+    const exportInput = {
+      threadId: activeThread.id,
+      title: activeThread.title,
+      exportedAt: new Date().toISOString(),
+      runtimeMode: activeThread.runtimeMode,
+      interactionMode: activeThread.interactionMode,
+      branch: activeThread.branch,
+      worktreePath: activeThread.worktreePath,
+      messages: timelineMessages,
+      proposedPlans: activeThread.proposedPlans,
+      activities: activeThread.activities,
+      turnDiffSummaries: activeThread.turnDiffSummaries,
+      ...(activeProject?.name ? { projectName: activeProject.name } : {}),
+    };
+    const filename = `${buildChatExportBaseFilename({
+      title: exportInput.title,
+      threadId: exportInput.threadId,
+    })}.json`;
+    const contents = buildChatExportJson(exportInput);
+    downloadTextFile(filename, contents, "application/json;charset=utf-8");
+  }, [activeProject?.name, activeThread, timelineMessages]);
   const splitTerminal = useCallback(() => {
     if (!activeThreadRef || hasReachedSplitLimit) return;
     const terminalId = `terminal-${randomUUID()}`;
@@ -3307,6 +3363,8 @@ export default function ChatView(props: ChatViewProps) {
           workspaceOpen={workspacePanelOpen}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleWorkspace={toggleWorkspacePanelVisibility}
+          onExportMarkdown={exportChatAsMarkdown}
+          onExportJson={exportChatAsJson}
         />
       </header>
 
@@ -3364,6 +3422,7 @@ export default function ChatView(props: ChatViewProps) {
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
+                activeThreadId={activeThread.id}
               />
             </div>
 
@@ -3505,6 +3564,7 @@ export default function ChatView(props: ChatViewProps) {
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
             environmentId={environmentId}
+            threadId={activeThread.id}
             markdownCwd={undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}

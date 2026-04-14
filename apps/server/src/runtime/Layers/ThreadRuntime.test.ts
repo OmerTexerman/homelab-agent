@@ -367,18 +367,39 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 
       const codexWrapperContents = yield* fileSystem.readFileString(codexWrapperPath);
       const homelabCliContents = yield* fileSystem.readFileString(homelabCliPath);
-      assert.match(codexWrapperContents, /\/opt\/homelab\/bin\/codex/);
+      const agentsContents = yield* fileSystem.readFileString(agentsPath);
+      const claudeContents = yield* fileSystem.readFileString(claudePath);
+      assert.match(codexWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/);
       assert.match(homelabCliContents, /--no-wait/);
       assert.match(homelabCliContents, /--timeout-seconds/);
+      assert.match(homelabCliContents, /--example/);
+      assert.match(homelabCliContents, /--schema/);
       assert.match(homelabCliContents, /Waiting for secret/);
-      assert.match(yield* fileSystem.readFileString(agentsPath), /homelab secret-request/);
+      assert.match(agentsContents, /homelab secret-request/);
       assert.match(
-        yield* fileSystem.readFileString(claudePath),
-        /The knowledge graph, secrets, and bootstrap registry are shared across all threads/,
+        agentsContents,
+        /You have outbound network access\. Use web search, vendor docs, GitHub, package registries/,
+      );
+      assert.match(
+        agentsContents,
+        /Write scratch scripts, temporary files, and quick repros inside the container/,
+      );
+      assert.match(agentsContents, /homelab promote --schema/);
+      assert.match(agentsContents, /"action": "upsert_entity"/);
+      assert.match(
+        agentsContents,
+        /`\/workspace` is this thread's scratch area inside the container\./,
+      );
+      assert.match(
+        claudeContents,
+        /Don't avoid searching when current external information matters\./,
       );
 
       const runCall = findRunCall(docker.calls);
       assert.ok(runCall);
+      const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+      assert.notEqual(networkFlagIndex, -1);
+      assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
       const runtimeCodexHome = path.join(runtimeHome, ".codex");
       assert.equal(
         yield* fileSystem.readFileString(path.join(runtimeCodexHome, "auth.json")),
@@ -392,7 +413,11 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(runCall.includes(authMount), false);
       assert.equal(
         runCall.some((entry) => entry.endsWith(":/opt/homelab/bin/codex:ro")),
-        true,
+        false,
+      );
+      assert.equal(
+        runCall.some((entry) => entry.endsWith(":/opt/homelab/bin/claude:ro")),
+        false,
       );
       assert.equal(
         docker.calls.some((call) => call[0] === "build"),

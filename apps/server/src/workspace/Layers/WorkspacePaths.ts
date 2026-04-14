@@ -7,6 +7,7 @@ import {
 
 import {
   WorkspacePaths,
+  LogicalWorkspaceRootError,
   WorkspacePathOutsideRootError,
   WorkspaceRootNotDirectoryError,
   WorkspaceRootNotExistsError,
@@ -58,6 +59,17 @@ export const makeWorkspacePaths = Effect.gen(function* () {
     return normalizedWorkspaceRoot;
   });
 
+  const resolveFilesystemWorkspaceRoot: WorkspacePathsShape["resolveFilesystemWorkspaceRoot"] =
+    Effect.fn("WorkspacePaths.resolveFilesystemWorkspaceRoot")(function* (workspaceRoot) {
+      const normalizedWorkspaceRoot = yield* normalizeWorkspaceRoot(workspaceRoot);
+      if (parseLogicalProjectWorkspaceRoot(normalizedWorkspaceRoot)) {
+        return yield* new LogicalWorkspaceRootError({
+          workspaceRoot: normalizedWorkspaceRoot,
+        });
+      }
+      return normalizedWorkspaceRoot;
+    });
+
   const resolveRelativePathWithinRoot: WorkspacePathsShape["resolveRelativePathWithinRoot"] =
     Effect.fn("WorkspacePaths.resolveRelativePathWithinRoot")(function* (input) {
       const normalizedInputPath = input.relativePath.trim();
@@ -91,6 +103,7 @@ export const makeWorkspacePaths = Effect.gen(function* () {
 
   return {
     normalizeWorkspaceRoot,
+    resolveFilesystemWorkspaceRoot,
     resolveRelativePathWithinRoot,
   } satisfies WorkspacePathsShape;
 });
