@@ -106,7 +106,24 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
 
 async function readErrorMessage(response: Response, fallbackMessage: string): Promise<string> {
   const text = await response.text();
-  return text || fallbackMessage;
+  if (!text) {
+    return fallbackMessage;
+  }
+  try {
+    const parsed = JSON.parse(text) as {
+      readonly error?: unknown;
+      readonly message?: unknown;
+    };
+    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+      return parsed.error;
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+      return parsed.message;
+    }
+  } catch {
+    // Fall back to raw response text when the backend did not return JSON.
+  }
+  return text;
 }
 
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBootstrapResult> {
@@ -122,9 +139,12 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBoot
     });
 
     if (!response.ok) {
-      const message = await response.text();
+      const message = await readErrorMessage(
+        response,
+        `Failed to bootstrap auth session (${response.status}).`,
+      );
       throw new BootstrapHttpError({
-        message: message || `Failed to bootstrap auth session (${response.status}).`,
+        message,
         status: response.status,
       });
     }

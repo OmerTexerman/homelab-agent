@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, expect, afterAll } from "@effect/vitest";
 import { Effect, Layer, Stream } from "effect";
@@ -139,6 +140,27 @@ it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
 
         expect(result.path).toBe(targetPath);
         expect(result.contents).toBe("hello from runtime\n");
+      }),
+    );
+
+    it.effect("maps logical project workspace paths back into the runtime workspace", () =>
+      Effect.gen(function* () {
+        const threadWorkspace = yield* ThreadWorkspace;
+        const logicalPath = `${createLogicalProjectWorkspaceRoot("project-alpha")}/notes.md`;
+
+        yield* threadWorkspace.writeFile({
+          threadId,
+          path: logicalPath,
+          contents: "logical root write\n",
+        });
+
+        const result = yield* threadWorkspace.readFile({
+          threadId,
+          path: path.join(hostWorkspacePath, "notes.md"),
+        });
+
+        expect(result.path).toBe(path.join(hostWorkspacePath, "notes.md"));
+        expect(result.contents).toBe("logical root write\n");
       }),
     );
   });

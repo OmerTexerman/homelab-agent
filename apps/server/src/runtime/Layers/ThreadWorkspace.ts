@@ -8,6 +8,7 @@ import {
   ThreadWorkspaceWriteFileResult as ThreadWorkspaceWriteFileResultSchema,
   type ThreadId,
 } from "@t3tools/contracts";
+import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 import { Effect, Layer, Schema } from "effect";
 
 import { runProcess, type ProcessRunOptions } from "../../processRunner.ts";
@@ -224,9 +225,22 @@ function normalizeContainerPath(
   pathValue: string | undefined,
   execution: ThreadExecutionContext,
 ): string {
+  const workspaceRoot = execution.workspacePath || DEFAULT_CONTAINER_WORKSPACE_PATH;
   const trimmed = pathValue?.trim();
   if (!trimmed) {
-    return execution.workspacePath || DEFAULT_CONTAINER_WORKSPACE_PATH;
+    return workspaceRoot;
+  }
+  const logicalProjectPath = parseLogicalProjectWorkspacePath(trimmed);
+  if (logicalProjectPath) {
+    if (!logicalProjectPath.relativePath) {
+      return workspaceRoot;
+    }
+    const mappedPath = nodePath.posix.normalize(
+      nodePath.posix.join(workspaceRoot, logicalProjectPath.relativePath),
+    );
+    return mappedPath === workspaceRoot || mappedPath.startsWith(`${workspaceRoot}/`)
+      ? mappedPath
+      : workspaceRoot;
   }
   if (trimmed === "~") {
     return nodePath.posix.normalize(execution.homePath || DEFAULT_CONTAINER_HOME_PATH);
