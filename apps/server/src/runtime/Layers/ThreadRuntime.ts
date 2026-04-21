@@ -575,6 +575,107 @@ function renderShellInitFile(input: {
   ].join("\n");
 }
 
+function renderHomelabSecretToFileScript(): string {
+  return `#!/usr/bin/env python3
+import argparse
+import base64
+import binascii
+import os
+import pathlib
+import re
+import sys
+import textwrap
+
+
+def fail(message: str, code: int = 1):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def normalize_newlines(value: str) -> str:
+    return value.replace("\\r\\n", "\\n").replace("\\r", "\\n")
+
+
+def write_text(path: pathlib.Path, value: str):
+    normalized = normalize_newlines(value)
+    if not normalized.endswith("\\n"):
+        normalized += "\\n"
+    path.write_text(normalized, encoding="utf-8")
+
+
+def write_secret_file(secret_value: str, target_path: pathlib.Path):
+    normalized = normalize_newlines(secret_value)
+    if "-----BEGIN " in normalized and "-----END " in normalized:
+        write_text(target_path, normalized)
+        return
+
+    compact = re.sub(r"\\s+", "", secret_value)
+    if compact:
+        try:
+            decoded = base64.b64decode(compact, validate=True)
+        except (binascii.Error, ValueError):
+            write_text(target_path, normalized)
+            return
+
+        if decoded.startswith(b"openssh-key-v1\\x00"):
+            armored = "\\n".join(textwrap.wrap(compact, 70))
+            write_text(
+                target_path,
+                "-----BEGIN OPENSSH PRIVATE KEY-----\\n"
+                + armored
+                + "\\n-----END OPENSSH PRIVATE KEY-----",
+            )
+            return
+
+        try:
+            decoded_text = decoded.decode("utf-8")
+        except UnicodeDecodeError:
+            target_path.write_bytes(decoded)
+            return
+
+        normalized_decoded = normalize_newlines(decoded_text)
+        if "-----BEGIN " in normalized_decoded and "-----END " in normalized_decoded:
+            write_text(target_path, normalized_decoded)
+            return
+
+        target_path.write_bytes(decoded)
+        return
+
+    write_text(target_path, normalized)
+
+
+parser = argparse.ArgumentParser(
+    description=(
+        "Write a secret environment variable to a file. Handles raw text, "
+        "armored private keys, base64-encoded file contents, and bare OpenSSH key payloads."
+    ),
+)
+parser.add_argument("secret_name", help="Environment variable name that holds the secret")
+parser.add_argument("target_path", help="Where to write the file")
+parser.add_argument(
+    "--mode",
+    default="600",
+    help="Octal file mode to apply after writing (default: 600)",
+)
+args = parser.parse_args()
+
+secret_value = os.environ.get(args.secret_name)
+if not secret_value:
+    fail(f"Secret '{args.secret_name}' is not set in this runtime.")
+
+target_path = pathlib.Path(args.target_path).expanduser()
+target_path.parent.mkdir(parents=True, exist_ok=True)
+write_secret_file(secret_value, target_path)
+
+try:
+    os.chmod(target_path, int(args.mode, 8))
+except ValueError as error:
+    fail(f"Invalid file mode '{args.mode}': {error}")
+
+print(str(target_path))
+`;
+}
+
 function renderHomelabCliScript(): string {
   return `#!/usr/bin/env python3
 import argparse
@@ -715,6 +816,7 @@ def promotion_example_payload():
                     "name": "truenas",
                     "title": "TrueNAS",
                     "summary": "Primary NAS and app host",
+                    "status": "active",
                     "properties": {"ip": "192.168.1.5"},
                     "createdAt": now,
                     "updatedAt": now,
@@ -728,6 +830,7 @@ def promotion_example_payload():
                     "name": "grafana",
                     "title": "Grafana",
                     "summary": "Monitoring dashboards exposed on port 3000",
+                    "status": "active",
                     "properties": {"url": "http://192.168.1.5:3000", "port": 3000},
                     "createdAt": now,
                     "updatedAt": now,
@@ -792,6 +895,7 @@ def promotion_schema_overview():
                 "lastVerifiedAt",
             ],
             "kindValues": PROMOTION_ENTITY_KINDS,
+            "statusValues": ["active", "planned", "deprecated", "unknown"],
         },
         "relation": {
             "required": ["id", "kind", "fromEntityId", "toEntityId", "createdAt", "updatedAt"],
@@ -815,6 +919,8 @@ def promotion_schema_overview():
             "Use 'homelab promote --example' to print a valid envelope.",
             "The runtime auto-fills threadId when it is omitted and the current thread is known.",
             "Entity ids, relation ids, and observation ids should be stable and human-readable.",
+            "Use 'active' for infrastructure that currently exists and is usable.",
+            "Use 'planned' for intended infrastructure, 'deprecated' for retired infrastructure, and reserve 'unknown' for genuinely unclear lifecycle state.",
         ],
     }
 
@@ -1000,7 +1106,7 @@ def build_parser():
 
     secret_request_parser = subparsers.add_parser(
         "secret-request",
-        help="Create or update a secret placeholder and wait for the value unless --no-wait is set.",
+        help="Create or update a secret reference, open the secure UI prompt, and wait for the value unless --no-wait is set.",
     )
     secret_request_parser.add_argument("key", help="Secret env var name, for example API_KEY.")
     secret_request_parser.add_argument("--label", help="Human-friendly label.")
@@ -1195,6 +1301,7 @@ cat <<'EOF' | homelab promote --stdin
         "name": "main-host",
         "title": "Main Host",
         "summary": "Primary machine in the homelab",
+        "status": "active",
         "createdAt": "2026-04-13T20:00:00.000Z",
         "updatedAt": "2026-04-13T20:00:00.000Z"
       }
@@ -1207,6 +1314,7 @@ cat <<'EOF' | homelab promote --stdin
         "name": "example-service",
         "title": "Example Service",
         "summary": "HTTP service discovered during investigation",
+        "status": "active",
         "properties": {"port": 443, "url": "https://example.internal"},
         "createdAt": "2026-04-13T20:00:00.000Z",
         "updatedAt": "2026-04-13T20:00:00.000Z"
@@ -1241,7 +1349,10 @@ EOF
 
 Promote liberally. Entity upserts are idempotent — promoting the same entity
 twice just updates it. Include observations so there is provenance for how you
-learned the fact.
+learned the fact. For infrastructure that currently exists and is in use, set
+entity \`status\` to \`active\`. Use \`planned\` only for intended future work,
+\`deprecated\` for retired infrastructure, and \`unknown\` only when you truly
+cannot determine lifecycle state yet.
 
 ## Secrets
 
@@ -1253,16 +1364,48 @@ homelab secret-request SERVICE_API_TOKEN \\
   --summary "Needed to query a service API from this thread"
 \`\`\`
 
+If a missing secret is blocking the task, run \`homelab secret-request\`
+yourself immediately. Do not tell the user to run the command for you.
+
 The user gets a secure prompt in the UI. Once they provide the value, it
 appears in new shells inside this runtime as an environment variable. The
 \`homelab secret-request\` command waits for fulfillment by default, then you can
 continue. Check availability with \`homelab secrets\`.
+
+If \`homelab secrets\` is empty, or a useful credential is missing from the
+registry, create the missing secret references yourself instead of ending with
+"if you want, I can request them". Secret reference creation is normal work.
+
+When multiple secrets could help, request the smallest clear set that unblocks
+the next concrete step. Prefer acting over asking for permission to use the
+broker unless the user explicitly told you not to or the correct secret name is
+genuinely unclear.
+
+Some secrets represent files rather than one-line tokens, such as SSH private
+keys, kubeconfigs, or certificates. Use \`homelab-secret-to-file\` to materialize
+them inside the container instead of guessing how they are encoded:
+
+\`\`\`bash
+homelab-secret-to-file PROXMOX_ROOT_SSH_KEY ~/.ssh/proxmox_root
+chmod 600 ~/.ssh/proxmox_root
+ssh -i ~/.ssh/proxmox_root root@192.168.1.60
+\`\`\`
+
+The helper handles raw multiline secret contents, armored private keys, base64-
+encoded file contents, and bare OpenSSH private-key payloads. If a secret looks
+like key material, prefer the helper over hand-rolled decoding.
 
 ## Research and scratch-work expectations
 
 - If a task depends on current vendor behavior, current package versions, or live service status,
   search for it instead of guessing.
 - If you are unsure, inspect first, then search, then ask the user.
+- When you identify a new service, runtime, platform, appliance, or tool in the user's homelab,
+  search for its official docs, APIs, CLIs, SDKs, health endpoints, auth methods, and automation
+  hooks so you can integrate with it instead of treating it as a black box.
+- Promote those discovered integration surfaces back into the homelab graph when they are useful:
+  API endpoints, admin URLs, official CLIs, required secrets, package names, docs references,
+  protocol details, and operational constraints.
 - When a problem is easier to understand with a quick script, write the script and run it.
 - When comparing options or debugging a protocol, create a minimal repro inside the container.
 - Treat web research and scratch code as normal working methods, not last resorts.
@@ -2061,6 +2204,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
     const homelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
     const homelabCliPath = nodePath.join(homelabBinDir, "homelab");
+    const homelabSecretToFilePath = nodePath.join(homelabBinDir, "homelab-secret-to-file");
 
     yield* fileSystem.makeDirectory(homelabBinDir, { recursive: true }).pipe(
       Effect.mapError(
@@ -2072,16 +2216,26 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ),
     );
 
-    yield* fileSystem.writeFileString(homelabCliPath, renderHomelabCliScript()).pipe(
-      Effect.tap(() => fileSystem.chmod(homelabCliPath, 0o755)),
-      Effect.mapError(
-        (cause) =>
-          new ThreadRuntimeError({
-            message: `Failed to write homelab CLI for runtime '${runtime.threadId}'.`,
-            cause,
-          }),
+    const writeExecutable = (filePath: string, contents: string, label: string) =>
+      fileSystem.writeFileString(filePath, contents).pipe(
+        Effect.tap(() => fileSystem.chmod(filePath, 0o755)),
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: `Failed to write ${label} for runtime '${runtime.threadId}'.`,
+              cause,
+            }),
+        ),
+      );
+
+    yield* Effect.all([
+      writeExecutable(homelabCliPath, renderHomelabCliScript(), "homelab CLI"),
+      writeExecutable(
+        homelabSecretToFilePath,
+        renderHomelabSecretToFileScript(),
+        "homelab secret helper",
       ),
-    );
+    ]);
   });
 
   const writeRuntimeInstructionFiles = Effect.fn("threadRuntime.writeRuntimeInstructionFiles")(

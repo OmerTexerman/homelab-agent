@@ -47,6 +47,10 @@ import {
   trimOrNull,
 } from "@t3tools/shared/model";
 import {
+  isClaudeUserInterruptionDiagnostic,
+  isProviderInterruptionMessage,
+} from "@t3tools/shared/providerInterruptions";
+import {
   Cause,
   DateTime,
   Deferred,
@@ -224,13 +228,41 @@ function getEffectiveClaudeCodeEffort(
   return effort === "ultrathink" ? null : effort;
 }
 
+function resolveClaudeBasePermissionMode(input: {
+  readonly runtimeMode: string;
+  readonly usesThreadRuntimeWrapper: boolean;
+}): PermissionMode | undefined {
+  switch (input.runtimeMode) {
+    case "auto-accept-edits":
+      return "acceptEdits";
+    case "full-access":
+      return "bypassPermissions";
+    default:
+      return undefined;
+  }
+}
+
+function buildClaudeQueryEnv(input: {
+  readonly runtimeLaunchEnv: NodeJS.ProcessEnv | undefined;
+  readonly permissionMode: PermissionMode | undefined;
+  readonly usesThreadRuntimeWrapper: boolean;
+}): NodeJS.ProcessEnv {
+  const baseEnv = input.runtimeLaunchEnv ?? process.env;
+  if (input.permissionMode !== "bypassPermissions" || !input.usesThreadRuntimeWrapper) {
+    return baseEnv;
+  }
+
+  return {
+    ...baseEnv,
+    // Claude explicitly permits bypass mode as root when the process is marked
+    // as running inside a sandboxed environment. Our thread runtimes are
+    // isolated Docker sandboxes, so this matches the real execution model.
+    IS_SANDBOX: "1",
+  };
+}
+
 function isClaudeInterruptedMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("all fibers interrupted without error") ||
-    normalized.includes("request was aborted") ||
-    normalized.includes("interrupted by user")
-  );
+  return isProviderInterruptionMessage(message);
 }
 
 function isClaudeInterruptedCause(cause: Cause.Cause<Error>): boolean {
@@ -257,7 +289,15 @@ function resultErrorsText(result: SDKResultMessage): string {
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
   const errors = resultErrorsText(result);
-  if (errors.includes("interrupt")) {
+  if (errors.includes("interrupt") || isProviderInterruptionMessage(errors)) {
+    return true;
+  }
+
+  if (
+    result.subtype === "error_during_execution" &&
+    result.is_error === false &&
+    isClaudeUserInterruptionDiagnostic(errors)
+  ) {
     return true;
   }
 
@@ -825,6 +865,26 @@ function toSessionError(
   }
   if (normalized.includes("closed")) {
     return new ProviderAdapterSessionClosedError({
+      provider: PROVIDER,
+      threadId,
+      cause,
+    });
+  }
+  return undefined;
+}
+
+function toRecoverableResumeSessionError(
+  threadId: ThreadId,
+  cause: unknown,
+): ProviderAdapterSessionNotFoundError | undefined {
+  const normalized = toMessage(cause, "").toLowerCase();
+  if (
+    normalized.includes("no conversation found") ||
+    normalized.includes("conversation not found") ||
+    normalized.includes("session not found") ||
+    (normalized.includes("failed to resume session") && normalized.includes("not found"))
+  ) {
+    return new ProviderAdapterSessionNotFoundError({
       provider: PROVIDER,
       threadId,
       cause,
@@ -2723,11 +2783,10 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? modelSelection.options.thinking
           : undefined;
       const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
-      const runtimeModeToPermission: Record<string, PermissionMode> = {
-        "auto-accept-edits": "acceptEdits",
-        "full-access": "bypassPermissions",
-      };
-      const permissionMode = runtimeModeToPermission[input.runtimeMode];
+      const permissionMode = resolveClaudeBasePermissionMode({
+        runtimeMode: input.runtimeMode,
+        usesThreadRuntimeWrapper: runtimeLaunch !== undefined,
+      });
       const settings = {
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
@@ -2748,7 +2807,11 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: runtimeLaunch?.env ?? process.env,
+        env: buildClaudeQueryEnv({
+          runtimeLaunchEnv: runtimeLaunch?.env,
+          permissionMode,
+          usesThreadRuntimeWrapper: runtimeLaunch !== undefined,
+        }),
         ...(runtimeLaunch?.additionalDirectories
           ? { additionalDirectories: runtimeLaunch.additionalDirectories }
           : cwd
@@ -2762,13 +2825,21 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             prompt,
             options: queryOptions,
           }),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
+        catch: (cause) => {
+          const resumeError =
+            existingResumeSessionId !== undefined
+              ? toRecoverableResumeSessionError(threadId, cause)
+              : undefined;
+          if (resumeError) {
+            return resumeError;
+          }
+          return new ProviderAdapterProcessError({
             provider: PROVIDER,
             threadId,
             detail: toMessage(cause, "Failed to start Claude runtime session."),
             cause,
-          }),
+          });
+        },
       });
 
       const session: ProviderSession = {
@@ -2997,6 +3068,12 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const context = yield* requireSession(threadId);
       const nextLength = Math.max(0, context.turns.length - numTurns);
       context.turns.splice(nextLength);
+      /**
+       * The adapter does not currently retain enough structured metadata to
+       * recompute the last assistant UUID after trimming turns. Clearing the
+       * checkpoint cursor is safer than leaving it pointed at a removed turn.
+       */
+      context.lastAssistantUuid = undefined;
       yield* updateResumeCursor(context);
       return yield* snapshotThread(context);
     },

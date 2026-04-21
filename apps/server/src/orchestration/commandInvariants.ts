@@ -1,4 +1,5 @@
 import type {
+  OrchestrationMessage,
   OrchestrationCommand,
   OrchestrationProject,
   OrchestrationReadModel,
@@ -31,6 +32,14 @@ export function findProjectById(
   return readModel.projects.find((project) => project.id === projectId);
 }
 
+function findActiveProjectById(
+  readModel: OrchestrationReadModel,
+  projectId: ProjectId,
+): OrchestrationProject | undefined {
+  const project = findProjectById(readModel, projectId);
+  return project?.deletedAt === null ? project : undefined;
+}
+
 export function listThreadsByProjectId(
   readModel: OrchestrationReadModel,
   projectId: ProjectId,
@@ -38,12 +47,20 @@ export function listThreadsByProjectId(
   return readModel.threads.filter((thread) => thread.projectId === projectId);
 }
 
+function findActiveThreadById(
+  readModel: OrchestrationReadModel,
+  threadId: ThreadId,
+): OrchestrationThread | undefined {
+  const thread = findThreadById(readModel, threadId);
+  return thread?.deletedAt === null ? thread : undefined;
+}
+
 export function requireProject(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
   readonly projectId: ProjectId;
 }): Effect.Effect<OrchestrationProject, OrchestrationCommandInvariantError> {
-  const project = findProjectById(input.readModel, input.projectId);
+  const project = findActiveProjectById(input.readModel, input.projectId);
   if (project) {
     return Effect.succeed(project);
   }
@@ -60,7 +77,7 @@ export function requireProjectAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly projectId: ProjectId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findProjectById(input.readModel, input.projectId)) {
+  if (!findActiveProjectById(input.readModel, input.projectId)) {
     return Effect.void;
   }
   return Effect.fail(
@@ -76,7 +93,7 @@ export function requireThread(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
-  const thread = findThreadById(input.readModel, input.threadId);
+  const thread = findActiveThreadById(input.readModel, input.threadId);
   if (thread) {
     return Effect.succeed(thread);
   }
@@ -131,7 +148,7 @@ export function requireThreadAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findThreadById(input.readModel, input.threadId)) {
+  if (!findActiveThreadById(input.readModel, input.threadId)) {
     return Effect.void;
   }
   return Effect.fail(
@@ -139,6 +156,41 @@ export function requireThreadAbsent(input: {
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
     ),
+  );
+}
+
+function isPendingUserMessage(message: OrchestrationMessage | undefined): boolean {
+  return message?.role === "user" && message.turnId === null;
+}
+
+export function requireThreadReadyForTurnStart(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
+  return requireThread(input).pipe(
+    Effect.flatMap((thread) => {
+      if (thread.session?.status === "starting" || thread.session?.status === "running") {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' already has an active turn and cannot start another one yet.`,
+          ),
+        );
+      }
+
+      const latestMessage = thread.messages.at(-1);
+      if (isPendingUserMessage(latestMessage)) {
+        return Effect.fail(
+          invariantError(
+            input.command.type,
+            `Thread '${input.threadId}' already has a pending user turn and cannot start another one yet.`,
+          ),
+        );
+      }
+
+      return Effect.succeed(thread);
+    }),
   );
 }
 

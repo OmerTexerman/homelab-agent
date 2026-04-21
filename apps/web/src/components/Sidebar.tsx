@@ -31,9 +31,12 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  CommandId,
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   type EnvironmentId,
+  EventId,
+  type OrchestrationEvent,
   ProjectId,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -65,11 +68,13 @@ import {
   selectSidebarThreadsForProjectRef,
   selectSidebarThreadsForProjectRefs,
   selectSidebarThreadsAcrossEnvironments,
+  selectThreadsAcrossEnvironments,
   selectThreadByRef,
   useStore,
 } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
+import { useWorkspacePanelStateStore } from "../workspacePanelStateStore";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -79,7 +84,10 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { readLocalApi } from "../localApi";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  clearFinalizedPromotedDraftThreadsByRef,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -120,6 +128,8 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
+  buildSidebarProjectDeletionSummary,
+  createProjectWithInitialDraftThread,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   resolveProjectStatusIndicator,
@@ -141,10 +151,12 @@ import { readEnvironmentApi } from "../environmentApi";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "../rpc/serverState";
 import { deriveLogicalProjectKey } from "../logicalProject";
+import { reconcileLifecycleUiFromStore } from "../lifecycleUiSync";
 import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
+import { applyEnvironmentSnapshot } from "../environments/runtime/service";
 import type { Project, SidebarThreadSummary } from "../types";
 const THREAD_PREVIEW_LIMIT = 6;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
@@ -161,6 +173,103 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
+
+function applyAcknowledgedProjectCreatedEvent(input: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  title: string;
+  workspaceRoot: string;
+  createdAt: string;
+  commandId: CommandId;
+}) {
+  const event = {
+    sequence: 0,
+    eventId: EventId.make(`local-project-created-${input.projectId}-${input.createdAt}`),
+    aggregateKind: "project",
+    aggregateId: input.projectId,
+    occurredAt: input.createdAt,
+    commandId: input.commandId,
+    causationEventId: null,
+    correlationId: input.commandId,
+    metadata: {},
+    type: "project.created",
+    payload: {
+      projectId: input.projectId,
+      title: input.title,
+      workspaceRoot: input.workspaceRoot,
+      defaultModelSelection: {
+        provider: "codex",
+        model: DEFAULT_MODEL_BY_PROVIDER.codex,
+      },
+      scripts: [],
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+    },
+  } satisfies Extract<OrchestrationEvent, { type: "project.created" }>;
+
+  useStore.getState().applyOrchestrationEvent(event, input.environmentId);
+  syncSidebarUiFromStore();
+}
+
+function applyAcknowledgedProjectDeletedEvent(input: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  deletedAt: string;
+  commandId: CommandId;
+  deletedThreadRefs?: readonly ScopedThreadRef[];
+}) {
+  for (const threadRef of input.deletedThreadRefs ?? []) {
+    const threadDeletedEvent = {
+      sequence: 0,
+      eventId: EventId.make(`local-thread-deleted-${threadRef.threadId}-${input.deletedAt}`),
+      aggregateKind: "thread",
+      aggregateId: threadRef.threadId,
+      occurredAt: input.deletedAt,
+      commandId: input.commandId,
+      causationEventId: null,
+      correlationId: input.commandId,
+      metadata: {},
+      type: "thread.deleted",
+      payload: {
+        threadId: threadRef.threadId,
+        deletedAt: input.deletedAt,
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+
+    useStore.getState().applyOrchestrationEvent(threadDeletedEvent, input.environmentId);
+    useUiStateStore.getState().clearThreadUi(scopedThreadKey(threadRef));
+    useTerminalStateStore.getState().removeTerminalState(threadRef);
+    useWorkspacePanelStateStore.getState().removeWorkspacePanelState(threadRef);
+  }
+
+  const event = {
+    sequence: 0,
+    eventId: EventId.make(`local-project-deleted-${input.projectId}-${input.deletedAt}`),
+    aggregateKind: "project",
+    aggregateId: input.projectId,
+    occurredAt: input.deletedAt,
+    commandId: input.commandId,
+    causationEventId: null,
+    correlationId: input.commandId,
+    metadata: {},
+    type: "project.deleted",
+    payload: {
+      projectId: input.projectId,
+      deletedAt: input.deletedAt,
+    },
+  } satisfies Extract<OrchestrationEvent, { type: "project.deleted" }>;
+
+  useStore.getState().applyOrchestrationEvent(event, input.environmentId);
+  useComposerDraftStore
+    .getState()
+    .clearProjectDraftThreadId(scopeProjectRef(input.environmentId, input.projectId));
+  clearFinalizedPromotedDraftThreadsByRef(input.deletedThreadRefs ?? []);
+  syncSidebarUiFromStore();
+}
+
+function syncSidebarUiFromStore() {
+  reconcileLifecycleUiFromStore(useStore.getState());
+}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<string, string>,
@@ -812,13 +921,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const removeFromSelection = useThreadSelectionStore((state) => state.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const selectedThreadCount = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
-  const clearComposerDraftForThread = useComposerDraftStore((state) => state.clearDraftThread);
-  const getDraftThreadByProjectRef = useComposerDraftStore(
-    (state) => state.getDraftThreadByProjectRef,
-  );
-  const clearProjectDraftThreadId = useComposerDraftStore(
-    (state) => state.clearProjectDraftThreadId,
-  );
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
     threadId: ThreadId;
   }>({
@@ -1149,9 +1251,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       const failures: string[] = [];
-      let representativeSucceeded = false;
+      let renamedAnyProject = false;
 
-      for (const [index, ref] of projectRenameTargets.entries()) {
+      for (const ref of projectRenameTargets) {
         const api = readEnvironmentApi(ref.environmentId);
         if (!api) {
           failures.push(`Environment '${ref.environmentId}' is unavailable.`);
@@ -1165,16 +1267,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             projectId: ref.projectId,
             title: trimmed,
           });
-          if (index === 0) {
-            representativeSucceeded = true;
-          }
+          renamedAnyProject = true;
         } catch (error) {
           failures.push(error instanceof Error ? error.message : "An unknown error occurred.");
         }
       }
 
-      if (representativeSucceeded) {
+      if (renamedAnyProject && failures.length === 0) {
         setOptimisticProjectTitle(trimmed);
+      } else if (failures.length > 0) {
+        setOptimisticProjectTitle(null);
       }
 
       if (failures.length > 0) {
@@ -1248,49 +1350,104 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       return;
     }
 
-    const projectThreadCount = projectThreads.length;
-    const confirmed = await api.dialogs.confirm(
-      projectThreadCount > 0
-        ? [
-            `Delete project "${displayedProjectName}" and all ${projectThreadCount} thread${projectThreadCount === 1 ? "" : "s"}?`,
-            "This permanently clears the project's conversation history.",
-          ].join("\n")
-        : `Remove project "${displayedProjectName}"?`,
-    );
-    if (!confirmed) {
+    const storeState = useStore.getState();
+    const draftStoreState = useComposerDraftStore.getState();
+    const currentMemberProjectRefs = selectProjectsAcrossEnvironments(storeState)
+      .filter((candidate) => deriveLogicalProjectKey(candidate) === project.projectKey)
+      .map((candidate) => scopeProjectRef(candidate.environmentId, candidate.id));
+    if (currentMemberProjectRefs.length === 0) {
       return;
     }
 
+    const deletionSummary = buildSidebarProjectDeletionSummary({
+      memberProjectRefs: currentMemberProjectRefs,
+      threads: selectThreadsAcrossEnvironments(storeState),
+      draftThreadsByThreadKey: draftStoreState.draftThreadsByThreadKey,
+      draftsByThreadKey: draftStoreState.draftsByThreadKey,
+    });
+
+    if (deletionSummary.shouldConfirmDelete) {
+      const confirmed = await api.dialogs.confirm(
+        [
+          `Delete project "${displayedProjectName}" and all ${deletionSummary.totalThreadCount} thread${deletionSummary.totalThreadCount === 1 ? "" : "s"}?`,
+          "This permanently clears the project's conversation history.",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const projectDeleteTargets = currentMemberProjectRefs.map((projectRef) => ({
+      projectRef,
+      api: readEnvironmentApi(projectRef.environmentId),
+    }));
+
     try {
-      if (projectThreadCount > 0) {
-        const deletedThreadKeys = new Set(
-          projectThreads.map((thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          ),
-        );
-        for (const thread of projectThreads) {
-          await deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
-            deletedThreadKeys,
+      const failures: string[] = [];
+      let deletedAnyProject = false;
+
+      for (const target of projectDeleteTargets) {
+        if (!target.api) {
+          failures.push(`Environment '${target.projectRef.environmentId}' is unavailable.`);
+          continue;
+        }
+        try {
+          const deleteCommandId = newCommandId();
+          const deletedAt = new Date().toISOString();
+          await target.api.orchestration.dispatchCommand({
+            type: "project.delete",
+            commandId: deleteCommandId,
+            projectId: target.projectRef.projectId,
           });
+          applyAcknowledgedProjectDeletedEvent({
+            environmentId: target.projectRef.environmentId,
+            projectId: target.projectRef.projectId,
+            deletedAt,
+            commandId: deleteCommandId,
+            deletedThreadRefs: deletionSummary.projectThreadRefs.filter(
+              (threadRef) => threadRef.environmentId === target.projectRef.environmentId,
+            ),
+          });
+          deletedAnyProject = true;
+        } catch (error) {
+          failures.push(
+            error instanceof Error
+              ? error.message
+              : `Failed to remove project '${target.projectRef.projectId}'.`,
+          );
         }
       }
 
-      const projectDraftThread = getDraftThreadByProjectRef(
-        scopeProjectRef(project.environmentId, project.id),
-      );
-      if (projectDraftThread) {
-        clearComposerDraftForThread(projectDraftThread.draftId);
+      if (failures.length > 0) {
+        await Promise.all(
+          projectDeleteTargets.map(async (target) => {
+            if (!target.api) {
+              return;
+            }
+            try {
+              const snapshot = await target.api.orchestration.getSnapshot();
+              applyEnvironmentSnapshot(snapshot, target.projectRef.environmentId);
+            } catch {
+              // Best-effort reconciliation only.
+            }
+          }),
+        );
+        syncSidebarUiFromStore();
+        toastManager.add({
+          type: "error",
+          title: deletedAnyProject
+            ? `Removed "${displayedProjectName}" with partial failures`
+            : `Failed to remove "${displayedProjectName}"`,
+          description: failures.join(" "),
+        });
       }
-      clearProjectDraftThreadId(scopeProjectRef(project.environmentId, project.id));
-      const projectApi = readEnvironmentApi(project.environmentId);
-      if (!projectApi) {
-        throw new Error("Project API unavailable.");
+
+      if (deletedAnyProject) {
+        removeFromSelection(
+          deletionSummary.projectThreadRefs.map((threadRef) => scopedThreadKey(threadRef)),
+        );
       }
-      await projectApi.orchestration.dispatchCommand({
-        type: "project.delete",
-        commandId: newCommandId(),
-        projectId: project.id,
-      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error removing project.";
       console.error("Failed to remove project", { projectId: project.id, error });
@@ -1300,16 +1457,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         description: message,
       });
     }
-  }, [
-    clearComposerDraftForThread,
-    clearProjectDraftThreadId,
-    displayedProjectName,
-    getDraftThreadByProjectRef,
-    project.environmentId,
-    project.id,
-    projectThreads,
-    deleteThread,
-  ]);
+  }, [displayedProjectName, project.id, project.projectKey, removeFromSelection]);
 
   const navigateToThread = useCallback(
     (threadRef: ScopedThreadRef) => {
@@ -1432,13 +1580,33 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         : currentRouteTarget?.kind === "draft"
           ? (draftStore.getDraftSession(currentRouteTarget.draftId) ?? null)
           : null;
+    const memberProjectKeys = new Set(project.memberProjectRefs.map(scopedProjectKey));
+    const targetProjectRef = (() => {
+      const currentActiveProjectRef = currentActiveThread
+        ? scopeProjectRef(currentActiveThread.environmentId, currentActiveThread.projectId)
+        : currentActiveDraftThread
+          ? scopeProjectRef(
+              currentActiveDraftThread.environmentId,
+              currentActiveDraftThread.projectId,
+            )
+          : null;
+      if (
+        currentActiveProjectRef &&
+        memberProjectKeys.has(scopedProjectKey(currentActiveProjectRef))
+      ) {
+        return currentActiveProjectRef;
+      }
+      return scopeProjectRef(project.environmentId, project.id);
+    })();
     const seedContext = resolveSidebarNewThreadSeedContext({
-      projectId: project.id,
+      projectId: targetProjectRef.projectId,
       defaultEnvMode: resolveSidebarNewThreadEnvMode({
         defaultEnvMode: defaultThreadEnvMode,
       }),
       activeThread:
-        currentActiveThread && currentActiveThread.projectId === project.id
+        currentActiveThread &&
+        currentActiveThread.projectId === targetProjectRef.projectId &&
+        currentActiveThread.environmentId === targetProjectRef.environmentId
           ? {
               projectId: currentActiveThread.projectId,
               branch: currentActiveThread.branch,
@@ -1446,7 +1614,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           : null,
       activeDraftThread:
-        currentActiveDraftThread && currentActiveDraftThread.projectId === project.id
+        currentActiveDraftThread &&
+        currentActiveDraftThread.projectId === targetProjectRef.projectId &&
+        currentActiveDraftThread.environmentId === targetProjectRef.environmentId
           ? {
               projectId: currentActiveDraftThread.projectId,
               branch: currentActiveDraftThread.branch,
@@ -1455,12 +1625,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           : null,
     });
-    void handleNewThread(scopeProjectRef(project.environmentId, project.id), {
+    void handleNewThread(targetProjectRef, {
       ...(seedContext.branch !== undefined ? { branch: seedContext.branch } : {}),
       ...(seedContext.worktreePath !== undefined ? { worktreePath: seedContext.worktreePath } : {}),
       envMode: seedContext.envMode,
     });
-  }, [defaultThreadEnvMode, handleNewThread, project.environmentId, project.id, router]);
+  }, [
+    defaultThreadEnvMode,
+    handleNewThread,
+    project.environmentId,
+    project.id,
+    project.memberProjectRefs,
+    router,
+  ]);
 
   const handleCreateThreadClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -2529,6 +2706,7 @@ export default function Sidebar() {
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const addProjectInFlightRef = useRef(false);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<string>
@@ -2696,12 +2874,16 @@ export default function Sidebar() {
   const addProjectFromInput = useCallback(
     async (rawTitle: string) => {
       const title = rawTitle.trim();
-      if (!title || isAddingProject) return;
-      const api = activeEnvironmentId ? readEnvironmentApi(activeEnvironmentId) : undefined;
+      if (!title || isAddingProject || addProjectInFlightRef.current) return;
+      const environmentId = activeEnvironmentId;
+      if (!environmentId) return;
+      const api = environmentId ? readEnvironmentApi(environmentId) : undefined;
       if (!api) return;
 
+      addProjectInFlightRef.current = true;
       setIsAddingProject(true);
       const finishAddingProject = () => {
+        addProjectInFlightRef.current = false;
         setIsAddingProject(false);
         setNewProjectTitle("");
         setAddProjectError(null);
@@ -2709,27 +2891,52 @@ export default function Sidebar() {
       };
 
       const projectId = newProjectId();
+      const createdAt = new Date().toISOString();
+      const createdProjectRef = scopeProjectRef(environmentId, projectId);
+      const workspaceRoot = createLogicalProjectWorkspaceRoot(projectId);
+      const commandId = newCommandId();
       try {
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
+        await createProjectWithInitialDraftThread({
+          environmentId,
           projectId,
           title,
-          workspaceRoot: createLogicalProjectWorkspaceRoot(projectId),
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          projectRef: createdProjectRef,
+          workspaceRoot,
+          createdAt,
+          projectCreateCommandId: commandId,
+          defaultEnvMode: defaultThreadEnvMode,
+          dispatchProjectCreate: () =>
+            api.orchestration.dispatchCommand({
+              type: "project.create",
+              commandId,
+              projectId,
+              title,
+              workspaceRoot,
+              defaultModelSelection: {
+                provider: "codex",
+                model: DEFAULT_MODEL_BY_PROVIDER.codex,
+              },
+              createdAt,
+            }),
+          acknowledgeProjectCreated: applyAcknowledgedProjectCreatedEvent,
+          openInitialDraftThread: handleNewThread,
+          clearProjectDraftThread: (projectRef) => {
+            useComposerDraftStore.getState().clearProjectDraftThreadId(projectRef);
           },
-          createdAt: new Date().toISOString(),
+          createRollbackCommandId: newCommandId,
+          now: () => new Date().toISOString(),
+          dispatchProjectDelete: (rollbackCommandId) =>
+            api.orchestration.dispatchCommand({
+              type: "project.delete",
+              commandId: rollbackCommandId,
+              projectId,
+            }),
+          acknowledgeProjectDeleted: applyAcknowledgedProjectDeletedEvent,
         });
-        if (activeEnvironmentId !== null) {
-          await handleNewThread(scopeProjectRef(activeEnvironmentId, projectId), {
-            envMode: defaultThreadEnvMode,
-          }).catch(() => undefined);
-        }
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
+        addProjectInFlightRef.current = false;
         setIsAddingProject(false);
         setAddProjectError(description);
         return;

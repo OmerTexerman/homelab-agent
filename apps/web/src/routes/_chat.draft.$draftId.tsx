@@ -1,11 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo } from "react";
+import { scopeThreadRef } from "@t3tools/client-runtime";
 import ChatView from "../components/ChatView";
-import { threadHasStarted } from "../components/ChatView.logic";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
-import { createThreadSelectorAcrossEnvironments } from "../storeSelectors";
-import { useStore } from "../store";
+import { createThreadSelectorByRef } from "../storeSelectors";
+import { selectEnvironmentState, useStore } from "../store";
 import { buildThreadRouteParams } from "../threadRoutes";
 
 function DraftChatThreadRouteView() {
@@ -13,27 +13,36 @@ function DraftChatThreadRouteView() {
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
-  const serverThread = useStore(
-    useMemo(
-      () => createThreadSelectorAcrossEnvironments(draftSession?.threadId ?? null),
-      [draftSession?.threadId],
-    ),
+  const finalizedPromotedThreadRef = useComposerDraftStore((store) =>
+    store.getFinalizedPromotedThreadRef(draftId),
   );
-  const serverThreadStarted = threadHasStarted(serverThread);
+  const routeEnvironmentId =
+    draftSession?.environmentId ?? finalizedPromotedThreadRef?.environmentId ?? null;
+  const bootstrapComplete = useStore(
+    (store) => selectEnvironmentState(store, routeEnvironmentId).bootstrapComplete,
+  );
+  const materializedThreadRef = useMemo(
+    () =>
+      draftSession?.promotedTo ??
+      (draftSession ? scopeThreadRef(draftSession.environmentId, draftSession.threadId) : null) ??
+      finalizedPromotedThreadRef,
+    [draftSession, finalizedPromotedThreadRef],
+  );
+  const serverThread = useStore(
+    useMemo(() => createThreadSelectorByRef(materializedThreadRef), [materializedThreadRef]),
+  );
   const canonicalThreadRef = useMemo(
     () =>
-      draftSession?.promotedTo
-        ? serverThreadStarted
-          ? draftSession.promotedTo
-          : null
-        : serverThread
-          ? {
-              environmentId: serverThread.environmentId,
-              threadId: serverThread.id,
-            }
-          : null,
-    [draftSession?.promotedTo, serverThread, serverThreadStarted],
+      serverThread
+        ? {
+            environmentId: serverThread.environmentId,
+            threadId: serverThread.id,
+          }
+        : null,
+    [serverThread],
   );
+  const waitingForMaterializedThread =
+    !draftSession && finalizedPromotedThreadRef != null && canonicalThreadRef == null;
 
   useEffect(() => {
     if (!canonicalThreadRef) {
@@ -47,11 +56,22 @@ function DraftChatThreadRouteView() {
   }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
-    if (draftSession || canonicalThreadRef) {
+    if (!draftSession && !finalizedPromotedThreadRef) {
+      void navigate({ to: "/", replace: true });
+      return;
+    }
+    if (!bootstrapComplete || draftSession || canonicalThreadRef || waitingForMaterializedThread) {
       return;
     }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate]);
+  }, [
+    bootstrapComplete,
+    canonicalThreadRef,
+    draftSession,
+    finalizedPromotedThreadRef,
+    navigate,
+    waitingForMaterializedThread,
+  ]);
 
   if (canonicalThreadRef) {
     return (
@@ -66,7 +86,16 @@ function DraftChatThreadRouteView() {
   }
 
   if (!draftSession) {
-    return null;
+    if (!waitingForMaterializedThread) {
+      return null;
+    }
+    return (
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
+          Waiting for the new thread to finish materializing...
+        </div>
+      </SidebarInset>
+    );
   }
 
   return (

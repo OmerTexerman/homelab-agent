@@ -272,6 +272,33 @@ describe("threadSelectionStore", () => {
     });
   });
 
+  describe("pruneToExisting", () => {
+    it("drops selected keys that no longer exist and clears a missing anchor", () => {
+      const store = useThreadSelectionStore.getState();
+      store.toggleThread(THREAD_A);
+      store.toggleThread(THREAD_B);
+      store.toggleThread(THREAD_C); // anchor = C
+
+      store.pruneToExisting([THREAD_B]);
+
+      const state = useThreadSelectionStore.getState();
+      expect([...state.selectedThreadKeys]).toEqual([THREAD_B]);
+      expect(state.anchorThreadKey).toBeNull();
+    });
+
+    it("is a no-op when every selected key still exists", () => {
+      const store = useThreadSelectionStore.getState();
+      store.toggleThread(THREAD_A);
+      store.toggleThread(THREAD_B); // anchor = B
+
+      const before = useThreadSelectionStore.getState();
+      store.pruneToExisting([THREAD_A, THREAD_B, THREAD_C]);
+      const after = useThreadSelectionStore.getState();
+
+      expect(after).toBe(before);
+    });
+  });
+
   describe("hasSelection", () => {
     it("returns false when nothing is selected", () => {
       expect(useThreadSelectionStore.getState().hasSelection()).toBe(false);

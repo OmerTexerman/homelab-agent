@@ -225,4 +225,16 @@ describe("providerInstanceId routing key (slice-2 invariant)", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts an idempotency key for durable turn dispatch", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      input: "hello",
+      idempotencyKey: "thread-turn-start:thread-1:message-1:2026-04-14T00:00:00.000Z",
+    });
+
+    expect(parsed.idempotencyKey).toBe(
+      "thread-turn-start:thread-1:message-1:2026-04-14T00:00:00.000Z",
+    );
+  });
 });

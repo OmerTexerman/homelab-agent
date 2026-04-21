@@ -1,8 +1,9 @@
-import type { OrchestrationEvent, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationEvent, ProjectId, ThreadId } from "@t3tools/contracts";
 
 export interface OrchestrationBatchEffects {
   promoteDraftThreadIds: ThreadId[];
   clearDeletedThreadIds: ThreadId[];
+  clearDeletedProjectIds: ProjectId[];
   removeTerminalStateThreadIds: ThreadId[];
   needsProviderInvalidation: boolean;
 }
@@ -18,6 +19,7 @@ export function deriveOrchestrationBatchEffects(
       removeTerminalState: boolean;
     }
   >();
+  const deletedProjectIds = new Set<ProjectId>();
   let needsProviderInvalidation = false;
 
   for (const event of events) {
@@ -43,6 +45,11 @@ export function deriveOrchestrationBatchEffects(
           clearDeletedThread: true,
           removeTerminalState: true,
         });
+        break;
+      }
+
+      case "project.deleted": {
+        deletedProjectIds.add(event.payload.projectId);
         break;
       }
 
@@ -88,6 +95,7 @@ export function deriveOrchestrationBatchEffects(
   return {
     promoteDraftThreadIds,
     clearDeletedThreadIds,
+    clearDeletedProjectIds: [...deletedProjectIds],
     removeTerminalStateThreadIds,
     needsProviderInvalidation,
   };

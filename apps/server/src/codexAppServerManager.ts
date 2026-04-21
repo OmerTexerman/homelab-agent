@@ -153,6 +153,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "missing thread",
   "no such thread",
   "unknown thread",
+  "no rollout found",
   "does not exist",
 ];
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)

@@ -47,6 +47,7 @@ import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
+import { findLatestPendingUserMessageLike } from "../messageTurnBinding.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -675,6 +676,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
           if (Option.isNone(existingRow)) {
             return;
           }
@@ -817,6 +821,30 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.session-set": {
+          if (
+            event.payload.session.status !== "running" ||
+            event.payload.session.activeTurnId === null
+          ) {
+            return;
+          }
+
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const pendingUserMessage = findLatestPendingUserMessageLike(existingRows);
+          if (!pendingUserMessage) {
+            return;
+          }
+
+          yield* projectionThreadMessageRepository.upsert({
+            ...pendingUserMessage,
+            turnId: event.payload.session.activeTurnId,
+            updatedAt: event.payload.session.updatedAt,
           });
           return;
         }
@@ -990,6 +1018,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             messageId: event.payload.messageId,
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
+            modelSelection: event.payload.modelSelection ?? null,
+            titleSeed: event.payload.titleSeed ?? null,
+            runtimeMode: event.payload.runtimeMode,
+            interactionMode: event.payload.interactionMode,
             requestedAt: event.payload.createdAt,
           });
           return;
