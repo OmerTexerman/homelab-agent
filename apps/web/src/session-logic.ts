@@ -10,6 +10,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { isProviderInterruptionMessage } from "@t3tools/shared/providerInterruptions";
 
 import type {
   ChatMessage,
@@ -467,11 +468,24 @@ export function deriveWorkLogEntries(
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.kind !== "context-window.updated")
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    .filter((activity) => !isInterruptedRuntimeErrorActivity(activity))
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .map(toDerivedWorkLogEntry);
   return collapseDerivedWorkLogEntries(entries).map(
     ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
   );
+}
+
+function isInterruptedRuntimeErrorActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.error") {
+    return false;
+  }
+
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  return typeof payload?.message === "string" && isProviderInterruptionMessage(payload.message);
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {

@@ -10,10 +10,13 @@ import {
   CheckpointRef,
   IsoDateTime,
   MessageId,
+  ModelSelection,
   NonNegativeInt,
   OrchestrationProposedPlanId,
   OrchestrationCheckpointFile,
   OrchestrationCheckpointStatus,
+  ProviderInteractionMode,
+  RuntimeMode,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -72,6 +75,10 @@ export const ProjectionPendingTurnStart = Schema.Struct({
   messageId: MessageId,
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+  modelSelection: Schema.NullOr(ModelSelection),
+  titleSeed: Schema.NullOr(Schema.String),
+  runtimeMode: Schema.NullOr(RuntimeMode),
+  interactionMode: Schema.NullOr(ProviderInteractionMode),
   requestedAt: IsoDateTime,
 });
 export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
@@ -125,6 +132,14 @@ export interface ProjectionTurnRepositoryShape {
   readonly getPendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
+
+  /**
+   * Lists all pending-start placeholder rows across threads so reactors can replay durable work after restart.
+   */
+  readonly listPendingTurnStarts: () => Effect.Effect<
+    ReadonlyArray<ProjectionPendingTurnStart>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Deletes only pending-start placeholder rows (`turnId = null`) for a thread and leaves concrete turn rows untouched.

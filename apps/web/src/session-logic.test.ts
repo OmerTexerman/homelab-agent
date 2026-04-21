@@ -634,6 +634,34 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("omits interrupted runtime diagnostics from the work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "runtime-interrupted",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.error",
+        summary: "Runtime error",
+        tone: "error",
+        payload: {
+          message: "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+        },
+      }),
+      makeActivity({
+        id: "runtime-real",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.error",
+        summary: "Runtime error",
+        tone: "error",
+        payload: {
+          message: "Claude Code process exited with code 137",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["runtime-real"]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

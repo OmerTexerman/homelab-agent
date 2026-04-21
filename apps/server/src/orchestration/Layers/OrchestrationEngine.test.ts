@@ -360,6 +360,86 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("cascades project deletion through active project threads", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-delete-cascade-create"),
+        projectId: asProjectId("project-delete-cascade"),
+        title: "Cascade Project",
+        workspaceRoot: "/tmp/project-delete-cascade",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-project-delete-cascade-thread-1"),
+        threadId: ThreadId.make("project-delete-cascade-thread-1"),
+        projectId: asProjectId("project-delete-cascade"),
+        title: "Cascade Thread One",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-project-delete-cascade-thread-2"),
+        threadId: ThreadId.make("project-delete-cascade-thread-2"),
+        projectId: asProjectId("project-delete-cascade"),
+        title: "Cascade Thread Two",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "project.delete",
+        commandId: CommandId.make("cmd-project-delete-cascade"),
+        projectId: asProjectId("project-delete-cascade"),
+      }),
+    );
+
+    const events = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "project.created",
+      "thread.created",
+      "thread.created",
+      "thread.deleted",
+      "thread.deleted",
+      "project.deleted",
+    ]);
+    expect(events.at(-1)?.aggregateKind).toBe("project");
+    await system.dispose();
+  });
+
   it("streams persisted domain events in order", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -811,6 +891,83 @@ describe("OrchestrationEngine", () => {
     ).toHaveLength(2);
 
     await runtime.dispose();
+  });
+
+  it("rejects a second thread.turn.start while a prior user turn is still pending", async () => {
+    const system = await createOrchestrationSystem();
+    const engine = system.engine;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-pending-turn"),
+        projectId: asProjectId("project-pending-turn"),
+        title: "Pending turn project",
+        workspaceRoot: "/tmp/project-pending-turn",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-pending-turn"),
+        threadId: ThreadId.make("thread-pending-turn"),
+        projectId: asProjectId("project-pending-turn"),
+        title: "pending-turn",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-thread-pending-turn-start-1"),
+        threadId: ThreadId.make("thread-pending-turn"),
+        message: {
+          messageId: asMessageId("msg-pending-turn-1"),
+          role: "user",
+          text: "first pending turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-thread-pending-turn-start-2"),
+          threadId: ThreadId.make("thread-pending-turn"),
+          message: {
+            messageId: asMessageId("msg-pending-turn-2"),
+            role: "user",
+            text: "second pending turn",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now(),
+        }),
+      ),
+    ).rejects.toThrow("already has a pending user turn");
+
+    await system.dispose();
   });
 
   it("reconciles in-memory state when append persists but projection fails", async () => {

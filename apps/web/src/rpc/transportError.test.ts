@@ -21,4 +21,13 @@ describe("transportError", () => {
   it("drops transport failures from thread surfaces", () => {
     expect(sanitizeThreadErrorMessage("SocketCloseError: 1006")).toBeNull();
   });
+
+  it("drops interrupted provider diagnostics from thread surfaces", () => {
+    expect(
+      sanitizeThreadErrorMessage(
+        "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+      ),
+    ).toBeNull();
+    expect(sanitizeThreadErrorMessage("Error: Request was aborted.")).toBeNull();
+  });
 });

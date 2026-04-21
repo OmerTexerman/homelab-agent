@@ -12,6 +12,7 @@ import {
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 import {
   applyOrchestrationEvent,
@@ -675,7 +676,7 @@ describe("incremental orchestration updates", () => {
     expect(nextAfterThreadDelete).toBe(state);
   });
 
-  it("reuses an existing project row when project.created arrives with a new id for the same cwd", () => {
+  it("keeps a recreated physical project distinct even when the cwd matches", () => {
     const originalProjectId = ProjectId.make("project-1");
     const recreatedProjectId = ProjectId.make("project-2");
     const state: AppState = makeEmptyState({
@@ -714,12 +715,68 @@ describe("incremental orchestration updates", () => {
       localEnvironmentId,
     );
 
-    expect(projectsOf(next)).toHaveLength(1);
-    expect(projectsOf(next)[0]?.id).toBe(recreatedProjectId);
-    expect(projectsOf(next)[0]?.cwd).toBe("/tmp/project");
-    expect(projectsOf(next)[0]?.name).toBe("Project Recreated");
-    expect(localEnvironmentStateOf(next).projectIds).toEqual([recreatedProjectId]);
-    expect(localEnvironmentStateOf(next).projectById[originalProjectId]).toBeUndefined();
+    expect(projectsOf(next)).toHaveLength(2);
+    expect(localEnvironmentStateOf(next).projectIds).toEqual([
+      originalProjectId,
+      recreatedProjectId,
+    ]);
+    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.id).toBe(
+      originalProjectId,
+    );
+    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.cwd).toBe("/tmp/project");
+    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.name).toBe("Project");
+    expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.id).toBe(
+      recreatedProjectId,
+    );
+    expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.name).toBe(
+      "Project Recreated",
+    );
+  });
+
+  it("does not reuse an existing project row for logical project workspace roots", () => {
+    const originalProjectId = ProjectId.make("project-logical-1");
+    const recreatedProjectId = ProjectId.make("project-logical-2");
+    const workspaceRoot = createLogicalProjectWorkspaceRoot("logical-project-alpha");
+    const state: AppState = makeEmptyState({
+      projectIds: [originalProjectId],
+      projectById: {
+        [originalProjectId]: {
+          id: originalProjectId,
+          environmentId: localEnvironmentId,
+          name: "Logical Project",
+          cwd: workspaceRoot,
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          scripts: [],
+        },
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("project.created", {
+        projectId: recreatedProjectId,
+        title: "Logical Project Recreated",
+        workspaceRoot,
+        defaultModelSelection: {
+          provider: "codex",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+        },
+        scripts: [],
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(projectsOf(next)).toHaveLength(2);
+    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.id).toBe(
+      originalProjectId,
+    );
     expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.id).toBe(
       recreatedProjectId,
     );
@@ -791,6 +848,137 @@ describe("incremental orchestration updates", () => {
     expect(localEnvironmentStateOf(next).threadIdsByProjectId[recreatedProjectId]).toEqual([
       threadId,
     ]);
+  });
+
+  it("removes a deleted project's threads and thread projections", () => {
+    const deletedProjectId = ProjectId.make("project-delete");
+    const survivingProjectId = ProjectId.make("project-keep");
+    const deletedThreadId = ThreadId.make("thread-delete");
+    const survivingThreadId = ThreadId.make("thread-keep");
+    const deletedThread = makeThread({
+      id: deletedThreadId,
+      projectId: deletedProjectId,
+    });
+    const survivingThread = makeThread({
+      id: survivingThreadId,
+      projectId: survivingProjectId,
+    });
+    const baseState = localEnvironmentStateOf(makeState(deletedThread));
+    const state = withActiveEnvironmentState(baseState, {
+      projectIds: [deletedProjectId, survivingProjectId],
+      projectById: {
+        [deletedProjectId]: {
+          id: deletedProjectId,
+          environmentId: localEnvironmentId,
+          name: "Delete Me",
+          cwd: "/tmp/project-delete",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          scripts: [],
+        },
+        [survivingProjectId]: {
+          id: survivingProjectId,
+          environmentId: localEnvironmentId,
+          name: "Keep Me",
+          cwd: "/tmp/project-keep",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          scripts: [],
+        },
+      },
+      threadIds: [deletedThreadId, survivingThreadId],
+      threadIdsByProjectId: {
+        [deletedProjectId]: [deletedThreadId],
+        [survivingProjectId]: [survivingThreadId],
+      },
+      threadShellById: {
+        ...baseState.threadShellById,
+        [survivingThreadId]: {
+          id: survivingThreadId,
+          environmentId: localEnvironmentId,
+          codexThreadId: null,
+          projectId: survivingProjectId,
+          title: survivingThread.title,
+          modelSelection: survivingThread.modelSelection,
+          runtimeMode: survivingThread.runtimeMode,
+          interactionMode: survivingThread.interactionMode,
+          error: survivingThread.error,
+          createdAt: survivingThread.createdAt,
+          archivedAt: survivingThread.archivedAt,
+          updatedAt: survivingThread.updatedAt,
+          branch: survivingThread.branch,
+          worktreePath: survivingThread.worktreePath,
+        },
+      },
+      threadSessionById: {
+        ...baseState.threadSessionById,
+        [survivingThreadId]: survivingThread.session,
+      },
+      threadTurnStateById: {
+        ...baseState.threadTurnStateById,
+        [survivingThreadId]: {
+          latestTurn: survivingThread.latestTurn,
+        },
+      },
+      messageIdsByThreadId: {
+        ...baseState.messageIdsByThreadId,
+        [survivingThreadId]: [],
+      },
+      messageByThreadId: {
+        ...baseState.messageByThreadId,
+        [survivingThreadId]: {},
+      },
+      activityIdsByThreadId: {
+        ...baseState.activityIdsByThreadId,
+        [survivingThreadId]: [],
+      },
+      activityByThreadId: {
+        ...baseState.activityByThreadId,
+        [survivingThreadId]: {},
+      },
+      proposedPlanIdsByThreadId: {
+        ...baseState.proposedPlanIdsByThreadId,
+        [survivingThreadId]: [],
+      },
+      proposedPlanByThreadId: {
+        ...baseState.proposedPlanByThreadId,
+        [survivingThreadId]: {},
+      },
+      turnDiffIdsByThreadId: {
+        ...baseState.turnDiffIdsByThreadId,
+        [survivingThreadId]: [],
+      },
+      turnDiffSummaryByThreadId: {
+        ...baseState.turnDiffSummaryByThreadId,
+        [survivingThreadId]: {},
+      },
+      sidebarThreadSummaryById: {
+        ...baseState.sidebarThreadSummaryById,
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("project.deleted", {
+        projectId: deletedProjectId,
+        deletedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(projectsOf(next).map((project) => project.id)).toEqual([survivingProjectId]);
+    expect(threadsOf(next).map((thread) => thread.id)).toEqual([survivingThreadId]);
+    expect(localEnvironmentStateOf(next).threadIdsByProjectId[deletedProjectId]).toBeUndefined();
+    expect(localEnvironmentStateOf(next).threadShellById[deletedThreadId]).toBeUndefined();
+    expect(localEnvironmentStateOf(next).sidebarThreadSummaryById[deletedThreadId]).toBeUndefined();
   });
 
   it("updates only the affected thread for message events", () => {

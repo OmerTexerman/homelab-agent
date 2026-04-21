@@ -1,5 +1,6 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -241,6 +242,28 @@ describe("environment grouping", () => {
       const key = deriveLogicalProjectKey(project);
       expect(key).toContain(primaryEnvId);
       expect(key).toContain(localOnlyProjectId);
+    });
+
+    it("ignores repository identity for logical homelab projects", () => {
+      const project = makeProject({
+        id: localOnlyProjectId,
+        environmentId: primaryEnvId,
+        name: "logical-only",
+        cwd: createLogicalProjectWorkspaceRoot(localOnlyProjectId),
+        repositoryIdentity: {
+          canonicalKey: SHARED_REPO_CANONICAL_KEY,
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "https://github.com/example/shared-repo.git",
+          },
+        },
+      });
+
+      const key = deriveLogicalProjectKey(project);
+      expect(key).toContain(primaryEnvId);
+      expect(key).toContain(localOnlyProjectId);
+      expect(key).not.toBe(SHARED_REPO_CANONICAL_KEY);
     });
 
     it("groups projects from different environments that share the same canonical key", () => {

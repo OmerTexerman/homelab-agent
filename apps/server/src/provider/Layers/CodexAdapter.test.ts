@@ -437,6 +437,32 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("maps recoverable resume failures to ProviderAdapterSessionNotFoundError", () =>
+    Effect.gen(function* () {
+      sessionErrorManager.startSessionImpl.mockRejectedValueOnce(
+        new Error(
+          "thread/resume failed: no rollout found for thread id 019d8b9f-fb1a-74e3-b026-908a0ebd508f",
+        ),
+      );
+
+      const adapter = yield* CodexAdapter;
+      const result = yield* adapter
+        .startSession({
+          threadId: asThreadId("resume-missing-rollout"),
+          provider: "codex",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "019d8b9f-fb1a-74e3-b026-908a0ebd508f" },
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
+      assert.equal(result.failure.provider, "codex");
+      assert.equal(result.failure.threadId, "resume-missing-rollout");
+    }),
+  );
+
   it.effect("maps unknown-session sendTurn errors to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

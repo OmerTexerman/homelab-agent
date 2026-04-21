@@ -31,7 +31,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { render } from "vitest-browser-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
-import { useComposerDraftStore, DraftId } from "../composerDraftStore";
+import {
+  useComposerDraftStore,
+  DraftId,
+  finalizePromotedDraftThreadByRef,
+} from "../composerDraftStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   removeInlineTerminalContextPlaceholder,
@@ -45,6 +49,8 @@ import { getRouter } from "../router";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import { useWorkspacePanelStateStore } from "../workspacePanelStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
@@ -71,6 +77,12 @@ const PROJECT_KEY = scopedProjectKey(scopeProjectRef(LOCAL_ENVIRONMENT_ID, PROJE
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'></svg>";
+
+function sidebarHasProjectName(name: string): boolean {
+  return [...document.querySelectorAll('[data-testid^="project-row-"]')].some((element) =>
+    element.textContent?.includes(name),
+  );
+}
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
@@ -342,6 +354,8 @@ function createSnapshotForTargetUser(options: {
 }
 
 function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
+  const bootstrapThread = snapshot.threads.find((thread) => thread.deletedAt === null) ?? null;
+  const bootstrapProjectId = bootstrapThread?.projectId ?? snapshot.projects[0]?.id ?? null;
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
@@ -355,8 +369,8 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       },
       cwd: "/repo/project",
       projectName: "Project",
-      bootstrapProjectId: PROJECT_ID,
-      bootstrapThreadId: THREAD_ID,
+      ...(bootstrapProjectId ? { bootstrapProjectId } : {}),
+      ...(bootstrapThread?.id ? { bootstrapThreadId: bootstrapThread.id } : {}),
     },
   };
 }
@@ -1605,6 +1619,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftsByThreadKey: {},
       draftThreadsByThreadKey: {},
       logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+      finalizedPromotedThreadRefByDraftId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
     });
@@ -1619,6 +1634,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectExpandedById: {},
       projectOrder: [],
       threadLastVisitedAtById: {},
+      threadChangedFilesExpandedById: {},
+    });
+    useThreadSelectionStore.setState({
+      selectedThreadKeys: new Set(),
+      anchorThreadKey: null,
+    });
+    useWorkspacePanelStateStore.setState({
+      workspacePanelOpenByThreadKey: {},
     });
     useTerminalStateStore.persist.clearStorage();
     useTerminalStateStore.setState({
@@ -2522,6 +2545,90 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("blocks duplicate first-send bootstrap dispatches while a draft thread is materializing", async () => {
+    useTerminalStateStore.setState({
+      terminalStateByThreadKey: {},
+    });
+    useComposerDraftStore.setState({
+      draftThreadsByThreadKey: {
+        [THREAD_KEY]: {
+          threadId: THREAD_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          logicalProjectKey: PROJECT_DRAFT_KEY,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      logicalProjectDraftThreadKeyByLogicalProjectKey: {
+        [PROJECT_DRAFT_KEY]: THREAD_KEY,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "first send");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStarts = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          );
+          expect(turnStarts).toHaveLength(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(useComposerDraftStore.getState().getDraftThread(THREAD_REF)?.promotedTo).toEqual(
+        THREAD_REF,
+      );
+
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "retry before materialization");
+      await waitForLayout();
+      const retrySendButton = await waitForSendButton();
+      retrySendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStarts = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          );
+          expect(turnStarts).toHaveLength(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect
+        .element(page.getByText("Thread is still materializing. Wait a moment and retry."))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows the send state once bootstrap dispatch is in flight", async () => {
     useTerminalStateStore.setState({
       terminalStateByThreadKey: {},
@@ -3281,14 +3388,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       // The composer editor should be present for the new draft thread.
       await waitForComposerEditor();
 
-      // `thread.created` should only mark the draft as promoting; it should
-      // not navigate away until the server thread has actual runtime state.
+      // Once the server materializes the thread, the draft route should
+      // immediately canonicalize to the authoritative server thread.
       await materializePromotedDraftThreadViaDomainEvent(newThreadId);
-      expect(mounted.router.state.location.pathname).toBe(newThreadPath);
-      await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
-
-      // Once the server thread starts, the route should canonicalize.
-      await startPromotedServerThreadViaDomainEvent(newThreadId);
       await vi.waitFor(
         () => {
           expect(useComposerDraftStore.getState().draftThreadsByThreadKey[newDraftId]).toBe(
@@ -3305,10 +3407,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Promoted drafts should canonicalize to the server thread route.",
       );
 
-      // The composer should remain usable after canonicalization, regardless of
-      // whether the promoted thread is still visibly empty or has already
-      // entered the running state.
+      // The composer should remain usable even before the runtime session
+      // fully starts for the new server thread.
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+
+      // Starting the runtime session later should not change the canonical route.
+      await startPromotedServerThreadViaDomainEvent(newThreadId);
+      expect(mounted.router.state.location.pathname).toBe(serverThreadPath(newThreadId));
     } finally {
       await mounted.cleanup();
     }
@@ -3406,6 +3511,733 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("shows multiple newly created projects as soon as the server acknowledges them", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-create-visibility-test" as MessageId,
+        targetText: "project create visibility test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          sequence += 1;
+          return { sequence };
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      addProjectButton.click();
+      const firstProjectInput = page.getByPlaceholder("Project name");
+      await expect.element(firstProjectInput).toBeVisible();
+      await firstProjectInput.fill("Alpha");
+      const firstProjectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+      firstProjectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sidebarHasProjectName("Alpha")).toBe(true);
+      });
+
+      addProjectButton.click();
+      const secondProjectInput = page.getByPlaceholder("Project name");
+      await expect.element(secondProjectInput).toBeVisible();
+      await secondProjectInput.fill("Beta");
+      const secondProjectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render for the second project.",
+      );
+      secondProjectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sidebarHasProjectName("Beta")).toBe(true);
+      });
+
+      addProjectButton.click();
+      const thirdProjectInput = page.getByPlaceholder("Project name");
+      await expect.element(thirdProjectInput).toBeVisible();
+      await thirdProjectInput.fill("Gamma");
+      const thirdProjectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render for the third project.",
+      );
+      thirdProjectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sidebarHasProjectName("Gamma")).toBe(true);
+      });
+      const projectCreates = wsRequests.filter(
+        (request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          request.type === "project.create",
+      );
+      expect(projectCreates).toHaveLength(3);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("ignores a same-tick second submit while creating a project", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-double-submit-test" as MessageId,
+        targetText: "project double submit test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      addProjectButton.click();
+      const projectInput = page.getByPlaceholder("Project name");
+      await expect.element(projectInput).toBeVisible();
+      await projectInput.fill("Rapid");
+      const projectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sidebarHasProjectName("Rapid")).toBe(true);
+      });
+
+      const projectCreates = wsRequests.filter(
+        (request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          request.type === "project.create",
+      );
+      expect(projectCreates).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("can send the first message from the third newly created project without duplicate bootstrap creates", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    const createdProjectIds: ProjectId[] = [];
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-third-bootstrap-test" as MessageId,
+        targetText: "project third bootstrap test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          createdProjectIds.push((body as unknown as { projectId: ProjectId }).projectId);
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      for (const name of ["Alpha", "Beta", "Gamma"]) {
+        addProjectButton.click();
+        const projectInput = page.getByPlaceholder("Project name");
+        await expect.element(projectInput).toBeVisible();
+        await projectInput.fill(name);
+        const projectInputElement = await waitForElement(
+          () =>
+            document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+          `Project creation input did not render for ${name}.`,
+        );
+        projectInputElement.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(sidebarHasProjectName(name)).toBe(true);
+        });
+      }
+
+      expect(createdProjectIds).toHaveLength(3);
+
+      const draftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should switch to a draft thread for the third project.",
+      );
+      const draftId = draftIdFromPath(draftPath);
+      useComposerDraftStore.getState().setPrompt(draftId, "hello from gamma");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStarts = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ) as Array<{
+            _tag: string;
+            type?: string;
+            bootstrap?: {
+              createThread?: {
+                projectId?: ProjectId;
+              };
+            };
+          }>;
+          expect(turnStarts).toHaveLength(1);
+          expect(turnStarts[0]?.bootstrap?.createThread?.projectId).toBe(createdProjectIds[2]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deletes an empty newly created project without confirmation and allows creating another immediately", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    let createdProjectId: ProjectId | null = null;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-delete-empty-test" as MessageId,
+        targetText: "project delete empty test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          createdProjectId = (body as unknown as { projectId: ProjectId }).projectId;
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      addProjectButton.click();
+      const projectInput = page.getByPlaceholder("Project name");
+      await expect.element(projectInput).toBeVisible();
+      await projectInput.fill("Disposable");
+      const projectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(createdProjectId).not.toBeNull();
+      });
+
+      const deleteButton = await waitForElement(
+        () =>
+          createdProjectId
+            ? (document.querySelector(
+                `[data-testid="project-delete-${createdProjectId}"]`,
+              ) as HTMLButtonElement | null)
+            : null,
+        "Delete button for the created project did not render.",
+      );
+      deleteButton.click();
+
+      await vi.waitFor(
+        () => {
+          if (!createdProjectId) {
+            throw new Error("Expected created project id to be available.");
+          }
+          expect(
+            document.querySelector(`[data-testid="project-row-${createdProjectId}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(confirmSpy).not.toHaveBeenCalled();
+
+      addProjectButton.click();
+      const replacementProjectInput = page.getByPlaceholder("Project name");
+      await expect.element(replacementProjectInput).toBeVisible();
+      await replacementProjectInput.fill("Replacement");
+      const replacementProjectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render for the replacement project.",
+      );
+      replacementProjectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(
+          [...document.querySelectorAll('[data-testid^="project-row-"]')].some((element) =>
+            element.textContent?.includes("Replacement"),
+          ),
+        ).toBe(true);
+      });
+    } finally {
+      confirmSpy.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
+  it("confirms before deleting a project that still has draft work", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    let createdProjectId: ProjectId | null = null;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-delete-confirm-test" as MessageId,
+        targetText: "project delete confirm test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          createdProjectId = (body as unknown as { projectId: ProjectId }).projectId;
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      addProjectButton.click();
+      const projectInput = page.getByPlaceholder("Project name");
+      await expect.element(projectInput).toBeVisible();
+      await projectInput.fill("Guarded");
+      const projectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      const draftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should switch to a new draft thread UUID.",
+      );
+      const draftId = draftIdFromPath(draftPath);
+      useComposerDraftStore.getState().setPrompt(draftId, "unfinished draft work");
+
+      await vi.waitFor(() => {
+        expect(createdProjectId).not.toBeNull();
+      });
+
+      const deleteButton = await waitForElement(
+        () =>
+          createdProjectId
+            ? (document.querySelector(
+                `[data-testid="project-delete-${createdProjectId}"]`,
+              ) as HTMLButtonElement | null)
+            : null,
+        "Delete button for the created project did not render.",
+      );
+      deleteButton.click();
+
+      await vi.waitFor(() => {
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(
+        document.querySelector(`[data-testid="project-row-${createdProjectId}"]`),
+      ).not.toBeNull();
+    } finally {
+      confirmSpy.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
+  it("rolls back a newly created project if opening its first draft thread fails", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    let createdProjectId: ProjectId | null = null;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-rollback-test" as MessageId,
+        targetText: "project rollback test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          createdProjectId = (body as unknown as { projectId: ProjectId }).projectId;
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    const navigateSpy = vi
+      .spyOn(mounted.router, "navigate")
+      .mockRejectedValueOnce(new Error("draft route failed"));
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+
+      addProjectButton.click();
+      const projectInput = page.getByPlaceholder("Project name");
+      await expect.element(projectInput).toBeVisible();
+      await projectInput.fill("Rollback");
+      const projectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(createdProjectId).not.toBeNull();
+      });
+
+      await vi.waitFor(
+        () => {
+          if (!createdProjectId) {
+            throw new Error("Expected created project id to be available.");
+          }
+          expect(
+            document.querySelector(`[data-testid="project-row-${createdProjectId}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const dispatchedCommandTypes = wsRequests
+        .filter((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand)
+        .map((request) => request.type);
+      expect(dispatchedCommandTypes).toContain("project.create");
+      expect(dispatchedCommandTypes).toContain("project.delete");
+    } finally {
+      navigateSpy.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
+  it("starts the first turn for a newly created project exactly once against that project id", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    let createdProjectId: ProjectId | null = null;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-bootstrap-test" as MessageId,
+        targetText: "project bootstrap test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "project.create") {
+          createdProjectId = (body as unknown as { projectId: ProjectId }).projectId;
+          sequence += 1;
+          return { sequence };
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const addProjectButton = await waitForElement(
+        () =>
+          document.querySelector('button[aria-label="Add project"]') as HTMLButtonElement | null,
+        "Add project button did not render.",
+      );
+      addProjectButton.click();
+      const projectInput = page.getByPlaceholder("Project name");
+      await expect.element(projectInput).toBeVisible();
+      await projectInput.fill("Gamma");
+      const projectInputElement = await waitForElement(
+        () =>
+          document.querySelector('input[placeholder="Project name"]') as HTMLInputElement | null,
+        "Project creation input did not render.",
+      );
+      projectInputElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+
+      const draftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should switch to a draft thread for the new project.",
+      );
+      const draftId = draftIdFromPath(draftPath);
+      useComposerDraftStore.getState().setPrompt(draftId, "hello from gamma");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStarts = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ) as Array<{
+            _tag: string;
+            type?: string;
+            bootstrap?: {
+              createThread?: {
+                projectId?: ProjectId;
+              };
+            };
+          }>;
+          expect(turnStarts).toHaveLength(1);
+          expect(turnStarts[0]?.bootstrap?.createThread?.projectId).toBe(createdProjectId);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("recovers a failed draft bootstrap by reconciling the authoritative snapshot", async () => {
+    let sequence = fixture.snapshot.snapshotSequence;
+    let recoveredThreadId: ThreadId | null = null;
+    let shouldRejectFirstDraftBootstrap = true;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-draft-bootstrap-recovery-test" as MessageId,
+        targetText: "draft bootstrap recovery test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
+          return recoveredThreadId
+            ? addThreadToSnapshot(fixture.snapshot, recoveredThreadId)
+            : fixture.snapshot;
+        }
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "thread.turn.start" && shouldRejectFirstDraftBootstrap) {
+          shouldRejectFirstDraftBootstrap = false;
+          recoveredThreadId = (body as unknown as { threadId: ThreadId }).threadId;
+          return Promise.reject(new Error("connection lost after bootstrap"));
+        }
+        sequence += 1;
+        return { sequence };
+      },
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newDraftId = draftIdFromPath(newThreadPath);
+      const newThreadId = draftThreadIdFor(newDraftId);
+
+      useComposerDraftStore.getState().setPrompt(newDraftId, "recover me");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(newThreadId),
+        "Failed local draft bootstrap should reconcile to the materialized server thread.",
+      );
+
+      const bootstrapTurnStarts = wsRequests.filter(
+        (request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          request.type === "thread.turn.start" &&
+          typeof request.bootstrap === "object" &&
+          request.bootstrap !== null &&
+          "createThread" in request.bootstrap,
+      );
+      expect(bootstrapTurnStarts).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("releases a stuck draft bootstrap when snapshot reconciliation never succeeds", async () => {
+    let shouldRejectFirstDraftBootstrap = true;
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-draft-bootstrap-unknown-recovery-test" as MessageId,
+        targetText: "draft bootstrap unknown recovery test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
+          return Promise.reject(new Error("snapshot unavailable"));
+        }
+        if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return undefined;
+        }
+        if (body.type === "thread.turn.start" && shouldRejectFirstDraftBootstrap) {
+          shouldRejectFirstDraftBootstrap = false;
+          return Promise.reject(new Error("connection lost after bootstrap"));
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newDraftId = draftIdFromPath(newThreadPath);
+
+      useComposerDraftStore.getState().setPrompt(newDraftId, "recover me eventually");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().getDraftSession(newDraftId)?.promotedTo,
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 25 },
+      );
+
+      await expect
+        .element(
+          page.getByText("Initial thread creation did not finish materializing. Retry the send."),
+        )
+        .toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe(`/draft/${newDraftId}`);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("canonicalizes stale promoted draft routes to the server thread route", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -3430,6 +4262,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const newThreadId = draftThreadIdFor(newDraftId);
 
       await promoteDraftThreadViaDomainEvent(newThreadId);
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftSession(newDraftId)).toBeNull();
+          expect(
+            useComposerDraftStore.getState().getFinalizedPromotedThreadRef(newDraftId),
+          ).toEqual(threadRefFor(newThreadId));
+        },
+        { timeout: 8_000, interval: 16 },
+      );
 
       await mounted.router.navigate({
         to: "/draft/$draftId",
@@ -3443,6 +4284,119 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a finalized promoted draft route mounted until the server thread snapshot arrives", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-draft-promoted-wait-test" as MessageId,
+        targetText: "draft promoted wait test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newDraftId = draftIdFromPath(newThreadPath);
+      const newThreadId = draftThreadIdFor(newDraftId);
+      const promotedThreadRef = threadRefFor(newThreadId);
+
+      useComposerDraftStore.getState().setDraftThreadContext(newDraftId, {
+        promotedTo: promotedThreadRef,
+      });
+      finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+      await mounted.router.navigate({
+        to: "/draft/$draftId",
+        params: { draftId: newDraftId },
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/draft/${newDraftId}`);
+        },
+        { timeout: 1_000, interval: 16 },
+      );
+
+      await materializePromotedDraftThreadViaDomainEvent(newThreadId);
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(newThreadId),
+        "Finalized promoted draft routes should wait for the canonical server thread.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not keep a server thread route alive just because a draft with the same ref exists", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      initialPath: serverThreadPath(THREAD_ID),
+      configureFixture: () => {
+        setDraftThreadWithoutWorktree();
+      },
+    });
+
+    try {
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/",
+        "Server routes should not fall back to a matching local draft session.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("redirects home when the active route thread is deleted", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-route-delete-test" as MessageId,
+        targetText: "route delete test",
+      }),
+    });
+
+    try {
+      await waitForComposerEditor();
+
+      sendOrchestrationDomainEvent({
+        sequence: fixture.snapshot.snapshotSequence + 1,
+        eventId: EventId.make("event-thread-deleted-active-route"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: NOW_ISO,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.deleted",
+        payload: {
+          threadId: THREAD_ID,
+          deletedAt: NOW_ISO,
+        },
+      });
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/",
+        "Deleting the active route thread should redirect the app home.",
+      );
     } finally {
       await mounted.cleanup();
     }

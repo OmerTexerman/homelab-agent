@@ -1,4 +1,12 @@
 import * as React from "react";
+import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
+import type {
+  CommandId,
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -7,6 +15,8 @@ import {
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
+import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
+import { draftSessionHasMeaningfulWork } from "../draftThreadLifecycle";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 
@@ -59,6 +69,10 @@ type ThreadStatusInput = Pick<
 export interface ThreadJumpHintVisibilityController {
   sync: (shouldShow: boolean) => void;
   dispose: () => void;
+}
+
+function throwWithCause(message: string, cause: Error): never {
+  throw new Error(message, { cause });
 }
 
 export function createThreadJumpHintVisibilityController(input: {
@@ -202,6 +216,137 @@ export function resolveSidebarNewThreadSeedContext(input: {
   return {
     envMode: input.defaultEnvMode,
   };
+}
+
+export function buildSidebarProjectDeletionSummary(input: {
+  memberProjectRefs: readonly ScopedProjectRef[];
+  threads: readonly Pick<SidebarThreadSummary, "environmentId" | "projectId" | "id">[];
+  draftThreadsByThreadKey: Record<
+    string,
+    Pick<DraftThreadState, "environmentId" | "projectId" | "promotedTo">
+  >;
+  draftsByThreadKey: Record<
+    string,
+    Pick<ComposerThreadDraftState, "prompt" | "images" | "terminalContexts"> | undefined
+  >;
+}): {
+  projectThreadRefs: ScopedThreadRef[];
+  projectThreadCount: number;
+  projectDraftThreadCount: number;
+  shouldConfirmDelete: boolean;
+  totalThreadCount: number;
+} {
+  const memberProjectKeys = new Set(input.memberProjectRefs.map(scopedProjectKey));
+  const projectThreadRefs = input.threads
+    .filter((thread) =>
+      memberProjectKeys.has(
+        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+      ),
+    )
+    .map((thread) => scopeThreadRef(thread.environmentId, thread.id));
+  const projectDraftThreadCount = Object.entries(input.draftThreadsByThreadKey).filter(
+    ([draftId, draftThread]) =>
+      memberProjectKeys.has(
+        scopedProjectKey(scopeProjectRef(draftThread.environmentId, draftThread.projectId)),
+      ) &&
+      draftSessionHasMeaningfulWork({
+        draftThread,
+        composerDraft: input.draftsByThreadKey[draftId],
+      }),
+  ).length;
+  const projectThreadCount = projectThreadRefs.length;
+  const totalThreadCount = projectThreadCount + projectDraftThreadCount;
+
+  return {
+    projectThreadRefs,
+    projectThreadCount,
+    projectDraftThreadCount,
+    shouldConfirmDelete: totalThreadCount > 0,
+    totalThreadCount,
+  };
+}
+
+export async function createProjectWithInitialDraftThread(input: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  title: string;
+  projectRef: ScopedProjectRef;
+  workspaceRoot: string;
+  createdAt: string;
+  projectCreateCommandId: CommandId;
+  defaultEnvMode: SidebarNewThreadEnvMode;
+  dispatchProjectCreate: () => Promise<unknown>;
+  acknowledgeProjectCreated: (input: {
+    environmentId: EnvironmentId;
+    projectId: ProjectId;
+    title: string;
+    workspaceRoot: string;
+    createdAt: string;
+    commandId: CommandId;
+  }) => void;
+  openInitialDraftThread: (
+    projectRef: ScopedProjectRef,
+    options: { envMode: SidebarNewThreadEnvMode },
+  ) => Promise<unknown>;
+  clearProjectDraftThread: (projectRef: ScopedProjectRef) => void;
+  createRollbackCommandId: () => CommandId;
+  now: () => string;
+  dispatchProjectDelete: (commandId: CommandId) => Promise<unknown>;
+  acknowledgeProjectDeleted: (input: {
+    environmentId: EnvironmentId;
+    projectId: ProjectId;
+    deletedAt: string;
+    commandId: CommandId;
+  }) => void;
+}): Promise<void> {
+  await input.dispatchProjectCreate();
+  input.acknowledgeProjectCreated({
+    environmentId: input.environmentId,
+    projectId: input.projectId,
+    title: input.title,
+    workspaceRoot: input.workspaceRoot,
+    createdAt: input.createdAt,
+    commandId: input.projectCreateCommandId,
+  });
+
+  try {
+    await input.openInitialDraftThread(input.projectRef, {
+      envMode: input.defaultEnvMode,
+    });
+  } catch (threadBootstrapError) {
+    const threadBootstrapCause =
+      threadBootstrapError instanceof Error
+        ? threadBootstrapError
+        : new Error("Failed to start the first thread for the new project.");
+    input.clearProjectDraftThread(input.projectRef);
+    const rollbackCommandId = input.createRollbackCommandId();
+    const deletedAt = input.now();
+    try {
+      await input.dispatchProjectDelete(rollbackCommandId);
+      input.acknowledgeProjectDeleted({
+        environmentId: input.environmentId,
+        projectId: input.projectId,
+        deletedAt,
+        commandId: rollbackCommandId,
+      });
+    } catch (rollbackError) {
+      const rollbackCause =
+        rollbackError instanceof Error
+          ? rollbackError
+          : new Error("Project rollback also failed.", { cause: threadBootstrapCause });
+      throwWithCause(
+        [
+          threadBootstrapCause.message,
+          `Project rollback also failed: ${rollbackCause.message}`,
+        ].join(" "),
+        rollbackCause,
+      );
+    }
+    throwWithCause(
+      `${threadBootstrapCause.message} The new project was rolled back.`,
+      threadBootstrapCause,
+    );
+  }
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {

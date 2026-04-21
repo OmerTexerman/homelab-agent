@@ -13,6 +13,7 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireThreadReadyForTurnStart,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -120,19 +121,41 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "project.deleted",
-        payload: {
-          projectId: command.projectId,
-          deletedAt: occurredAt,
+      const activeProjectThreads = readModel.threads.filter(
+        (thread) => thread.projectId === command.projectId && thread.deletedAt === null,
+      );
+      return [
+        ...activeProjectThreads.map((thread) =>
+          Object.assign(
+            withEventBase({
+              aggregateKind: "thread" as const,
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            }),
+            {
+              type: "thread.deleted" as const,
+              payload: {
+                threadId: thread.id,
+                deletedAt: occurredAt,
+              },
+            },
+          ),
+        ),
+        {
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "project.deleted" as const,
+          payload: {
+            projectId: command.projectId,
+            deletedAt: occurredAt,
+          },
         },
-      };
+      ];
     }
 
     case "thread.create": {
@@ -319,7 +342,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
-      const targetThread = yield* requireThread({
+      const targetThread = yield* requireThreadReadyForTurnStart({
         readModel,
         command,
         threadId: command.threadId,
@@ -384,8 +407,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,
         },

@@ -43,6 +43,7 @@ describe("deriveOrchestrationBatchEffects", () => {
     const createdThreadId = ThreadId.make("thread-created");
     const deletedThreadId = ThreadId.make("thread-deleted");
     const archivedThreadId = ThreadId.make("thread-archived");
+    const deletedProjectId = ProjectId.make("project-deleted");
 
     const effects = deriveOrchestrationBatchEffects([
       makeEvent("thread.created", {
@@ -66,10 +67,15 @@ describe("deriveOrchestrationBatchEffects", () => {
         archivedAt: "2026-02-27T00:00:02.000Z",
         updatedAt: "2026-02-27T00:00:02.000Z",
       }),
+      makeEvent("project.deleted", {
+        projectId: deletedProjectId,
+        deletedAt: "2026-02-27T00:00:03.000Z",
+      }),
     ]);
 
     expect(effects.promoteDraftThreadIds).toEqual([createdThreadId]);
     expect(effects.clearDeletedThreadIds).toEqual([deletedThreadId]);
+    expect(effects.clearDeletedProjectIds).toEqual([deletedProjectId]);
     expect(effects.removeTerminalStateThreadIds).toEqual([deletedThreadId, archivedThreadId]);
     expect(effects.needsProviderInvalidation).toBe(false);
   });
@@ -108,6 +114,7 @@ describe("deriveOrchestrationBatchEffects", () => {
 
     expect(effects.promoteDraftThreadIds).toEqual([threadId]);
     expect(effects.clearDeletedThreadIds).toEqual([]);
+    expect(effects.clearDeletedProjectIds).toEqual([]);
     expect(effects.removeTerminalStateThreadIds).toEqual([]);
     expect(effects.needsProviderInvalidation).toBe(true);
   });
@@ -129,6 +136,7 @@ describe("deriveOrchestrationBatchEffects", () => {
 
     expect(effects.promoteDraftThreadIds).toEqual([]);
     expect(effects.clearDeletedThreadIds).toEqual([]);
+    expect(effects.clearDeletedProjectIds).toEqual([]);
     expect(effects.removeTerminalStateThreadIds).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Layer } from "effect";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { TestClock } from "effect/testing";
 
 import { runProcess } from "../../processRunner.ts";
@@ -66,6 +67,17 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
 
       expect(nonGitIdentity).toBeNull();
       expect(noRemoteIdentity).toBeNull();
+    }).pipe(Effect.provide(RepositoryIdentityResolverLive)),
+  );
+
+  it.effect("returns null for logical homelab project roots", () =>
+    Effect.gen(function* () {
+      const resolver = yield* RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(
+        createLogicalProjectWorkspaceRoot("logical-project-alpha"),
+      );
+
+      expect(identity).toBeNull();
     }).pipe(Effect.provide(RepositoryIdentityResolverLive)),
   );
 

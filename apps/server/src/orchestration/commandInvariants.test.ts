@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
@@ -13,9 +14,12 @@ import { Effect } from "effect";
 import {
   findThreadById,
   listThreadsByProjectId,
+  requireProject,
+  requireProjectAbsent,
   requireNonNegativeInteger,
   requireThread,
   requireThreadAbsent,
+  requireThreadReadyForTurnStart,
 } from "./commandInvariants.ts";
 
 const now = new Date().toISOString();
@@ -49,6 +53,19 @@ const readModel: OrchestrationReadModel = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
+    },
+    {
+      id: ProjectId.make("project-deleted"),
+      title: "Project Deleted",
+      workspaceRoot: "/tmp/project-deleted",
+      defaultModelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: now,
     },
   ],
   threads: [
@@ -98,6 +115,29 @@ const readModel: OrchestrationReadModel = {
       checkpoints: [],
       deletedAt: null,
     },
+    {
+      id: ThreadId.make("thread-deleted"),
+      projectId: ProjectId.make("project-a"),
+      title: "Thread Deleted",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      latestTurn: null,
+      messages: [],
+      session: null,
+      activities: [],
+      proposedPlans: [],
+      checkpoints: [],
+      deletedAt: now,
+    },
   ],
 };
 
@@ -144,6 +184,119 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("does not exist");
+  });
+
+  it("rejects turn starts when a thread already has a pending user turn", async () => {
+    const pendingTurnReadModel: OrchestrationReadModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === ThreadId.make("thread-1")
+          ? {
+              ...thread,
+              messages: [
+                {
+                  id: MessageId.make("msg-pending"),
+                  role: "user",
+                  text: "still pending",
+                  attachments: [],
+                  turnId: null,
+                  streaming: false,
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              ],
+            }
+          : thread,
+      ),
+    };
+
+    await expect(
+      Effect.runPromise(
+        requireThreadReadyForTurnStart({
+          readModel: pendingTurnReadModel,
+          command: messageSendCommand,
+          threadId: ThreadId.make("thread-1"),
+        }),
+      ),
+    ).rejects.toThrow("already has a pending user turn");
+  });
+
+  it("rejects turn starts when a thread already has an active running turn", async () => {
+    const runningTurnReadModel: OrchestrationReadModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === ThreadId.make("thread-1")
+          ? {
+              ...thread,
+              session: {
+                threadId: ThreadId.make("thread-1"),
+                status: "running",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: TurnId.make("turn-running"),
+                lastError: null,
+                updatedAt: now,
+              },
+            }
+          : thread,
+      ),
+    };
+
+    await expect(
+      Effect.runPromise(
+        requireThreadReadyForTurnStart({
+          readModel: runningTurnReadModel,
+          command: messageSendCommand,
+          threadId: ThreadId.make("thread-1"),
+        }),
+      ),
+    ).rejects.toThrow("already has an active turn");
+  });
+
+  it("treats deleted projects as absent for active command flows", async () => {
+    await expect(
+      Effect.runPromise(
+        requireProject({
+          readModel,
+          command: {
+            type: "thread.create",
+            commandId: CommandId.make("cmd-project-deleted-require"),
+            threadId: ThreadId.make("thread-project-deleted-require"),
+            projectId: ProjectId.make("project-deleted"),
+            title: "new",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+          },
+          projectId: ProjectId.make("project-deleted"),
+        }),
+      ),
+    ).rejects.toThrow("does not exist");
+
+    await Effect.runPromise(
+      requireProjectAbsent({
+        readModel,
+        command: {
+          type: "project.create",
+          commandId: CommandId.make("cmd-project-deleted-absent"),
+          projectId: ProjectId.make("project-deleted"),
+          title: "revived",
+          workspaceRoot: "/tmp/project-deleted",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt: now,
+        },
+        projectId: ProjectId.make("project-deleted"),
+      }),
+    );
   });
 
   it("requires missing thread for create flows", async () => {
@@ -194,6 +347,41 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
+
+    await Effect.runPromise(
+      requireThreadAbsent({
+        readModel,
+        command: {
+          type: "thread.create",
+          commandId: CommandId.make("cmd-thread-deleted-absent"),
+          threadId: ThreadId.make("thread-deleted"),
+          projectId: ProjectId.make("project-a"),
+          title: "revived",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        },
+        threadId: ThreadId.make("thread-deleted"),
+      }),
+    );
+  });
+
+  it("treats deleted threads as absent for active command flows", async () => {
+    await expect(
+      Effect.runPromise(
+        requireThread({
+          readModel,
+          command: messageSendCommand,
+          threadId: ThreadId.make("thread-deleted"),
+        }),
+      ),
+    ).rejects.toThrow("does not exist");
   });
 
   it("requires non-negative integers", async () => {

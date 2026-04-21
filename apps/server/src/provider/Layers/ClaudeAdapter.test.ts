@@ -355,7 +355,10 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(createInput?.options.cwd, runtimeHostWorkspace);
       assert.deepEqual(createInput?.options.additionalDirectories, [runtimeHostWorkspace]);
+      assert.equal(createInput?.options.permissionMode, "bypassPermissions");
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
       assert.equal(createInput?.options.env?.CLAUDE_CONFIG_DIR, "/home/codex/.claude");
+      assert.equal(createInput?.options.env?.IS_SANDBOX, "1");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(
@@ -1256,6 +1259,124 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect(
+    "treats Claude ede diagnostics after a stop as interrupted without a runtime error",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello",
+          attachments: [],
+        });
+
+        harness.query.emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: false,
+          errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],
+          stop_reason: "tool_use",
+          session_id: "sdk-session-ede",
+          uuid: "result-ede",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        assert.deepEqual(
+          runtimeEvents.map((event) => event.type),
+          [
+            "session.started",
+            "session.configured",
+            "session.state.changed",
+            "turn.started",
+            "thread.started",
+            "turn.completed",
+          ],
+        );
+
+        const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+        assert.equal(turnCompleted?.type, "turn.completed");
+        if (turnCompleted?.type === "turn.completed") {
+          assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+          assert.equal(turnCompleted.payload.state, "interrupted");
+          assert.equal(
+            turnCompleted.payload.errorMessage,
+            "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use",
+          );
+          assert.equal(turnCompleted.payload.stopReason, "tool_use");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect(
+    "treats Claude ede diagnostics with a null stop reason as interrupted without a runtime error",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello again",
+          attachments: [],
+        });
+
+        harness.query.emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: false,
+          errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+          stop_reason: null,
+          session_id: "sdk-session-ede-null",
+          uuid: "result-ede-null",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+        assert.equal(turnCompleted?.type, "turn.completed");
+        if (turnCompleted?.type === "turn.completed") {
+          assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+          assert.equal(turnCompleted.payload.state, "interrupted");
+          assert.equal(
+            turnCompleted.payload.errorMessage,
+            "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+          );
+          assert.equal(turnCompleted.payload.stopReason, null);
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("closes the session when the Claude stream aborts after a turn starts", () => {
     const harness = makeHarness();
@@ -2409,6 +2530,50 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("maps stale Claude resume failures to ProviderAdapterSessionNotFoundError", () => {
+    const failingLayer = makeClaudeAdapterLive({
+      createQuery: () => {
+        throw new Error("No conversation found with session ID: stale-session-id");
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter
+        .startSession({
+          threadId: RESUME_THREAD_ID,
+          provider: "claudeAgent",
+          resumeCursor: {
+            threadId: "resume-thread-1",
+            resume: "550e8400-e29b-41d4-a716-446655440000",
+            turnCount: 3,
+          },
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+
+      assert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
+      if (result.failure._tag !== "ProviderAdapterSessionNotFoundError") {
+        return;
+      }
+
+      assert.equal(result.failure.provider, "claudeAgent");
+      assert.equal(result.failure.threadId, RESUME_THREAD_ID);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(failingLayer),
+    );
+  });
+
   it.effect("uses an app-generated Claude session id for fresh sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2492,6 +2657,17 @@ describe("ClaudeAdapterLive", () => {
         ).pipe(Stream.runHead, Effect.forkChild);
 
         harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-rollback",
+          uuid: "assistant-second",
+          parent_tool_use_id: null,
+          message: {
+            id: "assistant-message-second",
+            content: [{ type: "text", text: "second response" }],
+          },
+        } as unknown as SDKMessage);
+
+        harness.query.emit({
           type: "result",
           subtype: "success",
           is_error: false,
@@ -2516,6 +2692,18 @@ describe("ClaudeAdapterLive", () => {
         const threadAfterRollback = yield* adapter.readThread(session.threadId);
         assert.equal(threadAfterRollback.turns.length, 1);
         assert.equal(threadAfterRollback.turns[0]?.id, firstTurn.turnId);
+
+        const sessionsAfterRollback = yield* adapter.listSessions();
+        const activeSession = sessionsAfterRollback.find(
+          (candidate) => candidate.threadId === session.threadId,
+        );
+        const resumeCursor =
+          activeSession?.resumeCursor &&
+          typeof activeSession.resumeCursor === "object" &&
+          !Array.isArray(activeSession.resumeCursor)
+            ? (activeSession.resumeCursor as { resumeSessionAt?: string })
+            : null;
+        assert.equal(resumeCursor?.resumeSessionAt, undefined);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
         Effect.provide(harness.layer),

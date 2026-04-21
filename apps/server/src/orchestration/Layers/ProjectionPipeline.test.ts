@@ -20,6 +20,7 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { RepositoryIdentityResolverLive } from "../../project/Layers/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
@@ -167,6 +168,55 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       for (const row of stateRows) {
         assert.equal(row.lastAppliedSequence, 3);
       }
+    }),
+  );
+
+  it.effect("deletes pending turn starts when a thread is deleted", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionTurnRepository = yield* ProjectionTurnRepository;
+      const now = new Date().toISOString();
+      const threadId = ThreadId.make("thread-pending-delete");
+
+      yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-thread-pending-delete-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-thread-pending-delete-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-thread-pending-delete-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("msg-thread-pending-delete-1"),
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.deleted",
+        eventId: EventId.make("evt-thread-pending-delete-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-thread-pending-delete-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-thread-pending-delete-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          deletedAt: now,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const pendingTurnStarts = yield* projectionTurnRepository.listPendingTurnStarts();
+      assert.deepStrictEqual(pendingTurnStarts, []);
     }),
   );
 });

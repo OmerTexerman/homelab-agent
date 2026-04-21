@@ -8,6 +8,7 @@ import {
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { findLatestPendingUserMessageLike } from "./messageTurnBinding.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -438,11 +439,30 @@ export function projectEvent(
           event.type,
           "session",
         );
+        const nextMessages =
+          session.status === "running" && session.activeTurnId !== null
+            ? (() => {
+                const pendingUserMessage = findLatestPendingUserMessageLike(thread.messages);
+                if (!pendingUserMessage) {
+                  return thread.messages;
+                }
+                return thread.messages.map((message) =>
+                  message.id === pendingUserMessage.id
+                    ? {
+                        ...message,
+                        turnId: session.activeTurnId,
+                        updatedAt: session.updatedAt,
+                      }
+                    : message,
+                );
+              })()
+            : thread.messages;
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            messages: nextMessages,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {

@@ -337,6 +337,12 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const bashProfilePath = path.join(runtimeHome, ".bash_profile");
       const bashRcPath = path.join(runtimeHome, ".bashrc");
       const homelabCliPath = path.join(runtimeHome, ".homelab", "bin", "homelab");
+      const homelabSecretToFilePath = path.join(
+        runtimeHome,
+        ".homelab",
+        "bin",
+        "homelab-secret-to-file",
+      );
       const profilePath = path.join(runtimeHome, ".profile");
       const zshEnvPath = path.join(runtimeHome, ".zshenv");
       const agentsPath = path.join(runtimeWorkspace, "AGENTS.md");
@@ -346,6 +352,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(yield* fileSystem.exists(bashProfilePath), true);
       assert.equal(yield* fileSystem.exists(bashRcPath), true);
       assert.equal(yield* fileSystem.exists(homelabCliPath), true);
+      assert.equal(yield* fileSystem.exists(homelabSecretToFilePath), true);
       assert.equal(yield* fileSystem.exists(profilePath), true);
       assert.equal(yield* fileSystem.exists(zshEnvPath), true);
       assert.equal(yield* fileSystem.exists(agentsPath), true);
@@ -368,6 +375,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 
       const codexWrapperContents = yield* fileSystem.readFileString(codexWrapperPath);
       const homelabCliContents = yield* fileSystem.readFileString(homelabCliPath);
+      const homelabSecretToFileContents = yield* fileSystem.readFileString(homelabSecretToFilePath);
       const agentsContents = yield* fileSystem.readFileString(agentsPath);
       const claudeContents = yield* fileSystem.readFileString(claudePath);
       assert.match(codexWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/);
@@ -376,9 +384,22 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.match(homelabCliContents, /--example/);
       assert.match(homelabCliContents, /--schema/);
       assert.match(homelabCliContents, /Waiting for secret/);
+      assert.match(
+        homelabCliContents,
+        /Create or update a secret reference, open the secure UI prompt, and wait for the value/,
+      );
       assert.match(homelabCliContents, /"Submit a homelab promotion envelope\.\\n\\n"/);
       assert.match(homelabCliContents, /"Examples:\\n"/);
+      assert.match(homelabSecretToFileContents, /BEGIN OPENSSH PRIVATE KEY/);
+      assert.match(
+        homelabSecretToFileContents,
+        /base64-encoded file contents, and bare OpenSSH key payloads/,
+      );
       assert.match(agentsContents, /homelab secret-request/);
+      assert.match(
+        agentsContents,
+        /homelab-secret-to-file PROXMOX_ROOT_SSH_KEY ~\/\.ssh\/proxmox_root/,
+      );
       assert.match(agentsContents, /homelab --help\s+# Confirm the installed CLI surface/);
       assert.match(
         agentsContents,
@@ -390,6 +411,14 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
       assert.match(
         agentsContents,
+        /When you identify a new service, runtime, platform, appliance, or tool in the user's homelab,/,
+      );
+      assert.match(
+        agentsContents,
+        /search for its official docs, APIs, CLIs, SDKs, health endpoints, auth methods, and automation/,
+      );
+      assert.match(
+        agentsContents,
         /The workspace may be sparse\. Seeing only runtime helper files such as `AGENTS\.md` and/,
       );
       assert.match(
@@ -398,6 +427,21 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
       assert.match(agentsContents, /homelab promote --schema/);
       assert.match(agentsContents, /"id": "host-main"/);
+      assert.match(agentsContents, /"status": "active"/);
+      assert.match(
+        agentsContents,
+        /If a missing secret is blocking the task, run `homelab secret-request`\s+yourself immediately\./,
+      );
+      assert.match(agentsContents, /Do not tell the user to run the command for you\./);
+      assert.match(
+        agentsContents,
+        /If `homelab secrets` is empty, or a useful credential is missing from the\s+registry, create the missing secret references yourself/,
+      );
+      assert.match(agentsContents, /Secret reference creation is normal work\./);
+      assert.match(
+        agentsContents,
+        /The helper handles raw multiline secret contents, armored private keys, base64-\s+encoded file contents, and bare OpenSSH private-key payloads\./,
+      );
       assert.match(
         agentsContents,
         /`\/workspace` is this thread's scratch area inside the container\./,

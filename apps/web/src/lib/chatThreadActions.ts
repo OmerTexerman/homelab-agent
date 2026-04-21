@@ -1,5 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 interface ThreadContextLike {
@@ -21,7 +21,7 @@ interface NewThreadHandler {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
     },
-  ): Promise<void>;
+  ): Promise<ThreadId>;
 }
 
 type NewThreadOptions = NonNullable<Parameters<NewThreadHandler>[1]>;

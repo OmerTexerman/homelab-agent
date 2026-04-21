@@ -617,6 +617,25 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
   };
 }
 
+function removeProjectState(state: EnvironmentState, projectId: ProjectId): EnvironmentState {
+  let nextState = state;
+  const threadIds = state.threadIdsByProjectId[projectId] ?? EMPTY_THREAD_IDS;
+  for (const threadId of threadIds) {
+    nextState = removeThreadState(nextState, threadId);
+  }
+
+  if (!nextState.projectById[projectId]) {
+    return nextState;
+  }
+
+  const { [projectId]: _removedProject, ...projectById } = nextState.projectById;
+  return {
+    ...nextState,
+    projectById,
+    projectIds: removeId(nextState.projectIds, projectId),
+  };
+}
+
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") {
     return "error" as const;
@@ -998,33 +1017,17 @@ function applyEnvironmentOrchestrationEvent(
         environmentId,
       );
       const existingProjectId =
-        state.projectIds.find(
-          (projectId) =>
-            projectId === event.payload.projectId ||
-            state.projectById[projectId]?.cwd === event.payload.workspaceRoot,
-        ) ?? null;
+        state.projectIds.find((projectId) => projectId === event.payload.projectId) ?? null;
       let projectById = state.projectById;
       let projectIds = state.projectIds;
-
-      if (existingProjectId !== null && existingProjectId !== nextProject.id) {
-        const { [existingProjectId]: _removedProject, ...restProjectById } = state.projectById;
-        projectById = {
-          ...restProjectById,
-          [nextProject.id]: nextProject,
-        };
-        projectIds = state.projectIds.map((projectId) =>
-          projectId === existingProjectId ? nextProject.id : projectId,
-        );
-      } else {
-        projectById = {
-          ...state.projectById,
-          [nextProject.id]: nextProject,
-        };
-        projectIds =
-          existingProjectId === null && !state.projectIds.includes(nextProject.id)
-            ? [...state.projectIds, nextProject.id]
-            : state.projectIds;
-      }
+      projectById = {
+        ...state.projectById,
+        [nextProject.id]: nextProject,
+      };
+      projectIds =
+        existingProjectId === null && !state.projectIds.includes(nextProject.id)
+          ? [...state.projectIds, nextProject.id]
+          : state.projectIds;
 
       return {
         ...state,
@@ -1067,15 +1070,7 @@ function applyEnvironmentOrchestrationEvent(
     }
 
     case "project.deleted": {
-      if (!state.projectById[event.payload.projectId]) {
-        return state;
-      }
-      const { [event.payload.projectId]: _removedProject, ...projectById } = state.projectById;
-      return {
-        ...state,
-        projectById,
-        projectIds: removeId(state.projectIds, event.payload.projectId),
-      };
+      return removeProjectState(state, event.payload.projectId);
     }
 
     case "thread.created": {

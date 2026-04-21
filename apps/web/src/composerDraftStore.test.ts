@@ -15,12 +15,14 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearFinalizedPromotedDraftThreadsByRef,
   COMPOSER_DRAFT_STORAGE_KEY,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
+  reconcileDraftThreadsAgainstServerSnapshot,
   type ComposerImageAttachment,
   useComposerDraftStore,
   DraftId,
@@ -85,6 +87,7 @@ function resetComposerDraftStore() {
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+    finalizedPromotedThreadRefByDraftId: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
   });
@@ -484,11 +487,14 @@ describe("composerDraftStore terminal contexts", () => {
 describe("composerDraftStore project draft thread mapping", () => {
   const projectId = ProjectId.make("project-a");
   const otherProjectId = ProjectId.make("project-b");
+  const thirdProjectId = ProjectId.make("project-c");
   const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, projectId);
   const otherProjectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, otherProjectId);
+  const thirdProjectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, thirdProjectId);
   const remoteProjectRef = scopeProjectRef(OTHER_TEST_ENVIRONMENT_ID, projectId);
   const threadId = ThreadId.make("thread-a");
   const otherThreadId = ThreadId.make("thread-b");
+  const thirdThreadId = ThreadId.make("thread-c");
   const draftId = DraftId.make("draft-a");
   const otherDraftId = DraftId.make("draft-b");
   const sharedDraftId = DraftId.make("draft-shared");
@@ -561,6 +567,36 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(draftId)).toBeUndefined();
   });
 
+  it("clears every stale draft mapped to the same project id", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "first");
+    const staleDraftThread = useComposerDraftStore.getState().getDraftThread(draftId);
+    const staleDraftComposer = draftByKey(draftId);
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    store.setPrompt(otherDraftId, "second");
+
+    // Simulate a stale sibling draft surviving under the same project.
+    useComposerDraftStore.setState((state) => ({
+      draftThreadsByThreadKey: {
+        ...state.draftThreadsByThreadKey,
+        ...(staleDraftThread ? { [draftId]: staleDraftThread } : {}),
+      },
+      draftsByThreadKey: {
+        ...state.draftsByThreadKey,
+        ...(staleDraftComposer ? { [draftId]: staleDraftComposer } : {}),
+      },
+    }));
+
+    store.clearProjectDraftThreadId(projectRef);
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(otherDraftId)).toBeNull();
+    expect(draftByKey(draftId)).toBeUndefined();
+    expect(draftByKey(otherDraftId)).toBeUndefined();
+  });
+
   it("clears orphaned composer drafts when remapping a project to a new draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
@@ -573,6 +609,87 @@ describe("composerDraftStore project draft thread mapping", () => {
     );
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
     expect(draftByKey(draftId)).toBeUndefined();
+  });
+
+  it("prunes stray duplicate draft sessions when assigning a fresh project draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "canonical");
+
+    useComposerDraftStore.setState((state) => ({
+      draftThreadsByThreadKey: {
+        ...state.draftThreadsByThreadKey,
+        [otherDraftId]: {
+          ...(state.draftThreadsByThreadKey[draftId] ?? {
+            threadId: otherThreadId,
+            environmentId: TEST_ENVIRONMENT_ID,
+            projectId,
+            logicalProjectKey: scopedProjectKey(projectRef),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            branch: null,
+            worktreePath: null,
+            envMode: "local" as const,
+            promotedTo: null,
+          }),
+          threadId: otherThreadId,
+          projectId,
+          environmentId: TEST_ENVIRONMENT_ID,
+          logicalProjectKey: scopedProjectKey(projectRef),
+          promotedTo: null,
+        },
+      },
+      draftsByThreadKey: {
+        ...state.draftsByThreadKey,
+        [otherDraftId]: {
+          ...(state.draftsByThreadKey[draftId] ?? state.draftsByThreadKey[otherDraftId]!),
+          prompt: "stale duplicate",
+        },
+      },
+    }));
+
+    store.setProjectDraftThreadId(projectRef, localDraftId, { threadId: thirdThreadId });
+
+    expect(store.getDraftThread(localDraftId)?.threadId).toBe(thirdThreadId);
+    expect(store.getDraftThread(draftId)).toBeNull();
+    expect(store.getDraftThread(otherDraftId)).toBeNull();
+    expect(draftByKey(draftId)).toBeUndefined();
+    expect(draftByKey(otherDraftId)).toBeUndefined();
+  });
+
+  it("keeps distinct draft mappings for multiple new projects without evicting siblings", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setProjectDraftThreadId(otherProjectRef, otherDraftId, { threadId: otherThreadId });
+    store.setProjectDraftThreadId(thirdProjectRef, localDraftId, { threadId: thirdThreadId });
+
+    expect(store.getDraftThreadByProjectRef(projectRef)?.threadId).toBe(threadId);
+    expect(store.getDraftThreadByProjectRef(otherProjectRef)?.threadId).toBe(otherThreadId);
+    expect(store.getDraftThreadByProjectRef(thirdProjectRef)?.threadId).toBe(thirdThreadId);
+    expect(
+      Object.keys(useComposerDraftStore.getState().logicalProjectDraftThreadKeyByLogicalProjectKey),
+    ).toHaveLength(3);
+  });
+
+  it("removes stale logical-project aliases when a draft is rekeyed to a different project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+
+    store.setProjectDraftThreadId(otherProjectRef, draftId, { threadId: otherThreadId });
+
+    expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(store.getDraftThreadByProjectRef(otherProjectRef)).toMatchObject({
+      draftId,
+      threadId: otherThreadId,
+      projectId: otherProjectId,
+      environmentId: TEST_ENVIRONMENT_ID,
+    });
+    expect(
+      useComposerDraftStore.getState().logicalProjectDraftThreadKeyByLogicalProjectKey,
+    ).toEqual({
+      [scopedProjectKey(otherProjectRef)]: draftId,
+    });
   });
 
   it("keeps composer drafts when the thread is still mapped by another project", () => {
@@ -675,6 +792,39 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(remoteDraftId)?.prompt).toBe("remote draft");
   });
 
+  it("drops draft state for projects that disappear from the authoritative snapshot", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "stale draft");
+
+    reconcileDraftThreadsAgainstServerSnapshot({
+      environmentId: TEST_ENVIRONMENT_ID,
+      activeProjectIds: [otherProjectId],
+      activeThreadRefs: [],
+    });
+
+    expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(store.getDraftThread(draftId)).toBeNull();
+    expect(draftByKey(draftId)).toBeUndefined();
+  });
+
+  it("demotes promoted drafts whose server thread is absent from the authoritative snapshot", () => {
+    const store = useComposerDraftStore.getState();
+    const localThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "wait for server projection");
+    markPromotedDraftThreadByRef(localThreadRef);
+
+    reconcileDraftThreadsAgainstServerSnapshot({
+      environmentId: TEST_ENVIRONMENT_ID,
+      activeProjectIds: [projectId],
+      activeThreadRefs: [],
+    });
+
+    expect(store.getDraftThread(draftId)?.promotedTo).toBeNull();
+    expect(draftByKey(draftId)?.prompt).toBe("wait for server projection");
+  });
+
   it("only marks promoted drafts for the matching environment ref", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
@@ -723,6 +873,113 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toBeNull();
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
     expect(draftByKey(draftId)).toBeUndefined();
+  });
+
+  it("retains the canonical promoted thread ref after finalization", () => {
+    const store = useComposerDraftStore.getState();
+    const promotedThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    markPromotedDraftThread(threadId);
+
+    finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+    expect(store.getDraftSession(draftId)).toBeNull();
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toEqual(promotedThreadRef);
+  });
+
+  it("persists finalized promoted thread refs across hydration", () => {
+    const store = useComposerDraftStore.getState();
+    const promotedThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    markPromotedDraftThread(threadId);
+    finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      finalizedPromotedThreadRefByDraftId?: Record<
+        string,
+        {
+          environmentId: string;
+          threadId: string;
+        }
+      >;
+    };
+
+    expect(persistedState.finalizedPromotedThreadRefByDraftId).toEqual({
+      [draftId]: {
+        environmentId: TEST_ENVIRONMENT_ID,
+        threadId,
+      },
+    });
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.finalizedPromotedThreadRefByDraftId).toEqual({
+      [draftId]: {
+        environmentId: TEST_ENVIRONMENT_ID,
+        threadId,
+      },
+    });
+  });
+
+  it("clears finalized promoted aliases by canonical thread ref", () => {
+    const store = useComposerDraftStore.getState();
+    const promotedThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    markPromotedDraftThread(threadId);
+    finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toEqual(promotedThreadRef);
+
+    store.clearDraftThread(promotedThreadRef);
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toBeNull();
+  });
+
+  it("clears finalized promoted aliases for deleted project thread refs", () => {
+    const store = useComposerDraftStore.getState();
+    const promotedThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    markPromotedDraftThread(threadId);
+    finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toEqual(promotedThreadRef);
+
+    clearFinalizedPromotedDraftThreadsByRef([promotedThreadRef]);
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toBeNull();
+  });
+
+  it("drops finalized promoted aliases when the authoritative snapshot no longer contains the thread", () => {
+    const store = useComposerDraftStore.getState();
+    const promotedThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    markPromotedDraftThread(threadId);
+    finalizePromotedDraftThreadByRef(promotedThreadRef);
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toEqual(promotedThreadRef);
+
+    reconcileDraftThreadsAgainstServerSnapshot({
+      environmentId: TEST_ENVIRONMENT_ID,
+      activeProjectIds: [projectId],
+      activeThreadRefs: [],
+    });
+
+    expect(store.getFinalizedPromotedThreadRef(draftId)).toBeNull();
   });
 
   it("updates branch context on an existing draft thread", () => {

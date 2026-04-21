@@ -1,6 +1,9 @@
+import { scopeProjectRef } from "@t3tools/client-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildSidebarProjectDeletionSummary,
+  createProjectWithInitialDraftThread,
   createThreadJumpHintVisibilityController,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -19,7 +22,13 @@ import {
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
-import { EnvironmentId, OrchestrationLatestTurn, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  OrchestrationLatestTurn,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -227,6 +236,181 @@ describe("resolveSidebarNewThreadSeedContext", () => {
     ).toEqual({
       envMode: "worktree",
     });
+  });
+});
+
+describe("buildSidebarProjectDeletionSummary", () => {
+  it("skips confirmation for empty projects", () => {
+    const summary = buildSidebarProjectDeletionSummary({
+      memberProjectRefs: [scopeProjectRef(localEnvironmentId, ProjectId.make("project-empty"))],
+      threads: [],
+      draftThreadsByThreadKey: {},
+      draftsByThreadKey: {},
+    });
+
+    expect(summary).toEqual({
+      projectThreadRefs: [],
+      projectThreadCount: 0,
+      projectDraftThreadCount: 0,
+      shouldConfirmDelete: false,
+      totalThreadCount: 0,
+    });
+  });
+
+  it("counts both persisted and meaningful draft threads for confirmation", () => {
+    const summary = buildSidebarProjectDeletionSummary({
+      memberProjectRefs: [scopeProjectRef(localEnvironmentId, ProjectId.make("project-a"))],
+      threads: [
+        {
+          environmentId: localEnvironmentId,
+          projectId: ProjectId.make("project-a"),
+          id: ThreadId.make("thread-a"),
+        },
+      ],
+      draftThreadsByThreadKey: {
+        "draft-empty": {
+          environmentId: localEnvironmentId,
+          projectId: ProjectId.make("project-a"),
+          promotedTo: null,
+        },
+        "draft-meaningful": {
+          environmentId: localEnvironmentId,
+          projectId: ProjectId.make("project-a"),
+          promotedTo: null,
+        },
+      },
+      draftsByThreadKey: {
+        "draft-empty": {
+          prompt: "",
+          images: [],
+          terminalContexts: [],
+        },
+        "draft-meaningful": {
+          prompt: "unsaved work",
+          images: [],
+          terminalContexts: [],
+        },
+      },
+    });
+
+    expect(summary.projectThreadRefs).toEqual([
+      {
+        environmentId: localEnvironmentId,
+        threadId: ThreadId.make("thread-a"),
+      },
+    ]);
+    expect(summary.projectThreadCount).toBe(1);
+    expect(summary.projectDraftThreadCount).toBe(1);
+    expect(summary.shouldConfirmDelete).toBe(true);
+    expect(summary.totalThreadCount).toBe(2);
+  });
+});
+
+describe("createProjectWithInitialDraftThread", () => {
+  it("acknowledges the new project and opens its initial draft thread on success", async () => {
+    const projectRef = scopeProjectRef(localEnvironmentId, ProjectId.make("project-success"));
+    const dispatchProjectCreate = vi.fn().mockResolvedValue(undefined);
+    const acknowledgeProjectCreated = vi.fn();
+    const openInitialDraftThread = vi.fn().mockResolvedValue(ThreadId.make("thread-success"));
+
+    await createProjectWithInitialDraftThread({
+      environmentId: localEnvironmentId,
+      projectId: ProjectId.make("project-success"),
+      title: "Success",
+      projectRef,
+      workspaceRoot: "homelab://project/project-success",
+      createdAt: "2026-04-14T01:00:00.000Z",
+      projectCreateCommandId: CommandId.make("cmd-project-create-success"),
+      defaultEnvMode: "local",
+      dispatchProjectCreate,
+      acknowledgeProjectCreated,
+      openInitialDraftThread,
+      clearProjectDraftThread: vi.fn(),
+      createRollbackCommandId: () => CommandId.make("cmd-project-delete-success"),
+      now: () => "2026-04-14T01:00:01.000Z",
+      dispatchProjectDelete: vi.fn(),
+      acknowledgeProjectDeleted: vi.fn(),
+    });
+
+    expect(dispatchProjectCreate).toHaveBeenCalledTimes(1);
+    expect(acknowledgeProjectCreated).toHaveBeenCalledWith({
+      environmentId: localEnvironmentId,
+      projectId: ProjectId.make("project-success"),
+      title: "Success",
+      workspaceRoot: "homelab://project/project-success",
+      createdAt: "2026-04-14T01:00:00.000Z",
+      commandId: CommandId.make("cmd-project-create-success"),
+    });
+    expect(openInitialDraftThread).toHaveBeenCalledWith(projectRef, {
+      envMode: "local",
+    });
+  });
+
+  it("rolls the project back when opening the first draft thread fails", async () => {
+    const projectRef = scopeProjectRef(localEnvironmentId, ProjectId.make("project-rollback"));
+    const clearProjectDraftThread = vi.fn();
+    const dispatchProjectDelete = vi.fn().mockResolvedValue(undefined);
+    const acknowledgeProjectDeleted = vi.fn();
+
+    await expect(
+      createProjectWithInitialDraftThread({
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make("project-rollback"),
+        title: "Rollback",
+        projectRef,
+        workspaceRoot: "homelab://project/project-rollback",
+        createdAt: "2026-04-14T01:00:00.000Z",
+        projectCreateCommandId: CommandId.make("cmd-project-create-rollback"),
+        defaultEnvMode: "worktree",
+        dispatchProjectCreate: vi.fn().mockResolvedValue(undefined),
+        acknowledgeProjectCreated: vi.fn(),
+        openInitialDraftThread: vi.fn().mockRejectedValue(new Error("draft route failed")),
+        clearProjectDraftThread,
+        createRollbackCommandId: () => CommandId.make("cmd-project-delete-rollback"),
+        now: () => "2026-04-14T01:00:02.000Z",
+        dispatchProjectDelete,
+        acknowledgeProjectDeleted,
+      }),
+    ).rejects.toThrow("draft route failed The new project was rolled back.");
+
+    expect(clearProjectDraftThread).toHaveBeenCalledWith(projectRef);
+    expect(dispatchProjectDelete).toHaveBeenCalledWith(
+      CommandId.make("cmd-project-delete-rollback"),
+    );
+    expect(acknowledgeProjectDeleted).toHaveBeenCalledWith({
+      environmentId: localEnvironmentId,
+      projectId: ProjectId.make("project-rollback"),
+      deletedAt: "2026-04-14T01:00:02.000Z",
+      commandId: CommandId.make("cmd-project-delete-rollback"),
+    });
+  });
+
+  it("surfaces rollback failures alongside the initial draft bootstrap failure", async () => {
+    const projectRef = scopeProjectRef(
+      localEnvironmentId,
+      ProjectId.make("project-rollback-failure"),
+    );
+
+    await expect(
+      createProjectWithInitialDraftThread({
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make("project-rollback-failure"),
+        title: "Rollback Failure",
+        projectRef,
+        workspaceRoot: "homelab://project/project-rollback-failure",
+        createdAt: "2026-04-14T01:00:00.000Z",
+        projectCreateCommandId: CommandId.make("cmd-project-create-rollback-failure"),
+        defaultEnvMode: "local",
+        dispatchProjectCreate: vi.fn().mockResolvedValue(undefined),
+        acknowledgeProjectCreated: vi.fn(),
+        openInitialDraftThread: vi.fn().mockRejectedValue(new Error("draft route failed")),
+        clearProjectDraftThread: vi.fn(),
+        createRollbackCommandId: () => CommandId.make("cmd-project-delete-rollback-failure"),
+        now: () => "2026-04-14T01:00:03.000Z",
+        dispatchProjectDelete: vi.fn().mockRejectedValue(new Error("project delete failed")),
+        acknowledgeProjectDeleted: vi.fn(),
+      }),
+    ).rejects.toThrow("draft route failed Project rollback also failed: project delete failed");
   });
 });
 

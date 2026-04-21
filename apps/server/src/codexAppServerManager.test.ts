@@ -266,6 +266,14 @@ describe("isRecoverableThreadResumeError", () => {
     ).toBe(true);
   });
 
+  it("matches missing-rollout resume errors", () => {
+    expect(
+      isRecoverableThreadResumeError(
+        new Error("thread/resume failed: no rollout found for thread id 019d8b9f"),
+      ),
+    ).toBe(true);
+  });
+
   it("ignores non-resume errors", () => {
     expect(
       isRecoverableThreadResumeError(new Error("thread/start failed: permission denied")),

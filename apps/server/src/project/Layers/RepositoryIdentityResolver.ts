@@ -1,6 +1,7 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import { Cache, Duration, Effect, Exit, Layer } from "effect";
 import { detectGitHostingProviderFromRemoteUrl, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 import { runProcess } from "../../processRunner.ts";
 import {
@@ -133,6 +134,9 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
     const resolve: RepositoryIdentityResolverShape["resolve"] = Effect.fn(
       "RepositoryIdentityResolver.resolve",
     )(function* (cwd) {
+      if (isLogicalProjectWorkspaceRoot(cwd)) {
+        return null;
+      }
       const cacheKey = yield* Effect.promise(() => resolveRepositoryIdentityCacheKey(cwd));
       return yield* Cache.get(repositoryIdentityCache, cacheKey);
     });

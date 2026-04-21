@@ -21,7 +21,9 @@ import { TextGenerationError } from "@t3tools/contracts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -97,6 +99,7 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    readonly autoStart?: boolean;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -166,6 +169,14 @@ describe("ProviderCommandReactor", () => {
         }
       }),
     );
+    const clearThreadState = vi.fn((threadId: ThreadId) =>
+      Effect.sync(() => {
+        const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+        if (index >= 0) {
+          runtimeSessions.splice(index, 1);
+        }
+      }),
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -202,6 +213,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      clearThreadState: clearThreadState as ProviderServiceShape["clearThreadState"],
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -213,13 +225,15 @@ describe("ProviderCommandReactor", () => {
       },
     };
 
-    const orchestrationLayer = OrchestrationEngineLive.pipe(
-      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-      Layer.provide(OrchestrationProjectionPipelineLive),
-      Layer.provide(OrchestrationEventStoreLive),
-      Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-      Layer.provide(RepositoryIdentityResolverLive),
-      Layer.provide(SqlitePersistenceMemory),
+    const orchestrationLayer = Layer.empty.pipe(
+      Layer.provideMerge(OrchestrationEngineLive),
+      Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provideMerge(OrchestrationProjectionPipelineLive),
+      Layer.provideMerge(ProjectionTurnRepositoryLive),
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provideMerge(RepositoryIdentityResolverLive),
+      Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
@@ -239,8 +253,19 @@ describe("ProviderCommandReactor", () => {
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    const reactorScope = await Effect.runPromise(Scope.make("sequential"));
+    scope = reactorScope;
+    let reactorStarted = false;
+    const startReactor = async () => {
+      if (reactorStarted) {
+        return;
+      }
+      reactorStarted = true;
+      await Effect.runPromise(reactor.start().pipe(Scope.provide(reactorScope)));
+    };
+    if (input?.autoStart !== false) {
+      await startReactor();
+    }
     const drain = () => Effect.runPromise(reactor.drain);
 
     await Effect.runPromise(
@@ -272,18 +297,80 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      runtime,
       startSession,
       sendTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
       stopSession,
+      clearThreadState,
       renameBranch,
       generateBranchName,
       generateThreadTitle,
       stateDir,
       drain,
+      startReactor,
     };
+  }
+
+  async function completeAssistantTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly suffix: string;
+      readonly threadId?: ThreadId;
+      readonly turnId?: TurnId;
+      readonly text?: string;
+      readonly createdAt?: string;
+    },
+  ) {
+    const threadId = input.threadId ?? ThreadId.make("thread-1");
+    const turnId = input.turnId ?? asTurnId("turn-1");
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const providerName =
+      thread?.session?.providerName ?? thread?.modelSelection.provider ?? "codex";
+    const runtimeMode = thread?.session?.runtimeMode ?? thread?.runtimeMode ?? "approval-required";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make(`cmd-assistant-turn-delta-${input.suffix}`),
+        threadId,
+        messageId: asMessageId(`assistant-message-${input.suffix}`),
+        delta: input.text ?? "done",
+        turnId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make(`cmd-assistant-turn-complete-${input.suffix}`),
+        threadId,
+        messageId: asMessageId(`assistant-message-${input.suffix}`),
+        turnId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(`cmd-session-ready-${input.suffix}`),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName,
+          runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
   }
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
@@ -323,6 +410,131 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("replays persisted pending turn starts when the reactor starts after a restart gap", async () => {
+    const harness = await createHarness({ autoStart: false });
+    const now = new Date().toISOString();
+    const originalModelSelection: ModelSelection = {
+      provider: "codex",
+      model: "gpt-5.4",
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-replay-after-restart"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-replay-after-restart"),
+          role: "user",
+          text: "replay this pending turn start",
+          attachments: [],
+        },
+        modelSelection: originalModelSelection,
+        titleSeed: "Replay gap title",
+        interactionMode: "plan",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-turn-start-replay-model-drift"),
+        threadId: ThreadId.make("thread-1"),
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4-mini",
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("cmd-turn-start-replay-runtime-drift"),
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        createdAt: new Date(Date.parse(now) + 2_000).toISOString(),
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.make("cmd-turn-start-replay-interaction-drift"),
+        threadId: ThreadId.make("thread-1"),
+        interactionMode: "default",
+        createdAt: new Date(Date.parse(now) + 3_000).toISOString(),
+      }),
+    );
+
+    const pendingTurnStarts = await harness.runtime.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* ProjectionTurnRepository;
+        return yield* repo.listPendingTurnStarts();
+      }),
+    );
+    expect(pendingTurnStarts).toMatchObject([
+      {
+        interactionMode: "plan",
+        runtimeMode: "approval-required",
+        modelSelection: originalModelSelection,
+      },
+    ]);
+
+    expect(harness.sendTurn.mock.calls).toHaveLength(0);
+
+    await harness.startReactor();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      runtimeMode: "approval-required",
+      modelSelection: originalModelSelection,
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      interactionMode: "plan",
+      modelSelection: originalModelSelection,
+    });
+  });
+
+  it("does not replay pending turn starts for deleted threads after restart", async () => {
+    const harness = await createHarness({ autoStart: false });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-deleted-replay"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-deleted-replay"),
+          role: "user",
+          text: "do not replay me",
+          attachments: [],
+        },
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("cmd-thread-delete-before-replay"),
+        threadId: ThreadId.make("thread-1"),
+      }),
+    );
+
+    const pendingTurnStarts = await harness.runtime.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* ProjectionTurnRepository;
+        return yield* repo.listPendingTurnStarts();
+      }),
+    );
+    expect(pendingTurnStarts).toHaveLength(0);
+
+    await harness.startReactor();
+    expect(harness.sendTurn.mock.calls).toHaveLength(0);
   });
 
   it("generates a thread title on the first turn", async () => {
@@ -790,6 +1002,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, { suffix: "unsupported-1" });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -842,6 +1055,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, { suffix: "unchanged-1" });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -897,6 +1111,10 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, {
+      suffix: "claude-effort-1",
+      createdAt: new Date(Date.parse(now) + 1_000).toISOString(),
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -969,6 +1187,10 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, {
+      suffix: "runtime-mode-1",
+      createdAt: new Date(Date.parse(now) + 1_000).toISOString(),
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1019,6 +1241,81 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("refreshes the cached model selection when thread metadata changes before a restart", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("cmd-runtime-mode-set-model-cache-initial"),
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-model-cache-initial"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-model-cache-initial"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, {
+      suffix: "provider-switch-1",
+      createdAt: new Date(Date.parse(now) + 1_000).toISOString(),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-meta-update-model-cache"),
+        threadId: ThreadId.make("thread-1"),
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("cmd-runtime-mode-set-model-cache"),
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "approval-required",
+    });
   });
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {
@@ -1089,6 +1386,10 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await completeAssistantTurn(harness, {
+      suffix: "provider-switch-1",
+      createdAt: new Date(Date.parse(now) + 1_000).toISOString(),
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1569,5 +1870,59 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("reacts to thread.deleted by clearing provider thread state", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("cmd-thread-delete"),
+        threadId: ThreadId.make("thread-1"),
+      }),
+    );
+
+    await waitFor(() => harness.clearThreadState.mock.calls.length === 1);
+    expect(harness.clearThreadState.mock.calls[0]?.[0]).toBe(ThreadId.make("thread-1"));
+  });
+
+  it("clears provider thread state for each cascaded thread when a project is deleted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const threadModelSelection = {
+      provider: "codex" as const,
+      model: "gpt-5.4",
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-2"),
+        threadId: ThreadId.make("thread-2"),
+        projectId: asProjectId("project-1"),
+        title: "Thread 2",
+        modelSelection: threadModelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.delete",
+        commandId: CommandId.make("cmd-project-delete"),
+        projectId: asProjectId("project-1"),
+      }),
+    );
+
+    await waitFor(() => harness.clearThreadState.mock.calls.length === 2);
+    expect(harness.clearThreadState.mock.calls.map((call) => call[0])).toEqual([
+      ThreadId.make("thread-1"),
+      ThreadId.make("thread-2"),
+    ]);
   });
 });

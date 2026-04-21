@@ -16,6 +16,8 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 ] as const;
 
 interface PersistedUiState {
+  expandedProjectKeys?: string[];
+  projectOrderKeys?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
@@ -50,8 +52,10 @@ const initialState: UiState = {
   threadChangedFilesExpandedById: {},
 };
 
-const persistedExpandedProjectCwds = new Set<string>();
-const persistedProjectOrderCwds: string[] = [];
+const persistedExpandedProjectKeys = new Set<string>();
+const persistedProjectOrderKeys: string[] = [];
+const legacyPersistedExpandedProjectCwds = new Set<string>();
+const legacyPersistedProjectOrderCwds: string[] = [];
 const currentProjectCwdById = new Map<string, string>();
 let legacyKeysCleanedUp = false;
 
@@ -114,16 +118,32 @@ function sanitizePersistedThreadChangedFilesExpanded(
 }
 
 function hydratePersistedProjectState(parsed: PersistedUiState): void {
-  persistedExpandedProjectCwds.clear();
-  persistedProjectOrderCwds.length = 0;
+  persistedExpandedProjectKeys.clear();
+  persistedProjectOrderKeys.length = 0;
+  legacyPersistedExpandedProjectCwds.clear();
+  legacyPersistedProjectOrderCwds.length = 0;
+  for (const key of parsed.expandedProjectKeys ?? []) {
+    if (typeof key === "string" && key.length > 0) {
+      persistedExpandedProjectKeys.add(key);
+    }
+  }
+  for (const key of parsed.projectOrderKeys ?? []) {
+    if (typeof key === "string" && key.length > 0 && !persistedProjectOrderKeys.includes(key)) {
+      persistedProjectOrderKeys.push(key);
+    }
+  }
   for (const cwd of parsed.expandedProjectCwds ?? []) {
     if (typeof cwd === "string" && cwd.length > 0) {
-      persistedExpandedProjectCwds.add(cwd);
+      legacyPersistedExpandedProjectCwds.add(cwd);
     }
   }
   for (const cwd of parsed.projectOrderCwds ?? []) {
-    if (typeof cwd === "string" && cwd.length > 0 && !persistedProjectOrderCwds.includes(cwd)) {
-      persistedProjectOrderCwds.push(cwd);
+    if (
+      typeof cwd === "string" &&
+      cwd.length > 0 &&
+      !legacyPersistedProjectOrderCwds.includes(cwd)
+    ) {
+      legacyPersistedProjectOrderCwds.push(cwd);
     }
   }
 }
@@ -133,16 +153,10 @@ function persistState(state: UiState): void {
     return;
   }
   try {
-    const expandedProjectCwds = Object.entries(state.projectExpandedById)
+    const expandedProjectKeys = Object.entries(state.projectExpandedById)
       .filter(([, expanded]) => expanded)
-      .flatMap(([projectId]) => {
-        const cwd = currentProjectCwdById.get(projectId);
-        return cwd ? [cwd] : [];
-      });
-    const projectOrderCwds = state.projectOrder.flatMap((projectId) => {
-      const cwd = currentProjectCwdById.get(projectId);
-      return cwd ? [cwd] : [];
-    });
+      .map(([projectId]) => projectId);
+    const projectOrderKeys = [...state.projectOrder];
     const threadChangedFilesExpandedById = Object.fromEntries(
       Object.entries(state.threadChangedFilesExpandedById).flatMap(([threadId, turns]) => {
         const nextTurns = Object.fromEntries(
@@ -154,8 +168,8 @@ function persistState(state: UiState): void {
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
-        expandedProjectCwds,
-        projectOrderCwds,
+        expandedProjectKeys,
+        projectOrderKeys,
         threadChangedFilesExpandedById,
       } satisfies PersistedUiState),
     );
@@ -218,23 +232,24 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
   for (const project of projects) {
     currentProjectCwdById.set(project.key, project.cwd);
   }
-  const cwdMappingChanged =
-    previousProjectCwdById.size !== currentProjectCwdById.size ||
-    projects.some((project) => previousProjectCwdById.get(project.key) !== project.cwd);
-
   const nextExpandedById: Record<string, boolean> = {};
   const previousExpandedById = state.projectExpandedById;
-  const persistedOrderByCwd = new Map(
-    persistedProjectOrderCwds.map((cwd, index) => [cwd, index] as const),
+  const persistedOrderByKey = new Map(
+    persistedProjectOrderKeys.map((projectKey, index) => [projectKey, index] as const),
+  );
+  const legacyPersistedOrderByCwd = new Map(
+    legacyPersistedProjectOrderCwds.map((cwd, index) => [cwd, index] as const),
   );
   const mappedProjects = projects.map((project, index) => {
     const previousProjectIdForCwd = previousProjectIdByCwd.get(project.cwd);
     const expanded =
       previousExpandedById[project.key] ??
       (previousProjectIdForCwd ? previousExpandedById[previousProjectIdForCwd] : undefined) ??
-      (persistedExpandedProjectCwds.size > 0
-        ? persistedExpandedProjectCwds.has(project.cwd)
-        : true);
+      (persistedExpandedProjectKeys.size > 0
+        ? persistedExpandedProjectKeys.has(project.key)
+        : legacyPersistedExpandedProjectCwds.size > 0
+          ? legacyPersistedExpandedProjectCwds.has(project.cwd)
+          : true);
     nextExpandedById[project.key] = expanded;
     return {
       id: project.key,
@@ -280,8 +295,11 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
             id: project.id,
             incomingIndex: project.incomingIndex,
             orderIndex:
-              persistedOrderByCwd.get(project.cwd) ??
-              persistedProjectOrderCwds.length + project.incomingIndex,
+              persistedOrderByKey.get(project.id) ??
+              legacyPersistedOrderByCwd.get(project.cwd) ??
+              persistedProjectOrderKeys.length +
+                legacyPersistedProjectOrderCwds.length +
+                project.incomingIndex,
           }))
           .toSorted((left, right) => {
             const byOrder = left.orderIndex - right.orderIndex;
@@ -294,8 +312,7 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
 
   if (
     recordsEqual(state.projectExpandedById, nextExpandedById) &&
-    projectOrdersEqual(state.projectOrder, nextProjectOrder) &&
-    !cwdMappingChanged
+    projectOrdersEqual(state.projectOrder, nextProjectOrder)
   ) {
     return state;
   }

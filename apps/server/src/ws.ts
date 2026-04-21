@@ -1,4 +1,5 @@
 import { Cause, Effect, Layer, Queue, Ref, Schema, Stream } from "effect";
+import { existsSync } from "node:fs";
 import {
   type AuthAccessStreamEvent,
   AuthSessionId,
@@ -36,6 +37,7 @@ import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { Keybindings } from "./keybindings";
 import { Open, resolveAvailableEditors } from "./open";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer";
+import { OrchestrationCommandInvariantError } from "./orchestration/Errors";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import {
@@ -68,6 +70,34 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService";
 import { respondToAuthError } from "./auth/http";
+
+type BootstrapCreateThreadPayload = NonNullable<
+  NonNullable<
+    Extract<OrchestrationCommand, { type: "thread.turn.start" }>["bootstrap"]
+  >["createThread"]
+>;
+
+function bootstrapThreadMatchesCreateRequest(
+  thread: {
+    readonly projectId: string;
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+  },
+  createThread: BootstrapCreateThreadPayload,
+): boolean {
+  return (
+    thread.projectId === createThread.projectId &&
+    thread.branch === createThread.branch &&
+    thread.worktreePath === createThread.worktreePath
+  );
+}
+
+function bootstrapThreadCanRetryTurnStart(thread: {
+  readonly latestTurn: unknown | null;
+  readonly messages: ReadonlyArray<unknown>;
+}): boolean {
+  return thread.latestTurn === null && thread.messages.length === 0;
+}
 
 function toAuthAccessStreamEvent(
   change: BootstrapCredentialChange | SessionCredentialChange,
@@ -189,6 +219,12 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             });
       };
 
+      const bootstrapThreadRetryStateError = (threadId: ThreadId) =>
+        new OrchestrationCommandInvariantError({
+          commandType: "thread.turn.start",
+          detail: `Bootstrap thread '${threadId}' already exists with prior turn state and cannot be safely retried.`,
+        });
+
       const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
         Effect.gen(function* () {
           let runtime = yield* threadRuntime
@@ -295,21 +331,201 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          type ExistingBootstrapThread = {
+            readonly id: ThreadId;
+            readonly projectId: NonNullable<typeof targetProjectId>;
+            readonly title: string;
+            readonly modelSelection: unknown;
+            readonly runtimeMode: string;
+            readonly interactionMode: string;
+            readonly branch: string | null;
+            readonly worktreePath: string | null;
+            readonly latestTurn: unknown | null;
+            readonly messages: ReadonlyArray<unknown>;
+            readonly deletedAt: string | null;
+            readonly hasSetupScriptStarted: boolean;
+          };
           let createdThread = false;
+          let preparedWorktree = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          let preparedWorktreePath: string | null = null;
+          let preparedWorktreeProjectCwd: string | null = null;
+          let launchedSetupTerminalId: string | null = null;
+          const loadExistingBootstrapThread = (): Effect.Effect<
+            ExistingBootstrapThread | null,
+            never
+          > =>
+            orchestrationEngine.getReadModel().pipe(
+              Effect.map(
+                (readModel) =>
+                  readModel.threads
+                    .map((thread) => ({
+                      ...thread,
+                      hasSetupScriptStarted: thread.activities.some(
+                        (activity) => activity.kind === "setup-script.started",
+                      ),
+                    }))
+                    .find(
+                      (thread) => thread.id === command.threadId && thread.deletedAt === null,
+                    ) ?? null,
+              ),
+            );
+          const waitForExistingBootstrapThread = (
+            attemptsRemaining = 8,
+          ): Effect.Effect<ExistingBootstrapThread | null, never> =>
+            Effect.gen(function* () {
+              const existingThread = yield* loadExistingBootstrapThread();
+              if (existingThread || attemptsRemaining <= 0) {
+                return existingThread;
+              }
+              yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+              return yield* waitForExistingBootstrapThread(attemptsRemaining - 1);
+            });
+          let rollbackThreadExists = false;
+          let rollbackThreadBranch: string | null = null;
+          let rollbackThreadWorktreePath: string | null = null;
+          const applyExistingBootstrapThread = (thread: ExistingBootstrapThread) => {
+            targetProjectId = thread.projectId;
+            targetWorktreePath =
+              thread.worktreePath && existsSync(thread.worktreePath) ? thread.worktreePath : null;
+            rollbackThreadExists = true;
+            rollbackThreadBranch = thread.branch ?? null;
+            rollbackThreadWorktreePath = thread.worktreePath ?? null;
+          };
+          const existingBootstrapThread =
+            bootstrap?.createThread || bootstrap?.prepareWorktree
+              ? yield* loadExistingBootstrapThread()
+              : null;
+          if (existingBootstrapThread) {
+            applyExistingBootstrapThread(existingBootstrapThread);
+          }
 
-          const cleanupCreatedThread = () =>
-            createdThread
-              ? orchestrationEngine
+          if (
+            existingBootstrapThread &&
+            bootstrap?.createThread &&
+            !bootstrapThreadMatchesCreateRequest(existingBootstrapThread, bootstrap.createThread)
+          ) {
+            const invariantError = new OrchestrationCommandInvariantError({
+              commandType: "thread.turn.start",
+              detail: `Bootstrap thread '${command.threadId}' already exists with different metadata and cannot be reused safely.`,
+            });
+            return yield* new OrchestrationDispatchCommandError({
+              message: invariantError.message,
+              cause: invariantError,
+            });
+          }
+          if (
+            existingBootstrapThread &&
+            bootstrap?.createThread &&
+            !bootstrapThreadCanRetryTurnStart(existingBootstrapThread)
+          ) {
+            const invariantError = bootstrapThreadRetryStateError(command.threadId);
+            return yield* new OrchestrationDispatchCommandError({
+              message: invariantError.message,
+              cause: invariantError,
+            });
+          }
+
+          const cleanupBootstrapArtifacts = () =>
+            Effect.gen(function* () {
+              if (launchedSetupTerminalId) {
+                yield* terminalManager
+                  .close({
+                    threadId: command.threadId,
+                    terminalId: launchedSetupTerminalId,
+                  })
+                  .pipe(Effect.ignoreCause({ log: true }));
+              }
+
+              if (!preparedWorktree || !preparedWorktreePath || !preparedWorktreeProjectCwd) {
+                if (!createdThread) {
+                  return;
+                }
+                yield* orchestrationEngine
                   .dispatch({
                     type: "thread.delete",
                     commandId: serverCommandId("bootstrap-thread-delete"),
                     threadId: command.threadId,
                   })
-                  .pipe(Effect.ignoreCause({ log: true }))
-              : Effect.void;
+                  .pipe(
+                    Effect.matchEffect({
+                      onFailure: (error) =>
+                        Effect.logWarning("bootstrap cleanup failed to delete created thread", {
+                          threadId: command.threadId,
+                          message: error instanceof Error ? error.message : String(error),
+                        }),
+                      onSuccess: () => Effect.void,
+                    }),
+                  );
+                return;
+              }
+
+              const worktreePath = preparedWorktreePath;
+              const worktreeProjectCwd = preparedWorktreeProjectCwd;
+              yield* git
+                .removeWorktree({
+                  cwd: worktreeProjectCwd,
+                  path: worktreePath,
+                  force: true,
+                })
+                .pipe(
+                  Effect.map(() => true),
+                  Effect.matchEffect({
+                    onFailure: (error) =>
+                      Effect.logWarning("bootstrap cleanup failed to remove prepared worktree", {
+                        threadId: command.threadId,
+                        worktreePath,
+                        message: error instanceof Error ? error.message : String(error),
+                      }).pipe(Effect.as(!existsSync(worktreePath))),
+                    onSuccess: () => Effect.succeed(true),
+                  }),
+                );
+
+              if (createdThread) {
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.delete",
+                    commandId: serverCommandId("bootstrap-thread-delete"),
+                    threadId: command.threadId,
+                  })
+                  .pipe(
+                    Effect.matchEffect({
+                      onFailure: (error) =>
+                        Effect.logWarning("bootstrap cleanup failed to delete created thread", {
+                          threadId: command.threadId,
+                          message: error instanceof Error ? error.message : String(error),
+                        }),
+                      onSuccess: () => Effect.void,
+                    }),
+                  );
+                return;
+              }
+
+              if (!rollbackThreadExists) {
+                return;
+              }
+
+              yield* orchestrationEngine
+                .dispatch({
+                  type: "thread.meta.update",
+                  commandId: serverCommandId("bootstrap-thread-meta-rollback"),
+                  threadId: command.threadId,
+                  branch: rollbackThreadBranch,
+                  worktreePath: rollbackThreadWorktreePath,
+                })
+                .pipe(
+                  Effect.matchEffect({
+                    onFailure: (error) =>
+                      Effect.logWarning("bootstrap cleanup failed to restore thread metadata", {
+                        threadId: command.threadId,
+                        message: error instanceof Error ? error.message : String(error),
+                      }),
+                    onSuccess: () => Effect.void,
+                  }),
+                );
+            });
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: unknown;
@@ -411,6 +627,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                           if (setupResult.status !== "started") {
                             return Effect.void;
                           }
+                          launchedSetupTerminalId = setupResult.terminalId;
                           return recordSetupScriptStarted({
                             requestedAt,
                             worktreePath,
@@ -423,26 +640,72 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                     );
                 })()
               : Effect.void;
+          const shouldRunSetupScript = () =>
+            bootstrap?.runSetupScript === true &&
+            targetWorktreePath !== null &&
+            !(
+              existingBootstrapThread?.hasSetupScriptStarted === true &&
+              !createdThread &&
+              !preparedWorktree
+            );
 
           const bootstrapProgram = Effect.gen(function* () {
-            if (bootstrap?.createThread) {
-              yield* orchestrationEngine.dispatch({
-                type: "thread.create",
-                commandId: serverCommandId("bootstrap-thread-create"),
-                threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                createdAt: bootstrap.createThread.createdAt,
-              });
-              createdThread = true;
+            if (bootstrap?.createThread && !existingBootstrapThread) {
+              const recoveredExistingThread = yield* orchestrationEngine
+                .dispatch({
+                  type: "thread.create",
+                  commandId: serverCommandId("bootstrap-thread-create"),
+                  threadId: command.threadId,
+                  projectId: bootstrap.createThread.projectId,
+                  title: bootstrap.createThread.title,
+                  modelSelection: bootstrap.createThread.modelSelection,
+                  runtimeMode: bootstrap.createThread.runtimeMode,
+                  interactionMode: bootstrap.createThread.interactionMode,
+                  branch: bootstrap.createThread.branch,
+                  worktreePath: bootstrap.createThread.worktreePath,
+                  createdAt: bootstrap.createThread.createdAt,
+                })
+                .pipe(
+                  Effect.as(null),
+                  Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+                    waitForExistingBootstrapThread().pipe(
+                      Effect.flatMap((thread) => {
+                        if (!thread) {
+                          return Effect.fail(error);
+                        }
+                        if (!bootstrapThreadMatchesCreateRequest(thread, bootstrap.createThread!)) {
+                          return Effect.fail(
+                            new OrchestrationCommandInvariantError({
+                              commandType: "thread.turn.start",
+                              detail: `Bootstrap thread '${command.threadId}' already exists with different metadata and cannot be reused safely.`,
+                              cause: error,
+                            }),
+                          );
+                        }
+                        if (!bootstrapThreadCanRetryTurnStart(thread)) {
+                          return Effect.fail(
+                            new OrchestrationCommandInvariantError({
+                              commandType: "thread.turn.start",
+                              detail: bootstrapThreadRetryStateError(command.threadId).detail,
+                              cause: error,
+                            }),
+                          );
+                        }
+                        applyExistingBootstrapThread(thread);
+                        return Effect.succeed(thread);
+                      }),
+                    ),
+                  ),
+                );
+              createdThread = recoveredExistingThread === null;
+              if (createdThread) {
+                rollbackThreadExists = true;
+                rollbackThreadBranch = bootstrap.createThread.branch;
+                rollbackThreadWorktreePath = bootstrap.createThread.worktreePath;
+              }
             }
 
-            if (bootstrap?.prepareWorktree) {
+            if (bootstrap?.prepareWorktree && targetWorktreePath === null) {
               const worktree = yield* git.createWorktree({
                 cwd: bootstrap.prepareWorktree.projectCwd,
                 branch: bootstrap.prepareWorktree.baseBranch,
@@ -450,6 +713,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;
+              preparedWorktree = true;
+              preparedWorktreePath = worktree.worktree.path;
+              preparedWorktreeProjectCwd = bootstrap.prepareWorktree.projectCwd;
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: serverCommandId("bootstrap-thread-meta-update"),
@@ -459,7 +725,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               });
             }
 
-            yield* runSetupProgram();
+            if (shouldRunSetupScript()) {
+              yield* runSetupProgram();
+            }
 
             return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
           });
@@ -467,10 +735,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           return yield* bootstrapProgram.pipe(
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.fail(dispatchError);
-              }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return cleanupBootstrapArtifacts().pipe(
+                Effect.asVoid,
+                Effect.flatMap(() => Effect.fail(dispatchError)),
+              );
             }),
           );
         });

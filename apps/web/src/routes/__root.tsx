@@ -1,5 +1,5 @@
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
+import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -31,7 +31,7 @@ import {
   useServerConfigUpdatedSubscription,
   useServerWelcomeSubscription,
 } from "../rpc/serverState";
-import { useStore } from "../store";
+import { selectThreadExistsByRef, useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import {
@@ -241,6 +241,18 @@ function EventRouter() {
       if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {
         return;
       }
+      const bootstrapThreadRef = scopeThreadRef(
+        payload.environment.environmentId,
+        payload.bootstrapThreadId,
+      );
+      const bootstrapThreadExists = selectThreadExistsByRef(
+        useStore.getState(),
+        bootstrapThreadRef,
+      );
+      if (!bootstrapThreadExists) {
+        return;
+      }
+      console.error("DEBUG bootstrap navigate", bootstrapThreadRef);
       await navigate({
         to: "/$environmentId/$threadId",
         params: {

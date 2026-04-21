@@ -11,7 +11,6 @@ import { type ChatMessage, type SessionPhase, type Thread, type ThreadSession } 
 import { randomUUID } from "~/lib/utils";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
-import { selectThreadByRef, useStore } from "../store";
 import {
   filterTerminalContextsWithText,
   stripInlineTerminalContextPlaceholders,
@@ -20,9 +19,14 @@ import {
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
+export const ACTIVE_THREAD_SNAPSHOT_RECONCILIATION_INTERVAL_MS = 10_000;
 const WORKTREE_BRANCH_PREFIX = "t3code";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+function threadHasStarted(thread: Thread | null | undefined): boolean {
+  return thread?.latestTurn?.startedAt != null;
+}
 
 export function buildLocalDraftThread(
   threadId: ThreadId,
@@ -163,6 +167,42 @@ export function buildTemporaryWorktreeBranchName(): string {
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
 }
 
+export function deriveActiveThreadSnapshotReconciliationToken(input: {
+  thread: Thread | undefined;
+  phase: SessionPhase;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isRevertingCheckpoint: boolean;
+}): string | null {
+  if (
+    !input.thread ||
+    !(
+      input.phase === "running" ||
+      input.isSendBusy ||
+      input.isConnecting ||
+      input.isRevertingCheckpoint
+    )
+  ) {
+    return null;
+  }
+
+  const latestActivityCreatedAt = input.thread.activities.at(-1)?.createdAt ?? null;
+  const latestMessageTimestamp =
+    input.thread.messages.at(-1)?.completedAt ?? input.thread.messages.at(-1)?.createdAt ?? null;
+
+  return [
+    input.thread.id,
+    input.thread.updatedAt,
+    input.thread.session?.updatedAt ?? "",
+    input.thread.latestTurn?.turnId ?? "",
+    input.thread.latestTurn?.requestedAt ?? "",
+    input.thread.latestTurn?.startedAt ?? "",
+    input.thread.latestTurn?.completedAt ?? "",
+    latestActivityCreatedAt ?? "",
+    latestMessageTimestamp ?? "",
+  ].join("|");
+}
+
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {
@@ -220,12 +260,6 @@ export function buildExpiredTerminalContextToastCopy(
   };
 }
 
-export function threadHasStarted(thread: Thread | null | undefined): boolean {
-  return Boolean(
-    thread && (thread.latestTurn !== null || thread.messages.length > 0 || thread.session !== null),
-  );
-}
-
 export function deriveLockedProvider(input: {
   thread: Thread | null | undefined;
   selectedProvider: ProviderKind | null;
@@ -235,50 +269,6 @@ export function deriveLockedProvider(input: {
     return null;
   }
   return input.thread?.session?.provider ?? input.threadProvider ?? input.selectedProvider ?? null;
-}
-
-export async function waitForStartedServerThread(
-  threadRef: ScopedThreadRef,
-  timeoutMs = 1_000,
-): Promise<boolean> {
-  const getThread = () => selectThreadByRef(useStore.getState(), threadRef);
-  const thread = getThread();
-
-  if (threadHasStarted(thread)) {
-    return true;
-  }
-
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
-    const finish = (result: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeoutId !== null) {
-        globalThis.clearTimeout(timeoutId);
-      }
-      unsubscribe();
-      resolve(result);
-    };
-
-    const unsubscribe = useStore.subscribe((state) => {
-      if (!threadHasStarted(selectThreadByRef(state, threadRef))) {
-        return;
-      }
-      finish(true);
-    });
-
-    if (threadHasStarted(getThread())) {
-      finish(true);
-      return;
-    }
-
-    timeoutId = globalThis.setTimeout(() => {
-      finish(false);
-    }, timeoutMs);
-  });
 }
 
 export interface LocalDispatchSnapshot {

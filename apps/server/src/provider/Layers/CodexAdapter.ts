@@ -36,6 +36,7 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import {
   CodexAppServerManager,
   type CodexAppServerStartSessionInput,
+  isRecoverableThreadResumeError,
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -1444,13 +1445,21 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
       return yield* Effect.tryPromise({
         try: () => manager.startSession(managerInput),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
+        catch: (cause) => {
+          if (input.resumeCursor !== undefined && isRecoverableThreadResumeError(cause)) {
+            return new ProviderAdapterSessionNotFoundError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              cause,
+            });
+          }
+          return new ProviderAdapterProcessError({
             provider: PROVIDER,
             threadId: input.threadId,
             detail: `Failed to start Codex adapter session: ${cause instanceof Error ? cause.message : String(cause)}.`,
             cause,
-          }),
+          });
+        },
       });
     },
   );

@@ -26,6 +26,8 @@ interface ThreadSelectionStore extends ThreadSelectionState {
   clearSelection: () => void;
   /** Remove specific scoped thread keys from the selection (e.g. after deletion). */
   removeFromSelection: (threadKeys: readonly string[]) => void;
+  /** Prune selection to the currently existing scoped thread keys. */
+  pruneToExisting: (threadKeys: Iterable<string>) => void;
   /** Set the anchor thread without adding it to the selection (e.g. on plain-click navigate). */
   setAnchor: (threadKey: string) => void;
   /** Check if any threads are selected. */
@@ -115,6 +117,33 @@ export const useThreadSelectionStore = create<ThreadSelectionStore>((set, get) =
           ? null
           : state.anchorThreadKey;
       return { selectedThreadKeys: next, anchorThreadKey: newAnchor };
+    });
+  },
+
+  pruneToExisting: (threadKeys) => {
+    set((state) => {
+      const existing = new Set(threadKeys);
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of state.selectedThreadKeys) {
+        if (!existing.has(key)) {
+          changed = true;
+          continue;
+        }
+        next.add(key);
+      }
+
+      const nextAnchor =
+        state.anchorThreadKey !== null && !existing.has(state.anchorThreadKey)
+          ? null
+          : state.anchorThreadKey;
+      if (!changed && nextAnchor === state.anchorThreadKey) {
+        return state;
+      }
+      return {
+        selectedThreadKeys: next,
+        anchorThreadKey: nextAnchor,
+      };
     });
   },
 

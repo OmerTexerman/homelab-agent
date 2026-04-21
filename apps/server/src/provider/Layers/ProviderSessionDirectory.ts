@@ -105,13 +105,14 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
         resumeCursor:
-          binding.resumeCursor !== undefined
-            ? binding.resumeCursor
-            : (existingRuntime?.resumeCursor ?? null),
-        runtimePayload: mergeRuntimePayload(
-          existingRuntime?.runtimePayload ?? null,
-          binding.runtimePayload,
-        ),
+          providerChanged && binding.resumeCursor === undefined
+            ? null
+            : binding.resumeCursor !== undefined
+              ? binding.resumeCursor
+              : (existingRuntime?.resumeCursor ?? null),
+        runtimePayload: providerChanged
+          ? (binding.runtimePayload ?? null)
+          : mergeRuntimePayload(existingRuntime?.runtimePayload ?? null, binding.runtimePayload),
       })
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
   });

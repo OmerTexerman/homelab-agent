@@ -219,7 +219,7 @@ describe("uiStateStore pure functions", () => {
     expect(next.projectExpandedById[recreatedProject2]).toBe(false);
   });
 
-  it("syncProjects returns a new state when only project cwd changes", () => {
+  it("syncProjects treats cwd-only changes as a no-op for sidebar ordering state", () => {
     const project1 = ProjectId.make("project-1");
     const initialState = syncProjects(
       makeUiState({
@@ -233,7 +233,7 @@ describe("uiStateStore pure functions", () => {
 
     const next = syncProjects(initialState, [{ key: project1, cwd: "/tmp/project-1-renamed" }]);
 
-    expect(next).not.toBe(initialState);
+    expect(next).toBe(initialState);
     expect(next.projectOrder).toEqual([project1]);
     expect(next.projectExpandedById[project1]).toBe(false);
   });

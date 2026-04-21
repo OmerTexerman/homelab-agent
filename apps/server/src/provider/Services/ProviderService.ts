@@ -78,6 +78,14 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Clear any persisted provider/session state for a deleted thread.
+   *
+   * This is the lifecycle cleanup boundary used when the orchestration model
+   * has already decided the thread no longer exists.
+   */
+  readonly clearThreadState: (threadId: ThreadId) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.
