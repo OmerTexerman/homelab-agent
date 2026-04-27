@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas";
+import { AuthSessionId, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
 
 /**
  * Declares the server's overall authentication posture.
@@ -253,6 +253,8 @@ export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.T
 
 export const AuthCreatePairingCredentialInput = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
+  role: Schema.optionalKey(AuthSessionRole),
+  ttlMinutes: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(60 * 24 * 30))),
 });
 export type AuthCreatePairingCredentialInput = typeof AuthCreatePairingCredentialInput.Type;
 

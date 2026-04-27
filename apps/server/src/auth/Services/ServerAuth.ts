@@ -51,9 +51,7 @@ export interface ServerAuthShape {
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
   readonly issuePairingCredential: (
-    input?: AuthCreatePairingCredentialInput & {
-      readonly role?: SessionRole;
-    },
+    input?: AuthCreatePairingCredentialInput,
   ) => Effect.Effect<AuthPairingCredentialResult, AuthError>;
   readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthError>;
   readonly revokePairingLink: (id: string) => Effect.Effect<boolean, AuthError>;

@@ -526,14 +526,20 @@ describe("resolveInitialServerAuthGateState", () => {
 
     const { createServerPairingCredential } = await import("./environments/primary");
 
-    await expect(createServerPairingCredential("Julius iPhone")).resolves.toEqual({
+    await expect(
+      createServerPairingCredential({
+        label: "Julius iPhone",
+        role: "owner",
+        ttlMinutes: 1440,
+      }),
+    ).resolves.toEqual({
       id: "pairing-link-1",
       credential: "pairing-token",
       label: "Julius iPhone",
       expiresAt: "2026-04-05T00:00:00.000Z",
     });
     expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/pairing-token", {
-      body: JSON.stringify({ label: "Julius iPhone" }),
+      body: JSON.stringify({ label: "Julius iPhone", role: "owner", ttlMinutes: 1440 }),
       credentials: "include",
       headers: {
         "content-type": "application/json",

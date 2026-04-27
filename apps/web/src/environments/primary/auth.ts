@@ -250,10 +250,14 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
 }
 
 export async function createServerPairingCredential(
-  label?: string,
+  input?: AuthCreatePairingCredentialInput,
 ): Promise<AuthPairingCredentialResult> {
-  const trimmedLabel = label?.trim();
-  const payload: AuthCreatePairingCredentialInput = trimmedLabel ? { label: trimmedLabel } : {};
+  const trimmedLabel = input?.label?.trim();
+  const payload: AuthCreatePairingCredentialInput = {
+    ...(trimmedLabel ? { label: trimmedLabel } : {}),
+    ...(input?.role ? { role: input.role } : {}),
+    ...(input?.ttlMinutes ? { ttlMinutes: input.ttlMinutes } : {}),
+  };
   const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/pairing-token"), {
     body: JSON.stringify(payload),
     credentials: "include",

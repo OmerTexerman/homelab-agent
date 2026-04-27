@@ -210,7 +210,8 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane
       .createPairingLink({
         role: input?.role ?? "client",
-        subject: input?.role === "owner" ? "owner-bootstrap" : "one-time-token",
+        subject: input?.role === "owner" ? "owner-pairing-link" : "one-time-token",
+        ...(input?.ttlMinutes ? { ttl: Duration.minutes(input.ttlMinutes) } : {}),
         ...(input?.label ? { label: input.label } : {}),
       })
       .pipe(
@@ -235,7 +236,6 @@ export const makeServerAuth = Effect.gen(function* () {
   const listPairingLinks: ServerAuthShape["listPairingLinks"] = () =>
     authControlPlane
       .listPairingLinks({
-        role: "client",
         excludeSubjects: ["owner-bootstrap"],
       })
       .pipe(
