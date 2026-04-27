@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AuthClientSession,
   type AuthPairingLink,
+  type AuthSessionRole,
   type DesktopServerExposureState,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -45,6 +46,7 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { setPairingTokenOnUrl } from "../../pairingUrl";
 import {
@@ -166,6 +168,48 @@ const ITEM_ROW_CLASSNAME = "border-t border-border/60 px-4 py-4 first:border-t-0
 
 const ITEM_ROW_INNER_CLASSNAME =
   "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between";
+
+const PAIRING_ROLE_OPTIONS: ReadonlyArray<{
+  readonly value: AuthSessionRole;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    value: "client",
+    label: "Client",
+    description: "Best for a phone, tablet, or secondary browser that should use the backend.",
+  },
+  {
+    value: "owner",
+    label: "Owner",
+    description: "Full management access, including issuing links and revoking other sessions.",
+  },
+];
+
+const PAIRING_TTL_OPTIONS: ReadonlyArray<{
+  readonly value: string;
+  readonly ttlMinutes: number;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  { value: "60", ttlMinutes: 60, label: "1 hour", description: "Short-lived handoff." },
+  { value: "1440", ttlMinutes: 60 * 24, label: "1 day", description: "Good for same-day setup." },
+  {
+    value: "10080",
+    ttlMinutes: 60 * 24 * 7,
+    label: "7 days",
+    description: "Good default for adding a new device.",
+  },
+  {
+    value: "43200",
+    ttlMinutes: 60 * 24 * 30,
+    label: "30 days",
+    description: "Long-lived invite; revoke it once the device is paired.",
+  },
+];
+
+const DEFAULT_PAIRING_ROLE: AuthSessionRole = "client";
+const DEFAULT_PAIRING_TTL_VALUE = "10080";
 
 function sortDesktopPairingLinks(links: ReadonlyArray<ServerPairingLinkRecord>) {
   return [...links].toSorted(
@@ -526,13 +570,24 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 }: AuthorizedClientsHeaderActionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
+  const [pairingRole, setPairingRole] = useState<AuthSessionRole>(DEFAULT_PAIRING_ROLE);
+  const [pairingTtlValue, setPairingTtlValue] = useState(DEFAULT_PAIRING_TTL_VALUE);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
     setIsCreatingPairingLink(true);
     try {
-      await createServerPairingCredential(pairingLabel);
+      const ttlMinutes =
+        PAIRING_TTL_OPTIONS.find((option) => option.value === pairingTtlValue)?.ttlMinutes ??
+        60 * 24 * 7;
+      await createServerPairingCredential({
+        label: pairingLabel,
+        role: pairingRole,
+        ttlMinutes,
+      });
       setPairingLabel("");
+      setPairingRole(DEFAULT_PAIRING_ROLE);
+      setPairingTtlValue(DEFAULT_PAIRING_TTL_VALUE);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -544,7 +599,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [pairingLabel]);
+  }, [pairingLabel, pairingRole, pairingTtlValue]);
 
   return (
     <div className="flex items-center gap-2">
@@ -564,6 +619,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           setDialogOpen(open);
           if (!open) {
             setPairingLabel("");
+            setPairingRole(DEFAULT_PAIRING_ROLE);
+            setPairingTtlValue(DEFAULT_PAIRING_TTL_VALUE);
           }
         }}
       >
@@ -571,19 +628,19 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           render={
             <Button size="xs" variant="default">
               <PlusIcon className="size-3" />
-              Create link
+              Add device
             </Button>
           }
         />
         <DialogPopup className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Create pairing link</DialogTitle>
+            <DialogTitle>Add device</DialogTitle>
             <DialogDescription>
-              Generate a one-time link that another device can use to pair with this backend as an
-              authorized client.
+              Generate a pairing link for another device. Use client for ordinary access and owner
+              only when that device should be able to manage this backend too.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel>
+          <DialogPanel className="space-y-4">
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
                 Client label (optional)
@@ -595,6 +652,52 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                 disabled={isCreatingPairingLink}
                 autoFocus
               />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">Access level</span>
+              <Select value={pairingRole} onValueChange={(value) => setPairingRole(value!)}>
+                <SelectTrigger aria-label="Pairing access level">
+                  <SelectValue>
+                    {PAIRING_ROLE_OPTIONS.find((option) => option.value === pairingRole)?.label ??
+                      "Client"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {PAIRING_ROLE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="min-w-64 py-2">
+                      <div className="grid min-w-0 gap-0.5">
+                        <span className="font-medium text-foreground">{option.label}</span>
+                        <span className="text-muted-foreground text-xs leading-4">
+                          {option.description}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">Expires in</span>
+              <Select value={pairingTtlValue} onValueChange={(value) => setPairingTtlValue(value!)}>
+                <SelectTrigger aria-label="Pairing link expiry">
+                  <SelectValue>
+                    {PAIRING_TTL_OPTIONS.find((option) => option.value === pairingTtlValue)
+                      ?.label ?? "7 days"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {PAIRING_TTL_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="min-w-64 py-2">
+                      <div className="grid min-w-0 gap-0.5">
+                        <span className="font-medium text-foreground">{option.label}</span>
+                        <span className="text-muted-foreground text-xs leading-4">
+                          {option.description}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
             </label>
           </DialogPanel>
           <DialogFooter variant="bare">

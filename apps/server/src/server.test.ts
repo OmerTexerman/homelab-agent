@@ -1198,6 +1198,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("issues owner pairing credentials when requested", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          host: "0.0.0.0",
+        },
+      });
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const pairingTokenUrl = yield* getHttpServerUrl("/api/auth/pairing-token");
+      const ownerPairingResponse = yield* Effect.promise(() =>
+        fetch(pairingTokenUrl, {
+          method: "POST",
+          headers: {
+            cookie: ownerCookie,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            label: "Ops iPad",
+            role: "owner",
+            ttlMinutes: 1440,
+          }),
+        }),
+      );
+      const ownerPairingBody = (yield* Effect.promise(() => ownerPairingResponse.json())) as {
+        readonly id: string;
+        readonly credential: string;
+        readonly label?: string;
+      };
+
+      const linksResponse = yield* HttpClient.get("/api/auth/pairing-links", {
+        headers: {
+          cookie: ownerCookie,
+        },
+      });
+      const links = (yield* linksResponse.json) as ReadonlyArray<{
+        readonly id: string;
+        readonly role: string;
+        readonly label?: string;
+      }>;
+
+      const pairedOwnerCookie = yield* getAuthenticatedSessionCookieHeader(
+        ownerPairingBody.credential,
+      );
+      const pairedOwnerResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: {
+          cookie: pairedOwnerCookie,
+        },
+      });
+
+      assert.equal(ownerPairingResponse.status, 200);
+      assert.equal(ownerPairingBody.label, "Ops iPad");
+      assert.isTrue(
+        links.some(
+          (entry) =>
+            entry.id === ownerPairingBody.id &&
+            entry.role === "owner" &&
+            entry.label === "Ops iPad",
+        ),
+      );
+      assert.equal(pairedOwnerResponse.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("rejects unauthenticated pairing credential requests", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
