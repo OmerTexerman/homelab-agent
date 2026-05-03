@@ -8,6 +8,11 @@ import { Data, DateTime, Duration, Context } from "effect";
 import type { Effect, Stream } from "effect";
 
 export type SessionRole = "owner" | "client";
+export type SessionVisibility = "user" | "internal";
+
+export type ActiveSession = AuthClientSession & {
+  readonly visibility: SessionVisibility;
+};
 
 export interface IssuedSession {
   readonly sessionId: AuthSessionId;
@@ -16,6 +21,7 @@ export interface IssuedSession {
   readonly client: AuthClientMetadata;
   readonly expiresAt: DateTime.DateTime;
   readonly role: SessionRole;
+  readonly visibility: SessionVisibility;
 }
 
 export interface VerifiedSession {
@@ -26,12 +32,13 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly role: SessionRole;
+  readonly visibility: SessionVisibility;
 }
 
 export type SessionCredentialChange =
   | {
       readonly type: "clientUpserted";
-      readonly clientSession: AuthClientSession;
+      readonly clientSession: ActiveSession;
     }
   | {
       readonly type: "clientRemoved";
@@ -50,6 +57,7 @@ export interface SessionCredentialServiceShape {
     readonly subject?: string;
     readonly method?: ServerAuthSessionMethod;
     readonly role?: SessionRole;
+    readonly visibility?: SessionVisibility;
     readonly client?: AuthClientMetadata;
   }) => Effect.Effect<IssuedSession, SessionCredentialError>;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
@@ -68,10 +76,7 @@ export interface SessionCredentialServiceShape {
   readonly verifyWebSocketToken: (
     token: string,
   ) => Effect.Effect<VerifiedSession, SessionCredentialError>;
-  readonly listActive: () => Effect.Effect<
-    ReadonlyArray<AuthClientSession>,
-    SessionCredentialError
-  >;
+  readonly listActive: () => Effect.Effect<ReadonlyArray<ActiveSession>, SessionCredentialError>;
   readonly streamChanges: Stream.Stream<SessionCredentialChange>;
   readonly revoke: (sessionId: AuthSessionId) => Effect.Effect<boolean, SessionCredentialError>;
   readonly revokeAllExcept: (

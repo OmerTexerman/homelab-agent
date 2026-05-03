@@ -2063,7 +2063,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         verified &&
         verified.subject === expectedSubject &&
         verified.role === "owner" &&
-        verified.method === "bearer-session-token"
+        verified.method === "bearer-session-token" &&
+        verified.visibility === "internal"
       ) {
         return persisted.token;
       }
@@ -2079,6 +2080,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       .issue({
         method: "bearer-session-token",
         role: "owner",
+        visibility: "internal",
         subject: expectedSubject,
         client: {
           deviceType: "unknown",

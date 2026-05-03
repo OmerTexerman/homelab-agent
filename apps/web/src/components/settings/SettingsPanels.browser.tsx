@@ -1,5 +1,6 @@
 import "../../index.css";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
@@ -12,6 +13,7 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 import { DateTime } from "effect";
+import type { ReactElement } from "react";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -21,6 +23,22 @@ import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { GeneralSettingsPanel } from "./SettingsPanels";
+
+function renderSettingsUi(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AppAtomRegistryProvider>{ui}</AppAtomRegistryProvider>
+    </QueryClientProvider>,
+  );
+}
 
 const authAccessHarness = vi.hoisted(() => {
   type Snapshot = AuthAccessSnapshot;
@@ -400,13 +418,9 @@ describe("GeneralSettingsPanel observability", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <ConnectionsSettings />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<ConnectionsSettings />);
 
-    await expect.element(page.getByText("Manage local backend")).toBeInTheDocument();
+    await expect.element(page.getByText("Backend access")).toBeInTheDocument();
     await expect.element(page.getByLabelText("Enable network access")).toBeDisabled();
     await expect
       .element(
@@ -415,35 +429,53 @@ describe("GeneralSettingsPanel observability", () => {
         ),
       )
       .toBeInTheDocument();
-    await expect.element(page.getByText("Authorized clients")).not.toBeInTheDocument();
+    await expect.element(page.getByText("Paired devices")).not.toBeInTheDocument();
     await expect.element(page.getByText("Chrome on Mac")).not.toBeInTheDocument();
     await expect
-      .element(page.getByRole("heading", { name: "Remote environments", exact: true }))
-      .toBeInTheDocument();
+      .element(page.getByRole("heading", { name: "Other Homelab Agent backends", exact: true }))
+      .not.toBeInTheDocument();
   });
 
-  it("shows diagnostics inside About with a single logs-folder action", async () => {
+  it("shows the web About section without desktop-only diagnostics actions", async () => {
     setServerConfigSnapshot(createBaseServerConfig());
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <GeneralSettingsPanel />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<GeneralSettingsPanel />);
 
     await expect.element(page.getByText("About")).toBeInTheDocument();
-    await expect.element(page.getByText("Diagnostics")).toBeInTheDocument();
-    await expect.element(page.getByText("Open logs folder")).toBeInTheDocument();
-    await expect
-      .element(page.getByText("/repo/project/.t3/logs", { exact: true }))
-      .toBeInTheDocument();
-    await expect
-      .element(
-        page.getByText(
-          "Local trace file. OTLP exporting traces to http://localhost:4318/v1/traces.",
-        ),
-      )
-      .toBeInTheDocument();
+    await expect.element(page.getByText("Current version of the application.")).toBeInTheDocument();
+    await expect.element(page.getByText("Open logs folder")).not.toBeInTheDocument();
+  });
+
+  it("renders connections management inside the real settings panel", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/auth/session")) {
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              auth: createBaseServerConfig().auth,
+              role: "owner",
+              sessionMethod: "browser-session-cookie",
+              expiresAt: "2036-05-07T00:00:00.000Z",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unhandled fetch GET ${url}`);
+      }),
+    );
+
+    mounted = await renderSettingsUi(<GeneralSettingsPanel />);
+
+    await expect.element(page.getByText("Backend access")).toBeInTheDocument();
+    await expect.element(page.getByText("Paired devices")).not.toBeInTheDocument();
   });
 
   it("creates and shows a pairing link when network access is enabled", async () => {
@@ -539,17 +571,15 @@ describe("GeneralSettingsPanel observability", () => {
 
     setServerConfigSnapshot(createBaseServerConfig());
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <ConnectionsSettings />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<ConnectionsSettings />);
 
-    await expect.element(page.getByText("Authorized clients")).toBeInTheDocument();
+    await expect.element(page.getByText("Paired devices")).toBeInTheDocument();
     await expect.element(page.getByText("Revoke others")).toBeInTheDocument();
     await expect.element(page.getByText("This Mac")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Create link", exact: true }).click();
-    await expect.element(page.getByText("Create pairing link")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Add device", exact: true }).click();
+    await expect
+      .element(page.getByRole("heading", { name: "Add device", exact: true }))
+      .toBeInTheDocument();
     await page.getByRole("button", { name: "Create link", exact: true }).click();
     authAccessHarness.emitPairingLinkUpserted(pairingLinks[0]!);
     authAccessHarness.emitClientUpserted(clientSessions[1]!);
@@ -560,6 +590,97 @@ describe("GeneralSettingsPanel observability", () => {
       .element(page.getByRole("button", { name: /^(Copy|Show link)$/ }))
       .toBeInTheDocument();
     await expect.element(page.getByText("Revoke others")).toBeInTheDocument();
+  });
+
+  it("keeps owner pairing links visible after creation", async () => {
+    window.desktopBridge = createDesktopBridgeStub({
+      serverExposureState: {
+        mode: "network-accessible",
+        endpointUrl: "http://192.168.1.44:3773",
+        advertisedHost: "192.168.1.44",
+      },
+    });
+    let pairingLinks: Array<AuthAccessSnapshot["pairingLinks"][number]> = [];
+    const clientSessions: Array<AuthAccessSnapshot["clientSessions"][number]> = [
+      makeClientSession({
+        sessionId: "session-owner",
+        subject: "desktop-bootstrap",
+        role: "owner",
+        method: "browser-session-cookie",
+        client: {
+          label: "This Mac",
+          deviceType: "desktop",
+          os: "macOS",
+          browser: "Electron",
+          ipAddress: "127.0.0.1",
+        },
+        issuedAt: "2036-04-07T00:00:00.000Z",
+        expiresAt: "2036-05-07T00:00:00.000Z",
+        connected: true,
+        current: true,
+      }),
+    ];
+    authAccessHarness.setSnapshot({
+      pairingLinks,
+      clientSessions,
+    });
+    let createdRole: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/auth/pairing-token") && method === "POST") {
+          const parsedBody =
+            typeof init?.body === "string" ? (JSON.parse(init.body) as { role?: string }) : {};
+          createdRole = parsedBody.role ?? null;
+          pairingLinks = [
+            makePairingLink({
+              id: "pairing-link-owner",
+              credential: "pairing-token-owner",
+              role: "owner",
+              subject: "owner-pairing-link",
+              label: "Admin iPad",
+              createdAt: "2036-04-07T00:00:00.000Z",
+              expiresAt: "2036-04-10T00:05:00.000Z",
+            }),
+          ];
+          authAccessHarness.setSnapshot({
+            pairingLinks,
+            clientSessions,
+          });
+          return new Response(
+            JSON.stringify({
+              id: "pairing-link-owner",
+              credential: "pairing-token-owner",
+              label: "Admin iPad",
+              expiresAt: "2036-04-10T00:05:00.000Z",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+
+        throw new Error(`Unhandled fetch ${method} ${url}`);
+      }),
+    );
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderSettingsUi(<ConnectionsSettings />);
+
+    await page.getByRole("button", { name: "Add device", exact: true }).click();
+    await page.getByLabelText("Pairing access level").click();
+    await page.getByRole("option", { name: /Owner/ }).click();
+    await page.getByPlaceholder("e.g. Living room iPad").fill("Admin iPad");
+    await page.getByRole("button", { name: "Create link", exact: true }).click();
+    authAccessHarness.emitPairingLinkUpserted(pairingLinks[0]!);
+
+    expect(createdRole).toBe("owner");
+    await expect.element(page.getByText("Admin iPad")).toBeInTheDocument();
+    await expect.element(page.getByText(/Owner · Expires in/)).toBeInTheDocument();
   });
 
   it("revokes all other paired clients from settings", async () => {
@@ -632,11 +753,7 @@ describe("GeneralSettingsPanel observability", () => {
 
     setServerConfigSnapshot(createBaseServerConfig());
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <ConnectionsSettings />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<ConnectionsSettings />);
 
     await expect.element(page.getByText("Julius iPhone")).toBeInTheDocument();
     await page.getByRole("button", { name: "Revoke others", exact: true }).click();
@@ -651,18 +768,16 @@ describe("GeneralSettingsPanel observability", () => {
 
     setServerConfigSnapshot(createBaseServerConfig());
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <ConnectionsSettings />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<ConnectionsSettings />);
 
     const networkAccessToggle = page.getByLabelText("Enable network access");
     await expect.element(networkAccessToggle).not.toBeDisabled();
     await networkAccessToggle.click();
     await expect.element(page.getByText("Enable network access?")).toBeInTheDocument();
     await expect
-      .element(page.getByText("T3 Code will restart to expose this environment over the network."))
+      .element(
+        page.getByText("Homelab Agent will restart to expose this environment over the network."),
+      )
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and enable", exact: true }).click();
     await vi.waitFor(() => {
@@ -673,7 +788,7 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
-  it("opens the logs folder in the preferred editor", async () => {
+  it("does not render desktop-only logs controls in the web app", async () => {
     const openInEditor = vi.fn<LocalApi["shell"]["openInEditor"]>().mockResolvedValue(undefined);
     window.nativeApi = {
       shell: {
@@ -683,15 +798,9 @@ describe("GeneralSettingsPanel observability", () => {
 
     setServerConfigSnapshot(createBaseServerConfig());
 
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <GeneralSettingsPanel />
-      </AppAtomRegistryProvider>,
-    );
+    mounted = await renderSettingsUi(<GeneralSettingsPanel />);
 
-    const openLogsButton = page.getByText("Open logs folder");
-    await openLogsButton.click();
-
-    expect(openInEditor).toHaveBeenCalledWith("/repo/project/.t3/logs", "cursor");
+    await expect.element(page.getByText("Open logs folder")).not.toBeInTheDocument();
+    expect(openInEditor).not.toHaveBeenCalled();
   });
 });

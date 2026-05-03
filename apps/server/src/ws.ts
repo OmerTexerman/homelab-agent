@@ -99,11 +99,15 @@ function bootstrapThreadCanRetryTurnStart(thread: {
   return thread.latestTurn === null && thread.messages.length === 0;
 }
 
+function isUserFacingAuthClientSession(session: { readonly visibility: "user" | "internal" }) {
+  return session.visibility === "user";
+}
+
 function toAuthAccessStreamEvent(
   change: BootstrapCredentialChange | SessionCredentialChange,
   revision: number,
   currentSessionId: AuthSessionId,
-): AuthAccessStreamEvent {
+): AuthAccessStreamEvent | null {
   switch (change.type) {
     case "pairingLinkUpserted":
       return {
@@ -120,12 +124,23 @@ function toAuthAccessStreamEvent(
         payload: { id: change.id },
       };
     case "clientUpserted":
+      if (!isUserFacingAuthClientSession(change.clientSession)) {
+        return null;
+      }
       return {
         version: 1,
         revision,
         type: "clientUpserted",
         payload: {
-          ...change.clientSession,
+          sessionId: change.clientSession.sessionId,
+          subject: change.clientSession.subject,
+          role: change.clientSession.role,
+          method: change.clientSession.method,
+          client: change.clientSession.client,
+          issuedAt: change.clientSession.issuedAt,
+          expiresAt: change.clientSession.expiresAt,
+          lastConnectedAt: change.clientSession.lastConnectedAt,
+          connected: change.clientSession.connected,
           current: change.clientSession.sessionId === currentSessionId,
         },
       };
@@ -1318,6 +1333,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                     ),
                   ),
                 ),
+                Stream.filter((event): event is AuthAccessStreamEvent => event !== null),
               );
 
               return Stream.concat(

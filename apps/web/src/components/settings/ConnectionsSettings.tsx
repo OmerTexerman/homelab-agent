@@ -5,7 +5,6 @@ import {
   type AuthPairingLink,
   type AuthSessionRole,
   type DesktopServerExposureState,
-  type EnvironmentId,
 } from "@t3tools/contracts";
 import { DateTime } from "effect";
 
@@ -60,16 +59,7 @@ import {
   type ServerPairingLinkRecord,
 } from "~/environments/primary";
 import type { WsRpcClient } from "~/rpc/wsRpcClient";
-import {
-  type SavedEnvironmentRecord,
-  type SavedEnvironmentRuntimeState,
-  useSavedEnvironmentRegistryStore,
-  useSavedEnvironmentRuntimeStore,
-  addSavedEnvironment,
-  getPrimaryEnvironmentConnection,
-  reconnectSavedEnvironment,
-  removeSavedEnvironment,
-} from "~/environments/runtime";
+import { getPrimaryEnvironmentConnection } from "~/environments/runtime";
 
 const accessTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -138,31 +128,6 @@ function ConnectionStatusDot({
   );
 }
 
-function getSavedBackendStatusTooltip(
-  runtime: SavedEnvironmentRuntimeState | null,
-  record: SavedEnvironmentRecord,
-  nowMs: number,
-) {
-  const connectionState = runtime?.connectionState ?? "disconnected";
-
-  if (connectionState === "connected") {
-    const connectedAt = runtime?.connectedAt ?? record.lastConnectedAt;
-    return connectedAt ? `Connected for ${formatElapsedDurationLabel(connectedAt, nowMs)}` : null;
-  }
-
-  if (connectionState === "connecting") {
-    return null;
-  }
-
-  if (connectionState === "error") {
-    return runtime?.lastError ?? "An unknown connection error occurred.";
-  }
-
-  return record.lastConnectedAt
-    ? `Last connected at ${formatAccessTimestamp(record.lastConnectedAt)}`
-    : "Not connected yet.";
-}
-
 /** Direct row in the card – same pattern as the Provider / ACP-agent list rows. */
 const ITEM_ROW_CLASSNAME = "border-t border-border/60 px-4 py-4 first:border-t-0 sm:px-5";
 
@@ -177,12 +142,13 @@ const PAIRING_ROLE_OPTIONS: ReadonlyArray<{
   {
     value: "client",
     label: "Client",
-    description: "Best for a phone, tablet, or secondary browser that should use the backend.",
+    description:
+      "Best for a phone, tablet, or secondary browser that should use this Homelab Agent.",
   },
   {
     value: "owner",
     label: "Owner",
-    description: "Full management access, including issuing links and revoking other sessions.",
+    description: "Can also add devices, issue links, and revoke other sessions.",
   },
 ];
 
@@ -342,7 +308,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
         title: shareablePairingUrl ? "Pairing URL copied" : "Pairing token copied",
         description: shareablePairingUrl
           ? "Open it in the client you want to pair to this environment."
-          : "Paste it into another client with this backend's reachable host.",
+          : "Paste it into another browser or device using this Homelab Agent's reachable address.",
       });
     },
     onError: (error) => {
@@ -413,7 +379,8 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           </p>
           {shareablePairingUrl === null ? (
             <p className="text-[11px] text-muted-foreground/70">
-              Copy the token and pair from another client using this backend&apos;s reachable host.
+              Copy the token and pair from another browser or device using this Homelab Agent&apos;s
+              reachable address.
             </p>
           ) : null}
         </div>
@@ -434,7 +401,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                 <DialogDescription>
                   {shareablePairingUrl
                     ? "Clipboard copy is unavailable here. Open or manually copy this full pairing URL on the device you want to connect."
-                    : "Clipboard copy is unavailable here. Manually copy this token and pair from another client using this backend's reachable host."}
+                    : "Clipboard copy is unavailable here. Manually copy this token and pair from another browser or device using this Homelab Agent's reachable address."}
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel className="space-y-4">
@@ -574,6 +541,12 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   const [pairingTtlValue, setPairingTtlValue] = useState(DEFAULT_PAIRING_TTL_VALUE);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
+  const resetPairingDraft = useCallback(() => {
+    setPairingLabel("");
+    setPairingRole(DEFAULT_PAIRING_ROLE);
+    setPairingTtlValue(DEFAULT_PAIRING_TTL_VALUE);
+  }, []);
+
   const handleCreatePairingLink = useCallback(async () => {
     setIsCreatingPairingLink(true);
     try {
@@ -585,9 +558,6 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
         role: pairingRole,
         ttlMinutes,
       });
-      setPairingLabel("");
-      setPairingRole(DEFAULT_PAIRING_ROLE);
-      setPairingTtlValue(DEFAULT_PAIRING_TTL_VALUE);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -617,10 +587,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) {
-            setPairingLabel("");
-            setPairingRole(DEFAULT_PAIRING_ROLE);
-            setPairingTtlValue(DEFAULT_PAIRING_TTL_VALUE);
+          if (open) {
+            resetPairingDraft();
           }
         }}
       >
@@ -636,14 +604,14 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           <DialogHeader>
             <DialogTitle>Add device</DialogTitle>
             <DialogDescription>
-              Generate a pairing link for another device. Use client for ordinary access and owner
-              only when that device should be able to manage this backend too.
+              Generate a pairing link for another device. Choose Client for ordinary use. Choose
+              Owner only if that device should also be able to manage access for this Homelab Agent.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Client label (optional)
+                Device label (optional)
               </span>
               <Input
                 value={pairingLabel}
@@ -762,98 +730,12 @@ const PairingClientsList = memo(function PairingClientsList({
 
       {pairingLinks.length === 0 && clientSessions.length === 0 && !isLoading ? (
         <div className={ITEM_ROW_CLASSNAME}>
-          <p className="text-xs text-muted-foreground/60">No pairing links or client sessions.</p>
+          <p className="text-xs text-muted-foreground/60">No active invites or paired devices.</p>
         </div>
       ) : null}
     </>
   );
 });
-
-type SavedBackendListRowProps = {
-  environmentId: EnvironmentId;
-  reconnectingEnvironmentId: EnvironmentId | null;
-  removingEnvironmentId: EnvironmentId | null;
-  onReconnect: (environmentId: EnvironmentId) => void;
-  onRemove: (environmentId: EnvironmentId) => void;
-};
-
-function SavedBackendListRow({
-  environmentId,
-  reconnectingEnvironmentId,
-  removingEnvironmentId,
-  onReconnect,
-  onRemove,
-}: SavedBackendListRowProps) {
-  const nowMs = useRelativeTimeTick(1_000);
-  const record = useSavedEnvironmentRegistryStore((state) => state.byId[environmentId] ?? null);
-  const runtime = useSavedEnvironmentRuntimeStore((state) => state.byId[environmentId] ?? null);
-
-  if (!record) {
-    return null;
-  }
-
-  const connectionState = runtime?.connectionState ?? "disconnected";
-  const stateDotClassName =
-    connectionState === "connected"
-      ? "bg-success"
-      : connectionState === "connecting"
-        ? "bg-warning"
-        : connectionState === "error"
-          ? "bg-destructive"
-          : "bg-muted-foreground/40";
-  const roleLabel = runtime?.role ? (runtime.role === "owner" ? "Owner" : "Client") : null;
-  const descriptorLabel = runtime?.descriptor?.label ?? null;
-  const statusTooltip = getSavedBackendStatusTooltip(runtime, record, nowMs);
-  const metadataBits = [
-    roleLabel,
-    record.lastConnectedAt
-      ? `Last connected ${formatAccessTimestamp(record.lastConnectedAt)}`
-      : null,
-  ].filter((value): value is string => value !== null);
-
-  return (
-    <div className={ITEM_ROW_CLASSNAME}>
-      <div className={ITEM_ROW_INNER_CLASSNAME}>
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <ConnectionStatusDot
-              tooltipText={statusTooltip}
-              dotClassName={stateDotClassName}
-              pingClassName={
-                connectionState === "connecting" ? "bg-warning/60 duration-2000" : null
-              }
-            />
-            <h3 className="text-sm font-medium text-foreground">{record.label}</h3>
-          </div>
-          {metadataBits.length > 0 ? (
-            <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
-          ) : null}
-          {descriptorLabel && descriptorLabel !== record.label ? (
-            <p className="text-xs text-muted-foreground">Server label: {descriptorLabel}</p>
-          ) : null}
-        </div>
-        <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={reconnectingEnvironmentId === environmentId}
-            onClick={() => void onReconnect(environmentId)}
-          >
-            {reconnectingEnvironmentId === environmentId ? "Reconnecting…" : "Reconnect"}
-          </Button>
-          <Button
-            size="xs"
-            variant="destructive-outline"
-            disabled={removingEnvironmentId === environmentId}
-            onClick={() => void onRemove(environmentId)}
-          >
-            {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
@@ -863,14 +745,6 @@ export function ConnectionsSettings() {
   const [currentAuthPolicy, setCurrentAuthPolicy] = useState<
     "desktop-managed-local" | "loopback-browser" | "remote-reachable" | "unsafe-no-auth" | null
   >(desktopBridge ? null : null);
-  const savedEnvironmentsById = useSavedEnvironmentRegistryStore((state) => state.byId);
-  const savedEnvironmentIds = useMemo(
-    () =>
-      Object.values(savedEnvironmentsById)
-        .toSorted((left, right) => left.label.localeCompare(right.label))
-        .map((record) => record.environmentId),
-    [savedEnvironmentsById],
-  );
 
   const [desktopServerExposureState, setDesktopServerExposureState] =
     useState<DesktopServerExposureState | null>(null);
@@ -892,20 +766,6 @@ export function ConnectionsSettings() {
     string | null
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
-  const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  const [savedBackendMode, setSavedBackendMode] = useState<"pairing-url" | "host-code">(
-    "pairing-url",
-  );
-  const [savedBackendLabel, setSavedBackendLabel] = useState("");
-  const [savedBackendPairingUrl, setSavedBackendPairingUrl] = useState("");
-  const [savedBackendHost, setSavedBackendHost] = useState("");
-  const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
-  const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
-  const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
-  const [reconnectingSavedEnvironmentId, setReconnectingSavedEnvironmentId] =
-    useState<EnvironmentId | null>(null);
-  const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
-    useState<EnvironmentId | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [pendingDesktopServerExposureMode, setPendingDesktopServerExposureMode] = useState<
     DesktopServerExposureState["mode"] | null
@@ -1008,84 +868,6 @@ export function ConnectionsSettings() {
       });
     } finally {
       setIsRevokingOtherDesktopClients(false);
-    }
-  }, []);
-
-  const handleAddSavedBackend = useCallback(async () => {
-    setIsAddingSavedBackend(true);
-    setSavedBackendError(null);
-    try {
-      const record = await addSavedEnvironment({
-        label: savedBackendLabel,
-        ...(savedBackendMode === "pairing-url"
-          ? { pairingUrl: savedBackendPairingUrl }
-          : {
-              host: savedBackendHost,
-              pairingCode: savedBackendPairingCode,
-            }),
-      });
-      setSavedBackendLabel("");
-      setSavedBackendPairingUrl("");
-      setSavedBackendHost("");
-      setSavedBackendPairingCode("");
-      setAddBackendDialogOpen(false);
-      toastManager.add({
-        type: "success",
-        title: "Backend added",
-        description: `${record.label} is now saved and will reconnect on app startup.`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to add backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not add backend",
-        description: message,
-      });
-    } finally {
-      setIsAddingSavedBackend(false);
-    }
-  }, [
-    savedBackendHost,
-    savedBackendLabel,
-    savedBackendMode,
-    savedBackendPairingCode,
-    savedBackendPairingUrl,
-  ]);
-
-  const handleReconnectSavedBackend = useCallback(async (environmentId: EnvironmentId) => {
-    setReconnectingSavedEnvironmentId(environmentId);
-    setSavedBackendError(null);
-    try {
-      await reconnectSavedEnvironment(environmentId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to reconnect backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not reconnect backend",
-        description: message,
-      });
-    } finally {
-      setReconnectingSavedEnvironmentId(null);
-    }
-  }, []);
-
-  const handleRemoveSavedBackend = useCallback(async (environmentId: EnvironmentId) => {
-    setRemovingSavedEnvironmentId(environmentId);
-    setSavedBackendError(null);
-    try {
-      await removeSavedEnvironment(environmentId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
-      setSavedBackendError(message);
-      toastManager.add({
-        type: "error",
-        title: "Could not remove backend",
-        description: message,
-      });
-    } finally {
-      setRemovingSavedEnvironmentId(null);
     }
   }, []);
 
@@ -1211,15 +993,11 @@ export function ConnectionsSettings() {
     setDesktopServerExposureState(null);
     setDesktopServerExposureError(null);
   }, [canManageLocalBackend]);
-  const visibleDesktopPairingLinks = useMemo(
-    () => desktopPairingLinks.filter((pairingLink) => pairingLink.role === "client"),
-    [desktopPairingLinks],
-  );
   return (
     <SettingsPageContainer>
       {canManageLocalBackend ? (
         <>
-          <SettingsSection title="Manage local backend">
+          <SettingsSection title="Backend access">
             {desktopBridge ? (
               <SettingsRow
                 title="Network access"
@@ -1335,7 +1113,7 @@ export function ConnectionsSettings() {
 
           {isLocalBackendNetworkAccessible ? (
             <SettingsSection
-              title="Authorized clients"
+              title="Paired devices"
               headerAction={
                 <AuthorizedClientsHeaderAction
                   clientSessions={desktopClientSessions}
@@ -1352,7 +1130,7 @@ export function ConnectionsSettings() {
               <PairingClientsList
                 endpointUrl={desktopServerExposureState?.endpointUrl}
                 isLoading={isLoadingDesktopAccessManagement}
-                pairingLinks={visibleDesktopPairingLinks}
+                pairingLinks={desktopPairingLinks}
                 clientSessions={desktopClientSessions}
                 revokingPairingLinkId={revokingDesktopPairingLinkId}
                 revokingClientSessionId={revokingDesktopClientSessionId}
@@ -1363,174 +1141,13 @@ export function ConnectionsSettings() {
           ) : null}
         </>
       ) : (
-        <SettingsSection title="Local backend access">
+        <SettingsSection title="Backend access">
           <SettingsRow
-            title="Owner tools"
-            description="Pairing links and client-session management are only available to owner sessions for this backend."
+            title="Device pairing"
+            description="Only owner sessions can issue invites or revoke paired devices for this backend."
           />
         </SettingsSection>
       )}
-
-      <SettingsSection
-        title="Remote environments"
-        headerAction={
-          <Dialog
-            open={addBackendDialogOpen}
-            onOpenChange={(open) => {
-              setAddBackendDialogOpen(open);
-              if (!open) {
-                setSavedBackendError(null);
-              }
-            }}
-          >
-            <DialogTrigger
-              render={
-                <Button size="xs" variant="outline">
-                  <PlusIcon className="size-3" />
-                  Add environment
-                </Button>
-              }
-            />
-            <DialogPopup>
-              <DialogHeader>
-                <DialogTitle>Add Environment</DialogTitle>
-                <DialogDescription>Pair another environment to this client.</DialogDescription>
-                <div className="flex gap-1 rounded-lg border border-border/60 bg-muted/50 p-1">
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                      savedBackendMode === "pairing-url"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    disabled={isAddingSavedBackend}
-                    onClick={() => setSavedBackendMode("pairing-url")}
-                  >
-                    Pairing URL
-                  </button>
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                      savedBackendMode === "host-code"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    disabled={isAddingSavedBackend}
-                    onClick={() => setSavedBackendMode("host-code")}
-                  >
-                    Host + code
-                  </button>
-                </div>
-              </DialogHeader>
-              <DialogPanel>
-                <div className="space-y-4">
-                  {savedBackendMode === "pairing-url" ? (
-                    <p className="text-xs text-muted-foreground">
-                      Enter the full pairing URL from the environment you want to connect to.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Enter the backend host and pairing code separately.
-                    </p>
-                  )}
-                  <div className="space-y-3">
-                    <label className="block">
-                      <span className="mb-1.5 block text-xs font-medium text-foreground">
-                        Label
-                      </span>
-                      <Input
-                        value={savedBackendLabel}
-                        onChange={(event) => setSavedBackendLabel(event.target.value)}
-                        placeholder="My backend (optional)"
-                        disabled={isAddingSavedBackend}
-                        spellCheck={false}
-                      />
-                    </label>
-                    {savedBackendMode === "pairing-url" ? (
-                      <label className="block">
-                        <span className="mb-1.5 block text-xs font-medium text-foreground">
-                          Pairing URL
-                        </span>
-                        <Input
-                          value={savedBackendPairingUrl}
-                          onChange={(event) => setSavedBackendPairingUrl(event.target.value)}
-                          placeholder="https://backend.example.com/pair#token=..."
-                          disabled={isAddingSavedBackend}
-                          spellCheck={false}
-                        />
-                        <span className="mt-1 block text-[11px] text-muted-foreground">
-                          The full URL including the pairing token.
-                        </span>
-                      </label>
-                    ) : (
-                      <>
-                        <label className="block">
-                          <span className="mb-1.5 block text-xs font-medium text-foreground">
-                            Host
-                          </span>
-                          <Input
-                            value={savedBackendHost}
-                            onChange={(event) => setSavedBackendHost(event.target.value)}
-                            placeholder="https://backend.example.com"
-                            disabled={isAddingSavedBackend}
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-1.5 block text-xs font-medium text-foreground">
-                            Pairing code
-                          </span>
-                          <Input
-                            value={savedBackendPairingCode}
-                            onChange={(event) => setSavedBackendPairingCode(event.target.value)}
-                            placeholder="Pairing code"
-                            disabled={isAddingSavedBackend}
-                            spellCheck={false}
-                          />
-                        </label>
-                      </>
-                    )}
-                  </div>
-                  {savedBackendError ? (
-                    <p className="text-xs text-destructive">{savedBackendError}</p>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    disabled={isAddingSavedBackend}
-                    onClick={() => void handleAddSavedBackend()}
-                  >
-                    <PlusIcon className="size-3.5" />
-                    {isAddingSavedBackend ? "Adding…" : "Add Backend"}
-                  </Button>
-                </div>
-              </DialogPanel>
-            </DialogPopup>
-          </Dialog>
-        }
-      >
-        {savedEnvironmentIds.map((environmentId) => (
-          <SavedBackendListRow
-            key={environmentId}
-            environmentId={environmentId}
-            reconnectingEnvironmentId={reconnectingSavedEnvironmentId}
-            removingEnvironmentId={removingSavedEnvironmentId}
-            onReconnect={handleReconnectSavedBackend}
-            onRemove={handleRemoveSavedBackend}
-          />
-        ))}
-
-        {savedEnvironmentIds.length === 0 ? (
-          <div className={ITEM_ROW_CLASSNAME}>
-            <p className="text-xs text-muted-foreground">
-              No remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
-              environment.
-            </p>
-          </div>
-        ) : null}
-      </SettingsSection>
     </SettingsPageContainer>
   );
 }

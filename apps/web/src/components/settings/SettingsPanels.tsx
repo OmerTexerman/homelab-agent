@@ -50,6 +50,7 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
+import { ConnectionsSettings } from "./ConnectionsSettings";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
 import { useServerProviders } from "../../rpc/serverState";
 
@@ -1025,6 +1026,8 @@ export function GeneralSettingsPanel() {
           );
         })}
       </SettingsSection>
+
+      <ConnectionsSettings />
 
       <SettingsSection title="About">
         {isElectron ? (

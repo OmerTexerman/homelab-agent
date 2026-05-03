@@ -14,11 +14,15 @@ export const AuthSessionClientMetadataRecord = Schema.Struct({
 });
 export type AuthSessionClientMetadataRecord = typeof AuthSessionClientMetadataRecord.Type;
 
+export const AuthSessionVisibility = Schema.Literals(["user", "internal"]);
+export type AuthSessionVisibility = typeof AuthSessionVisibility.Type;
+
 export const AuthSessionRecord = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
   role: Schema.Literals(["owner", "client"]),
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
+  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -32,6 +36,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   subject: Schema.String,
   role: Schema.Literals(["owner", "client"]),
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
+  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
