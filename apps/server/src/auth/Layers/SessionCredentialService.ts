@@ -17,6 +17,7 @@ import { ServerSecretStore } from "../Services/ServerSecretStore.ts";
 import {
   SessionCredentialError,
   SessionCredentialService,
+  type ActiveSession,
   type IssuedSession,
   type SessionCredentialChange,
   type SessionCredentialServiceShape,
@@ -82,7 +83,7 @@ function toClientMetadata(record: {
   };
 }
 
-function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthClientSession {
+function toActiveSession(input: Omit<ActiveSession, "current">): ActiveSession {
   return {
     ...input,
     current: false,
@@ -107,7 +108,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       cause,
     });
 
-  const emitUpsert = (clientSession: AuthClientSession) =>
+  const emitUpsert = (clientSession: ActiveSession) =>
     PubSub.publish(changesPubSub, {
       type: "clientUpserted",
       clientSession,
@@ -123,16 +124,17 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     Effect.gen(function* () {
       const row = yield* authSessions.getById({ sessionId });
       if (Option.isNone(row) || row.value.revokedAt !== null) {
-        return Option.none<AuthClientSession>();
+        return Option.none<ActiveSession>();
       }
 
       const connectedSessions = yield* Ref.get(connectedSessionsRef);
       return Option.some(
-        toAuthClientSession({
+        toActiveSession({
           sessionId: row.value.sessionId,
           subject: row.value.subject,
           role: row.value.role,
           method: row.value.method,
+          visibility: row.value.visibility,
           client: toClientMetadata(row.value.client),
           issuedAt: row.value.issuedAt,
           expiresAt: row.value.expiresAt,
@@ -232,6 +234,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         subject: claims.sub,
         role: claims.role,
         method: claims.method,
+        visibility: input?.visibility ?? "user",
         client: {
           label: client.label ?? null,
           ipAddress: client.ipAddress ?? null,
@@ -244,11 +247,12 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt,
       });
       yield* emitUpsert(
-        toAuthClientSession({
+        toActiveSession({
           sessionId,
           subject: claims.sub,
           role: claims.role,
           method: claims.method,
+          visibility: input?.visibility ?? "user",
           client,
           issuedAt,
           expiresAt,
@@ -264,6 +268,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         client,
         expiresAt: expiresAt,
         role: claims.role,
+        visibility: input?.visibility ?? "user",
       } satisfies IssuedSession;
     }).pipe(Effect.mapError(toSessionCredentialError("Failed to issue session credential.")));
 
@@ -327,6 +332,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: expiresAt.value,
         subject: claims.sub,
         role: claims.role,
+        visibility: row.value.visibility,
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -427,6 +433,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: row.value.expiresAt,
         subject: row.value.subject,
         role: row.value.role,
+        visibility: row.value.visibility,
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -446,11 +453,12 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       const rows = yield* authSessions.listActive({ now });
 
       return rows.map((row) =>
-        toAuthClientSession({
+        toActiveSession({
           sessionId: row.sessionId,
           subject: row.subject,
           role: row.role,
           method: row.method,
+          visibility: row.visibility,
           client: toClientMetadata(row.client),
           issuedAt: row.issuedAt,
           expiresAt: row.expiresAt,

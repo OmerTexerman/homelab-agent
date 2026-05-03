@@ -57,6 +57,7 @@ it.layer(NodeServices.layer)("SessionCredentialServiceLive", (it) => {
       expect(verified.role).toBe("owner");
       expect(verified.client.label).toBe("Desktop app");
       expect(verified.client.browser).toBe("Electron");
+      expect(verified.visibility).toBe("user");
       expect(verified.expiresAt?.toString()).toBe(issued.expiresAt.toString());
     }).pipe(Effect.provide(makeSessionCredentialLayer())),
   );
@@ -81,7 +82,26 @@ it.layer(NodeServices.layer)("SessionCredentialServiceLive", (it) => {
       expect(verified.method).toBe("bearer-session-token");
       expect(verified.subject).toBe("test-clock");
       expect(verified.role).toBe("client");
+      expect(verified.visibility).toBe("user");
     }).pipe(Effect.provide(Layer.merge(makeSessionCredentialLayer(), TestClock.layer()))),
+  );
+
+  it.effect("persists internal session visibility for runtime-issued bearer tokens", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const issued = yield* sessions.issue({
+        method: "bearer-session-token",
+        role: "owner",
+        subject: "thread-runtime:test-thread",
+        visibility: "internal",
+      });
+      const verified = yield* sessions.verify(issued.token);
+      const listed = yield* sessions.listActive();
+
+      expect(issued.visibility).toBe("internal");
+      expect(verified.visibility).toBe("internal");
+      expect(listed[0]?.visibility).toBe("internal");
+    }).pipe(Effect.provide(makeSessionCredentialLayer())),
   );
 
   it.effect("rejects websocket tokens once the parent session has expired", () =>

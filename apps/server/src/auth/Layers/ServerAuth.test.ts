@@ -8,6 +8,7 @@ import { ServerConfig } from "../../config.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BootstrapCredentialError } from "../Services/BootstrapCredentialService.ts";
 import { ServerAuth, type ServerAuthShape } from "../Services/ServerAuth.ts";
+import { SessionCredentialService } from "../Services/SessionCredentialService.ts";
 import { ServerAuthLive, toBootstrapExchangeAuthError } from "./ServerAuth.ts";
 import { ServerSecretStoreLive } from "./ServerSecretStore.ts";
 
@@ -121,6 +122,7 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
   it.effect("lists pairing links and revokes other client sessions while keeping the owner", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;
+      const sessions = yield* SessionCredentialService;
 
       const ownerExchange = yield* serverAuth.exchangeBootstrapCredential(
         "desktop-bootstrap-token",
@@ -146,9 +148,20 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
       const clientSession = yield* serverAuth.authenticateHttpRequest(
         makeCookieRequest(clientExchange.sessionToken),
       );
+      const internalRuntimeSession = yield* sessions.issue({
+        method: "bearer-session-token",
+        role: "owner",
+        subject: "thread-runtime:test-thread",
+        visibility: "internal",
+        client: {
+          deviceType: "unknown",
+          label: "Thread runtime test-thread",
+        },
+      });
       const clientsBeforeRevoke = yield* serverAuth.listClientSessions(ownerSession.sessionId);
       const revokedCount = yield* serverAuth.revokeOtherClientSessions(ownerSession.sessionId);
       const clientsAfterRevoke = yield* serverAuth.listClientSessions(ownerSession.sessionId);
+      const verifiedInternalRuntimeSession = yield* sessions.verify(internalRuntimeSession.token);
 
       expect(listedPairingLinks.map((entry) => entry.id)).toContain(pairingCredential.id);
       expect(listedPairingLinks.find((entry) => entry.id === pairingCredential.id)?.label).toBe(
@@ -169,9 +182,13 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
         clientsBeforeRevoke.find((entry) => entry.sessionId === clientSession.sessionId)?.client
           .deviceType,
       ).toBe("mobile");
+      expect(
+        clientsBeforeRevoke.some((entry) => entry.sessionId === internalRuntimeSession.sessionId),
+      ).toBe(false);
       expect(revokedCount).toBe(1);
       expect(clientsAfterRevoke).toHaveLength(1);
       expect(clientsAfterRevoke[0]?.sessionId).toBe(ownerSession.sessionId);
+      expect(verifiedInternalRuntimeSession.visibility).toBe("internal");
     }).pipe(
       Effect.provide(
         makeServerAuthLayer({

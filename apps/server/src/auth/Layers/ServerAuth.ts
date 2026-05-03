@@ -41,6 +41,57 @@ const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
 const STARTUP_OWNER_PAIRING_TTL = Duration.minutes(30);
 
+function isUserFacingClientSession(session: { readonly visibility: "user" | "internal" }) {
+  return session.visibility === "user";
+}
+
+function toAuthClientSession(
+  clientSession: {
+    readonly sessionId: AuthSessionId;
+    readonly subject: string;
+    readonly role: "owner" | "client";
+    readonly method: "browser-session-cookie" | "bearer-session-token";
+    readonly client: AuthClientSession["client"];
+    readonly issuedAt: AuthClientSession["issuedAt"];
+    readonly expiresAt: AuthClientSession["expiresAt"];
+    readonly lastConnectedAt: AuthClientSession["lastConnectedAt"];
+    readonly connected: boolean;
+  },
+  currentSessionId: AuthSessionId,
+): AuthClientSession {
+  return {
+    sessionId: clientSession.sessionId,
+    subject: clientSession.subject,
+    role: clientSession.role,
+    method: clientSession.method,
+    client: clientSession.client,
+    issuedAt: clientSession.issuedAt,
+    expiresAt: clientSession.expiresAt,
+    lastConnectedAt: clientSession.lastConnectedAt,
+    connected: clientSession.connected,
+    current: clientSession.sessionId === currentSessionId,
+  };
+}
+
+const loadUserFacingClientSessions = (
+  sessions: SessionCredentialServiceShape,
+  currentSessionId: AuthSessionId,
+): Effect.Effect<ReadonlyArray<AuthClientSession>, AuthError> =>
+  sessions.listActive().pipe(
+    Effect.mapError(
+      (cause) =>
+        new AuthError({
+          message: "Failed to load paired clients.",
+          cause,
+        }),
+    ),
+    Effect.map((clientSessions) =>
+      clientSessions
+        .filter(isUserFacingClientSession)
+        .map((clientSession) => toAuthClientSession(clientSession, currentSessionId)),
+    ),
+  );
+
 export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): AuthError {
   if (cause.status === 500) {
     return new AuthError({
@@ -266,21 +317,16 @@ export const makeServerAuth = Effect.gen(function* () {
     );
 
   const listClientSessions: ServerAuthShape["listClientSessions"] = (currentSessionId) =>
-    authControlPlane.listSessions().pipe(
+    loadUserFacingClientSessions(sessions, currentSessionId);
+
+  const revokeUserFacingSession = (sessionId: AuthSessionId) =>
+    sessions.revoke(sessionId).pipe(
       Effect.mapError(
         (cause) =>
           new AuthError({
-            message: "Failed to load paired clients.",
+            message: "Failed to revoke client session.",
             cause,
           }),
-      ),
-      Effect.map((clientSessions) =>
-        clientSessions.map(
-          (clientSession): AuthClientSession => ({
-            ...clientSession,
-            current: clientSession.sessionId === currentSessionId,
-          }),
-        ),
       ),
     );
 
@@ -295,29 +341,35 @@ export const makeServerAuth = Effect.gen(function* () {
           status: 403,
         });
       }
-      return yield* authControlPlane.revokeSession(targetSessionId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AuthError({
-              message: "Failed to revoke client session.",
-              cause,
-            }),
-        ),
-      );
+      const clientSessions = yield* loadUserFacingClientSessions(sessions, currentSessionId);
+      if (!clientSessions.some((clientSession) => clientSession.sessionId === targetSessionId)) {
+        return false;
+      }
+      return yield* revokeUserFacingSession(targetSessionId);
     });
 
   const revokeOtherClientSessions: ServerAuthShape["revokeOtherClientSessions"] = (
     currentSessionId,
   ) =>
-    authControlPlane.revokeOtherSessionsExcept(currentSessionId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AuthError({
-            message: "Failed to revoke other client sessions.",
-            cause,
-          }),
-      ),
-    );
+    Effect.gen(function* () {
+      const clientSessions = yield* loadUserFacingClientSessions(sessions, currentSessionId);
+      const targetSessionIds = clientSessions
+        .filter((clientSession) => !clientSession.current)
+        .map((clientSession) => clientSession.sessionId);
+      if (targetSessionIds.length === 0) {
+        return 0;
+      }
+
+      const results = yield* Effect.forEach(
+        targetSessionIds,
+        (sessionId) => revokeUserFacingSession(sessionId),
+        {
+          concurrency: "unbounded",
+        },
+      );
+
+      return results.filter(Boolean).length;
+    });
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
     authControlPlane
