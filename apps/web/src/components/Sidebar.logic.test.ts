@@ -26,6 +26,7 @@ import {
   OrchestrationLatestTurn,
   ProjectId,
   ProviderInstanceId,
+  RuntimeSessionId,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -704,6 +705,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     environmentId: localEnvironmentId,
     name: "Project",
     cwd: "/tmp/project",
+    defaultRuntimeId: RuntimeSessionId.make("project-runtime:project-1"),
     defaultModelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",
@@ -722,6 +724,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     environmentId: localEnvironmentId,
     codexThreadId: null,
     projectId: ProjectId.make("project-1"),
+    runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
+    runtimeSelectionMode: "shared",
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),

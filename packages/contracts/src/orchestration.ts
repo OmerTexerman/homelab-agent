@@ -123,6 +123,9 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const ThreadRuntimeMode = Schema.Literals(["shared", "isolated"]);
+export type ThreadRuntimeMode = typeof ThreadRuntimeMode.Type;
+export const DEFAULT_THREAD_RUNTIME_MODE: ThreadRuntimeMode = "shared";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -337,6 +340,7 @@ export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -385,6 +389,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -492,6 +497,7 @@ const ThreadCreateCommand = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -526,6 +532,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -550,6 +558,8 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -839,6 +849,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -871,6 +882,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
   runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

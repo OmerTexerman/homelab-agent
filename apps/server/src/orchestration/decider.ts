@@ -4,6 +4,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
+import { DEFAULT_THREAD_RUNTIME_MODE } from "@t3tools/contracts";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -16,6 +17,10 @@ import {
   requireThreadNotArchived,
   requireThreadReadyForTurnStart,
 } from "./commandInvariants.ts";
+import {
+  defaultProjectRuntimeId,
+  isolatedThreadRuntimeId,
+} from "../runtime/ProjectRuntimePolicy.ts";
 
 const nowIso = () => new Date().toISOString();
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
@@ -66,6 +71,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      const defaultRuntimeId =
+        command.defaultRuntimeId ?? defaultProjectRuntimeId(command.projectId);
 
       return {
         ...withEventBase({
@@ -79,6 +86,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: command.projectId,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          defaultRuntimeId,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
           createdAt: command.createdAt,
@@ -160,7 +168,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -170,6 +178,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const runtimeSelectionMode = command.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      const runtimeId =
+        command.runtimeId ??
+        (runtimeSelectionMode === "isolated"
+          ? isolatedThreadRuntimeId(command.threadId)
+          : (project.defaultRuntimeId ?? defaultProjectRuntimeId(command.projectId)));
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -181,6 +195,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          runtimeId,
+          runtimeSelectionMode,
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -285,6 +301,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.projectId !== undefined ? { projectId: command.projectId } : {}),
+          ...(command.runtimeId !== undefined ? { runtimeId: command.runtimeId } : {}),
+          ...(command.runtimeSelectionMode !== undefined
+            ? { runtimeSelectionMode: command.runtimeSelectionMode }
+            : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }

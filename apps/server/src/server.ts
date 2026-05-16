@@ -56,6 +56,7 @@ import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistr
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
 import { RuntimeWorkspaceLive } from "./runtime/Layers/RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./runtime/Layers/ThreadWorkspace.ts";
+import { ProjectRuntimeQueueLive } from "./runtime/ProjectRuntimeQueue.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
@@ -298,6 +299,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
   Layer.provideMerge(KnowledgeGraphLive),
   Layer.provideMerge(HomelabSecretRegistryLive.pipe(Layer.provide(ServerSecretStoreLive))),
   Layer.provideMerge(ThreadRuntimeLive),
+  Layer.provideMerge(ProjectRuntimeQueueLive),
   Layer.provideMerge(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeLive))),
   Layer.provideMerge(
     ThreadWorkspaceLive.pipe(

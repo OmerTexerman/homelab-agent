@@ -52,6 +52,7 @@ export interface ThreadRuntimeDescriptor {
 
 export interface ThreadRuntimeLaunchInput {
   readonly threadId: ThreadId;
+  readonly runtimeId?: RuntimeSessionId;
   readonly provider: ProviderKind | null;
   readonly runtimeMode: RuntimeMode;
   readonly imageRef?: string;

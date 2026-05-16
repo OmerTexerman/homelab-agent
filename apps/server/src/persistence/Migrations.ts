@@ -46,6 +46,7 @@ import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.
 import Migration0031 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
 import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
 import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
+import Migration0034 from "./Migrations/034_ProjectRuntimeAssignments.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -91,6 +92,7 @@ export const migrationEntries = [
   [31, "ProjectionPendingTurnIntent", Migration0031],
   [32, "RepairInterruptedClaudeTurns", Migration0032],
   [33, "AuthSessionVisibility", Migration0033],
+  [34, "ProjectRuntimeAssignments", Migration0034],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

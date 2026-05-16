@@ -221,6 +221,7 @@ function mapProject(
     name: project.title,
     cwd: project.workspaceRoot,
     repositoryIdentity: project.repositoryIdentity ?? null,
+    defaultRuntimeId: project.defaultRuntimeId ?? null,
     defaultModelSelection: project.defaultModelSelection
       ? normalizeModelSelection(project.defaultModelSelection)
       : null,
@@ -236,6 +237,8 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     environmentId,
     codexThreadId: null,
     projectId: thread.projectId,
+    runtimeId: thread.runtimeId ?? null,
+    runtimeSelectionMode: thread.runtimeSelectionMode ?? "shared",
     title: thread.title,
     modelSelection: normalizeModelSelection(thread.modelSelection),
     runtimeMode: thread.runtimeMode,
@@ -270,6 +273,8 @@ function mapThreadShell(
     environmentId,
     codexThreadId: null,
     projectId: thread.projectId,
+    runtimeId: thread.runtimeId ?? null,
+    runtimeSelectionMode: thread.runtimeSelectionMode ?? "shared",
     title: thread.title,
     modelSelection: normalizeModelSelection(thread.modelSelection),
     runtimeMode: thread.runtimeMode,
@@ -290,6 +295,8 @@ function mapThreadShell(
     id: thread.id,
     environmentId,
     projectId: thread.projectId,
+    runtimeId: thread.runtimeId ?? null,
+    runtimeSelectionMode: thread.runtimeSelectionMode ?? "shared",
     title: thread.title,
     interactionMode: thread.interactionMode,
     session,
@@ -318,6 +325,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     environmentId: thread.environmentId,
     codexThreadId: thread.codexThreadId,
     projectId: thread.projectId,
+    runtimeId: thread.runtimeId ?? null,
+    runtimeSelectionMode: thread.runtimeSelectionMode ?? "shared",
     title: thread.title,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
@@ -391,6 +400,8 @@ function sidebarThreadSummariesEqual(
     left !== undefined &&
     left.id === right.id &&
     left.projectId === right.projectId &&
+    left.runtimeId === right.runtimeId &&
+    left.runtimeSelectionMode === right.runtimeSelectionMode &&
     left.title === right.title &&
     left.interactionMode === right.interactionMode &&
     threadSessionsEqual(left.session, right.session) &&
@@ -414,6 +425,8 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.environmentId === right.environmentId &&
     left.codexThreadId === right.codexThreadId &&
     left.projectId === right.projectId &&
+    left.runtimeId === right.runtimeId &&
+    left.runtimeSelectionMode === right.runtimeSelectionMode &&
     left.title === right.title &&
     left.modelSelection === right.modelSelection &&
     left.runtimeMode === right.runtimeMode &&
@@ -1177,6 +1190,7 @@ function applyEnvironmentOrchestrationEvent(
           title: event.payload.title,
           workspaceRoot: event.payload.workspaceRoot,
           repositoryIdentity: event.payload.repositoryIdentity ?? null,
+          defaultRuntimeId: event.payload.defaultRuntimeId ?? null,
           defaultModelSelection: event.payload.defaultModelSelection,
           scripts: event.payload.scripts,
           createdAt: event.payload.createdAt,
@@ -1233,6 +1247,9 @@ function applyEnvironmentOrchestrationEvent(
         ...(event.payload.repositoryIdentity !== undefined
           ? { repositoryIdentity: event.payload.repositoryIdentity ?? null }
           : {}),
+        ...(event.payload.defaultRuntimeId !== undefined
+          ? { defaultRuntimeId: event.payload.defaultRuntimeId }
+          : {}),
         ...(event.payload.defaultModelSelection !== undefined
           ? {
               defaultModelSelection: event.payload.defaultModelSelection
@@ -1264,6 +1281,8 @@ function applyEnvironmentOrchestrationEvent(
         {
           id: event.payload.threadId,
           projectId: event.payload.projectId,
+          runtimeId: event.payload.runtimeId ?? null,
+          runtimeSelectionMode: event.payload.runtimeSelectionMode ?? "shared",
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
@@ -1307,6 +1326,10 @@ function applyEnvironmentOrchestrationEvent(
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
         ...(event.payload.projectId !== undefined ? { projectId: event.payload.projectId } : {}),
+        ...(event.payload.runtimeId !== undefined ? { runtimeId: event.payload.runtimeId } : {}),
+        ...(event.payload.runtimeSelectionMode !== undefined
+          ? { runtimeSelectionMode: event.payload.runtimeSelectionMode }
+          : {}),
         ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
         ...(event.payload.modelSelection !== undefined
           ? { modelSelection: normalizeModelSelection(event.payload.modelSelection) }

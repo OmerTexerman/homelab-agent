@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
+  type ProviderKind,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
@@ -39,6 +40,11 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
+import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
+import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
+import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -185,6 +191,9 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
+  const projectRuntimeQueue = yield* Effect.serviceOption(ProjectRuntimeQueue);
+  const homelabSecretRegistry = yield* Effect.serviceOption(HomelabSecretRegistry);
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -395,9 +404,13 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
+    if (!project) {
+      return yield* Effect.die(new Error(`Project '${thread.projectId}' was not found.`));
+    }
+    const runtimeAssignment = resolveProjectRuntimeAssignment({ project, thread });
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
-      projects: project ? [project] : [],
+      projects: [project],
     });
 
     const startProviderSession = (input?: {
@@ -406,6 +419,7 @@ const make = Effect.gen(function* () {
     }) =>
       providerService.startSession(threadId, {
         threadId,
+        runtimeId: runtimeAssignment.runtimeId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -571,6 +585,70 @@ const make = Effect.gen(function* () {
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
+  });
+
+  const refreshRuntimeContextView = Effect.fn("refreshRuntimeContextView")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderDriverKind;
+    readonly runtimeMode: RuntimeMode;
+    readonly createdAt: string;
+  }) {
+    const readModel = yield* projectionSnapshotQuery.getSnapshot();
+    if (Option.isNone(threadRuntime)) {
+      return;
+    }
+    const thread = readModel.threads.find(
+      (entry) => entry.id === input.threadId && entry.deletedAt === null,
+    );
+    if (!thread) return;
+    const project = readModel.projects.find(
+      (entry) => entry.id === thread.projectId && entry.deletedAt === null,
+    );
+    if (!project) return;
+    const assignment = resolveProjectRuntimeAssignment({ project, thread });
+    const effectiveCwd = resolveThreadWorkspaceCwd({
+      thread,
+      projects: [project],
+    });
+
+    const runtimeProvider: ProviderKind | null =
+      input.provider === ProviderDriverKind.make("codex")
+        ? "codex"
+        : input.provider === ProviderDriverKind.make("claudeAgent")
+          ? "claudeAgent"
+          : null;
+    yield* threadRuntime.value.ensureRuntime({
+      threadId: input.threadId,
+      runtimeId: assignment.runtimeId,
+      provider: runtimeProvider,
+      runtimeMode: input.runtimeMode,
+      ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
+    });
+    const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
+    const secrets = Option.isSome(homelabSecretRegistry)
+      ? yield* homelabSecretRegistry.value.listSecrets().pipe(
+          Effect.catchTag("HomelabSecretRegistryError", (error) =>
+            Effect.logWarning("failed to list homelab secrets for context view", {
+              threadId: input.threadId,
+              detail: error.message,
+            }).pipe(Effect.as([])),
+          ),
+        )
+      : [];
+    yield* writeHomelabContextView({
+      hostWorkspacePath: launchContext.hostWorkspacePath,
+      project,
+      threads: readModel.threads.filter((entry) => entry.projectId === project.id),
+      secrets,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to write homelab context view", {
+          threadId: input.threadId,
+          runtimeId: assignment.runtimeId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
   });
 
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fn(
@@ -784,9 +862,65 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
+    const project = yield* resolveProject(thread.projectId);
+    if (!project) {
+      yield* recoverTurnStartFailure(
+        Cause.fail(new Error(`Project '${thread.projectId}' was not found.`)),
+      );
+      return;
+    }
+    const runtimeAssignment = resolveProjectRuntimeAssignment({ project, thread });
+    const providerInfo = yield* providerService.getInstanceInfo(
+      (event.payload.modelSelection ?? thread.modelSelection).instanceId,
+    );
+    const providerDriver = providerInfo.driverKind;
+    if (!isProviderDriverKind(providerDriver)) {
+      yield* recoverTurnStartFailure(
+        Cause.fail(new Error(`Provider driver '${providerDriver}' is not available.`)),
+      );
+      return;
+    }
+
+    const runtimeContextReady = yield* refreshRuntimeContextView({
+      threadId: event.payload.threadId,
+      provider: providerDriver,
+      runtimeMode: event.payload.runtimeMode,
+      createdAt: event.payload.createdAt,
+    }).pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        handleTurnStartFailure(cause).pipe(
+          Effect.as(false),
+          Effect.catchCause((recoveryCause) =>
+            Effect.logWarning(
+              "provider command reactor failed to recover runtime context failure",
+              {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(recoveryCause),
+                originalCause: Cause.pretty(cause),
+              },
+            ).pipe(Effect.as(false)),
+          ),
+        ),
+      ),
+    );
+    if (!runtimeContextReady) {
+      return;
+    }
+
+    const sendTurnEffect = providerService
       .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      .pipe(Effect.catchCause(recoverTurnStartFailure));
+    const queuedSendTurnEffect = Option.isSome(projectRuntimeQueue)
+      ? projectRuntimeQueue.value.run(
+          {
+            runtimeId: runtimeAssignment.runtimeId,
+            policy: runtimeAssignment.queuePolicy,
+          },
+          sendTurnEffect,
+        )
+      : sendTurnEffect;
+    yield* queuedSendTurnEffect.pipe(Effect.forkScoped);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

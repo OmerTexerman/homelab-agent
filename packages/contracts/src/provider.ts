@@ -5,6 +5,7 @@ import {
   EventId,
   IsoDateTime,
   ProviderItemId,
+  RuntimeSessionId,
   ThreadId,
   TurnId,
 } from "./baseSchemas.ts";
@@ -52,6 +53,7 @@ export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
+  runtimeId: Schema.optional(RuntimeSessionId),
   provider: Schema.optional(ProviderDriverKind),
   // See ProviderSession for the migration story.
   providerInstanceId: Schema.optional(ProviderInstanceId),

@@ -1,7 +1,6 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import nodePath from "node:path";
 
-import type { ThreadId as ThreadIdModel } from "@t3tools/contracts";
 import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 
 export const CONTAINER_WORKSPACE_PATH = "/workspace";
@@ -10,20 +9,23 @@ function encodeThreadSegment(threadId: string): string {
   return Buffer.from(threadId, "utf8").toString("base64url");
 }
 
-export function runtimeRootPath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(threadRuntimesDir, encodeThreadSegment(String(threadId)));
+export function runtimeRootPath(threadRuntimesDir: string, runtimeStorageId: string): string {
+  return nodePath.join(threadRuntimesDir, encodeThreadSegment(runtimeStorageId));
 }
 
-export function runtimeBinDirForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "bin");
+export function runtimeBinDirForThread(
+  threadRuntimesDir: string,
+  runtimeStorageId: string,
+): string {
+  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "bin");
 }
 
-export function managedWorkspacePath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "workspace");
+export function managedWorkspacePath(threadRuntimesDir: string, runtimeStorageId: string): string {
+  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "workspace");
 }
 
-export function homePathForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "home");
+export function homePathForThread(threadRuntimesDir: string, runtimeStorageId: string): string {
+  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "home");
 }
 
 export function isWithinContainerWorkspace(targetPath: string): boolean {
@@ -46,7 +48,7 @@ export function hostWorkspacePathForContainerPath(
 
 export function normalizeRequestedCwd(
   threadRuntimesDir: string,
-  threadId: ThreadIdModel,
+  runtimeStorageId: string,
   requestedCwd: string | undefined,
 ): string | undefined {
   const normalized = requestedCwd?.trim();
@@ -65,7 +67,7 @@ export function normalizeRequestedCwd(
   }
 
   const normalizedContainerPath = nodePath.posix.normalize(normalized.replace(/\\/g, "/"));
-  const managedWorkspace = managedWorkspacePath(threadRuntimesDir, threadId);
+  const managedWorkspace = managedWorkspacePath(threadRuntimesDir, runtimeStorageId);
   const normalizedHostPath = nodePath.normalize(normalized);
 
   if (

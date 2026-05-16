@@ -59,7 +59,7 @@ export interface RuntimeEnvironmentInput {
 
 export interface RuntimeMountContext {
   readonly threadRuntimesDir: string;
-  readonly threadId: ThreadIdModel;
+  readonly runtimeStorageId: string;
   readonly workspacePath: string;
   readonly homePath: string;
 }
@@ -168,11 +168,11 @@ export function buildRuntimeMountSpecs(
 ): ReadonlyArray<DockerMountSpec> {
   return normalizeMountSpecs([
     {
-      source: managedWorkspacePath(context.threadRuntimesDir, context.threadId),
+      source: managedWorkspacePath(context.threadRuntimesDir, context.runtimeStorageId),
       target: context.workspacePath,
     },
     {
-      source: homePathForThread(context.threadRuntimesDir, context.threadId),
+      source: homePathForThread(context.threadRuntimesDir, context.runtimeStorageId),
       target: context.homePath,
     },
     ...(hostBindings.sshAuthSockPath

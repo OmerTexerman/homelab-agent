@@ -13,7 +13,9 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  RuntimeSessionId,
   ThreadId,
+  ThreadRuntimeMode,
   TurnId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -26,6 +28,8 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

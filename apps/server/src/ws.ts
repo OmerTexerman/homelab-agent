@@ -236,6 +236,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             yield* threadRuntime
               .ensureRuntime({
                 threadId,
+                ...(thread.runtimeId != null ? { runtimeId: thread.runtimeId } : {}),
                 provider: null,
                 runtimeMode: thread.runtimeMode,
               })
@@ -461,6 +462,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             thread: Pick<
               OrchestrationThread,
               | "projectId"
+              | "runtimeId"
+              | "runtimeSelectionMode"
               | "runtimeMode"
               | "interactionMode"
               | "branch"
@@ -484,6 +487,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
 
               const sameBootstrapTarget =
                 thread.projectId === requested.projectId &&
+                thread.runtimeId === (requested.runtimeId ?? thread.runtimeId) &&
+                thread.runtimeSelectionMode === requested.runtimeSelectionMode &&
                 thread.runtimeMode === requested.runtimeMode &&
                 thread.interactionMode === requested.interactionMode &&
                 thread.branch === requested.branch &&
@@ -499,6 +504,8 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             thread: Pick<
               OrchestrationThread,
               | "projectId"
+              | "runtimeId"
+              | "runtimeSelectionMode"
               | "runtimeMode"
               | "interactionMode"
               | "branch"
@@ -711,6 +718,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                     commandId: serverCommandId("bootstrap-thread-create"),
                     threadId: command.threadId,
                     projectId: bootstrap.createThread.projectId,
+                    ...(bootstrap.createThread.runtimeId !== undefined
+                      ? { runtimeId: bootstrap.createThread.runtimeId }
+                      : {}),
+                    runtimeSelectionMode: bootstrap.createThread.runtimeSelectionMode,
                     title: bootstrap.createThread.title,
                     modelSelection: bootstrap.createThread.modelSelection,
                     runtimeMode: bootstrap.createThread.runtimeMode,

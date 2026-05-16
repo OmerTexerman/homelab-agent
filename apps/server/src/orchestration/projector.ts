@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  DEFAULT_THREAD_RUNTIME_MODE,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -184,6 +185,7 @@ export function projectEvent(
             id: payload.projectId,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
+            defaultRuntimeId: payload.defaultRuntimeId ?? null,
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             createdAt: payload.createdAt,
@@ -213,6 +215,9 @@ export function projectEvent(
                   ...(payload.title !== undefined ? { title: payload.title } : {}),
                   ...(payload.workspaceRoot !== undefined
                     ? { workspaceRoot: payload.workspaceRoot }
+                    : {}),
+                  ...(payload.defaultRuntimeId !== undefined
+                    ? { defaultRuntimeId: payload.defaultRuntimeId }
                     : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
@@ -254,6 +259,8 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            runtimeId: payload.runtimeId ?? null,
+            runtimeSelectionMode: payload.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -321,6 +328,10 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.projectId !== undefined ? { projectId: payload.projectId } : {}),
+            ...(payload.runtimeId !== undefined ? { runtimeId: payload.runtimeId } : {}),
+            ...(payload.runtimeSelectionMode !== undefined
+              ? { runtimeSelectionMode: payload.runtimeSelectionMode }
+              : {}),
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }

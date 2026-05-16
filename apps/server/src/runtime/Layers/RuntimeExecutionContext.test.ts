@@ -82,7 +82,7 @@ describe("buildRuntimeMountSpecs", () => {
       buildRuntimeMountSpecs(
         {
           threadRuntimesDir: "/state/thread-runtimes",
-          threadId: ThreadId.make("thread-1"),
+          runtimeStorageId: "thread-1",
           workspacePath: "/workspace",
           homePath: "/runtime/home",
         },

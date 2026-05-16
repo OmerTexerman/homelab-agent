@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  DEFAULT_THREAD_RUNTIME_MODE,
   type ChatAttachment,
   type OrchestrationEvent,
   ThreadId,
@@ -471,6 +472,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             projectId: event.payload.projectId,
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
+            defaultRuntimeId: event.payload.defaultRuntimeId ?? null,
             defaultModelSelection: event.payload.defaultModelSelection,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
@@ -491,6 +493,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.workspaceRoot !== undefined
               ? { workspaceRoot: event.payload.workspaceRoot }
+              : {}),
+            ...(event.payload.defaultRuntimeId !== undefined
+              ? { defaultRuntimeId: event.payload.defaultRuntimeId }
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
@@ -571,6 +576,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
+            runtimeId: event.payload.runtimeId ?? null,
+            runtimeSelectionMode: event.payload.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
             title: event.payload.title,
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
@@ -629,6 +636,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            ...(event.payload.runtimeId !== undefined
+              ? { runtimeId: event.payload.runtimeId }
+              : {}),
+            ...(event.payload.runtimeSelectionMode !== undefined
+              ? { runtimeSelectionMode: event.payload.runtimeSelectionMode }
+              : {}),
             ...(event.payload.modelSelection !== undefined
               ? { modelSelection: event.payload.modelSelection }
               : {}),

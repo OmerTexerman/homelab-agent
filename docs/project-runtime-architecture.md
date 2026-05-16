@@ -91,6 +91,27 @@ PATH, filesystem, and env live in the runtime. This should behave like running
 `codex` or `claude` multiple times in the same working directory, not like every
 thread gets its own installed provider binary.
 
+### Implemented Foundation
+
+The first project-runtime foundation slice is now represented in the durable
+orchestration model:
+
+- `Project.defaultRuntimeId` is the logical link to the default shared project
+  runtime. New and migrated projects default to `project-runtime:<project-id>`.
+- `Thread.runtimeId` records the runtime selected for that thread.
+- `Thread.runtimeSelectionMode` records whether the thread uses the shared
+  project runtime or an isolated runtime.
+- New shared threads attach to `project.defaultRuntimeId` automatically.
+- New isolated threads attach to `isolated-runtime:<thread-id>`.
+- Older persisted events and projections are backfilled through migration 034.
+
+Runtime assignment policy lives in `apps/server/src/runtime/ProjectRuntimePolicy.ts`.
+The current runtime implementation still delegates concrete container lifecycle
+to the existing `ThreadRuntime` compatibility service, but shared project
+runtimes now use runtime-id-derived host storage paths and container names. The
+legacy per-thread runtime id path is preserved for existing descriptors so
+upstream-derived behavior does not lose old runtime state.
+
 ## Concurrency
 
 The default project runtime has a single active writer.
@@ -102,6 +123,13 @@ runtime.
 The explicit override is "run concurrently in isolated runtime". This creates an
 isolated clone/branch instead of allowing two active writers in the same shared
 runtime.
+
+`ProjectRuntimeQueue` is the server boundary for this policy. Shared-runtime
+turn dispatches are keyed by runtime id and run under a single-writer semaphore.
+Isolated runtime dispatches use the `isolated-concurrent` policy and bypass the
+shared semaphore. Provider sessions remain per-thread; the runtime lock is a
+runtime policy layer around provider execution, not a separate provider binary
+or provider home per thread.
 
 When isolated work finishes:
 
@@ -175,6 +203,19 @@ Each runtime should contain a generated read-only `.homelab` view:
 The goal is to let models use familiar tools such as `rg`, `grep`, `jq`, and
 shell scripts. Structured APIs and CLI commands should still exist for validated
 writes and richer UI operations.
+
+The current generated view is implemented by
+`apps/server/src/runtime/HomelabContextView.ts` and written into the runtime
+workspace before provider turn execution. It includes:
+
+- `.homelab/README.md` with usage notes and redaction expectations.
+- `.homelab/threads/index.jsonl` for searchable thread discovery.
+- `.homelab/threads/thread_<id>/summary.md` for compact thread summaries.
+- `.homelab/threads/thread_<id>/messages.jsonl` for structured raw messages.
+- `.homelab/threads/thread_<id>/transcript.md` for grep-friendly transcripts.
+- `.homelab/memory/index.jsonl` as a file-backed foundation for project-local
+  memory entries and proposed-plan references.
+- `.homelab/index/*.jsonl` as stable search indexes for agents and scripts.
 
 Generated views must:
 
@@ -258,6 +299,9 @@ embedding product policy inline.
 11. Update runtime instruction files so providers understand project runtime
     sharing, project-local memory search, and global promotion boundaries.
 12. Keep upstream sync documentation current as files move behind adapters.
+
+Items 1, 3, 4, 5, 7, 8, 9, and 11 now have an initial vertical slice. Item 6
+and the richer lifecycle operations remain future work.
 
 ## Validation
 

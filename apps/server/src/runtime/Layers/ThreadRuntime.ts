@@ -209,12 +209,20 @@ function encodeThreadSegment(threadId: string): string {
   return Buffer.from(threadId, "utf8").toString("base64url");
 }
 
-function runtimeName(threadId: ThreadIdModel): string {
-  return `runtime-${encodeThreadSegment(String(threadId))}`;
+function runtimeNameFromId(runtimeId: RuntimeSessionIdModel): string {
+  return `runtime-${encodeThreadSegment(String(runtimeId))}`;
 }
 
 function makeRuntimeId(threadId: ThreadIdModel): RuntimeSessionIdModel {
-  return RuntimeSessionId.make(runtimeName(threadId));
+  return RuntimeSessionId.make(`runtime-${encodeThreadSegment(String(threadId))}`);
+}
+
+function runtimeStorageId(
+  runtime: Pick<ThreadRuntimeDescriptor, "threadId" | "runtimeId">,
+): string {
+  return runtime.runtimeId === makeRuntimeId(runtime.threadId)
+    ? String(runtime.threadId)
+    : String(runtime.runtimeId);
 }
 
 function trimToUndefined(value: string | null | undefined): string | undefined {
@@ -273,12 +281,13 @@ function toLaunchContext(
   threadRuntimesDir: string,
   runtime: ThreadRuntimeDescriptor,
 ): ThreadRuntimeLaunchContext {
+  const storageId = runtimeStorageId(runtime);
   return {
     execution: toExecutionContext(runtime),
-    hostRuntimePath: runtimeRootPath(threadRuntimesDir, runtime.threadId),
-    hostWorkspacePath: managedWorkspacePath(threadRuntimesDir, runtime.threadId),
-    hostHomePath: homePathForThread(threadRuntimesDir, runtime.threadId),
-    hostBinDir: runtimeBinDirForThread(threadRuntimesDir, runtime.threadId),
+    hostRuntimePath: runtimeRootPath(threadRuntimesDir, storageId),
+    hostWorkspacePath: managedWorkspacePath(threadRuntimesDir, storageId),
+    hostHomePath: homePathForThread(threadRuntimesDir, storageId),
+    hostBinDir: runtimeBinDirForThread(threadRuntimesDir, storageId),
     shellWrapperPath: runtime.shell,
   };
 }
@@ -955,6 +964,8 @@ homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
 homelab secrets         # See what credentials are available
 homelab bootstrap       # See inherited tools, packages, and runtime bootstrap data
+find .homelab -maxdepth 3 -type f | sort
+rg -n "query-or-host-or-service" .homelab || true
 pwd && ls -la           # See the runtime workspace you can use freely
 \`\`\`
 
@@ -962,12 +973,29 @@ This tells you what hosts, services, networks, and secrets the user has
 registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
 
-\`/workspace\` is this thread's scratch area inside the container. It is useful
-for notes, probes, temporary scripts, and exported artifacts. It is not
-guaranteed to be a checked-out app repository.
+\`/workspace\` is the project runtime workspace inside the container. Threads in
+the same project normally share this runtime and filesystem, with turns queued
+by the app so there is one active writer at a time. Use it for notes, probes,
+temporary scripts, and exported artifacts. It is not guaranteed to be a checked-
+out app repository.
 
 If the browser shows a "Thread Workspace" panel, it is a view into this same
 \`/workspace\` directory.
+
+## Project-local memory and transcripts
+
+Generated project context lives under \`.homelab/\`. These files are views over
+durable app state, not the source of truth. Search them with normal tools:
+
+- \`.homelab/memory/index.jsonl\` has project-local memory and durable notes.
+- \`.homelab/threads/index.jsonl\` lists discoverable threads in this project.
+- \`.homelab/threads/thread_*/summary.md\` summarizes each thread.
+- \`.homelab/threads/thread_*/messages.jsonl\` and \`transcript.md\` expose raw
+  thread transcripts where safe.
+
+Do not dump all of \`.homelab\` into prompts. Search it for the current task and
+open only the relevant files. Secret values are redacted; use placeholders and
+\`homelab secret-request\` when a real value is needed.
 
 ## The homelab CLI
 
@@ -1165,9 +1193,14 @@ through the best available interface. If you discover something new, promote it.
 
 ## Thread model
 
-- This container is yours alone. Other threads can't see your files.
-- The knowledge graph, secrets, and bootstrap registry are shared across all threads.
-- When this thread ends, the container is destroyed. Only promoted state survives.
+- This project runtime may be shared by multiple threads in the same project.
+- Shared-runtime turns are queued by default. Explicit isolated runtimes are
+  used for containment or concurrent work.
+- Provider sessions are still per-thread. Running multiple threads should feel
+  like running \`codex\`, \`claude\`, or another provider CLI multiple times in
+  the same project directory, not like installing a separate provider per thread.
+- The knowledge graph, secrets, bootstrap registry, and project-local
+  \`.homelab\` views are shared context. Global homelab promotion is explicit.
 `;
 }
 
@@ -1570,10 +1603,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
   const ensureRuntimeDirectories = (runtime: ThreadRuntimeDescriptor) => {
-    const threadRoot = runtimeRootPath(threadRuntimesDir, runtime.threadId);
-    const managedWorkspace = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
-    const runtimeBinDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
+    const storageId = runtimeStorageId(runtime);
+    const threadRoot = runtimeRootPath(threadRuntimesDir, storageId);
+    const managedWorkspace = managedWorkspacePath(threadRuntimesDir, storageId);
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, storageId);
+    const runtimeBinDir = runtimeBinDirForThread(threadRuntimesDir, storageId);
     const runtimeHomelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
 
     return Effect.gen(function* () {
@@ -1649,7 +1683,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     buildRuntimeMountSpecs(
       {
         threadRuntimesDir,
-        threadId: runtime.threadId,
+        runtimeStorageId: runtimeStorageId(runtime),
         workspacePath: runtime.workspacePath,
         homePath: runtime.homePath,
       },
@@ -1661,7 +1695,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       runtime: ThreadRuntimeDescriptor,
     ): Effect.fn.Return<PersistedRuntimeAccessTokenState | undefined, ThreadRuntimeError> {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtime.threadId),
+        homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
       );
       const exists = yield* fileSystem.exists(tokenPath).pipe(Effect.orElseSucceed(() => false));
       if (!exists) {
@@ -1714,7 +1748,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeAccessTokenState = Effect.fn("threadRuntime.writeRuntimeAccessTokenState")(
     function* (runtime: ThreadRuntimeDescriptor, state: PersistedRuntimeAccessTokenState) {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtime.threadId),
+        homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
       );
       yield* fileSystem.writeFileString(tokenPath, `${JSON.stringify(state, null, 2)}\n`).pipe(
         Effect.tap(() => fileSystem.chmod(tokenPath, 0o600)),
@@ -1827,7 +1861,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
       const syncEntries = buildRuntimeAuthSyncEntries({
         hostBindings,
-        runtimeHomePath: homePathForThread(threadRuntimesDir, runtime.threadId),
+        runtimeHomePath: homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
       });
       if (syncEntries.length === 0) {
         return;
@@ -1865,7 +1899,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           )
         : {};
     const runtimeAccessToken = yield* resolveRuntimeAccessToken(runtime);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
     const secretEnvPath = runtimeSecretEnvPath(runtimeHomePath);
     const controlEnv = {
       ...secretEnv,
@@ -1889,7 +1923,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeToolScripts = Effect.fn("threadRuntime.writeRuntimeToolScripts")(function* (
     runtime: ThreadRuntimeDescriptor,
   ) {
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
     const homelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
     const homelabCliPath = nodePath.join(homelabBinDir, "homelab");
     const homelabSecretToFilePath = nodePath.join(homelabBinDir, "homelab-secret-to-file");
@@ -1928,7 +1962,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeInstructionFiles = Effect.fn("threadRuntime.writeRuntimeInstructionFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
+      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageId(runtime));
       const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
       const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
 
@@ -1955,7 +1989,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+      const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
       const writeFile = (filePath: string, contents: string) =>
         fileSystem.writeFileString(filePath, contents).pipe(
           Effect.mapError(
@@ -1990,8 +2024,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeWrapperScripts = Effect.fn("threadRuntime.writeRuntimeWrapperScripts")(
     function* (runtime: ThreadRuntimeDescriptor, _hostBindings: RuntimeHostBindings) {
-      const binDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
-      const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
+      const storageId = runtimeStorageId(runtime);
+      const binDir = runtimeBinDirForThread(threadRuntimesDir, storageId);
+      const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, storageId);
       const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
       const claudeWrapperPath = nodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER);
       const cursorWrapperPath = nodePath.join(binDir, CURSOR_RUNTIME_WRAPPER);
@@ -2325,6 +2360,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const buildDescriptor = Effect.fn("threadRuntime.buildDescriptor")(function* (input: {
     readonly threadId: ThreadIdModel;
+    readonly runtimeId?: RuntimeSessionIdModel;
     readonly provider: ProviderKindModel | null;
     readonly runtimeMode: RuntimeModeModel;
     readonly imageRef?: string;
@@ -2342,10 +2378,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           }),
       ),
     );
-    const runtimeId = input.existing?.runtimeId ?? makeRuntimeId(input.threadId);
+    const runtimeId = input.runtimeId ?? input.existing?.runtimeId ?? makeRuntimeId(input.threadId);
+    const storageId =
+      runtimeId === makeRuntimeId(input.threadId) ? String(input.threadId) : String(runtimeId);
     const cwd =
-      normalizeRequestedCwd(threadRuntimesDir, input.threadId, input.requestedCwd) ??
-      normalizeRequestedCwd(threadRuntimesDir, input.threadId, input.existing?.cwd) ??
+      normalizeRequestedCwd(threadRuntimesDir, storageId, input.requestedCwd) ??
+      normalizeRequestedCwd(threadRuntimesDir, storageId, input.existing?.cwd) ??
       CONTAINER_WORKSPACE_PATH;
     const workspacePath = CONTAINER_WORKSPACE_PATH;
     const imageRef = normalizeRuntimeImageRef(
@@ -2353,7 +2391,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
     const now = new Date().toISOString();
     const runtimeShellPath = nodePath.join(
-      runtimeBinDirForThread(threadRuntimesDir, input.threadId),
+      runtimeBinDirForThread(threadRuntimesDir, storageId),
       SHELL_RUNTIME_WRAPPER,
     );
 
@@ -2366,7 +2404,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       provider: input.provider,
       runtimeMode: input.runtimeMode,
       imageRef,
-      containerName: input.existing?.containerName ?? runtimeName(input.threadId),
+      containerName: input.existing?.containerName ?? runtimeNameFromId(runtimeId),
       containerId: input.existing?.containerId ?? null,
       workspacePath,
       homePath: CONTAINER_HOME_PATH,
@@ -2407,6 +2445,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   ) {
     const rebuilt = yield* buildDescriptor({
       threadId: runtime.threadId,
+      runtimeId: runtime.runtimeId,
       provider: runtime.provider,
       runtimeMode: runtime.runtimeMode,
       imageRef: runtime.imageRef,
@@ -2586,16 +2625,25 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     destroyRuntime: (threadId) =>
       Effect.gen(function* () {
         const runtime = yield* getRuntimeOrNotFound(threadId);
-        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtime.threadId);
+        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtimeStorageId(runtime));
+        const remainingBindings = yield* Ref.get(runtimesRef).pipe(
+          Effect.map((current) =>
+            current.filter(
+              (entry) => entry.threadId !== threadId && entry.runtimeId === runtime.runtimeId,
+            ),
+          ),
+        );
 
-        yield* removeContainerIfPresent(runtime.containerName);
-        yield* revokeRuntimeAccessToken(runtime);
         yield* updateRuntimes(
           (current) => [undefined, current.filter((entry) => entry.threadId !== threadId)] as const,
         );
-        yield* fileSystem
-          .remove(runtimeRoot, { recursive: true, force: true })
-          .pipe(Effect.ignore({ log: true }));
+        if (remainingBindings.length === 0) {
+          yield* removeContainerIfPresent(runtime.containerName);
+          yield* revokeRuntimeAccessToken(runtime);
+          yield* fileSystem
+            .remove(runtimeRoot, { recursive: true, force: true })
+            .pipe(Effect.ignore({ log: true }));
+        }
         yield* publishEvent({
           kind: "runtime.destroyed",
           threadId: runtime.threadId,

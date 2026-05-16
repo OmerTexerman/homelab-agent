@@ -7,6 +7,11 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import {
+  DEFAULT_THREAD_RUNTIME_MODE,
+  ThreadRuntimeMode,
+  type ThreadRuntimeMode as ThreadRuntimeModeType,
+} from "./orchestration.ts";
 
 export const ProjectRuntimeId = RuntimeSessionId;
 export type ProjectRuntimeId = RuntimeSessionId;
@@ -64,6 +69,10 @@ export const ThreadRuntimeLink = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   runtimeId: ProjectRuntimeId,
+  runtimeSelectionMode: ThreadRuntimeMode,
   isolated: Schema.Boolean,
 });
 export type ThreadRuntimeLink = typeof ThreadRuntimeLink.Type;
+
+export const DEFAULT_PROJECT_THREAD_RUNTIME_MODE: ThreadRuntimeModeType =
+  DEFAULT_THREAD_RUNTIME_MODE;

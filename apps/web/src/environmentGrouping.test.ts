@@ -1,4 +1,10 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RuntimeSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { describe, expect, it } from "vitest";
@@ -49,6 +55,7 @@ function makeProject(
 ): Project {
   return {
     cwd: `/tmp/${overrides.name}`,
+    defaultRuntimeId: RuntimeSessionId.make(`project-runtime:${overrides.id}`),
     defaultModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -70,6 +77,8 @@ function makeSidebarThreadSummary(
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    runtimeId: RuntimeSessionId.make(`project-runtime:${overrides.projectId}`),
+    runtimeSelectionMode: "shared",
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,

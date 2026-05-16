@@ -3,6 +3,7 @@ import {
   ModelSelection,
   type ProviderKind as ProviderKindModel,
   type ProviderSession,
+  type RuntimeSessionId as RuntimeSessionIdModel,
   type RuntimeMode as RuntimeModeModel,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
@@ -120,6 +121,7 @@ export const ensureProviderExecutionContext = Effect.fn("provider.ensureProvider
   function* (input: {
     readonly threadRuntime: ThreadRuntimeShape;
     readonly threadId: ThreadIdModel;
+    readonly runtimeId?: RuntimeSessionIdModel;
     readonly provider: ProviderKindModel;
     readonly runtimeMode: RuntimeModeModel;
     readonly requestedCwd?: string;
@@ -128,6 +130,7 @@ export const ensureProviderExecutionContext = Effect.fn("provider.ensureProvider
     return yield* Effect.gen(function* () {
       yield* input.threadRuntime.ensureRuntime({
         threadId: input.threadId,
+        ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
         provider: input.provider,
         runtimeMode: input.runtimeMode,
         ...(input.requestedCwd ? { requestedCwd: input.requestedCwd } : {}),
