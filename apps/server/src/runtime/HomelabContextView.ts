@@ -5,6 +5,7 @@ import type {
   HomelabSecretDescriptor,
   OrchestrationProject,
   OrchestrationThread,
+  ProjectMemoryEntry,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +22,7 @@ export interface HomelabContextViewInput {
     "id" | "title" | "workspaceRoot" | "defaultRuntimeId"
   >;
   readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
   readonly secrets?: ReadonlyArray<HomelabSecretDescriptor>;
 }
 
@@ -31,7 +33,7 @@ const SECRET_VALUE_PATTERNS = [
   /\b[A-Za-z0-9+/]{32,}={0,2}\b/g,
 ];
 
-function safeSegment(value: string): string {
+export function safeHomelabViewSegment(value: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized.slice(0, 120) : "unknown";
 }
@@ -127,6 +129,46 @@ function renderMessagesJsonl(input: {
     .join("");
 }
 
+function renderMemoryMarkdown(input: {
+  readonly entry: ProjectMemoryEntry;
+  readonly secrets: ReadonlyArray<HomelabSecretDescriptor>;
+}): string {
+  const { entry, secrets } = input;
+  const tags = entry.tags.map((tag) => redactHomelabViewText(tag, secrets));
+  const lines = [
+    `# ${redactHomelabViewText(entry.summary, secrets)}`,
+    "",
+    `- Memory: ${entry.id}`,
+    `- Project: ${entry.projectId}`,
+    `- Runtime: ${entry.runtimeId ?? "project"}`,
+    `- Source thread: ${entry.sourceThreadId ?? "unknown"}`,
+    `- Source message: ${entry.sourceMessageId ?? "unknown"}`,
+    `- Source file: ${entry.sourceFilePath ?? "unknown"}`,
+    `- Tags: ${tags.length > 0 ? tags.join(", ") : "none"}`,
+    `- Promotion: ${entry.promotionStatus}`,
+    `- Created: ${entry.createdAt}`,
+    `- Updated: ${entry.updatedAt}`,
+    "",
+    "## Body",
+    "",
+    redactHomelabViewText(entry.body || entry.summary, secrets),
+    "",
+  ];
+
+  if (entry.supersedes.length > 0 || entry.replaces.length > 0) {
+    lines.push("## Links", "");
+    for (const memoryId of entry.supersedes) {
+      lines.push(`- Supersedes: ${memoryId}`);
+    }
+    for (const memoryId of entry.replaces) {
+      lines.push(`- Replaces: ${memoryId}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 export function renderHomelabContextViewFiles(
   input: Omit<HomelabContextViewInput, "hostWorkspacePath">,
 ): HomelabViewFile[] {
@@ -135,6 +177,19 @@ export function renderHomelabContextViewFiles(
   const activeThreads = input.threads
     .filter((thread) => thread.deletedAt === null)
     .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const memoryEntries = (input.memoryEntries ?? []).toSorted((left, right) => {
+    const updatedDelta = right.updatedAt.localeCompare(left.updatedAt);
+    return updatedDelta !== 0 ? updatedDelta : String(left.id).localeCompare(String(right.id));
+  });
+  const supersededMemoryIds = new Set<string>(
+    memoryEntries.flatMap((entry) => [
+      ...entry.supersedes.map(String),
+      ...entry.replaces.map(String),
+    ]),
+  );
+  const latestMemoryEntries = memoryEntries.filter(
+    (entry) => !supersededMemoryIds.has(String(entry.id)),
+  );
 
   files.push({
     relativePath: ".homelab/README.md",
@@ -158,9 +213,9 @@ export function renderHomelabContextViewFiles(
           runtimeId: thread.runtimeId,
           runtimeSelectionMode: thread.runtimeSelectionMode,
           summary: redactHomelabViewText(summarizeThread(thread), secrets),
-          summaryPath: `.homelab/threads/thread_${safeSegment(String(thread.id))}/summary.md`,
-          transcriptPath: `.homelab/threads/thread_${safeSegment(String(thread.id))}/transcript.md`,
-          messagesPath: `.homelab/threads/thread_${safeSegment(String(thread.id))}/messages.jsonl`,
+          summaryPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/summary.md`,
+          transcriptPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/transcript.md`,
+          messagesPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/messages.jsonl`,
           messageCount: thread.messages.length,
           updatedAt: thread.updatedAt,
         }),
@@ -170,8 +225,28 @@ export function renderHomelabContextViewFiles(
 
   files.push({
     relativePath: ".homelab/memory/index.jsonl",
-    contents: activeThreads
-      .flatMap((thread) =>
+    contents: [
+      ...memoryEntries.map((entry) =>
+        jsonLine({
+          kind: "project-memory",
+          memoryId: entry.id,
+          projectId: entry.projectId,
+          runtimeId: entry.runtimeId,
+          sourceThreadId: entry.sourceThreadId,
+          sourceMessageId: entry.sourceMessageId,
+          sourceFilePath: entry.sourceFilePath,
+          summary: redactHomelabViewText(entry.summary, secrets),
+          tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
+          promotionStatus: entry.promotionStatus,
+          promotionId: entry.promotionId,
+          sourcePath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
+          supersedes: entry.supersedes,
+          replaces: entry.replaces,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+        }),
+      ),
+      ...activeThreads.flatMap((thread) =>
         thread.proposedPlans.map((plan) =>
           jsonLine({
             kind: "thread-proposed-plan",
@@ -179,13 +254,13 @@ export function renderHomelabContextViewFiles(
             threadId: thread.id,
             planId: plan.id,
             summary: redactHomelabViewText(plan.planMarkdown.split("\n")[0] ?? "", secrets),
-            sourcePath: `.homelab/threads/thread_${safeSegment(String(thread.id))}/summary.md`,
+            sourcePath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/summary.md`,
             createdAt: plan.createdAt,
             updatedAt: plan.updatedAt,
           }),
         ),
-      )
-      .join(""),
+      ),
+    ].join(""),
   });
 
   files.push({
@@ -193,8 +268,8 @@ export function renderHomelabContextViewFiles(
     contents: [
       "# Latest Project Memory",
       "",
-      "Project-local memory entries are generated into `memory/index.jsonl` as they become durable.",
-      "This slice stores transcript summaries and proposed-plan references as a file-backed foundation.",
+      "Project-local memory entries are generated from durable app state.",
+      "Use `memory/index.jsonl` for structured search and the files in this directory for readable details.",
       "",
     ].join("\n"),
   });
@@ -212,12 +287,49 @@ export function renderHomelabContextViewFiles(
       )
       .join(""),
   });
-  files.push({ relativePath: ".homelab/index/memory.jsonl", contents: "" });
+  files.push({
+    relativePath: ".homelab/index/memory.jsonl",
+    contents: memoryEntries
+      .map((entry) =>
+        jsonLine({
+          memoryId: entry.id,
+          summary: redactHomelabViewText(entry.summary, secrets),
+          tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
+          sourceThreadId: entry.sourceThreadId,
+          sourceFilePath: entry.sourceFilePath,
+          detailPath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
+          promotionStatus: entry.promotionStatus,
+          updatedAt: entry.updatedAt,
+        }),
+      )
+      .join(""),
+  });
+  files.push({
+    relativePath: ".homelab/index/transcripts.jsonl",
+    contents: activeThreads
+      .map((thread) =>
+        jsonLine({
+          threadId: thread.id,
+          title: thread.title,
+          transcriptPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/transcript.md`,
+          messagesPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/messages.jsonl`,
+          updatedAt: thread.updatedAt,
+        }),
+      )
+      .join(""),
+  });
   files.push({ relativePath: ".homelab/index/tools.jsonl", contents: "" });
   files.push({ relativePath: ".homelab/tools/README.md", contents: "# Runtime Tools\n\n" });
 
+  for (const entry of latestMemoryEntries) {
+    files.push({
+      relativePath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
+      contents: renderMemoryMarkdown({ entry, secrets }),
+    });
+  }
+
   for (const thread of activeThreads) {
-    const threadDir = `.homelab/threads/thread_${safeSegment(String(thread.id))}`;
+    const threadDir = `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}`;
     files.push({
       relativePath: `${threadDir}/summary.md`,
       contents: renderThreadSummary({ thread, secrets }),

@@ -206,15 +206,18 @@ writes and richer UI operations.
 
 The current generated view is implemented by
 `apps/server/src/runtime/HomelabContextView.ts` and written into the runtime
-workspace before provider turn execution. It includes:
+workspace before provider turn execution and after project-memory writes when a
+runtime is already active. It includes:
 
 - `.homelab/README.md` with usage notes and redaction expectations.
 - `.homelab/threads/index.jsonl` for searchable thread discovery.
 - `.homelab/threads/thread_<id>/summary.md` for compact thread summaries.
 - `.homelab/threads/thread_<id>/messages.jsonl` for structured raw messages.
 - `.homelab/threads/thread_<id>/transcript.md` for grep-friendly transcripts.
-- `.homelab/memory/index.jsonl` as a file-backed foundation for project-local
-  memory entries and proposed-plan references.
+- `.homelab/memory/index.jsonl` from durable project-local memory entries plus
+  proposed-plan references.
+- `.homelab/memory/latest/*.md` as readable generated views for current memory
+  entries.
 - `.homelab/index/*.jsonl` as stable search indexes for agents and scripts.
 
 Generated views must:
@@ -231,6 +234,13 @@ Generated views must:
 Agents can freely create scratch files and scripts in the workspace. Structured
 memory writes should go through an API/CLI so indexing, provenance, and
 validation remain reliable.
+
+The initial durable memory slice stores project memory in SQLite through
+`ProjectMemory`. Agents write it with `homelab memory add` or mark it for review
+with `homelab memory propose`. Search uses structured memory fields first, then
+thread transcript indexes for exact recovery. Promotion to global homelab
+knowledge remains explicit: a proposed memory entry can be marked promoted only
+when a normal homelab promotion envelope is submitted and recorded.
 
 ## Secrets
 

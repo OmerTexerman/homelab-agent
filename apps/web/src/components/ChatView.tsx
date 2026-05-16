@@ -3774,6 +3774,7 @@ export default function ChatView(props: ChatViewProps) {
         {showRuntimeWorkspaceExplorer && workspacePanelOpen && isServerThread ? (
           <ThreadWorkspacePanel
             environmentId={activeThread.environmentId}
+            projectId={activeThread.projectId}
             threadId={activeThread.id}
             open={workspacePanelOpen}
             onClose={closeWorkspaceExplorer}

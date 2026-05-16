@@ -1,6 +1,7 @@
 import {
   MessageId,
   ProjectId,
+  ProjectMemoryId,
   ProviderInstanceId,
   RuntimeSessionId,
   ThreadId,
@@ -120,6 +121,27 @@ describe("HomelabContextView", () => {
       renderHomelabContextViewFiles({
         project,
         threads: [thread, deletedThread],
+        memoryEntries: [
+          {
+            id: ProjectMemoryId.make("memory-backups"),
+            projectId,
+            runtimeId,
+            sourceThreadId: thread.id,
+            sourceMessageId: MessageId.make("message-1"),
+            sourceFilePath: "/workspace/notes.md",
+            summary: "Backups use ghp_abcdefghijklmnopqrstuvwxyz123456",
+            body: "Rotate with $GITHUB_TOKEN and never persist the raw token.",
+            tags: ["backups"],
+            supersedes: [],
+            replaces: [],
+            promotionStatus: "proposed",
+            promotionId: null,
+            promotionSummary: null,
+            promotedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
         secrets,
       }),
     );
@@ -137,6 +159,10 @@ describe("HomelabContextView", () => {
     );
     expect(files.has(".homelab/threads/thread_thread-deleted/summary.md")).toBe(false);
     expect(files.get(".homelab/memory/index.jsonl")).toContain("Rotate backup credentials");
+    expect(files.get(".homelab/memory/index.jsonl")).toContain("memory-backups");
+    expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("[REDACTED_SECRET]");
+    expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("$GITHUB_TOKEN");
+    expect(files.get(".homelab/index/memory.jsonl")).toContain("memory-backups");
 
     const indexLine = files.get(".homelab/threads/index.jsonl")?.trim();
     expect(indexLine).toBeTruthy();

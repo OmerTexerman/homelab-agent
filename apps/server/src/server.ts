@@ -53,6 +53,7 @@ import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { KnowledgeGraphLive } from "./homelab/Layers/KnowledgeGraph.ts";
 import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistry.ts";
+import { ProjectMemoryLive } from "./homelab/Layers/ProjectMemory.ts";
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
 import { RuntimeWorkspaceLive } from "./runtime/Layers/RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./runtime/Layers/ThreadWorkspace.ts";
@@ -99,6 +100,10 @@ import {
 import {
   homelabEntitiesRouteLayer,
   homelabEntityRouteLayer,
+  homelabProjectMemoryCreateRouteLayer,
+  homelabProjectMemoryListRouteLayer,
+  homelabProjectMemoryPromoteRouteLayer,
+  homelabProjectMemorySearchRouteLayer,
   homelabPromotionsRouteLayer,
   homelabRelationsRouteLayer,
   homelabRuntimeBootstrapRouteLayer,
@@ -298,6 +303,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(KnowledgeGraphLive),
   Layer.provideMerge(HomelabSecretRegistryLive.pipe(Layer.provide(ServerSecretStoreLive))),
+  Layer.provideMerge(ProjectMemoryLive),
   Layer.provideMerge(ThreadRuntimeLive),
   Layer.provideMerge(ProjectRuntimeQueueLive),
   Layer.provideMerge(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeLive))),
@@ -328,6 +334,10 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
 const HomelabRoutesLayer = Layer.mergeAll(
   homelabEntitiesRouteLayer,
   homelabEntityRouteLayer,
+  homelabProjectMemoryCreateRouteLayer,
+  homelabProjectMemoryListRouteLayer,
+  homelabProjectMemoryPromoteRouteLayer,
+  homelabProjectMemorySearchRouteLayer,
   homelabPromotionsRouteLayer,
   homelabRelationsRouteLayer,
   homelabRuntimeBootstrapRouteLayer,

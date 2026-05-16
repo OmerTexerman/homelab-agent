@@ -18,6 +18,7 @@ export * from "./sourceControl.ts";
 export * from "./homelab.ts";
 export * from "./homelabHttp.ts";
 export * from "./homelabSecrets.ts";
+export * from "./projectMemory.ts";
 export * from "./orchestration.ts";
 export * from "./editor.ts";
 export * from "./project.ts";

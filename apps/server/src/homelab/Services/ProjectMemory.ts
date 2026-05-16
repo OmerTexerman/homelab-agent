@@ -1,0 +1,56 @@
+import type {
+  ProjectId,
+  ProjectMemoryCreateInput,
+  ProjectMemoryEntry,
+  ProjectMemoryId,
+  ProjectMemoryListInput,
+  ProjectMemoryPromoteInput,
+  ProjectMemorySearchInput,
+  ProjectMemorySearchResult,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import type * as Effect from "effect/Effect";
+
+export class ProjectMemoryError extends Data.TaggedError("ProjectMemoryError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export interface ProjectMemoryCreateResolvedInput extends ProjectMemoryCreateInput {
+  readonly projectId: ProjectId;
+}
+
+export interface ProjectMemoryListResolvedInput extends ProjectMemoryListInput {
+  readonly projectId: ProjectId;
+}
+
+export interface ProjectMemorySearchResolvedInput extends ProjectMemorySearchInput {
+  readonly projectId: ProjectId;
+}
+
+export interface ProjectMemoryPromoteResolvedInput extends ProjectMemoryPromoteInput {
+  readonly projectId: ProjectId;
+}
+
+export interface ProjectMemoryShape {
+  readonly create: (
+    input: ProjectMemoryCreateResolvedInput,
+  ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;
+  readonly getById: (
+    memoryId: ProjectMemoryId,
+  ) => Effect.Effect<ProjectMemoryEntry | undefined, ProjectMemoryError>;
+  readonly list: (
+    input: ProjectMemoryListResolvedInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectMemoryEntry>, ProjectMemoryError>;
+  readonly search: (
+    input: ProjectMemorySearchResolvedInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectMemorySearchResult>, ProjectMemoryError>;
+  readonly markPromoted: (
+    input: ProjectMemoryPromoteResolvedInput,
+  ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;
+}
+
+export class ProjectMemory extends Context.Service<ProjectMemory, ProjectMemoryShape>()(
+  "homelab/Services/ProjectMemory",
+) {}

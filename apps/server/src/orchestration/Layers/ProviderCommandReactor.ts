@@ -41,6 +41,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
+import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
 import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
@@ -635,10 +636,27 @@ const make = Effect.gen(function* () {
           ),
         )
       : [];
+    const projectMemory = yield* Effect.serviceOption(ProjectMemory);
+    const memoryEntries = Option.isSome(projectMemory)
+      ? yield* projectMemory.value
+          .list({
+            projectId: project.id,
+            limit: 1_000,
+          })
+          .pipe(
+            Effect.catchTag("ProjectMemoryError", (error) =>
+              Effect.logWarning("failed to list project memory for context view", {
+                threadId: input.threadId,
+                detail: error.message,
+              }).pipe(Effect.as([])),
+            ),
+          )
+      : [];
     yield* writeHomelabContextView({
       hostWorkspacePath: launchContext.hostWorkspacePath,
       project,
       threads: readModel.threads.filter((entry) => entry.projectId === project.id),
+      memoryEntries,
       secrets,
     }).pipe(
       Effect.catchCause((cause) =>

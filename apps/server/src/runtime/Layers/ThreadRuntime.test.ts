@@ -412,6 +412,9 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.match(homelabCliContents, /--timeout-seconds/);
       assert.match(homelabCliContents, /--example/);
       assert.match(homelabCliContents, /--schema/);
+      assert.match(homelabCliContents, /memory/);
+      assert.match(homelabCliContents, /project-memory\/search/);
+      assert.match(homelabCliContents, /cmd_memory_propose/);
       assert.match(homelabCliContents, /Waiting for secret/);
       assert.match(
         homelabCliContents,
@@ -473,8 +476,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
       assert.match(
         agentsContents,
-        /`\/workspace` is this thread's scratch area inside the container\./,
+        /`\/workspace` is the project runtime workspace inside the container\./,
       );
+      assert.match(agentsContents, /homelab memory search <query>/);
+      assert.match(agentsContents, /homelab memory propose/);
       assert.match(
         claudeContents,
         /Don't avoid searching when current external information matters\./,

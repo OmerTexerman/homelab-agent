@@ -407,7 +407,7 @@ print(str(target_path))
 `;
 }
 
-function renderHomelabCliScript(): string {
+export function renderHomelabCliScript(): string {
   return `#!/usr/bin/env python3
 import argparse
 import json
@@ -478,6 +478,27 @@ def read_json_input(path: str | None, use_stdin: bool):
     if use_stdin:
         return json.load(sys.stdin)
     fail("Provide --file or --stdin for the promotion payload.")
+
+
+def read_text_input(path: str | None, use_stdin: bool, inline: str | None):
+    if inline is not None:
+        return inline
+    if path:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    if use_stdin:
+        return sys.stdin.read()
+    return ""
+
+
+def runtime_thread_query(args=None):
+    query = {}
+    project_id = getattr(args, "project_id", None) if args is not None else None
+    if project_id:
+        query["projectId"] = project_id
+    elif THREAD_ID:
+        query["threadId"] = THREAD_ID
+    return query
 
 
 PROMOTION_ENTITY_KINDS = [
@@ -790,6 +811,79 @@ def cmd_bootstrap(_args):
     print_json(request_json("GET", "/api/homelab/runtime-bootstrap"))
 
 
+def cmd_memory_search(args):
+    payload = runtime_thread_query(args)
+    payload["query"] = args.query
+    payload["includeTranscripts"] = not args.no_transcripts
+    if args.limit is not None:
+        payload["limit"] = args.limit
+    print_json(request_json("POST", "/api/homelab/project-memory/search", payload=payload))
+
+
+def cmd_memory_list(args):
+    query = runtime_thread_query(args)
+    if args.promotion_status:
+        query["promotionStatus"] = args.promotion_status
+    if args.limit is not None:
+        query["limit"] = args.limit
+    print_json(request_json("GET", "/api/homelab/project-memory", query=query))
+
+
+def build_memory_payload(args, promotion_status):
+    payload = runtime_thread_query(args)
+    if args.id:
+        payload["id"] = args.id
+    if args.runtime_id:
+        payload["runtimeId"] = args.runtime_id
+    if THREAD_ID:
+        payload["sourceThreadId"] = THREAD_ID
+    if args.source_thread_id:
+        payload["sourceThreadId"] = args.source_thread_id
+    if args.source_message_id:
+        payload["sourceMessageId"] = args.source_message_id
+    if args.source_file:
+        payload["sourceFilePath"] = args.source_file
+    payload["summary"] = args.summary
+    body = read_text_input(args.body_file, args.stdin, args.body)
+    if body:
+        payload["body"] = body
+    if args.tag:
+        payload["tags"] = args.tag
+    if args.supersedes:
+        payload["supersedes"] = args.supersedes
+    if args.replaces:
+        payload["replaces"] = args.replaces
+    payload["promotionStatus"] = promotion_status
+    return payload
+
+
+def cmd_memory_add(args):
+    print_json(
+        request_json(
+            "POST",
+            "/api/homelab/project-memory",
+            payload=build_memory_payload(args, "none"),
+        )
+    )
+
+
+def cmd_memory_propose(args):
+    print_json(
+        request_json(
+            "POST",
+            "/api/homelab/project-memory",
+            payload=build_memory_payload(args, "proposed"),
+        )
+    )
+
+
+def cmd_memory_promote(args):
+    payload = runtime_thread_query(args)
+    payload["memoryId"] = args.memory_id
+    payload["promotion"] = prepare_promotion_payload(read_json_input(args.file, args.stdin))
+    print_json(request_json("POST", "/api/homelab/project-memory/promote", payload=payload))
+
+
 def cmd_promote(args):
     if args.example:
         print_json(promotion_example_payload())
@@ -865,6 +959,74 @@ def build_parser():
         "bootstrap", help="Inspect the shared runtime bootstrap descriptor for future threads."
     )
     bootstrap_parser.set_defaults(func=cmd_bootstrap)
+
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Search, list, and write project-local memory.",
+    )
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+
+    memory_search_parser = memory_subparsers.add_parser(
+        "search", help="Search project memory and transcript indexes."
+    )
+    memory_search_parser.add_argument("query", help="Search query.")
+    memory_search_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_search_parser.add_argument("--limit", type=int, default=None, help="Max result count.")
+    memory_search_parser.add_argument(
+        "--no-transcripts",
+        action="store_true",
+        help="Search durable memory only, without raw transcript indexes.",
+    )
+    memory_search_parser.set_defaults(func=cmd_memory_search)
+
+    memory_list_parser = memory_subparsers.add_parser(
+        "list", help="List durable project memory entries."
+    )
+    memory_list_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_list_parser.add_argument("--limit", type=int, default=None, help="Max entry count.")
+    memory_list_parser.add_argument(
+        "--promotion-status",
+        choices=["none", "proposed", "promoted", "rejected"],
+        help="Filter by promotion status.",
+    )
+    memory_list_parser.set_defaults(func=cmd_memory_list)
+
+    def add_memory_write_arguments(target_parser):
+        target_parser.add_argument("--id", help="Stable memory id. Generated when omitted.")
+        target_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+        target_parser.add_argument("--runtime-id", help="Runtime id this memory applies to.")
+        target_parser.add_argument("--source-thread-id", help="Source thread id. Defaults to this runtime thread.")
+        target_parser.add_argument("--source-message-id", help="Source message id.")
+        target_parser.add_argument("--source-file", help="Source file path.")
+        target_parser.add_argument("--summary", required=True, help="Short memory summary.")
+        target_parser.add_argument("--body", help="Memory body text.")
+        target_parser.add_argument("--body-file", help="Read memory body text from a file.")
+        target_parser.add_argument("--stdin", action="store_true", help="Read memory body text from stdin.")
+        target_parser.add_argument("--tag", action="append", help="Tag. Can be repeated.")
+        target_parser.add_argument("--supersedes", action="append", help="Memory id superseded by this entry.")
+        target_parser.add_argument("--replaces", action="append", help="Memory id replaced by this entry.")
+
+    memory_add_parser = memory_subparsers.add_parser("add", help="Add a durable project memory entry.")
+    add_memory_write_arguments(memory_add_parser)
+    memory_add_parser.set_defaults(func=cmd_memory_add)
+
+    memory_propose_parser = memory_subparsers.add_parser(
+        "propose", help="Add a project memory entry flagged for explicit promotion review."
+    )
+    add_memory_write_arguments(memory_propose_parser)
+    memory_propose_parser.set_defaults(func=cmd_memory_propose)
+
+    memory_promote_parser = memory_subparsers.add_parser(
+        "promote",
+        help="Apply a promotion envelope for a proposed memory entry and mark it promoted.",
+    )
+    memory_promote_parser.add_argument("memory_id", help="Project memory id.")
+    memory_promote_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_promote_parser.add_argument("--file", help="Path to a JSON promotion envelope.")
+    memory_promote_parser.add_argument(
+        "--stdin", action="store_true", help="Read the promotion envelope from stdin."
+    )
+    memory_promote_parser.set_defaults(func=cmd_memory_promote)
 
     promote_parser = subparsers.add_parser(
         "promote",
@@ -962,6 +1124,7 @@ Run this before doing anything else:
 \`\`\`bash
 homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
+homelab memory list     # See durable project-local memory
 homelab secrets         # See what credentials are available
 homelab bootstrap       # See inherited tools, packages, and runtime bootstrap data
 find .homelab -maxdepth 3 -type f | sort
@@ -988,6 +1151,7 @@ Generated project context lives under \`.homelab/\`. These files are views over
 durable app state, not the source of truth. Search them with normal tools:
 
 - \`.homelab/memory/index.jsonl\` has project-local memory and durable notes.
+- \`.homelab/memory/latest/\` has readable generated files for current entries.
 - \`.homelab/threads/index.jsonl\` lists discoverable threads in this project.
 - \`.homelab/threads/thread_*/summary.md\` summarizes each thread.
 - \`.homelab/threads/thread_*/messages.jsonl\` and \`transcript.md\` expose raw
@@ -1014,6 +1178,8 @@ source code or wrapper scripts before using it.
 | \`homelab snapshot\` | Full dump of all entities, relations, and metadata |
 | \`homelab search <query>\` | Search entities by name, kind, or description |
 | \`homelab search <query> --kind host\` | Filter search to a specific entity kind |
+| \`homelab memory search <query>\` | Search project memory and thread transcript indexes |
+| \`homelab memory list\` | List durable project memory entries |
 | \`homelab entity <id>\` | Get one entity with all its details |
 | \`homelab relations <id>\` | Show all relations connected to an entity |
 | \`homelab secrets\` | List secret references and whether values exist |
@@ -1025,15 +1191,28 @@ Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 
 ### Writing back (promotions)
 
-When you discover something about the homelab that should persist — a new
-service, a dependency, a finding, a useful tool — promote it so future threads
-see it immediately.
+When you discover project-local context that future threads should find, add it
+to project memory:
+
+\`\`\`bash
+homelab memory add --summary "Backups run from nas01" \\
+  --tag backups \\
+  --body "Verified from the scheduler config in /workspace/notes."
+\`\`\`
+
+Use \`homelab memory propose\` when the entry should be reviewed for global
+promotion. Promotion from project memory to the global graph is explicit.
+
+When you discover something about the homelab that should persist globally — a
+new service, a dependency, a finding, a useful tool — promote it so future
+threads see it immediately.
 
 Use these first if you are unsure about the payload shape:
 
 \`\`\`bash
 homelab promote --schema
 homelab promote --example
+homelab memory promote <memory-id> --file promotion.json
 \`\`\`
 
 \`\`\`bash

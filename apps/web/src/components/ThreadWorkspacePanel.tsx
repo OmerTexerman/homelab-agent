@@ -1,8 +1,16 @@
-import type { EnvironmentId, ThreadId, ThreadWorkspaceEntry } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ProjectMemoryEntry,
+  ProjectMemorySearchResult,
+  ThreadId,
+  ThreadWorkspaceEntry,
+} from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Schema from "effect/Schema";
 import {
   ArrowUpIcon,
+  BookOpenIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   DownloadIcon,
@@ -28,6 +36,12 @@ import {
 import { ensureEnvironmentApi } from "~/environmentApi";
 import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import {
+  homelabProjectMemoryQueryOptions,
+  homelabProjectMemorySearchQueryOptions,
+  homelabQueryKeys,
+  promoteProjectMemoryEntry,
+} from "~/lib/homelabReactQuery";
 import {
   threadWorkspaceEntriesQueryOptions,
   threadWorkspaceQueryKeys,
@@ -322,14 +336,270 @@ const WorkspaceTreeItem = memo(function WorkspaceTreeItem(props: {
   );
 });
 
+type WorkspacePanelMode = "files" | "memory";
+
+function formatMemoryTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function ProjectMemoryEntryRow(props: {
+  readonly entry: ProjectMemoryEntry;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "w-full rounded-md border px-3 py-2 text-left transition-colors",
+        props.selected ? "border-primary/50 bg-primary/8" : "border-border hover:bg-accent/50",
+      )}
+      onClick={props.onSelect}
+    >
+      <div className="flex items-start gap-2">
+        <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="line-clamp-2 text-xs font-medium text-foreground">
+            {props.entry.summary}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>{formatMemoryTimestamp(props.entry.updatedAt)}</span>
+            <span className="rounded border border-border px-1 py-0.5">
+              {props.entry.promotionStatus}
+            </span>
+            {props.entry.tags.slice(0, 3).map((tag) => (
+              <span key={tag} className="rounded bg-muted px-1 py-0.5">
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function ProjectMemorySearchRow(props: {
+  readonly result: ProjectMemorySearchResult;
+  readonly onOpenSource: (path: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border px-3 py-2">
+      <div className="flex items-start gap-2">
+        <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="line-clamp-1 text-xs font-medium text-foreground">
+            {props.result.summary}
+          </div>
+          <div className="mt-1 line-clamp-3 text-xs text-muted-foreground">
+            {props.result.snippet}
+          </div>
+          <button
+            type="button"
+            className="mt-1 block max-w-full truncate font-mono text-[11px] text-primary hover:underline"
+            onClick={() => props.onOpenSource(`/workspace/${props.result.sourcePath}`)}
+          >
+            {props.result.sourcePath}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThreadProjectMemoryPanel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly open: boolean;
+  readonly onOpenSourcePath: (path: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [memoryQuery, setMemoryQuery] = useState("");
+  const [selectedMemoryId, setSelectedMemoryId] = useState<ProjectMemoryEntry["id"] | null>(null);
+  const [promotionDraft, setPromotionDraft] = useState("");
+  const trimmedQuery = memoryQuery.trim();
+  const listQuery = useQuery(
+    homelabProjectMemoryQueryOptions({
+      environmentId: props.environmentId,
+      projectId: props.projectId,
+      enabled: props.open,
+      limit: 100,
+    }),
+  );
+  const searchQueryState = useQuery(
+    homelabProjectMemorySearchQueryOptions({
+      environmentId: props.environmentId,
+      projectId: props.projectId,
+      query: trimmedQuery,
+      enabled: props.open && trimmedQuery.length > 0,
+      limit: 25,
+    }),
+  );
+  const entries = listQuery.data?.entries ?? [];
+  const proposedEntries = entries.filter((entry) => entry.promotionStatus === "proposed");
+  const selectedEntry =
+    entries.find((entry) => entry.id === selectedMemoryId) ?? proposedEntries[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedEntry) {
+      setPromotionDraft("");
+      return;
+    }
+    if (selectedMemoryId === selectedEntry.id) {
+      return;
+    }
+    setSelectedMemoryId(selectedEntry.id);
+  }, [selectedEntry, selectedMemoryId]);
+
+  const promoteMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedEntry) {
+        throw new Error("Select a memory entry before promoting.");
+      }
+      const promotion = JSON.parse(promotionDraft) as unknown;
+      return promoteProjectMemoryEntry({
+        environmentId: props.environmentId,
+        projectId: props.projectId,
+        memoryId: selectedEntry.id,
+        promotion: promotion as Parameters<typeof promoteProjectMemoryEntry>[0]["promotion"],
+      });
+    },
+    onSuccess: async () => {
+      setPromotionDraft("");
+      await queryClient.invalidateQueries({
+        queryKey: homelabQueryKeys.projectMemory(props.environmentId, props.projectId),
+      });
+      toastManager.add({
+        type: "success",
+        title: "Project memory promoted",
+        description: selectedEntry?.summary,
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to promote memory",
+        description: error instanceof Error ? error.message : "Unknown promotion error.",
+      });
+    },
+  });
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-border px-3 py-2">
+        <label className="relative block">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+          <Input
+            value={memoryQuery}
+            onChange={(event) => setMemoryQuery(event.target.value)}
+            placeholder="Search memory and transcripts"
+            className="pl-7 text-xs"
+          />
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {trimmedQuery.length > 0 ? (
+          searchQueryState.isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <LoaderIcon className="size-3.5 animate-spin" />
+              Searching memory
+            </div>
+          ) : searchQueryState.isError ? (
+            <div className="text-xs text-destructive">
+              {searchQueryState.error instanceof Error
+                ? searchQueryState.error.message
+                : "Unable to search memory."}
+            </div>
+          ) : (searchQueryState.data?.results.length ?? 0) === 0 ? (
+            <div className="text-xs text-muted-foreground">No memory or transcript matches.</div>
+          ) : (
+            <div className="space-y-2">
+              {(searchQueryState.data?.results ?? []).map((result) => (
+                <ProjectMemorySearchRow
+                  key={result.id}
+                  result={result}
+                  onOpenSource={props.onOpenSourcePath}
+                />
+              ))}
+            </div>
+          )
+        ) : listQuery.isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderIcon className="size-3.5 animate-spin" />
+            Loading memory
+          </div>
+        ) : listQuery.isError ? (
+          <div className="text-xs text-destructive">
+            {listQuery.error instanceof Error ? listQuery.error.message : "Unable to load memory."}
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="text-xs text-muted-foreground">No project memory entries yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {entries.map((entry) => (
+              <ProjectMemoryEntryRow
+                key={entry.id}
+                entry={entry}
+                selected={selectedEntry?.id === entry.id}
+                onSelect={() => setSelectedMemoryId(entry.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="border-t border-border px-3 py-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-xs font-medium text-foreground">Promotion review</div>
+          <div className="text-[11px] text-muted-foreground">{proposedEntries.length} proposed</div>
+        </div>
+        {selectedEntry && selectedEntry.promotionStatus === "proposed" ? (
+          <div className="space-y-2">
+            <div className="line-clamp-2 text-xs text-muted-foreground">
+              {selectedEntry.summary}
+            </div>
+            <Textarea
+              value={promotionDraft}
+              onChange={(event) => setPromotionDraft(event.target.value)}
+              placeholder='{"id":"promotion-...","threadId":"...","summary":"...","createdAt":"...","entries":[]}'
+              className="h-28 resize-none font-mono text-[11px] leading-4"
+            />
+            <Button
+              type="button"
+              size="xs"
+              onClick={() => promoteMutation.mutate()}
+              disabled={promotionDraft.trim().length === 0 || promoteMutation.isPending}
+            >
+              {promoteMutation.isPending ? <LoaderIcon className="size-3.5 animate-spin" /> : null}
+              Promote
+            </Button>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">No proposed memory selected.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly open: boolean;
   readonly onClose: () => void;
   readonly resolvedTheme: "light" | "dark";
 }) {
   const queryClient = useQueryClient();
+  const [panelMode, setPanelMode] = useState<WorkspacePanelMode>("files");
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPath, setCurrentPath] = useState(DEFAULT_CONTAINER_WORKSPACE_PATH);
   const [pathDraft, setPathDraft] = useState(DEFAULT_CONTAINER_WORKSPACE_PATH);
@@ -376,6 +646,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   }, []);
 
   useEffect(() => {
+    setPanelMode("files");
     setSearchQuery("");
     setCurrentPath(DEFAULT_CONTAINER_WORKSPACE_PATH);
     setPathDraft(DEFAULT_CONTAINER_WORKSPACE_PATH);
@@ -420,7 +691,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       threadId: props.threadId,
       basePath: currentPath,
       query: searchQuery.trim(),
-      enabled: props.open,
+      enabled: props.open && panelMode === "files",
       limit: 1_000,
     }),
   );
@@ -453,7 +724,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       environmentId: props.environmentId,
       threadId: props.threadId,
       path: selectedKind === "file" ? selectedPath : null,
-      enabled: props.open && selectedKind === "file" && selectedPath !== null,
+      enabled:
+        props.open && panelMode === "files" && selectedKind === "file" && selectedPath !== null,
     }),
   );
 
@@ -595,7 +867,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   });
 
   const isDirty = selectedKind === "file" && editorValue !== savedValue;
-  const editorOpen = selectedKind === "file" && Boolean(selectedPath);
+  const editorOpen = panelMode === "files" && selectedKind === "file" && Boolean(selectedPath);
   const selectedFilePath = selectedPath ?? "";
   const selectedFileUnsupported =
     selectedKind === "file" ? fileQuery.data?.contents === null : false;
@@ -750,143 +1022,189 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         )}
         style={editorOpen ? { width: `${treeWidth}px` } : undefined}
       >
-        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-foreground">
-              {HOMELAB_PRODUCT_COPY.runtimeWorkspaceTitle}
+        <div className="border-b border-border px-3 py-2">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-foreground">
+                {HOMELAB_PRODUCT_COPY.runtimeWorkspaceTitle}
+              </div>
+              <div className="truncate text-[11px] text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.runtimeWorkspaceSubtitle}
+              </div>
             </div>
-            <div className="truncate text-[11px] text-muted-foreground">
-              {HOMELAB_PRODUCT_COPY.runtimeWorkspaceSubtitle}
-            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7"
+              onClick={refreshWorkspace}
+              disabled={entriesQuery.isFetching}
+              aria-label="Refresh workspace"
+            >
+              {entriesQuery.isFetching ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCwIcon className="size-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7"
+              onClick={props.onClose}
+              aria-label="Close workspace panel"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7"
-            onClick={refreshWorkspace}
-            disabled={entriesQuery.isFetching}
-            aria-label="Refresh workspace"
-          >
-            {entriesQuery.isFetching ? (
-              <LoaderIcon className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCwIcon className="size-3.5" />
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7"
-            onClick={props.onClose}
-            aria-label="Close workspace panel"
-          >
-            <XIcon className="size-3.5" />
-          </Button>
-        </div>
-        <div className="border-b border-border px-3 py-2">
-          <form
-            className="flex items-center gap-1.5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitPathDraft();
-            }}
-          >
-            <Button
+          <div className="mt-2 grid grid-cols-2 rounded-md border border-border bg-muted/20 p-0.5">
+            <button
               type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7"
-              onClick={openWorkspaceHome}
-              aria-label="Open workspace root"
+              className={cn(
+                "rounded px-2 py-1 text-xs",
+                panelMode === "files"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setPanelMode("files")}
             >
-              <HouseIcon className="size-3.5" />
-            </Button>
-            <Button
+              Files
+            </button>
+            <button
               type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7"
-              onClick={openParentDirectory}
-              aria-label="Open parent directory"
-              disabled={currentPath === "/"}
+              className={cn(
+                "rounded px-2 py-1 text-xs",
+                panelMode === "memory"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setPanelMode("memory")}
             >
-              <ArrowUpIcon className="size-3.5" />
-            </Button>
-            <Input
-              value={pathDraft}
-              onChange={(event) => setPathDraft(event.target.value)}
-              placeholder="/workspace"
-              className="h-8 min-w-0 flex-1 font-mono text-xs"
-              aria-label="Runtime path"
-            />
-            <Button type="submit" variant="outline" size="xs">
-              Go
-            </Button>
-          </form>
-          <div className="mt-2 text-[11px] text-muted-foreground">{currentPath}</div>
+              Memory
+            </button>
+          </div>
         </div>
-        <div className="border-b border-border px-3 py-2">
-          <label className="relative block">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
-            <Input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Filter current directory"
-              className="pl-7 text-xs"
-            />
-          </label>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-          {entriesQuery.isLoading ? (
-            <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-              <LoaderIcon className="size-3.5 animate-spin" />
-              Loading workspace
-            </div>
-          ) : entriesQuery.isError ? (
-            <div className="px-2 py-3 text-xs text-destructive">
-              {entriesQuery.error instanceof Error
-                ? entriesQuery.error.message
-                : "Unable to load workspace files."}
-            </div>
-          ) : tree.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              {searchQuery.trim().length > 0
-                ? "No entries in this directory match that filter."
-                : "This directory is empty."}
-            </div>
-          ) : (
-            <>
-              {tree.map((node) => (
-                <WorkspaceTreeItem
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  expandedDirectories={expandedDirectories}
-                  selectedPath={selectedPath}
-                  theme={props.resolvedTheme}
-                  onToggleDirectory={toggleDirectory}
-                  onSelectNode={selectNode}
-                  onContextMenu={(event, nextNode) => {
-                    event.preventDefault();
-                    selectNode(nextNode);
-                    setContextMenu({
-                      x: event.clientX,
-                      y: event.clientY,
-                      node: nextNode,
-                    });
-                  }}
+        {panelMode === "files" ? (
+          <>
+            <div className="border-b border-border px-3 py-2">
+              <form
+                className="flex items-center gap-1.5"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitPathDraft();
+                }}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-7"
+                  onClick={openWorkspaceHome}
+                  aria-label="Open workspace root"
+                >
+                  <HouseIcon className="size-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-7"
+                  onClick={openParentDirectory}
+                  aria-label="Open parent directory"
+                  disabled={currentPath === "/"}
+                >
+                  <ArrowUpIcon className="size-3.5" />
+                </Button>
+                <Input
+                  value={pathDraft}
+                  onChange={(event) => setPathDraft(event.target.value)}
+                  placeholder="/workspace"
+                  className="h-8 min-w-0 flex-1 font-mono text-xs"
+                  aria-label="Runtime path"
                 />
-              ))}
-              {entriesQuery.data?.truncated ? (
-                <div className="px-2 pt-2 text-[11px] text-muted-foreground">
-                  Workspace list truncated. Narrow the search to load less at once.
+                <Button type="submit" variant="outline" size="xs">
+                  Go
+                </Button>
+              </form>
+              <div className="mt-2 text-[11px] text-muted-foreground">{currentPath}</div>
+            </div>
+            <div className="border-b border-border px-3 py-2">
+              <label className="relative block">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Filter current directory"
+                  className="pl-7 text-xs"
+                />
+              </label>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+              {entriesQuery.isLoading ? (
+                <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                  Loading workspace
                 </div>
-              ) : null}
-            </>
-          )}
-        </div>
+              ) : entriesQuery.isError ? (
+                <div className="px-2 py-3 text-xs text-destructive">
+                  {entriesQuery.error instanceof Error
+                    ? entriesQuery.error.message
+                    : "Unable to load workspace files."}
+                </div>
+              ) : tree.length === 0 ? (
+                <div className="px-2 py-3 text-xs text-muted-foreground">
+                  {searchQuery.trim().length > 0
+                    ? "No entries in this directory match that filter."
+                    : "This directory is empty."}
+                </div>
+              ) : (
+                <>
+                  {tree.map((node) => (
+                    <WorkspaceTreeItem
+                      key={node.path}
+                      node={node}
+                      depth={0}
+                      expandedDirectories={expandedDirectories}
+                      selectedPath={selectedPath}
+                      theme={props.resolvedTheme}
+                      onToggleDirectory={toggleDirectory}
+                      onSelectNode={selectNode}
+                      onContextMenu={(event, nextNode) => {
+                        event.preventDefault();
+                        selectNode(nextNode);
+                        setContextMenu({
+                          x: event.clientX,
+                          y: event.clientY,
+                          node: nextNode,
+                        });
+                      }}
+                    />
+                  ))}
+                  {entriesQuery.data?.truncated ? (
+                    <div className="px-2 pt-2 text-[11px] text-muted-foreground">
+                      Workspace list truncated. Narrow the search to load less at once.
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <ThreadProjectMemoryPanel
+            environmentId={props.environmentId}
+            projectId={props.projectId}
+            open={props.open && panelMode === "memory"}
+            onOpenSourcePath={(path) => {
+              setPanelMode("files");
+              setCurrentPath(dirnameContainerPath(path));
+              setPathDraft(dirnameContainerPath(path));
+              setSelectedPath(path);
+              setSelectedKind("file");
+              setSyncedFilePath(null);
+            }}
+          />
+        )}
       </div>
 
       {editorOpen ? (
