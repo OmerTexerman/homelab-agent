@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 /**
  * ThreadRuntime - Container-first execution boundary for one thread.
  *

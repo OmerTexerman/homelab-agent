@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isWindowsCommandNotFound, runProcess } from "./processRunner";
+import { isWindowsCommandNotFound, runProcess } from "./processRunner.ts";
 
 describe("runProcess", () => {
   it("fails when output exceeds max buffer in default mode", async () => {

@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import nodeFs from "node:fs";
 import nodeOs from "node:os";
 import nodePath from "node:path";

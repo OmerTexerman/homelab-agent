@@ -1,8 +1,12 @@
-import { Effect, FileSystem, Option, Schema } from "effect";
+// @effect-diagnostics globalDate:off
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
-import { writeFileStringAtomically } from "./atomicWrite";
-import { type ServerConfigShape } from "./config";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess";
+import { writeFileStringAtomically } from "./atomicWrite.ts";
+import { type ServerConfigShape } from "./config.ts";
+import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";
 
 export const PersistedServerRuntimeState = Schema.Struct({
   version: Schema.Literal(1),

@@ -1,12 +1,13 @@
+// @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectFailure:off missingEffectContext:off
 import { ThreadId } from "@t3tools/contracts";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 
 import {
   ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
   type ThreadRuntimeShape,
-} from "../../runtime/Services/ThreadRuntime";
-import { TerminalCwdError } from "../Services/Manager";
+} from "../../runtime/Services/ThreadRuntime.ts";
+import { TerminalCwdError } from "../Services/Manager.ts";
 
 export interface RuntimeTerminalContextInput {
   readonly threadRuntime: ThreadRuntimeShape;
@@ -80,7 +81,14 @@ export const resolveRuntimeTerminalStartContext = Effect.fn(
         new TerminalCwdError({
           cwd: input.cwd,
           reason: "statFailed",
-          cause: cause instanceof Error ? cause : new Error(describeThreadRuntimeFailure(cause)),
+          cause:
+            cause instanceof Error
+              ? cause
+              : new Error(
+                  describeThreadRuntimeFailure(
+                    cause as ThreadRuntimeError | ThreadRuntimeNotFoundError,
+                  ),
+                ),
         }),
     ),
   );

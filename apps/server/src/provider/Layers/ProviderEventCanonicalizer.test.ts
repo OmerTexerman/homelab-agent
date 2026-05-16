@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ApprovalRequestId, EventId, ProviderItemId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  EventId,
+  ProviderDriverKind,
+  ProviderItemId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 
 import {
   classifyToolItemType,
@@ -98,7 +105,7 @@ describe("ProviderEventCanonicalizer", () => {
       event: {
         id: EventId.make("evt-1"),
         kind: "notification",
-        provider: "codex",
+        provider: ProviderDriverKind.make("codex"),
         threadId: ThreadId.make("provider-thread-1"),
         createdAt: "2026-02-23T00:00:00.000Z",
         method: "item/started",
@@ -137,7 +144,7 @@ describe("ProviderEventCanonicalizer", () => {
       event: {
         id: EventId.make("evt-item-started"),
         kind: "notification",
-        provider: "codex",
+        provider: ProviderDriverKind.make("codex"),
         threadId: ThreadId.make("thread-1"),
         createdAt: "2026-02-23T00:00:00.000Z",
         method: "item/started",

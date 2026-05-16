@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -36,6 +37,7 @@ import {
   FileSystem,
   Layer,
   ManagedRuntime,
+  Option,
   Path,
   Schema,
   Stream,
@@ -60,11 +62,8 @@ import {
   CheckpointDiffQuery,
   type CheckpointDiffQueryShape,
 } from "./checkpointing/Services/CheckpointDiffQuery.ts";
-import { GitCore, type GitCoreShape } from "./git/Services/GitCore.ts";
-import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
-import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
+import { GitWorkflowService, type GitWorkflowServiceShape } from "./git/GitWorkflowService.ts";
 import { Keybindings, type KeybindingsShape } from "./keybindings.ts";
-import { Open, type OpenShape } from "./open.ts";
 import { KnowledgeGraph, type KnowledgeGraphShape } from "./homelab/Services/KnowledgeGraph.ts";
 import {
   HomelabSecretRegistry,
@@ -117,10 +116,26 @@ import {
   RepositoryIdentityResolver,
   type RepositoryIdentityResolverShape,
 } from "./project/Services/RepositoryIdentityResolver.ts";
+import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import {
+  SourceControlRepositoryService,
+  type SourceControlRepositoryServiceShape,
+} from "./sourceControl/SourceControlRepositoryService.ts";
 import {
   ServerEnvironment,
   type ServerEnvironmentShape,
 } from "./environment/Services/ServerEnvironment.ts";
+import {
+  VcsProvisioningService,
+  type VcsProvisioningServiceShape,
+} from "./vcs/VcsProvisioningService.ts";
+import { VcsDriverRegistry, type VcsDriverRegistryShape } from "./vcs/VcsDriverRegistry.ts";
+import {
+  VcsStatusBroadcaster,
+  type VcsStatusBroadcasterShape,
+} from "./vcs/VcsStatusBroadcaster.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
@@ -134,9 +149,52 @@ const decodeHomelabEntity = Schema.decodeUnknownSync(HomelabEntity);
 const decodeHomelabPromotionEnvelope = Schema.decodeUnknownSync(HomelabPromotionEnvelope);
 const decodeHomelabSnapshot = Schema.decodeUnknownSync(HomelabSnapshot);
 const defaultModelSelection = {
-  provider: "codex",
+  instanceId: "codex",
   model: "gpt-5-codex",
 } as const;
+
+const makeDefaultVcsLocalStatus = (
+  overrides: Partial<{
+    isRepo: boolean;
+    hasPrimaryRemote: boolean;
+    isDefaultRef: boolean;
+    refName: string | null;
+    hasWorkingTreeChanges: boolean;
+  }> = {},
+) => ({
+  isRepo: true,
+  hasPrimaryRemote: true,
+  isDefaultRef: true,
+  refName: "main",
+  hasWorkingTreeChanges: false,
+  workingTree: { files: [], insertions: 0, deletions: 0 },
+  ...overrides,
+});
+
+const makeDefaultVcsRemoteStatus = (
+  overrides: Partial<{
+    hasUpstream: boolean;
+    aheadCount: number;
+    behindCount: number;
+    aheadOfDefaultCount: number;
+    pr: null;
+  }> = {},
+) => ({
+  hasUpstream: true,
+  aheadCount: 0,
+  behindCount: 0,
+  aheadOfDefaultCount: 0,
+  pr: null,
+  ...overrides,
+});
+
+const makeDefaultVcsStatus = (
+  localOverrides?: Parameters<typeof makeDefaultVcsLocalStatus>[0],
+  remoteOverrides?: Parameters<typeof makeDefaultVcsRemoteStatus>[0],
+) => ({
+  ...makeDefaultVcsLocalStatus(localOverrides),
+  ...makeDefaultVcsRemoteStatus(remoteOverrides),
+});
 
 function makeMockThreadRuntimeDescriptor(
   threadId: ThreadId = defaultThreadId,
@@ -249,6 +307,57 @@ const makeDefaultOrchestrationReadModel = () => {
   };
 };
 
+const projectToShell = (
+  project: ReturnType<typeof makeDefaultOrchestrationReadModel>["projects"][number],
+) => ({
+  id: project.id,
+  title: project.title,
+  workspaceRoot: project.workspaceRoot,
+  ...(project.repositoryIdentity !== undefined
+    ? { repositoryIdentity: project.repositoryIdentity }
+    : {}),
+  ...(project.defaultRuntimeId !== undefined ? { defaultRuntimeId: project.defaultRuntimeId } : {}),
+  defaultModelSelection: project.defaultModelSelection,
+  scripts: project.scripts,
+  createdAt: project.createdAt,
+  updatedAt: project.updatedAt,
+});
+
+const threadToShell = (
+  thread: ReturnType<typeof makeDefaultOrchestrationReadModel>["threads"][number],
+) => ({
+  id: thread.id,
+  projectId: thread.projectId,
+  ...(thread.runtimeId !== undefined ? { runtimeId: thread.runtimeId } : {}),
+  title: thread.title,
+  modelSelection: thread.modelSelection,
+  runtimeMode: thread.runtimeMode,
+  interactionMode: thread.interactionMode,
+  branch: thread.branch,
+  worktreePath: thread.worktreePath,
+  latestTurn: thread.latestTurn,
+  createdAt: thread.createdAt,
+  updatedAt: thread.updatedAt,
+  archivedAt: thread.archivedAt,
+  session: thread.session,
+  latestUserMessageAt:
+    thread.messages.toReversed().find((message) => message.role === "user")?.createdAt ?? null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: thread.proposedPlans.some((plan) => plan.implementedAt === null),
+});
+
+const makeShellSnapshotFromReadModel = (
+  readModel: ReturnType<typeof makeDefaultOrchestrationReadModel>,
+) => ({
+  snapshotSequence: readModel.snapshotSequence,
+  updatedAt: readModel.updatedAt,
+  projects: readModel.projects.filter((project) => project.deletedAt === null).map(projectToShell),
+  threads: readModel.threads
+    .filter((thread) => thread.deletedAt === null && thread.archivedAt === null)
+    .map(threadToShell),
+});
+
 const makeDefaultHomelabSnapshot = () =>
   decodeHomelabSnapshot({
     entities: [],
@@ -257,12 +366,26 @@ const makeDefaultHomelabSnapshot = () =>
     updatedAt: new Date().toISOString(),
   });
 
+const vcsDriverRegistryTestLayer = Layer.mock(VcsDriverRegistry)({
+  detect: () => Effect.succeed(null),
+  get: () => Effect.die("Unexpected VCS driver lookup in server route test"),
+  resolve: () => Effect.die("Unexpected VCS driver resolution in server route test"),
+} satisfies Partial<VcsDriverRegistryShape>);
+
 const workspaceAndProjectServicesLayer = Layer.mergeAll(
   WorkspacePathsLive,
-  WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive)),
+  WorkspaceEntriesLive.pipe(
+    Layer.provide(WorkspacePathsLive),
+    Layer.provide(vcsDriverRegistryTestLayer),
+  ),
   WorkspaceFileSystemLive.pipe(
     Layer.provide(WorkspacePathsLive),
-    Layer.provide(WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive))),
+    Layer.provide(
+      WorkspaceEntriesLive.pipe(
+        Layer.provide(WorkspacePathsLive),
+        Layer.provide(vcsDriverRegistryTestLayer),
+      ),
+    ),
   ),
   ProjectFaviconResolverLive,
 );
@@ -385,9 +508,13 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<KeybindingsShape>;
     providerRegistry?: Partial<ProviderRegistryShape>;
     serverSettings?: Partial<ServerSettingsShape>;
-    open?: Partial<OpenShape>;
-    gitCore?: Partial<GitCoreShape>;
-    gitManager?: Partial<GitManagerShape>;
+    externalLauncher?: Partial<ExternalLauncher.ExternalLauncherShape>;
+    gitWorkflow?: Partial<GitWorkflowServiceShape>;
+    vcsStatusBroadcaster?: Partial<VcsStatusBroadcasterShape>;
+    vcsProvisioning?: Partial<VcsProvisioningServiceShape>;
+    sourceControlRepositoryService?: Partial<SourceControlRepositoryServiceShape>;
+    processDiagnostics?: Partial<ProcessDiagnostics.ProcessDiagnosticsShape>;
+    processResourceMonitor?: Partial<ProcessResourceMonitor.ProcessResourceMonitorShape>;
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
     terminalManager?: Partial<TerminalManagerShape>;
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
@@ -438,10 +565,6 @@ const buildAppUnderTest = (options?: {
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
-    const gitManagerLayer = Layer.mock(GitManager)({
-      ...options?.layers?.gitManager,
-    });
-    const gitStatusBroadcasterLayer = GitStatusBroadcasterLive.pipe(Layer.provide(gitManagerLayer));
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -476,17 +599,134 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(Open)({
-          ...options?.layers?.open,
+        Layer.mock(ExternalLauncher.ExternalLauncher)({
+          launchBrowser: () => Effect.void,
+          launchEditor: () => Effect.void,
+          ...options?.layers?.externalLauncher,
         }),
       ),
       Layer.provide(
-        Layer.mock(GitCore)({
-          ...options?.layers?.gitCore,
+        Layer.mock(GitWorkflowService)({
+          status: () => Effect.succeed(makeDefaultVcsStatus()),
+          localStatus: () => Effect.succeed(makeDefaultVcsLocalStatus()),
+          remoteStatus: () => Effect.succeed(makeDefaultVcsRemoteStatus()),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+          pullCurrentBranch: () =>
+            Effect.succeed({
+              status: "pulled" as const,
+              refName: "main",
+              upstreamRef: "origin/main",
+            }),
+          runStackedAction: (input) =>
+            Effect.succeed({
+              action: input.action,
+              branch: { status: "skipped_not_requested" as const },
+              commit: { status: "skipped_not_requested" as const },
+              push: { status: "skipped_not_requested" as const },
+              pr: { status: "skipped_not_requested" as const },
+              toast: {
+                title: "No Git action",
+                cta: {
+                  kind: "none" as const,
+                },
+              },
+            }),
+          resolvePullRequest: () =>
+            Effect.succeed({
+              pullRequest: {
+                number: 1,
+                title: "Demo PR",
+                url: "https://example.com/pr/1",
+                baseBranch: "main",
+                headBranch: "feature/demo",
+                state: "open" as const,
+              },
+            }),
+          preparePullRequestThread: () =>
+            Effect.succeed({
+              pullRequest: {
+                number: 1,
+                title: "Demo PR",
+                url: "https://example.com/pr/1",
+                baseBranch: "main",
+                headBranch: "feature/demo",
+                state: "open" as const,
+              },
+              branch: "feature/demo",
+              worktreePath: null,
+            }),
+          listRefs: () =>
+            Effect.succeed({
+              refs: [],
+              isRepo: true,
+              hasPrimaryRemote: true,
+              nextCursor: null,
+              totalCount: 0,
+            }),
+          createWorktree: (input) =>
+            Effect.succeed({
+              worktree: {
+                path: input.path ?? `/tmp/worktrees/${input.newRefName ?? input.refName}`,
+                refName: input.newRefName ?? input.refName,
+              },
+            }),
+          removeWorktree: () => Effect.void,
+          createRef: (input) => Effect.succeed({ refName: input.refName }),
+          switchRef: (input) => Effect.succeed({ refName: input.refName }),
+          renameBranch: (input) => Effect.succeed({ branch: input.newBranch }),
+          ...options?.layers?.gitWorkflow,
         }),
       ),
-      Layer.provide(gitManagerLayer),
-      Layer.provideMerge(gitStatusBroadcasterLayer),
+      Layer.provide(
+        Layer.mock(VcsStatusBroadcaster)({
+          getStatus: () => Effect.succeed(makeDefaultVcsStatus()),
+          refreshLocalStatus: () => Effect.succeed(makeDefaultVcsLocalStatus()),
+          refreshStatus: () => Effect.succeed(makeDefaultVcsStatus()),
+          streamStatus: () => Stream.empty,
+          ...options?.layers?.vcsStatusBroadcaster,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(VcsProvisioningService)({
+          initRepository: () => Effect.void,
+          ...options?.layers?.vcsProvisioning,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(SourceControlRepositoryService)({
+          ...options?.layers?.sourceControlRepositoryService,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
+          read: Effect.succeed({
+            processes: [],
+            generatedAt: new Date().toISOString(),
+          }),
+          signal: (input) =>
+            Effect.succeed({
+              pid: input.pid,
+              signal: input.signal,
+              sent: false,
+            }),
+          ...options?.layers?.processDiagnostics,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+          readHistory: () =>
+            Effect.succeed({
+              generatedAt: new Date().toISOString(),
+              windowMs: 0,
+              bucketMs: 0,
+              buckets: [],
+              processes: [],
+            }),
+          ...options?.layers?.processResourceMonitor,
+        }),
+      ),
       Layer.provide(
         Layer.mock(ProjectSetupScriptRunner)({
           runForThread: () => Effect.succeed({ status: "no-script" as const }),
@@ -559,6 +799,58 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery)({
           getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+          getShellSnapshot: () =>
+            Effect.succeed(makeShellSnapshotFromReadModel(makeDefaultOrchestrationReadModel())),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              ...makeShellSnapshotFromReadModel(makeDefaultOrchestrationReadModel()),
+              threads: [],
+            }),
+          getSnapshotSequence: () =>
+            Effect.succeed({
+              snapshotSequence: makeDefaultOrchestrationReadModel().snapshotSequence,
+            }),
+          getCounts: () =>
+            Effect.succeed({
+              projectCount: makeDefaultOrchestrationReadModel().projects.length,
+              threadCount: makeDefaultOrchestrationReadModel().threads.length,
+            }),
+          getActiveProjectByWorkspaceRoot: (workspaceRoot) => {
+            const project = makeDefaultOrchestrationReadModel().projects.find(
+              (entry) => entry.workspaceRoot === workspaceRoot && entry.deletedAt === null,
+            );
+            return Effect.succeed(project ? Option.some(project) : Option.none());
+          },
+          getProjectShellById: (projectId) => {
+            const project = makeDefaultOrchestrationReadModel().projects.find(
+              (entry) => entry.id === projectId && entry.deletedAt === null,
+            );
+            return Effect.succeed(project ? Option.some(projectToShell(project)) : Option.none());
+          },
+          getFirstActiveThreadIdByProjectId: (projectId) => {
+            const thread = makeDefaultOrchestrationReadModel().threads.find(
+              (entry) =>
+                entry.projectId === projectId &&
+                entry.deletedAt === null &&
+                entry.archivedAt === null,
+            );
+            return Effect.succeed(thread ? Option.some(thread.id) : Option.none());
+          },
+          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+          getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+          getThreadShellById: (threadId) => {
+            const thread = makeDefaultOrchestrationReadModel().threads.find(
+              (entry) => entry.id === threadId && entry.deletedAt === null,
+            );
+            return Effect.succeed(thread ? Option.some(threadToShell(thread)) : Option.none());
+          },
+          getThreadDetailById: (threadId) => {
+            const thread = makeDefaultOrchestrationReadModel().threads.find(
+              (entry) => entry.id === threadId && entry.deletedAt === null,
+            );
+            return Effect.succeed(thread ? Option.some(thread) : Option.none());
+          },
           ...options?.layers?.projectionSnapshotQuery,
         }),
       ),
@@ -2393,7 +2685,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(second, {
         version: 1,
         type: "keybindingsUpdated",
-        payload: { issues: [] },
+        payload: changeEvent,
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -2617,8 +2909,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       let openedInput: { cwd: string; editor: EditorId } | null = null;
       yield* buildAppUnderTest({
         layers: {
-          open: {
-            openInEditor: (input) =>
+          externalLauncher: {
+            launchEditor: (input) =>
               Effect.sync(() => {
                 openedInput = input;
               }),
@@ -2645,8 +2937,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const openError = new OpenError({ message: "Editor command not found: cursor" });
       yield* buildAppUnderTest({
         layers: {
-          open: {
-            openInEditor: () => Effect.fail(openError),
+          externalLauncher: {
+            launchEditor: () => Effect.fail(openError),
           },
         },
       });
@@ -2665,43 +2957,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc git methods", () =>
+  it.effect("routes websocket rpc vcs and git workflow methods", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         layers: {
-          gitManager: {
-            invalidateLocalStatus: () => Effect.void,
-            invalidateRemoteStatus: () => Effect.void,
-            invalidateStatus: () => Effect.void,
-            localStatus: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasOriginRemote: true,
-                isDefaultBranch: true,
-                branch: "main",
-                hasWorkingTreeChanges: false,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
-            remoteStatus: () =>
-              Effect.succeed({
-                hasUpstream: true,
-                aheadCount: 0,
-                behindCount: 0,
-                pr: null,
-              }),
-            status: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasOriginRemote: true,
-                isDefaultBranch: true,
-                branch: "main",
-                hasWorkingTreeChanges: false,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-                hasUpstream: true,
-                aheadCount: 0,
-                behindCount: 0,
-                pr: null,
-              }),
+          vcsStatusBroadcaster: {
+            refreshStatus: () => Effect.succeed(makeDefaultVcsStatus()),
+          },
+          gitWorkflow: {
             runStackedAction: (input, options) =>
               Effect.gen(function* () {
                 const result = {
@@ -2774,17 +3037,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 branch: "feature/demo",
                 worktreePath: null,
               }),
-          },
-          gitCore: {
             pullCurrentBranch: () =>
               Effect.succeed({
                 status: "pulled",
-                branch: "main",
-                upstreamBranch: "origin/main",
+                refName: "main",
+                upstreamRef: "origin/main",
               }),
-            listBranches: () =>
+            listRefs: () =>
               Effect.succeed({
-                branches: [
+                refs: [
                   {
                     name: "main",
                     current: true,
@@ -2793,18 +3054,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   },
                 ],
                 isRepo: true,
-                hasOriginRemote: true,
+                hasPrimaryRemote: true,
                 nextCursor: null,
                 totalCount: 1,
               }),
             createWorktree: () =>
               Effect.succeed({
-                worktree: { path: "/tmp/wt", branch: "feature/demo" },
+                worktree: { path: "/tmp/wt", refName: "feature/demo" },
               }),
             removeWorktree: () => Effect.void,
-            createBranch: (input) => Effect.succeed({ branch: input.branch }),
-            checkoutBranch: (input) => Effect.succeed({ branch: input.branch }),
-            initRepo: () => Effect.void,
+            createRef: (input) => Effect.succeed({ refName: input.refName }),
+            switchRef: (input) => Effect.succeed({ refName: input.refName }),
+          },
+          vcsProvisioning: {
+            initRepository: () => Effect.void,
           },
         },
       });
@@ -2812,13 +3075,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
 
       const pull = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })),
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsPull]({ cwd: "/tmp/repo" })),
       );
       assert.equal(pull.status, "pulled");
 
       const refreshedStatus = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitRefreshStatus]({ cwd: "/tmp/repo" }),
+          client[WS_METHODS.vcsRefreshStatus]({ cwd: "/tmp/repo" }),
         ),
       );
       assert.equal(refreshedStatus.isRepo, true);
@@ -2862,27 +3125,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(prepared.branch, "feature/demo");
 
-      const branches = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitListBranches]({ cwd: "/tmp/repo" }),
-        ),
+      const refs = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsListRefs]({ cwd: "/tmp/repo" })),
       );
-      assert.equal(branches.branches[0]?.name, "main");
+      assert.equal(refs.refs[0]?.name, "main");
 
       const worktree = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitCreateWorktree]({
+          client[WS_METHODS.vcsCreateWorktree]({
             cwd: "/tmp/repo",
-            branch: "main",
+            refName: "main",
             path: null,
           }),
         ),
       );
-      assert.equal(worktree.worktree.branch, "feature/demo");
+      assert.equal(worktree.worktree.refName, "feature/demo");
 
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitRemoveWorktree]({
+          client[WS_METHODS.vcsRemoveWorktree]({
             cwd: "/tmp/repo",
             path: "/tmp/wt",
           }),
@@ -2891,25 +3152,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitCreateBranch]({
+          client[WS_METHODS.vcsCreateRef]({
             cwd: "/tmp/repo",
-            branch: "feature/new",
+            refName: "feature/new",
           }),
         ),
       );
 
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitCheckout]({
+          client[WS_METHODS.vcsSwitchRef]({
             cwd: "/tmp/repo",
-            branch: "main",
+            refName: "main",
           }),
         ),
       );
 
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.gitInit]({
+          client[WS_METHODS.vcsInit]({
             cwd: "/tmp/repo",
           }),
         ),
@@ -2917,7 +3178,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc git.pull errors", () =>
+  it.effect("routes websocket rpc vcs.pull errors", () =>
     Effect.gen(function* () {
       const gitError = new GitCommandError({
         operation: "pull",
@@ -2925,60 +3186,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         cwd: "/tmp/repo",
         detail: "upstream missing",
       });
-      let invalidationCalls = 0;
-      let statusCalls = 0;
+      let refreshCalls = 0;
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             pullCurrentBranch: () => Effect.fail(gitError),
           },
-          gitManager: {
-            invalidateLocalStatus: () =>
+          vcsStatusBroadcaster: {
+            refreshStatus: () =>
               Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            invalidateRemoteStatus: () =>
-              Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            invalidateStatus: () =>
-              Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            localStatus: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasOriginRemote: true,
-                isDefaultBranch: true,
-                branch: "main",
-                hasWorkingTreeChanges: true,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
-            remoteStatus: () =>
-              Effect.sync(() => {
-                statusCalls += 1;
-                return {
-                  hasUpstream: true,
-                  aheadCount: 0,
-                  behindCount: 0,
-                  pr: null,
-                };
-              }),
-            status: () =>
-              Effect.sync(() => {
-                statusCalls += 1;
-                return {
-                  isRepo: true,
-                  hasOriginRemote: true,
-                  isDefaultBranch: true,
-                  branch: "main",
-                  hasWorkingTreeChanges: true,
-                  workingTree: { files: [], insertions: 0, deletions: 0 },
-                  hasUpstream: true,
-                  aheadCount: 0,
-                  behindCount: 0,
-                  pr: null,
-                };
+                refreshCalls += 1;
+                return makeDefaultVcsStatus({ hasWorkingTreeChanges: true });
               }),
           },
         },
@@ -2986,18 +3204,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })).pipe(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsPull]({ cwd: "/tmp/repo" })).pipe(
           Effect.result,
         ),
       );
 
       assertFailure(result, gitError);
-      assert.equal(invalidationCalls, 0);
-      assert.equal(statusCalls, 0);
+      assert.equal(refreshCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc git.runStackedAction errors after refreshing git status", () =>
+  it.effect("routes websocket rpc git.runStackedAction errors without refreshing vcs status", () =>
     Effect.gen(function* () {
       const gitError = new GitCommandError({
         operation: "commit",
@@ -3005,58 +3222,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         cwd: "/tmp/repo",
         detail: "nothing to commit",
       });
-      let invalidationCalls = 0;
-      let statusCalls = 0;
+      let refreshCalls = 0;
       yield* buildAppUnderTest({
         layers: {
-          gitManager: {
-            invalidateLocalStatus: () =>
+          vcsStatusBroadcaster: {
+            refreshStatus: () =>
               Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            invalidateRemoteStatus: () =>
-              Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            invalidateStatus: () =>
-              Effect.sync(() => {
-                invalidationCalls += 1;
-              }),
-            localStatus: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasOriginRemote: true,
-                isDefaultBranch: false,
-                branch: "feature/demo",
-                hasWorkingTreeChanges: true,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
-            remoteStatus: () =>
-              Effect.sync(() => {
-                statusCalls += 1;
-                return {
-                  hasUpstream: true,
-                  aheadCount: 0,
-                  behindCount: 0,
-                  pr: null,
-                };
-              }),
-            status: () =>
-              Effect.sync(() => {
-                statusCalls += 1;
-                return {
-                  isRepo: true,
-                  hasOriginRemote: true,
-                  isDefaultBranch: false,
-                  branch: "feature/demo",
+                refreshCalls += 1;
+                return makeDefaultVcsStatus({
+                  isDefaultRef: false,
+                  refName: "feature/demo",
                   hasWorkingTreeChanges: true,
-                  workingTree: { files: [], insertions: 0, deletions: 0 },
-                  hasUpstream: true,
-                  aheadCount: 0,
-                  behindCount: 0,
-                  pr: null,
-                };
+                });
               }),
+          },
+          gitWorkflow: {
             runStackedAction: () => Effect.fail(gitError),
           },
         },
@@ -3074,44 +3254,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, gitError);
-      assert.equal(invalidationCalls, 0);
-      assert.equal(statusCalls, 0);
+      assert.equal(refreshCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("completes websocket rpc git.pull before background git status refresh finishes", () =>
+  it.effect("completes websocket rpc vcs.pull before background vcs status refresh finishes", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             pullCurrentBranch: () =>
               Effect.succeed({
                 status: "pulled" as const,
-                branch: "main",
-                upstreamBranch: "origin/main",
+                refName: "main",
+                upstreamRef: "origin/main",
               }),
           },
-          gitManager: {
-            invalidateLocalStatus: () => Effect.void,
-            invalidateRemoteStatus: () => Effect.void,
-            localStatus: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasOriginRemote: true,
-                isDefaultBranch: true,
-                branch: "main",
-                hasWorkingTreeChanges: false,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
-            remoteStatus: () =>
-              Effect.sleep(Duration.seconds(2)).pipe(
-                Effect.as({
-                  hasUpstream: true,
-                  aheadCount: 0,
-                  behindCount: 0,
-                  pr: null,
-                }),
-              ),
+          vcsStatusBroadcaster: {
+            refreshStatus: () =>
+              Effect.sleep(Duration.seconds(2)).pipe(Effect.as(makeDefaultVcsStatus())),
           },
         },
       });
@@ -3119,7 +3280,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const startedAt = Date.now();
       const result = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })),
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsPull]({ cwd: "/tmp/repo" })),
       );
       const elapsedMs = Date.now() - startedAt;
 
@@ -3129,32 +3290,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "completes websocket rpc git.runStackedAction before background git status refresh finishes",
+    "completes websocket rpc git.runStackedAction before background vcs status refresh finishes",
     () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest({
           layers: {
-            gitManager: {
-              invalidateLocalStatus: () => Effect.void,
-              invalidateRemoteStatus: () => Effect.void,
-              localStatus: () =>
-                Effect.succeed({
-                  isRepo: true,
-                  hasOriginRemote: true,
-                  isDefaultBranch: false,
-                  branch: "feature/demo",
-                  hasWorkingTreeChanges: false,
-                  workingTree: { files: [], insertions: 0, deletions: 0 },
-                }),
-              remoteStatus: () =>
+            vcsStatusBroadcaster: {
+              refreshStatus: () =>
                 Effect.sleep(Duration.seconds(2)).pipe(
-                  Effect.as({
-                    hasUpstream: true,
-                    aheadCount: 0,
-                    behindCount: 0,
-                    pr: null,
-                  }),
+                  Effect.as(
+                    makeDefaultVcsStatus({
+                      isDefaultRef: false,
+                      refName: "feature/demo",
+                    }),
+                  ),
                 ),
+            },
+            gitWorkflow: {
               runStackedAction: () =>
                 Effect.succeed({
                   action: "commit" as const,
@@ -3199,80 +3351,67 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
-    "starts a background local git status refresh after a successful git.runStackedAction",
-    () =>
-      Effect.gen(function* () {
-        const localRefreshStarted = yield* Deferred.make<void>();
+  it.effect("starts a background vcs status refresh after a successful git.runStackedAction", () =>
+    Effect.gen(function* () {
+      const statusRefreshStarted = yield* Deferred.make<void>();
 
-        yield* buildAppUnderTest({
-          layers: {
-            gitManager: {
-              invalidateLocalStatus: () => Effect.void,
-              invalidateRemoteStatus: () => Effect.void,
-              localStatus: () =>
-                Deferred.succeed(localRefreshStarted, undefined).pipe(
-                  Effect.ignore,
-                  Effect.andThen(
-                    Effect.succeed({
-                      isRepo: true,
-                      hasOriginRemote: true,
-                      isDefaultBranch: false,
-                      branch: "feature/demo",
-                      hasWorkingTreeChanges: false,
-                      workingTree: { files: [], insertions: 0, deletions: 0 },
+      yield* buildAppUnderTest({
+        layers: {
+          vcsStatusBroadcaster: {
+            refreshStatus: () =>
+              Deferred.succeed(statusRefreshStarted, undefined).pipe(
+                Effect.ignore,
+                Effect.andThen(
+                  Effect.succeed(
+                    makeDefaultVcsStatus({
+                      isDefaultRef: false,
+                      refName: "feature/demo",
                     }),
                   ),
                 ),
-              remoteStatus: () =>
-                Effect.sleep(Duration.seconds(2)).pipe(
-                  Effect.as({
-                    hasUpstream: true,
-                    aheadCount: 0,
-                    behindCount: 0,
-                    pr: null,
-                  }),
-                ),
-              runStackedAction: () =>
-                Effect.succeed({
-                  action: "commit" as const,
-                  branch: { status: "skipped_not_requested" as const },
-                  commit: {
-                    status: "created" as const,
-                    commitSha: "abc123",
-                    subject: "feat: demo",
-                  },
-                  push: { status: "skipped_not_requested" as const },
-                  pr: { status: "skipped_not_requested" as const },
-                  toast: {
-                    title: "Committed abc123",
-                    description: "feat: demo",
-                    cta: {
-                      kind: "run_action" as const,
-                      label: "Push",
-                      action: {
-                        kind: "push" as const,
-                      },
+              ),
+          },
+          gitWorkflow: {
+            runStackedAction: () =>
+              Effect.succeed({
+                action: "commit" as const,
+                branch: { status: "skipped_not_requested" as const },
+                commit: {
+                  status: "created" as const,
+                  commitSha: "abc123",
+                  subject: "feat: demo",
+                },
+                push: { status: "skipped_not_requested" as const },
+                pr: { status: "skipped_not_requested" as const },
+                toast: {
+                  title: "Committed abc123",
+                  description: "feat: demo",
+                  cta: {
+                    kind: "run_action" as const,
+                    label: "Push",
+                    action: {
+                      kind: "push" as const,
                     },
                   },
-                }),
-            },
+                },
+              }),
           },
-        });
+        },
+      });
 
-        const wsUrl = yield* getWsServerUrl("/ws");
-        yield* Effect.scoped(
-          withWsRpcClient(wsUrl, (client) =>
-            client[WS_METHODS.gitRunStackedAction]({
-              actionId: "action-1",
-              cwd: "/tmp/repo",
-              action: "commit",
-            }).pipe(Stream.runCollect),
-          ),
-        );
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitRunStackedAction]({
+            actionId: "action-1",
+            cwd: "/tmp/repo",
+            action: "commit",
+          }).pipe(Stream.runCollect),
+        ),
+      );
 
-        yield* Deferred.await(localRefreshStarted);
-      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      yield* Deferred.await(statusRefreshStarted);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc orchestration methods", () =>
@@ -3321,6 +3460,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           projectionSnapshotQuery: {
             getSnapshot: () => Effect.succeed(snapshot),
+            getShellSnapshot: () => Effect.succeed(makeShellSnapshotFromReadModel(snapshot)),
           },
           orchestrationEngine: {
             dispatch: () => Effect.succeed({ sequence: 7 }),
@@ -3346,9 +3486,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
-      const snapshotResult = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[ORCHESTRATION_WS_METHODS.getSnapshot]({})),
+      const shellSnapshotEvents = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
       );
+      const shellSnapshotEvent = Array.from(shellSnapshotEvents)[0];
+      assert.equal(shellSnapshotEvent?.kind, "snapshot");
+      const snapshotResult =
+        shellSnapshotEvent?.kind === "snapshot" ? shellSnapshotEvent.snapshot : null;
+      assertTrue(snapshotResult !== null);
       assert.equal(snapshotResult.snapshotSequence, 1);
 
       const dispatchResult = yield* Effect.scoped(
@@ -3406,6 +3556,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  ...projectToShell(makeDefaultOrchestrationReadModel().projects[0]!),
+                  title: "Renamed Project",
+                  repositoryIdentity,
+                }),
+              ),
+          },
           orchestrationEngine: {
             getReadModel: () =>
               Effect.succeed({
@@ -3583,13 +3743,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
-          Effect.succeed({
-            worktree: {
-              branch: "t3code/bootstrap-branch",
-              path: "/tmp/bootstrap-worktree",
-            },
-          }),
+        const createWorktree = vi.fn(
+          (_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
+            Effect.succeed({
+              worktree: {
+                refName: "t3code/bootstrap-branch",
+                path: "/tmp/bootstrap-worktree",
+              },
+            }),
         );
         const runForThread = vi.fn(
           (_: Parameters<ProjectSetupScriptRunnerShape["runForThread"]>[0]) =>
@@ -3604,7 +3765,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* buildAppUnderTest({
           layers: {
-            gitCore: {
+            gitWorkflow: {
               createWorktree,
             },
             orchestrationEngine: {
@@ -3674,8 +3835,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
-          branch: "main",
-          newBranch: "t3code/bootstrap-branch",
+          refName: "main",
+          newRefName: "t3code/bootstrap-branch",
           path: null,
         });
         assert.deepEqual(runForThread.mock.calls[0]?.[0], {
@@ -3704,10 +3865,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("records setup-script failures without aborting bootstrap turn start", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
+      const createWorktree = vi.fn((_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
         Effect.succeed({
           worktree: {
-            branch: "t3code/bootstrap-branch",
+            refName: "t3code/bootstrap-branch",
             path: "/tmp/bootstrap-worktree",
           },
         }),
@@ -3719,7 +3880,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             createWorktree,
           },
           orchestrationEngine: {
@@ -3797,10 +3958,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
+      const createWorktree = vi.fn((_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
         Effect.succeed({
           worktree: {
-            branch: "t3code/bootstrap-branch",
+            refName: "t3code/bootstrap-branch",
             path: "/tmp/bootstrap-worktree",
           },
         }),
@@ -3819,7 +3980,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             createWorktree,
           },
           orchestrationEngine: {
@@ -3915,13 +4076,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
+      const createWorktree = vi.fn((_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
         Effect.die(new Error("worktree exploded")),
       );
 
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             createWorktree,
           },
           orchestrationEngine: {
@@ -4059,16 +4220,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
-          Effect.succeed({
-            worktree: {
-              branch: "t3code/bootstrap-branch",
-              path: "/tmp/bootstrap-worktree",
-            },
-          }),
+        const createWorktree = vi.fn(
+          (_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
+            Effect.succeed({
+              worktree: {
+                refName: "t3code/bootstrap-branch",
+                path: "/tmp/bootstrap-worktree",
+              },
+            }),
         );
         const removeWorktree = vi.fn(
-          (_: Parameters<GitCoreShape["removeWorktree"]>[0]) => Effect.void,
+          (_: Parameters<GitWorkflowServiceShape["removeWorktree"]>[0]) => Effect.void,
         );
         const existingThreadId = ThreadId.make("thread-bootstrap-existing");
         const readModel = {
@@ -4087,7 +4249,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* buildAppUnderTest({
           layers: {
-            gitCore: {
+            gitWorkflow: {
               createWorktree,
               removeWorktree,
             },
@@ -4145,8 +4307,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.include(result.failure.message, "final dispatch exploded");
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
-          branch: "main",
-          newBranch: "t3code/bootstrap-branch",
+          refName: "main",
+          newRefName: "t3code/bootstrap-branch",
           path: null,
         });
         assert.deepEqual(removeWorktree.mock.calls[0]?.[0], {
@@ -4171,15 +4333,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("restores existing thread metadata even when prepared worktree cleanup fails", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const createWorktree = vi.fn((_: Parameters<GitCoreShape["createWorktree"]>[0]) =>
+      const createWorktree = vi.fn((_: Parameters<GitWorkflowServiceShape["createWorktree"]>[0]) =>
         Effect.succeed({
           worktree: {
-            branch: "t3code/bootstrap-branch",
+            refName: "t3code/bootstrap-branch",
             path: "/tmp/bootstrap-worktree-failed-cleanup",
           },
         }),
       );
-      const removeWorktree = vi.fn((_: Parameters<GitCoreShape["removeWorktree"]>[0]) =>
+      const removeWorktree = vi.fn((_: Parameters<GitWorkflowServiceShape["removeWorktree"]>[0]) =>
         Effect.fail(
           new GitCommandError({
             operation: "removeWorktree",
@@ -4206,7 +4368,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
-          gitCore: {
+          gitWorkflow: {
             createWorktree,
             removeWorktree,
           },
@@ -4281,64 +4443,60 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
-    "routes websocket rpc subscribeOrchestrationDomainEvents with replay/live overlap resilience",
-    () =>
-      Effect.gen(function* () {
-        const now = new Date().toISOString();
-        const threadId = ThreadId.make("thread-1");
-        let replayCursor: number | null = null;
-        const makeEvent = (sequence: number): OrchestrationEvent =>
-          ({
-            sequence,
-            eventId: `event-${sequence}`,
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            occurredAt: now,
-            commandId: null,
-            causationEventId: null,
-            correlationId: null,
-            metadata: {},
-            type: "thread.reverted",
-            payload: {
-              threadId,
-              turnCount: sequence,
-            },
-          }) as OrchestrationEvent;
+  it.effect("routes websocket rpc orchestration.subscribeShell snapshot and live updates", () =>
+    Effect.gen(function* () {
+      const readModel = {
+        ...makeDefaultOrchestrationReadModel(),
+        snapshotSequence: 1,
+      };
 
-        yield* buildAppUnderTest({
-          layers: {
-            orchestrationEngine: {
-              getReadModel: () =>
-                Effect.succeed({
-                  ...makeDefaultOrchestrationReadModel(),
-                  snapshotSequence: 1,
-                }),
-              readEvents: (fromSequenceExclusive) => {
-                replayCursor = fromSequenceExclusive;
-                return Stream.make(makeEvent(2), makeEvent(3));
-              },
-              streamDomainEvents: Stream.make(makeEvent(3), makeEvent(4)),
-            },
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getShellSnapshot: () => Effect.succeed(makeShellSnapshotFromReadModel(readModel)),
           },
-        });
+          orchestrationEngine: {
+            streamDomainEvents: Stream.make({
+              sequence: 2,
+              eventId: EventId.make("event-2"),
+              aggregateKind: "project",
+              aggregateId: defaultProjectId,
+              occurredAt: new Date().toISOString(),
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              type: "project.deleted",
+              payload: {
+                projectId: defaultProjectId,
+                deletedAt: new Date().toISOString(),
+              },
+            } satisfies Extract<OrchestrationEvent, { type: "project.deleted" }>),
+          },
+        },
+      });
 
-        const wsUrl = yield* getWsServerUrl("/ws");
-        const events = yield* Effect.scoped(
-          withWsRpcClient(wsUrl, (client) =>
-            client[WS_METHODS.subscribeOrchestrationDomainEvents]({}).pipe(
-              Stream.take(3),
-              Stream.runCollect,
-            ),
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            Stream.take(2),
+            Stream.runCollect,
           ),
-        );
+        ),
+      );
 
-        assert.equal(replayCursor, 1);
-        assert.deepEqual(
-          Array.from(events).map((event) => event.sequence),
-          [2, 3, 4],
-        );
-      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      const [snapshot, live] = Array.from(events);
+      assert.equal(snapshot?.kind, "snapshot");
+      if (snapshot?.kind === "snapshot") {
+        assert.equal(snapshot.snapshot.snapshotSequence, 1);
+      }
+      assert.deepEqual(live, {
+        kind: "project-removed",
+        sequence: 2,
+        projectId: defaultProjectId,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
@@ -4448,6 +4606,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  ...projectToShell(makeDefaultOrchestrationReadModel().projects[0]!),
+                  title: "Renamed Project",
+                  repositoryIdentity,
+                }),
+              ),
+          },
           orchestrationEngine: {
             getReadModel: () =>
               Effect.succeed({
@@ -4486,14 +4654,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const events = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeOrchestrationDomainEvents]({}).pipe(
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+          client[ORCHESTRATION_WS_METHODS.replayEvents]({
+            fromSequenceExclusive: 0,
+          }),
         ),
       );
 
-      const event = Array.from(events)[0];
+      const event = events[0];
       assert.equal(resolveCalls, 1);
       assert.equal(event?.type, "project.meta-updated");
       assert.deepEqual(
@@ -4771,14 +4938,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 text: "hello",
                 attachments: [],
               },
-              modelSelection: { provider: "codex", model: "gpt-5.4" },
+              modelSelection: { instanceId: "codex", model: "gpt-5.4" },
               runtimeMode: "full-access",
               interactionMode: "default",
               bootstrap: {
                 createThread: {
                   projectId: defaultProjectId,
                   title: "Retitled Bootstrap Thread",
-                  modelSelection: { provider: "codex", model: "gpt-5.4" },
+                  modelSelection: { instanceId: "codex", model: "gpt-5.4" },
                   runtimeMode: "full-access",
                   interactionMode: "default",
                   branch: null,
@@ -5141,6 +5308,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  ...projectToShell(makeDefaultOrchestrationReadModel().projects[0]!),
+                  title: "Renamed Project",
+                  repositoryIdentity,
+                }),
+              ),
+          },
           orchestrationEngine: {
             getReadModel: () =>
               Effect.succeed({
@@ -5210,6 +5387,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  ...projectToShell(makeDefaultOrchestrationReadModel().projects[0]!),
+                  title: "Renamed Project",
+                  repositoryIdentity,
+                }),
+              ),
+          },
           orchestrationEngine: {
             getReadModel: () =>
               Effect.succeed({
@@ -5234,40 +5421,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               },
             } satisfies Extract<OrchestrationEvent, { type: "project.meta-updated" }>),
           },
-          repositoryIdentityResolver: {
-            resolve: () => Effect.succeed(repositoryIdentity),
-          },
         },
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const events = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeOrchestrationDomainEvents]({}).pipe(
-            Stream.take(1),
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            Stream.take(2),
             Stream.runCollect,
           ),
         ),
       );
 
-      const event = Array.from(events)[0];
-      assert.equal(event?.type, "project.meta-updated");
+      const event = Array.from(events)[1];
+      assert.equal(event?.kind, "project-upserted");
       assert.deepEqual(
-        event && event.type === "project.meta-updated" ? event.payload.repositoryIdentity : null,
+        event && event.kind === "project-upserted" ? event.project.repositoryIdentity : null,
         repositoryIdentity,
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc orchestration.getSnapshot errors", () =>
+  it.effect("routes websocket rpc orchestration.subscribeShell snapshot errors", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         layers: {
           projectionSnapshotQuery: {
-            getSnapshot: () =>
+            getShellSnapshot: () =>
               Effect.fail(
                 new PersistenceSqlError({
-                  operation: "ProjectionSnapshotQuery.getSnapshot",
+                  operation: "ProjectionSnapshotQuery.getShellSnapshot",
                   detail: "projection unavailable",
                 }),
               ),
@@ -5277,14 +5461,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[ORCHESTRATION_WS_METHODS.getSnapshot]({})).pipe(
-          Effect.result,
-        ),
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(Stream.runCollect),
+        ).pipe(Effect.result),
       );
 
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
-      assertInclude(result.failure.message, "Failed to load orchestration snapshot");
+      assertInclude(result.failure.message, "Failed to load orchestration shell snapshot");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import os from "node:os";

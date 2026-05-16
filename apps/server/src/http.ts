@@ -1,6 +1,13 @@
 import Mime from "@effect/platform-node/Mime";
 import { ThreadId } from "@t3tools/contracts";
-import { Cause, Data, Effect, Exit, FileSystem, Option, Path } from "effect";
+import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import { cast } from "effect/Function";
 import {
   HttpBody,
@@ -16,12 +23,11 @@ import {
   ATTACHMENTS_ROUTE_PREFIX,
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
-} from "./attachmentPaths";
-import { resolveAttachmentPathById } from "./attachmentStore";
-import { resolveStaticDir, ServerConfig } from "./config";
-import { decodeOtlpTraceRecords } from "./observability/TraceRecord.ts";
+} from "./attachmentPaths.ts";
+import { resolveAttachmentPathById } from "./attachmentStore.ts";
+import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
-import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
+import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
@@ -29,7 +35,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   browserApiCorsHeaders,
-} from "./httpCors";
+} from "./httpCors.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 

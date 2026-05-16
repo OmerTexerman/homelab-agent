@@ -1,9 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, DEFAULT_MODEL_BY_PROVIDER, ThreadId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  DEFAULT_MODEL_BY_PROVIDER,
+  type ProviderEvent,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   buildCodexInitializeParams,
@@ -15,7 +21,7 @@ import {
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
-} from "./codexAppServerManager";
+} from "./codexAppServerManager.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 
@@ -393,7 +399,7 @@ describe("startSession", () => {
   it("emits session/startFailed when resolving cwd throws before process launch", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
+    manager.on("event", (event: ProviderEvent) => {
       events.push({
         method: event.method,
         kind: event.kind,
@@ -428,7 +434,7 @@ describe("startSession", () => {
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
+    manager.on("event", (event: ProviderEvent) => {
       events.push({
         method: event.method,
         kind: event.kind,

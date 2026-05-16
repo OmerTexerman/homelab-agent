@@ -106,7 +106,10 @@ export interface WorkspacePathsShape {
     workspaceRoot: string,
   ) => Effect.Effect<
     string,
-    WorkspaceRootNotExistsError | WorkspaceRootNotDirectoryError | LogicalWorkspaceRootError
+    | WorkspaceRootNotExistsError
+    | WorkspaceRootCreateFailedError
+    | WorkspaceRootNotDirectoryError
+    | LogicalWorkspaceRootError
   >;
 
   /**

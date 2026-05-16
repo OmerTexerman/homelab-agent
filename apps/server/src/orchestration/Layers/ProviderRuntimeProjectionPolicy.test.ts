@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EventId, RuntimeRequestId, RuntimeTaskId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  EventId,
+  ProviderDriverKind,
+  RuntimeRequestId,
+  RuntimeTaskId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import type { ProviderRuntimeEvent } from "@t3tools/contracts";
 
 import {
@@ -12,7 +19,7 @@ import {
 } from "./ProviderRuntimeProjectionPolicy.ts";
 
 const eventBase = {
-  provider: "codex",
+  provider: ProviderDriverKind.make("codex"),
   threadId: ThreadId.make("thread-1"),
   createdAt: "2026-02-23T00:00:00.000Z",
 } as const;

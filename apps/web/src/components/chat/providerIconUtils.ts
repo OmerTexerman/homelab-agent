@@ -9,12 +9,9 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("cursor")]: CursorIcon,
 };
 
-function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
-  value: ProviderDriverKind;
-  label: string;
-  available: true;
-  pickerSidebarBadge?: "new" | "soon";
-} {
+function isAvailableProviderOption(
+  option: (typeof PROVIDER_OPTIONS)[number],
+): option is (typeof PROVIDER_OPTIONS)[number] & { available: true } {
   return option.available;
 }
 

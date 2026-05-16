@@ -1,6 +1,13 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
-import { Cache, Duration, Effect, Exit, Layer } from "effect";
-import { detectGitHostingProviderFromRemoteUrl, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import * as Cache from "effect/Cache";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import {
+  detectSourceControlProviderFromGitRemoteUrl,
+  normalizeGitRemoteUrl,
+} from "@t3tools/shared/git";
 import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 import { runProcess } from "../../processRunner.ts";
@@ -45,7 +52,7 @@ function buildRepositoryIdentity(input: {
   readonly remoteUrl: string;
 }): RepositoryIdentity {
   const canonicalKey = normalizeGitRemoteUrl(input.remoteUrl);
-  const hostingProvider = detectGitHostingProviderFromRemoteUrl(input.remoteUrl);
+  const hostingProvider = detectSourceControlProviderFromGitRemoteUrl(input.remoteUrl);
   const repositoryPath = canonicalKey.split("/").slice(1).join("/");
   const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
   const [owner] = repositoryPathSegments;

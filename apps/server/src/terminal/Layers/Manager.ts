@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalDateInEffect:off anyUnknownInErrorContext:off globalErrorInEffectFailure:off effectFnImplicitAny:off missingEffectContext:off
 import path from "node:path";
 
 import {
@@ -7,28 +8,26 @@ import {
   type TerminalSessionStatus,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
-import {
-  Effect,
-  Encoding,
-  Equal,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  Option,
-  Schema,
-  Scope,
-  Semaphore,
-  SynchronizedRef,
-} from "effect";
+import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
+import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import { ServerConfig } from "../../config";
+import { ServerConfig } from "../../config.ts";
 import {
   increment,
   terminalRestartsTotal,
   terminalSessionsTotal,
-} from "../../observability/Metrics";
-import { runProcess } from "../../processRunner";
+} from "../../observability/Metrics.ts";
+import { runProcess } from "../../processRunner.ts";
 import {
   TerminalCwdError,
   TerminalHistoryError,
@@ -36,21 +35,21 @@ import {
   TerminalNotRunningError,
   TerminalSessionLookupError,
   type TerminalManagerShape,
-} from "../Services/Manager";
-import { ThreadRuntime, type ThreadRuntimeShape } from "../../runtime/Services/ThreadRuntime";
-import { resolveRuntimeTerminalStartContext } from "./RuntimeTerminalContext";
+} from "../Services/Manager.ts";
+import { ThreadRuntime, type ThreadRuntimeShape } from "../../runtime/Services/ThreadRuntime.ts";
+import { resolveRuntimeTerminalStartContext } from "./RuntimeTerminalContext.ts";
 import {
   appendTerminalSessionOutput,
   capTerminalHistory,
   snapshotTerminalSession,
-} from "./TerminalSession";
+} from "./TerminalSession.ts";
 import {
   PtyAdapter,
   PtySpawnError,
   type PtyAdapterShape,
   type PtyExitEvent,
   type PtyProcess,
-} from "../Services/PTY";
+} from "../Services/PTY.ts";
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;

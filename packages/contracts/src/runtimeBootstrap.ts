@@ -1,6 +1,6 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
-import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const RuntimeBootstrapMutationKind = Schema.Literals([
   "apt-package",

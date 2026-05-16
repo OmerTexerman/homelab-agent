@@ -5,7 +5,7 @@ import {
   isLogicalProjectWorkspaceRoot,
   parseLogicalProjectWorkspacePath,
   parseLogicalProjectWorkspaceRoot,
-} from "./workspace";
+} from "./workspace.ts";
 
 describe("workspace logical project helpers", () => {
   it("parses a logical project root", () => {

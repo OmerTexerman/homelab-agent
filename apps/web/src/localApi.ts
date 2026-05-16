@@ -29,9 +29,9 @@ let cachedApi: LocalApi | undefined;
 export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
   return {
     dialogs: {
-      pickFolder: async () => {
+      pickFolder: async (options) => {
         if (!window.desktopBridge) return null;
-        return window.desktopBridge.pickFolder();
+        return window.desktopBridge.pickFolder(options);
       },
       confirm: async (message) => {
         if (window.desktopBridge) {
@@ -112,11 +112,20 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
     server: {
       getConfig: rpcClient.server.getConfig,
       refreshProviders: rpcClient.server.refreshProviders,
+      updateProvider: rpcClient.server.updateProvider,
       upsertKeybinding: rpcClient.server.upsertKeybinding,
+      removeKeybinding: rpcClient.server.removeKeybinding,
       getSettings: rpcClient.server.getSettings,
+      discoverSourceControl: rpcClient.server.discoverSourceControl,
+      getTraceDiagnostics: rpcClient.server.getTraceDiagnostics,
+      getProcessDiagnostics: rpcClient.server.getProcessDiagnostics,
+      getProcessResourceHistory: rpcClient.server.getProcessResourceHistory,
+      signalProcess: rpcClient.server.signalProcess,
       listHomelabSecrets: rpcClient.server.listHomelabSecrets,
       upsertHomelabSecret: rpcClient.server.upsertHomelabSecret,
-      deleteHomelabSecret: rpcClient.server.deleteHomelabSecret,
+      deleteHomelabSecret: async (input) => {
+        await rpcClient.server.deleteHomelabSecret(input);
+      },
       updateSettings: rpcClient.server.updateSettings,
     },
   };

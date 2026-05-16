@@ -1,122 +1,177 @@
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
 import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
-import type { ScopedProjectRef } from "@t3tools/contracts";
-import type { EnvironmentId } from "@t3tools/contracts";
-import type { Project, SidebarThreadSummary } from "./types";
+import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import { normalizeProjectPathForComparison } from "./lib/projectPaths";
+import type { Project } from "./types";
 
-export type LogicalProjectEnvironmentPresence = "local-only" | "remote-only" | "mixed";
+export interface ProjectGroupingSettings {
+  sidebarProjectGroupingMode: SidebarProjectGroupingMode;
+  sidebarProjectGroupingOverrides: Record<string, SidebarProjectGroupingMode>;
+}
 
-export type LogicalProjectSnapshot = Project & {
-  projectKey: string;
-  environmentPresence: LogicalProjectEnvironmentPresence;
-  memberProjectRefs: readonly ScopedProjectRef[];
-  remoteEnvironmentLabels: readonly string[];
-};
+export type ProjectGroupingMode = SidebarProjectGroupingMode;
+
+export function selectProjectGroupingSettings(settings: UnifiedSettings): ProjectGroupingSettings {
+  return {
+    sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
+    sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
+  };
+}
+
+function uniqueNonEmptyValues(values: ReadonlyArray<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
+function deriveRepositoryRelativeProjectPath(
+  project: Pick<Project, "cwd" | "repositoryIdentity">,
+): string | null {
+  const rootPath = project.repositoryIdentity?.rootPath?.trim();
+  if (!rootPath) {
+    return null;
+  }
+
+  const normalizedProjectPath = normalizeProjectPathForComparison(project.cwd);
+  const normalizedRootPath = normalizeProjectPathForComparison(rootPath);
+  if (normalizedProjectPath.length === 0 || normalizedRootPath.length === 0) {
+    return null;
+  }
+
+  if (normalizedProjectPath === normalizedRootPath) {
+    return "";
+  }
+
+  const separator = normalizedRootPath.includes("\\") ? "\\" : "/";
+  const rootPrefix = `${normalizedRootPath}${separator}`;
+  if (!normalizedProjectPath.startsWith(rootPrefix)) {
+    return null;
+  }
+
+  return normalizedProjectPath.slice(rootPrefix.length).replaceAll("\\", "/");
+}
+
+export function derivePhysicalProjectKeyFromPath(environmentId: string, cwd: string): string {
+  return `${environmentId}:${normalizeProjectPathForComparison(cwd)}`;
+}
+
+export function derivePhysicalProjectKey(project: Pick<Project, "environmentId" | "cwd">): string {
+  return derivePhysicalProjectKeyFromPath(project.environmentId, project.cwd);
+}
+
+export function deriveProjectGroupingOverrideKey(
+  project: Pick<Project, "environmentId" | "cwd">,
+): string {
+  return derivePhysicalProjectKey(project);
+}
+
+// Key under which a project's manual sort order (projectOrder) is stored.
+// Must stay aligned with the writer side in `uiStateStore.syncProjects` and
+// the drag handlers in `Sidebar` so readers and writers agree.
+export function getProjectOrderKey(project: Pick<Project, "environmentId" | "cwd">): string {
+  return derivePhysicalProjectKey(project);
+}
+
+export function resolveProjectGroupingMode(
+  project: Pick<Project, "environmentId" | "cwd">,
+  settings: ProjectGroupingSettings,
+): SidebarProjectGroupingMode {
+  return (
+    settings.sidebarProjectGroupingOverrides?.[deriveProjectGroupingOverrideKey(project)] ??
+    settings.sidebarProjectGroupingMode
+  );
+}
+
+function deriveRepositoryScopedKey(
+  project: Pick<Project, "cwd" | "repositoryIdentity">,
+  groupingMode: SidebarProjectGroupingMode,
+): string | null {
+  const canonicalKey = project.repositoryIdentity?.canonicalKey;
+  if (!canonicalKey) {
+    return null;
+  }
+
+  if (groupingMode === "repository") {
+    return canonicalKey;
+  }
+
+  const relativeProjectPath = deriveRepositoryRelativeProjectPath(project);
+  if (relativeProjectPath === null) {
+    return canonicalKey;
+  }
+
+  return relativeProjectPath.length === 0
+    ? canonicalKey
+    : `${canonicalKey}::${relativeProjectPath}`;
+}
 
 export function deriveLogicalProjectKey(
-  project: Pick<Project, "environmentId" | "id" | "repositoryIdentity" | "cwd">,
+  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity">,
+  options?: {
+    groupingMode?: SidebarProjectGroupingMode;
+  },
 ): string {
   if (isLogicalProjectWorkspaceRoot(project.cwd)) {
     return scopedProjectKey(scopeProjectRef(project.environmentId, project.id));
   }
+
+  const groupingMode = options?.groupingMode ?? "repository";
+  if (groupingMode === "separate") {
+    return derivePhysicalProjectKey(project);
+  }
+
   return (
-    project.repositoryIdentity?.canonicalKey ??
+    deriveRepositoryScopedKey(project, groupingMode) ??
+    derivePhysicalProjectKey(project) ??
     scopedProjectKey(scopeProjectRef(project.environmentId, project.id))
   );
 }
 
+export function deriveLogicalProjectKeyFromSettings(
+  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity">,
+  settings: ProjectGroupingSettings,
+): string {
+  return deriveLogicalProjectKey(project, {
+    groupingMode: resolveProjectGroupingMode(project, settings),
+  });
+}
+
 export function deriveLogicalProjectKeyFromRef(
   projectRef: ScopedProjectRef,
-  project: Pick<Project, "repositoryIdentity" | "cwd"> | null | undefined,
+  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity"> | null | undefined,
+  options?: {
+    groupingMode?: SidebarProjectGroupingMode;
+  },
 ): string {
-  if (project?.cwd && isLogicalProjectWorkspaceRoot(project.cwd)) {
-    return scopedProjectKey(projectRef);
-  }
-  return project?.repositoryIdentity?.canonicalKey ?? scopedProjectKey(projectRef);
+  return project ? deriveLogicalProjectKey(project, options) : scopedProjectKey(projectRef);
 }
 
-export function buildPhysicalToLogicalProjectKey(
-  projects: readonly Project[],
-): ReadonlyMap<string, string> {
-  const mapping = new Map<string, string>();
-  for (const project of projects) {
-    const physicalKey = scopedProjectKey(scopeProjectRef(project.environmentId, project.id));
-    mapping.set(physicalKey, deriveLogicalProjectKey(project));
-  }
-  return mapping;
-}
-
-export function buildLogicalProjectSnapshots(input: {
-  readonly projects: readonly Project[];
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly remoteEnvironmentLabel: (project: Project) => string;
-}): LogicalProjectSnapshot[] {
-  const groupedMembers = new Map<string, Project[]>();
-  for (const project of input.projects) {
-    const logicalKey = deriveLogicalProjectKey(project);
-    const existing = groupedMembers.get(logicalKey);
-    if (existing) {
-      existing.push(project);
-    } else {
-      groupedMembers.set(logicalKey, [project]);
-    }
+export function deriveProjectGroupLabel(input: {
+  representative: Pick<Project, "name" | "repositoryIdentity">;
+  members: ReadonlyArray<Pick<Project, "name" | "repositoryIdentity">>;
+}): string {
+  const sharedDisplayNames = uniqueNonEmptyValues(
+    input.members.map((member) => member.repositoryIdentity?.displayName),
+  );
+  if (sharedDisplayNames.length === 1) {
+    return sharedDisplayNames[0]!;
   }
 
-  const result: LogicalProjectSnapshot[] = [];
-  const seen = new Set<string>();
-  for (const project of input.projects) {
-    const logicalKey = deriveLogicalProjectKey(project);
-    if (seen.has(logicalKey)) continue;
-    seen.add(logicalKey);
-
-    const members = groupedMembers.get(logicalKey) ?? [];
-    const representative =
-      (input.primaryEnvironmentId
-        ? members.find((member) => member.environmentId === input.primaryEnvironmentId)
-        : undefined) ?? members[0];
-    if (!representative) continue;
-
-    const hasLocal =
-      input.primaryEnvironmentId !== null &&
-      members.some((member) => member.environmentId === input.primaryEnvironmentId);
-    const hasRemote =
-      input.primaryEnvironmentId !== null
-        ? members.some((member) => member.environmentId !== input.primaryEnvironmentId)
-        : false;
-
-    result.push({
-      ...representative,
-      projectKey: logicalKey,
-      environmentPresence:
-        hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",
-      memberProjectRefs: members.map((member) => scopeProjectRef(member.environmentId, member.id)),
-      remoteEnvironmentLabels: members
-        .filter(
-          (member) =>
-            input.primaryEnvironmentId !== null &&
-            member.environmentId !== input.primaryEnvironmentId,
-        )
-        .map(input.remoteEnvironmentLabel),
-    });
+  const sharedRepositoryNames = uniqueNonEmptyValues(
+    input.members.map((member) => member.repositoryIdentity?.name),
+  );
+  if (sharedRepositoryNames.length === 1) {
+    return sharedRepositoryNames[0]!;
   }
 
-  return result;
-}
-
-export function groupThreadsByLogicalProjectKey(
-  threads: readonly SidebarThreadSummary[],
-  physicalToLogicalKey: ReadonlyMap<string, string>,
-): ReadonlyMap<string, SidebarThreadSummary[]> {
-  const next = new Map<string, SidebarThreadSummary[]>();
-  for (const thread of threads) {
-    const physicalKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-    const logicalKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-    const existing = next.get(logicalKey);
-    if (existing) {
-      existing.push(thread);
-    } else {
-      next.set(logicalKey, [thread]);
-    }
-  }
-  return next;
+  return input.representative.name;
 }

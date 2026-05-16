@@ -6,13 +6,15 @@ import {
   AuthRevokePairingLinkInput,
   type AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
-import { DateTime, Effect, Schema } from "effect";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { AuthError, ServerAuth } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
-import { browserApiCorsHeaders } from "../httpCors";
+import { browserApiCorsHeaders } from "../httpCors.ts";
 
 export const respondToAuthError = (error: AuthError) =>
   Effect.gen(function* () {

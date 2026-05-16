@@ -354,45 +354,30 @@ describe("resolveInitialServerAuthGateState", () => {
   });
 
   it("surfaces a friendly error message when an invalid pairing token is submitted", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        sessionResponse({
-          authenticated: false,
-          auth: {
-            policy: "loopback-browser",
-            bootstrapMethods: ["one-time-token"],
-            sessionMethods: ["browser-session-cookie"],
-            sessionCookieName: "t3_session",
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse(
-          {
-            error: "Invalid bootstrap credential.",
-          },
-          { status: 401 },
-        ),
-      );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: "Invalid bootstrap credential.",
+        },
+        {
+          status: 401,
+        },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
-    installTestBrowser("http://localhost/");
 
-    const { resolveInitialServerAuthGateState, submitServerAuthCredential } =
-      await import("./environments/primary");
+    const { submitServerAuthCredential } = await import("./environments/primary");
 
-    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
-      status: "requires-auth",
-      auth: {
-        policy: "loopback-browser",
-        bootstrapMethods: ["one-time-token"],
-        sessionMethods: ["browser-session-cookie"],
-        sessionCookieName: "t3_session",
+    await expect(submitServerAuthCredential("bad-token")).rejects.toThrow(
+      "Invalid pairing token. Check the token and try again.",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/bootstrap", {
+      body: JSON.stringify({ credential: "bad-token" }),
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
       },
-    });
-    await expect(submitServerAuthCredential("expired-token")).rejects.toMatchObject({
-      message: "Invalid pairing token. Check the token and try again.",
-      status: 401,
+      method: "POST",
     });
   });
 
@@ -467,7 +452,7 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(fetchMock.mock.calls[3]?.[0]).toBe("http://localhost:3773/api/auth/session");
   });
 
-  it("revalidates the server session state after a previous authenticated result", async () => {
+  it("memoizes the authenticated gate state after the first successful read", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -502,15 +487,9 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
-      status: "requires-auth",
-      auth: {
-        policy: "loopback-browser",
-        bootstrapMethods: ["one-time-token"],
-        sessionMethods: ["browser-session-cookie"],
-        sessionCookieName: "t3_session",
-      },
+      status: "authenticated",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates a pairing credential from the authenticated auth endpoint", async () => {
@@ -526,20 +505,14 @@ describe("resolveInitialServerAuthGateState", () => {
 
     const { createServerPairingCredential } = await import("./environments/primary");
 
-    await expect(
-      createServerPairingCredential({
-        label: "Julius iPhone",
-        role: "owner",
-        ttlMinutes: 1440,
-      }),
-    ).resolves.toEqual({
+    await expect(createServerPairingCredential("Julius iPhone")).resolves.toEqual({
       id: "pairing-link-1",
       credential: "pairing-token",
       label: "Julius iPhone",
       expiresAt: "2026-04-05T00:00:00.000Z",
     });
     expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/pairing-token", {
-      body: JSON.stringify({ label: "Julius iPhone", role: "owner", ttlMinutes: 1440 }),
+      body: JSON.stringify({ label: "Julius iPhone" }),
       credentials: "include",
       headers: {
         "content-type": "application/json",

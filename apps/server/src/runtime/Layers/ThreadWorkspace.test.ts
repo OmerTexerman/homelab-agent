@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +7,14 @@ import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, expect, afterAll } from "@effect/vitest";
-import { Effect, Layer, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
+import { layer as ProcessRunnerLive } from "../../processRunner.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "../Services/ThreadWorkspace.ts";
+import { RuntimeWorkspaceLive } from "./RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./ThreadWorkspace.ts";
 
 const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), "thread-workspace-runtime-"));
@@ -33,52 +38,76 @@ afterAll(() => {
   rmSync(runtimeRoot, { recursive: true, force: true });
 });
 
+const runtimeId = RuntimeSessionId.make("runtime-thread-workspace-test");
+const ThreadRuntimeTestLive = Layer.succeed(ThreadRuntime, {
+  ensureRuntime: () => Effect.die("unused"),
+  getRuntime: () =>
+    Effect.succeed({
+      threadId,
+      runtimeId,
+      backend: "docker" as const,
+      status: "running" as const,
+      health: "healthy" as const,
+      provider: null,
+      runtimeMode: "full-access" as const,
+      imageRef: "thread-workspace-test",
+      containerName: "thread-workspace-test",
+      containerId: "container-thread-workspace-test",
+      workspacePath: hostWorkspacePath,
+      homePath: hostHomePath,
+      cwd: hostWorkspacePath,
+      shell: shellWrapperPath,
+      env: {},
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      lastStartedAt: new Date(0).toISOString(),
+      lastStoppedAt: null,
+      lastError: null,
+    }),
+  listRuntimes: () => Effect.die("unused"),
+  startRuntime: () => Effect.die("unused"),
+  stopRuntime: () => Effect.die("unused"),
+  touchRuntime: () => Effect.die("unused"),
+  refreshRuntimeEnvironment: () => Effect.die("unused"),
+  destroyRuntime: () => Effect.die("unused"),
+  resolveExecutionContext: () =>
+    Effect.succeed({
+      threadId,
+      runtimeId,
+      backend: "docker" as const,
+      containerId: "container-thread-workspace-test",
+      workspacePath: hostWorkspacePath,
+      homePath: hostHomePath,
+      cwd: hostWorkspacePath,
+      shell: shellWrapperPath,
+      env: {},
+    }),
+  resolveLaunchContext: () =>
+    Effect.succeed({
+      execution: {
+        threadId,
+        runtimeId,
+        backend: "docker" as const,
+        containerId: "container-thread-workspace-test",
+        workspacePath: hostWorkspacePath,
+        homePath: hostHomePath,
+        cwd: hostWorkspacePath,
+        shell: shellWrapperPath,
+        env: {},
+      },
+      hostRuntimePath: runtimeRoot,
+      hostWorkspacePath,
+      hostHomePath,
+      hostBinDir,
+      shellWrapperPath,
+    }),
+  streamEvents: Stream.empty,
+});
+
 const TestLayer = ThreadWorkspaceLive.pipe(
   Layer.provideMerge(NodeServices.layer),
-  Layer.provide(
-    Layer.succeed(ThreadRuntime, {
-      ensureRuntime: () => Effect.die("unused"),
-      getRuntime: () => Effect.die("unused"),
-      listRuntimes: () => Effect.die("unused"),
-      startRuntime: () => Effect.die("unused"),
-      stopRuntime: () => Effect.die("unused"),
-      touchRuntime: () => Effect.die("unused"),
-      refreshRuntimeEnvironment: () => Effect.die("unused"),
-      destroyRuntime: () => Effect.die("unused"),
-      resolveExecutionContext: () =>
-        Effect.succeed({
-          threadId,
-          runtimeId: RuntimeSessionId.make("runtime-thread-workspace-test"),
-          backend: "docker" as const,
-          containerId: "container-thread-workspace-test",
-          workspacePath: hostWorkspacePath,
-          homePath: hostHomePath,
-          cwd: hostWorkspacePath,
-          shell: shellWrapperPath,
-          env: {},
-        }),
-      resolveLaunchContext: () =>
-        Effect.succeed({
-          execution: {
-            threadId,
-            runtimeId: RuntimeSessionId.make("runtime-thread-workspace-test"),
-            backend: "docker" as const,
-            containerId: "container-thread-workspace-test",
-            workspacePath: hostWorkspacePath,
-            homePath: hostHomePath,
-            cwd: hostWorkspacePath,
-            shell: shellWrapperPath,
-            env: {},
-          },
-          hostRuntimePath: runtimeRoot,
-          hostWorkspacePath,
-          hostHomePath,
-          hostBinDir,
-          shellWrapperPath,
-        }),
-      streamEvents: Stream.empty,
-    }),
-  ),
+  Layer.provide(ProcessRunnerLive),
+  Layer.provide(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeTestLive))),
 );
 
 it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {

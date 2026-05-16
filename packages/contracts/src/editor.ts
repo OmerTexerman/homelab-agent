@@ -57,3 +57,8 @@ export class ExternalLauncherError extends Schema.TaggedErrorClass<ExternalLaunc
     cause: Schema.optional(Schema.Defect),
   },
 ) {}
+
+export const OpenInEditorInput = LaunchEditorInput;
+export type OpenInEditorInput = LaunchEditorInput;
+export const OpenError = ExternalLauncherError;
+export type OpenError = ExternalLauncherError;

@@ -1,9 +1,4 @@
-import {
-  scopedProjectKey,
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 
 import { markPromotedDraftThreadsByRef, useComposerDraftStore } from "./composerDraftStore";
 import {
@@ -13,6 +8,8 @@ import {
   useStore,
 } from "./store";
 import { collectActiveTerminalThreadIds } from "./lib/terminalStateCleanup";
+import { getClientSettings } from "./hooks/useSettings";
+import { deriveLogicalProjectKeyFromSettings, derivePhysicalProjectKey } from "./logicalProject";
 import { useTerminalStateStore } from "./terminalStateStore";
 import { useThreadSelectionStore } from "./threadSelectionStore";
 import { useUiStateStore } from "./uiStateStore";
@@ -21,13 +18,15 @@ import { useWorkspacePanelStateStore } from "./workspacePanelStateStore";
 export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.getState()) {
   const projects = selectProjectsAcrossEnvironments(storeState);
   const threads = selectThreadsAcrossEnvironments(storeState);
+  const clientSettings = getClientSettings();
   const activeServerThreadKeys = threads.map((thread) =>
     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
   );
 
   useUiStateStore.getState().syncProjects(
     projects.map((project) => ({
-      key: scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),
+      key: derivePhysicalProjectKey(project),
+      logicalKey: deriveLogicalProjectKeyFromSettings(project, clientSettings),
       cwd: project.cwd,
     })),
   );

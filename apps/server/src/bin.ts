@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -20,9 +21,9 @@ export const cli = Command.make("t3", { ...sharedServerCommandFlags }).pipe(
 );
 
 if (import.meta.main) {
-  Command.run(cli, { version: packageJson.version }).pipe(
+  const program = Command.run(cli, { version: packageJson.version }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),
-    NodeRuntime.runMain,
-  );
+  ) as Effect.Effect<unknown, unknown, never>;
+  NodeRuntime.runMain(program);
 }

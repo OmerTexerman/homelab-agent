@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off
 import { describe, expect, it } from "vitest";
 import {
   MessageId,
@@ -60,7 +61,7 @@ const readModel: OrchestrationReadModel = {
       title: "Project Deleted",
       workspaceRoot: "/tmp/project-deleted",
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       scripts: [],
@@ -121,7 +122,7 @@ const readModel: OrchestrationReadModel = {
       projectId: ProjectId.make("project-a"),
       title: "Thread Deleted",
       modelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -266,7 +267,7 @@ describe("commandInvariants", () => {
             projectId: ProjectId.make("project-deleted"),
             title: "new",
             modelSelection: {
-              provider: "codex",
+              instanceId: ProviderInstanceId.make("codex"),
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -290,7 +291,7 @@ describe("commandInvariants", () => {
           title: "revived",
           workspaceRoot: "/tmp/project-deleted",
           defaultModelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           createdAt: now,
@@ -359,7 +360,7 @@ describe("commandInvariants", () => {
           projectId: ProjectId.make("project-a"),
           title: "revived",
           modelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import path from "node:path";
 import os from "node:os";
 

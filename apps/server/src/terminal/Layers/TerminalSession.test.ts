@@ -7,7 +7,7 @@ import {
   snapshotTerminalSession,
   type TerminalHistoryState,
   type TerminalSnapshotState,
-} from "./TerminalSession";
+} from "./TerminalSession.ts";
 
 describe("capTerminalHistory", () => {
   it("keeps the newest lines and preserves trailing newlines", () => {

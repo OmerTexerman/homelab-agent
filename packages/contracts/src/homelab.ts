@@ -1,6 +1,6 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
-import { CommandId, EventId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { CommandId, EventId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const makeHomelabId = <Brand extends string>(brand: Brand) =>
   TrimmedNonEmptyString.pipe(Schema.brand(brand));

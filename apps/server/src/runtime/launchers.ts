@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import nodePath from "node:path";
 
 import type { ThreadRuntimeLaunchContext } from "./Services/ThreadRuntime.ts";

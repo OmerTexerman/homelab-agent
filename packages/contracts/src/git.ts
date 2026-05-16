@@ -316,6 +316,41 @@ export const VcsPullResult = Schema.Struct({
 });
 export type VcsPullResult = typeof VcsPullResult.Type;
 
+/**
+ * Legacy Git-named contract aliases retained for fork callers that have not
+ * completed the upstream VCS naming migration.
+ */
+export const GitStatusInput = VcsStatusInput;
+export type GitStatusInput = VcsStatusInput;
+export const GitStatusResult = VcsStatusResult;
+export type GitStatusResult = VcsStatusResult;
+export const GitStatusStreamEvent = VcsStatusStreamEvent;
+export type GitStatusStreamEvent = VcsStatusStreamEvent;
+export const GitPullInput = VcsPullInput;
+export type GitPullInput = VcsPullInput;
+export const GitPullResult = VcsPullResult;
+export type GitPullResult = VcsPullResult;
+export const GitListBranchesInput = VcsListRefsInput;
+export type GitListBranchesInput = VcsListRefsInput;
+export const GitListBranchesResult = VcsListRefsResult;
+export type GitListBranchesResult = VcsListRefsResult;
+export const GitCreateWorktreeInput = VcsCreateWorktreeInput;
+export type GitCreateWorktreeInput = VcsCreateWorktreeInput;
+export const GitCreateWorktreeResult = VcsCreateWorktreeResult;
+export type GitCreateWorktreeResult = VcsCreateWorktreeResult;
+export const GitRemoveWorktreeInput = VcsRemoveWorktreeInput;
+export type GitRemoveWorktreeInput = VcsRemoveWorktreeInput;
+export const GitCreateBranchInput = VcsCreateRefInput;
+export type GitCreateBranchInput = VcsCreateRefInput;
+export const GitCreateBranchResult = VcsCreateRefResult;
+export type GitCreateBranchResult = VcsCreateRefResult;
+export const GitCheckoutInput = VcsSwitchRefInput;
+export type GitCheckoutInput = VcsSwitchRefInput;
+export const GitCheckoutResult = VcsSwitchRefResult;
+export type GitCheckoutResult = VcsSwitchRefResult;
+export const GitInitInput = VcsInitInput;
+export type GitInitInput = VcsInitInput;
+
 // RPC / domain errors
 export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()("GitCommandError", {
   operation: Schema.String,

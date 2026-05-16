@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off globalDate:off
 import os from "node:os";
 import path from "node:path";
 

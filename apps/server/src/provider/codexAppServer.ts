@@ -1,8 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { ServerProviderSkill } from "@t3tools/contracts";
-import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount";
-import { expandHomePath } from "../pathExpansion";
+import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 
 interface JsonRpcProbeResponse {
   readonly id?: unknown;

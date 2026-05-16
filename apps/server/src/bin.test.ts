@@ -1,4 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off - NodeHttpServer.layer takes `NodeHttp.createServer` as arg
+// @effect-diagnostics nodeBuiltinImport:off missingEffectContext:off anyUnknownInErrorContext:off
 import * as NodeHttp from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -139,7 +139,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
         }
         yield* persistServerRuntimeState({
           path: config.serverRuntimeStatePath,
-          state: yield* makePersistedServerRuntimeState({
+          state: makePersistedServerRuntimeState({
             config,
             port: address.port,
           }),

@@ -1,6 +1,6 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
-import { PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { PositiveInt, RuntimeSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const THREAD_WORKSPACE_SEARCH_MAX_LIMIT = 2_000;
 const THREAD_WORKSPACE_PATH_MAX_LENGTH = 1_024;
@@ -13,6 +13,7 @@ const ThreadWorkspaceEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ThreadWorkspaceEntriesInput = Schema.Struct({
   threadId: ThreadId,
+  runtimeId: Schema.optional(RuntimeSessionId),
   query: ThreadWorkspaceSearchQuery,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(THREAD_WORKSPACE_SEARCH_MAX_LIMIT)),
   basePath: Schema.optional(ThreadWorkspacePath),
@@ -37,6 +38,7 @@ export type ThreadWorkspaceEntriesResult = typeof ThreadWorkspaceEntriesResult.T
 
 export const ThreadWorkspaceReadFileInput = Schema.Struct({
   threadId: ThreadId,
+  runtimeId: Schema.optional(RuntimeSessionId),
   path: ThreadWorkspacePath,
 });
 export type ThreadWorkspaceReadFileInput = typeof ThreadWorkspaceReadFileInput.Type;
@@ -53,6 +55,7 @@ export type ThreadWorkspaceReadFileResult = typeof ThreadWorkspaceReadFileResult
 
 export const ThreadWorkspaceWriteFileInput = Schema.Struct({
   threadId: ThreadId,
+  runtimeId: Schema.optional(RuntimeSessionId),
   path: ThreadWorkspacePath,
   contents: Schema.String,
 });

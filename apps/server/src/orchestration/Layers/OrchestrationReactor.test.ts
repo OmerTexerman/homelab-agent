@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off
 import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 

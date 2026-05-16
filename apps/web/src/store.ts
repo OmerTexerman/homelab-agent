@@ -1186,17 +1186,33 @@ function applyEnvironmentOrchestrationEvent(
         environmentId,
       );
       const existingProjectId =
-        state.projectIds.find((projectId) => projectId === event.payload.projectId) ?? null;
+        state.projectIds.find(
+          (projectId) =>
+            projectId === event.payload.projectId ||
+            state.projectById[projectId]?.cwd === event.payload.workspaceRoot,
+        ) ?? null;
       let projectById = state.projectById;
       let projectIds = state.projectIds;
-      projectById = {
-        ...state.projectById,
-        [nextProject.id]: nextProject,
-      };
-      projectIds =
-        existingProjectId === null && !state.projectIds.includes(nextProject.id)
-          ? [...state.projectIds, nextProject.id]
-          : state.projectIds;
+
+      if (existingProjectId !== null && existingProjectId !== nextProject.id) {
+        const { [existingProjectId]: _removedProject, ...restProjectById } = state.projectById;
+        projectById = {
+          ...restProjectById,
+          [nextProject.id]: nextProject,
+        };
+        projectIds = state.projectIds.map((projectId) =>
+          projectId === existingProjectId ? nextProject.id : projectId,
+        );
+      } else {
+        projectById = {
+          ...state.projectById,
+          [nextProject.id]: nextProject,
+        };
+        projectIds =
+          existingProjectId === null && !state.projectIds.includes(nextProject.id)
+            ? [...state.projectIds, nextProject.id]
+            : state.projectIds;
+      }
 
       return {
         ...state,
