@@ -1,5 +1,7 @@
 FROM ubuntu:24.04
 
+ARG CODEX_CLI_VERSION=0.130.0
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     > /etc/apt/sources.list.d/nodesource.list \
   && apt-get update && apt-get install -y --no-install-recommends \
   nodejs \
-  && npm install -g @anthropic-ai/claude-code @openai/codex \
+  && npm install -g @anthropic-ai/claude-code @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \
   && rm -rf /var/lib/apt/lists/*
 

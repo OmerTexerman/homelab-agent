@@ -28,6 +28,7 @@ interface FakeDockerContainer {
   image: string;
   workdir: string;
   mounts: FakeDockerMount[];
+  labels: Record<string, string>;
   running: boolean;
 }
 
@@ -46,6 +47,7 @@ class FakeDockerRunner {
   readonly calls: string[][] = [];
   readonly containers = new Map<string, FakeDockerContainer>();
   readonly images = new Set<string>();
+  readonly imageLabels = new Map<string, Record<string, string>>();
   private nextId = 1;
 
   run = (args: ReadonlyArray<string>) =>
@@ -73,6 +75,7 @@ class FakeDockerRunner {
               Config: {
                 Image: container.image,
                 WorkingDir: container.workdir,
+                Labels: container.labels,
               },
               Mounts: container.mounts.map((mount) => ({
                 Source: mount.source,
@@ -106,6 +109,7 @@ class FakeDockerRunner {
           return okResult({ code: 1, stderr: "missing image tag" });
         }
         this.images.add(imageRef);
+        this.imageLabels.set(imageRef, readDockerBuildLabels(input));
         return okResult({ stdout: `Successfully built ${imageRef}\n` });
       }
 
@@ -177,6 +181,7 @@ class FakeDockerRunner {
           image,
           workdir,
           mounts,
+          labels: Object.assign({}, this.imageLabels.get(image)),
           running: true,
         });
         return okResult({ stdout: `${id}\n` });
@@ -224,6 +229,17 @@ function findRunCall(
   calls: ReadonlyArray<ReadonlyArray<string>>,
 ): ReadonlyArray<string> | undefined {
   return calls.find((call) => call[0] === "run");
+}
+
+function readDockerBuildLabels(args: ReadonlyArray<string>): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--label") continue;
+    const [name, ...valueParts] = (args[index + 1] ?? "").split("=");
+    if (!name || valueParts.length === 0) continue;
+    labels[name] = valueParts.join("=");
+  }
+  return labels;
 }
 
 const docker = new FakeDockerRunner();
@@ -301,6 +317,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;
@@ -488,6 +505,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const runtime = yield* ThreadRuntime;
       const descriptor = yield* runtime.ensureRuntime({
@@ -559,11 +577,59 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }),
   );
 
+  it.effect(
+    "recreates an existing container when the local runtime image fingerprint changes",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+        const settings = yield* ServerSettingsService;
+        const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
+        yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-image-fingerprint"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const firstStart = yield* runtime.startRuntime(descriptor.threadId);
+        yield* runtime.stopRuntime(descriptor.threadId);
+
+        const container = docker.containers.get(firstStart.containerName);
+        assert.ok(container);
+        container.labels["homelab.runtime.fingerprint"] = "stale-runtime-image";
+
+        docker.calls.length = 0;
+        const restarted = yield* runtime.startRuntime(descriptor.threadId);
+
+        assert.equal(restarted.status, "running");
+        assert.notEqual(restarted.containerId, firstStart.containerId);
+        assert.equal(
+          docker.calls.some((call) => call[0] === "rm"),
+          true,
+        );
+        assert.equal(
+          docker.calls.some((call) => call[0] === "run"),
+          true,
+        );
+        assert.equal(
+          docker.calls.some((call) => call[0] === "start"),
+          false,
+        );
+      }),
+  );
+
   it.effect("reuses a compatible stopped container instead of recreating it", () =>
     Effect.gen(function* () {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;
@@ -599,6 +665,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;

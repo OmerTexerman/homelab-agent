@@ -16,8 +16,7 @@ import {
 } from "../../pairingUrl";
 
 import { resolvePrimaryEnvironmentHttpUrl } from "./target";
-import * as Data from "effect/Data";
-import * as Predicate from "effect/Predicate";
+import { Data, Predicate } from "effect";
 
 export class BootstrapHttpError extends Data.TaggedError("BootstrapHttpError")<{
   readonly message: string;
@@ -58,7 +57,6 @@ type ServerAuthGateState =
     };
 
 let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
-let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
 
@@ -133,33 +131,12 @@ const INVALID_BOOTSTRAP_CREDENTIAL_MESSAGES = new Set([
   "Unknown bootstrap credential.",
 ]);
 
-function parseBootstrapErrorMessage(message: string): string {
-  const trimmed = message.trim();
-  if (trimmed.length === 0) {
-    return "";
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as {
-      error?: unknown;
-    };
-    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
-      return parsed.error.trim();
-    }
-  } catch {
-    // Not JSON; fall back to plain text.
-  }
-
-  return trimmed;
-}
-
 function toFriendlyBootstrapErrorMessage(status: number, message: string): string {
-  const parsedMessage = parseBootstrapErrorMessage(message);
-  if (status === 401 && INVALID_BOOTSTRAP_CREDENTIAL_MESSAGES.has(parsedMessage)) {
+  const trimmed = message.trim();
+  if (status === 401 && INVALID_BOOTSTRAP_CREDENTIAL_MESSAGES.has(trimmed)) {
     return "Invalid pairing token. Check the token and try again.";
   }
-
-  return parsedMessage;
+  return trimmed;
 }
 
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBootstrapResult> {
@@ -175,11 +152,10 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBoot
     });
 
     if (!response.ok) {
-      const rawMessage = await readErrorMessage(
-        response,
-        `Failed to bootstrap auth session (${response.status}).`,
+      const message = toFriendlyBootstrapErrorMessage(
+        response.status,
+        await readErrorMessage(response, `Failed to bootstrap auth session (${response.status}).`),
       );
-      const message = toFriendlyBootstrapErrorMessage(response.status, rawMessage);
       throw new BootstrapHttpError({
         message,
         status: response.status,
@@ -281,7 +257,6 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
     throw new Error("Enter a pairing token to continue.");
   }
 
-  resolvedAuthenticatedGateState = null;
   await exchangeBootstrapCredential(trimmedCredential);
   bootstrapPromise = null;
   stripPairingTokenFromUrl();
@@ -403,31 +378,19 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
 }
 
 export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGateState> {
-  if (resolvedAuthenticatedGateState?.status === "authenticated") {
-    return resolvedAuthenticatedGateState;
-  }
-
   if (bootstrapPromise) {
     return bootstrapPromise;
   }
 
   const nextPromise = bootstrapServerAuth();
   bootstrapPromise = nextPromise;
-  return nextPromise
-    .then((result) => {
-      if (result.status === "authenticated") {
-        resolvedAuthenticatedGateState = result;
-      }
-      return result;
-    })
-    .finally(() => {
-      if (bootstrapPromise === nextPromise) {
-        bootstrapPromise = null;
-      }
-    });
+  return nextPromise.finally(() => {
+    if (bootstrapPromise === nextPromise) {
+      bootstrapPromise = null;
+    }
+  });
 }
 
 export function __resetServerAuthBootstrapForTests() {
   bootstrapPromise = null;
-  resolvedAuthenticatedGateState = null;
 }

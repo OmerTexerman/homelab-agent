@@ -7,10 +7,16 @@ material.
 
 - [product-direction.md](./product-direction.md)
   Product model, architecture direction, and the intended shape of Homelab Agent.
+- [project-runtime-architecture.md](./project-runtime-architecture.md)
+  Shared project runtime/container design, project-local memory, queueing,
+  lifecycle, and implementation sequence.
 - [codebase.md](./codebase.md)
   Map of the active code paths and where to start reading the implementation.
 - [codebase-audit.md](./codebase-audit.md)
   Current cleanup targets, legacy residue, and simplification priorities.
+- [upstream-sync.md](./upstream-sync.md)
+  Playbook for rebasing/pulling from upstream while keeping homelab-specific
+  behavior isolated behind fork-owned modules.
 
 ## Reference
 

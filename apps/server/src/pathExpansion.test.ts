@@ -1,9 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { expandHomePath } from "./pathExpansion.ts";
+import { expandHomePath } from "./pathExpansion";
 
 describe("expandHomePath", () => {
   it("returns an empty string unchanged", () => {

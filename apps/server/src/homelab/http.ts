@@ -21,6 +21,7 @@ import { respondToAuthError } from "../auth/http.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
+import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 
 class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
@@ -382,7 +383,6 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
   "/api/homelab/promotions",
   Effect.gen(function* () {
     yield* authenticateOwnerSession;
-    const knowledgeGraph = yield* KnowledgeGraph;
     const promotion = yield* HttpServerRequest.schemaBodyJson(HomelabPromotionEnvelope).pipe(
       Effect.mapError((cause) => {
         const detail =
@@ -401,7 +401,7 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
         });
       }),
     );
-    const recorded = yield* knowledgeGraph.applyPromotion(promotion);
+    const recorded = yield* recordPromotedDiscoveries(promotion);
     return HttpServerResponse.jsonUnsafe(recorded satisfies HomelabPromotionRecorded, {
       status: 201,
     });

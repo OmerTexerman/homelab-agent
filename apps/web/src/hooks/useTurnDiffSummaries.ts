@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { inferCheckpointTurnCountByTurnId } from "../session-logic";
+import { inferCheckpointTurnCountByTurnId } from "../threadTimeline";
 import type { Thread } from "../types";
 
 export function useTurnDiffSummaries(activeThread: Thread | undefined) {

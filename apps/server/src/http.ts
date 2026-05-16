@@ -25,6 +25,11 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import {
+  browserApiCorsAllowedHeaders,
+  browserApiCorsAllowedMethods,
+  browserApiCorsHeaders,
+} from "./httpCors";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 
@@ -34,8 +39,8 @@ const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export const browserApiCorsLayer = HttpRouter.cors({
-  allowedMethods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["authorization", "b3", "traceparent", "content-type"],
+  allowedMethods: [...browserApiCorsAllowedMethods],
+  allowedHeaders: [...browserApiCorsAllowedHeaders],
   maxAge: 600,
 });
 
@@ -73,7 +78,10 @@ export const serverEnvironmentRouteLayer = HttpRouter.add(
     const descriptor = yield* Effect.service(ServerEnvironment).pipe(
       Effect.flatMap((serverEnvironment) => serverEnvironment.getDescriptor),
     );
-    return HttpServerResponse.jsonUnsafe(descriptor, { status: 200 });
+    return HttpServerResponse.jsonUnsafe(descriptor, {
+      status: 200,
+      headers: browserApiCorsHeaders,
+    });
   }),
 );
 

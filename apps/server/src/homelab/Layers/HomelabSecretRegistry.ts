@@ -11,6 +11,7 @@ import {
 import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
+import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
@@ -117,16 +118,14 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
   const statePath = path.join(stateDir, "homelab-secrets.json");
 
   const persistState = (secrets: ReadonlyArray<PersistedHomelabSecretMetadata>) => {
-    const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
     const persistedState: PersistedHomelabSecretState = { version: 1, secrets: [...secrets] };
 
-    return Effect.succeed(`${JSON.stringify(persistedState, null, 2)}\n`).pipe(
-      Effect.tap(() => fileSystem.makeDirectory(path.dirname(statePath), { recursive: true })),
-      Effect.tap((encoded) => fileSystem.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fileSystem.rename(tempPath, statePath)),
-      Effect.ensuring(
-        fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true })),
-      ),
+    return writeFileStringAtomically({
+      filePath: statePath,
+      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.mapError((cause) =>
         toRegistryError("Failed to persist homelab secret metadata.", cause),
       ),

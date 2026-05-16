@@ -56,6 +56,9 @@ import { useUiStateStore } from "~/uiStateStore";
 import { useWorkspacePanelStateStore } from "~/workspacePanelStateStore";
 import { WsTransport } from "../../rpc/wsTransport";
 import { createWsRpcClient, type WsRpcClient } from "../../rpc/wsRpcClient";
+import { coalesceOrchestrationUiEvents, EnvironmentProjectionGateway } from "./projectionGateway";
+
+export { shouldApplyProjectionEvent, shouldApplyProjectionSnapshot } from "./projectionGateway";
 
 type EnvironmentServiceState = {
   readonly queryClient: QueryClient;
@@ -66,6 +69,7 @@ type EnvironmentServiceState = {
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
 const environmentConnectionListeners = new Set<() => void>();
+const projectionGateway = new EnvironmentProjectionGateway();
 
 let activeService: EnvironmentServiceState | null = null;
 let needsProviderInvalidation = false;
@@ -128,43 +132,6 @@ function setRuntimeError(environmentId: EnvironmentId, error: unknown) {
   });
 }
 
-function coalesceOrchestrationUiEvents(
-  events: ReadonlyArray<OrchestrationEvent>,
-): OrchestrationEvent[] {
-  if (events.length < 2) {
-    return [...events];
-  }
-
-  const coalesced: OrchestrationEvent[] = [];
-  for (const event of events) {
-    const previous = coalesced.at(-1);
-    if (
-      previous?.type === "thread.message-sent" &&
-      event.type === "thread.message-sent" &&
-      previous.payload.threadId === event.payload.threadId &&
-      previous.payload.messageId === event.payload.messageId
-    ) {
-      coalesced[coalesced.length - 1] = {
-        ...event,
-        payload: {
-          ...event.payload,
-          attachments: event.payload.attachments ?? previous.payload.attachments,
-          createdAt: previous.payload.createdAt,
-          text:
-            !event.payload.streaming && event.payload.text.length > 0
-              ? event.payload.text
-              : previous.payload.text + event.payload.text,
-        },
-      };
-      continue;
-    }
-
-    coalesced.push(event);
-  }
-
-  return coalesced;
-}
-
 function reconcileSnapshotDerivedState() {
   reconcileLifecycleUiFromStore(useStore.getState());
 }
@@ -173,7 +140,12 @@ export function applyEnvironmentSnapshot(
   snapshot: OrchestrationReadModel,
   environmentId: EnvironmentId,
 ) {
+  if (!projectionGateway.shouldApplySnapshot(environmentId, snapshot)) {
+    return;
+  }
+
   useStore.getState().syncServerReadModel(snapshot, environmentId);
+  projectionGateway.markSnapshotApplied(environmentId, snapshot);
   reconcileDraftThreadsAgainstServerSnapshot({
     environmentId,
     activeProjectIds: snapshot.projects
@@ -201,12 +173,13 @@ function applyRecoveredEventBatch(
   events: ReadonlyArray<OrchestrationEvent>,
   environmentId: EnvironmentId,
 ) {
-  if (events.length === 0) {
+  const applicableEvents = projectionGateway.filterApplicableEvents(events, environmentId);
+  if (applicableEvents.length === 0) {
     return;
   }
 
   const stateBeforeEvents = useStore.getState();
-  const deletedProjectThreadRefs = events.flatMap((event) => {
+  const deletedProjectThreadRefs = applicableEvents.flatMap((event) => {
     if (event.type !== "project.deleted") {
       return [];
     }
@@ -214,9 +187,9 @@ function applyRecoveredEventBatch(
       .filter((thread) => thread.projectId === event.payload.projectId)
       .map((thread) => scopeThreadRef(environmentId, thread.id));
   });
-  const batchEffects = deriveOrchestrationBatchEffects(events);
-  const uiEvents = coalesceOrchestrationUiEvents(events);
-  const needsProjectUiSync = events.some(
+  const batchEffects = deriveOrchestrationBatchEffects(applicableEvents);
+  const uiEvents = coalesceOrchestrationUiEvents(applicableEvents);
+  const needsProjectUiSync = applicableEvents.some(
     (event) =>
       event.type === "project.created" ||
       event.type === "project.meta-updated" ||
@@ -229,7 +202,11 @@ function applyRecoveredEventBatch(
   }
 
   useStore.getState().applyOrchestrationEvents(uiEvents, environmentId);
-  const needsThreadUiSync = events.some(
+  for (const event of applicableEvents) {
+    projectionGateway.markEventApplied(environmentId, event.sequence);
+  }
+
+  const needsThreadUiSync = applicableEvents.some(
     (event) =>
       event.type === "thread.created" ||
       event.type === "thread.deleted" ||
@@ -375,6 +352,7 @@ async function removeConnection(environmentId: EnvironmentId): Promise<boolean> 
   }
 
   environmentConnections.delete(environmentId);
+  projectionGateway.reset(environmentId);
   emitEnvironmentConnectionRegistryChange();
   await connection.dispose();
   return true;
@@ -702,6 +680,7 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
 
 export async function resetEnvironmentServiceForTests(): Promise<void> {
   stopActiveService();
+  projectionGateway.resetAll();
   await Promise.all(
     [...environmentConnections.keys()].map((environmentId) => removeConnection(environmentId)),
   );

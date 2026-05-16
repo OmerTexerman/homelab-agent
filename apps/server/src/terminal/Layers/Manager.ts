@@ -4,7 +4,6 @@ import {
   DEFAULT_TERMINAL_ID,
   ThreadId,
   type TerminalEvent,
-  type TerminalSessionSnapshot,
   type TerminalSessionStatus,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
@@ -38,12 +37,13 @@ import {
   TerminalSessionLookupError,
   type TerminalManagerShape,
 } from "../Services/Manager";
+import { ThreadRuntime, type ThreadRuntimeShape } from "../../runtime/Services/ThreadRuntime";
+import { resolveRuntimeTerminalStartContext } from "./RuntimeTerminalContext";
 import {
-  ThreadRuntime,
-  ThreadRuntimeError,
-  ThreadRuntimeNotFoundError,
-  type ThreadRuntimeShape,
-} from "../../runtime/Services/ThreadRuntime";
+  appendTerminalSessionOutput,
+  capTerminalHistory,
+  snapshotTerminalSession,
+} from "./TerminalSession";
 import {
   PtyAdapter,
   PtySpawnError,
@@ -154,21 +154,6 @@ type DrainProcessEventAction =
 interface TerminalManagerState {
   sessions: Map<string, TerminalSessionState>;
   killFibers: Map<PtyProcess, Fiber.Fiber<void, never>>;
-}
-
-function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
-  return {
-    threadId: session.threadId,
-    terminalId: session.terminalId,
-    cwd: session.cwd,
-    worktreePath: session.worktreePath,
-    status: session.status,
-    pid: session.pid,
-    history: session.history,
-    exitCode: session.exitCode,
-    exitSignal: session.exitSignal,
-    updatedAt: session.updatedAt,
-  };
 }
 
 function cleanupProcessHandles(session: TerminalSessionState): void {
@@ -416,192 +401,6 @@ const defaultSubprocessChecker = Effect.fn("terminal.defaultSubprocessChecker")(
   return yield* checkPosixSubprocessActivity(terminalPid);
 });
 
-function capHistory(history: string, maxLines: number): string {
-  if (history.length === 0) return history;
-  const hasTrailingNewline = history.endsWith("\n");
-  const lines = history.split("\n");
-  if (hasTrailingNewline) {
-    lines.pop();
-  }
-  if (lines.length <= maxLines) return history;
-  const capped = lines.slice(lines.length - maxLines).join("\n");
-  return hasTrailingNewline ? `${capped}\n` : capped;
-}
-
-function isCsiFinalByte(codePoint: number): boolean {
-  return codePoint >= 0x40 && codePoint <= 0x7e;
-}
-
-function shouldStripCsiSequence(body: string, finalByte: string): boolean {
-  if (finalByte === "n") {
-    return true;
-  }
-  if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
-    return true;
-  }
-  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
-    return true;
-  }
-  return false;
-}
-
-function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
-}
-
-function stripStringTerminator(value: string): string {
-  if (value.endsWith("\u001b\\")) {
-    return value.slice(0, -2);
-  }
-  const lastCharacter = value.at(-1);
-  if (lastCharacter === "\u0007" || lastCharacter === "\u009c") {
-    return value.slice(0, -1);
-  }
-  return value;
-}
-
-function findStringTerminatorIndex(input: string, start: number): number | null {
-  for (let index = start; index < input.length; index += 1) {
-    const codePoint = input.charCodeAt(index);
-    if (codePoint === 0x07 || codePoint === 0x9c) {
-      return index + 1;
-    }
-    if (codePoint === 0x1b && input.charCodeAt(index + 1) === 0x5c) {
-      return index + 2;
-    }
-  }
-  return null;
-}
-
-function isEscapeIntermediateByte(codePoint: number): boolean {
-  return codePoint >= 0x20 && codePoint <= 0x2f;
-}
-
-function isEscapeFinalByte(codePoint: number): boolean {
-  return codePoint >= 0x30 && codePoint <= 0x7e;
-}
-
-function findEscapeSequenceEndIndex(input: string, start: number): number | null {
-  let cursor = start;
-  while (cursor < input.length && isEscapeIntermediateByte(input.charCodeAt(cursor))) {
-    cursor += 1;
-  }
-  if (cursor >= input.length) {
-    return null;
-  }
-  return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
-}
-
-function sanitizeTerminalHistoryChunk(
-  pendingControlSequence: string,
-  data: string,
-): { visibleText: string; pendingControlSequence: string } {
-  const input = `${pendingControlSequence}${data}`;
-  let visibleText = "";
-  let index = 0;
-
-  const append = (value: string) => {
-    visibleText += value;
-  };
-
-  while (index < input.length) {
-    const codePoint = input.charCodeAt(index);
-
-    if (codePoint === 0x1b) {
-      const nextCodePoint = input.charCodeAt(index + 1);
-      if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-
-      if (nextCodePoint === 0x5b) {
-        let cursor = index + 2;
-        while (cursor < input.length) {
-          if (isCsiFinalByte(input.charCodeAt(cursor))) {
-            const sequence = input.slice(index, cursor + 1);
-            const body = input.slice(index + 2, cursor);
-            if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
-              append(sequence);
-            }
-            index = cursor + 1;
-            break;
-          }
-          cursor += 1;
-        }
-        if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
-        }
-        continue;
-      }
-
-      if (
-        nextCodePoint === 0x5d ||
-        nextCodePoint === 0x50 ||
-        nextCodePoint === 0x5e ||
-        nextCodePoint === 0x5f
-      ) {
-        const terminatorIndex = findStringTerminatorIndex(input, index + 2);
-        if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
-        }
-        const sequence = input.slice(index, terminatorIndex);
-        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
-        if (nextCodePoint !== 0x5d || !shouldStripOscSequence(content)) {
-          append(sequence);
-        }
-        index = terminatorIndex;
-        continue;
-      }
-
-      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
-      if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      append(input.slice(index, escapeSequenceEndIndex));
-      index = escapeSequenceEndIndex;
-      continue;
-    }
-
-    if (codePoint === 0x9b) {
-      let cursor = index + 1;
-      while (cursor < input.length) {
-        if (isCsiFinalByte(input.charCodeAt(cursor))) {
-          const sequence = input.slice(index, cursor + 1);
-          const body = input.slice(index + 1, cursor);
-          if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
-            append(sequence);
-          }
-          index = cursor + 1;
-          break;
-        }
-        cursor += 1;
-      }
-      if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      continue;
-    }
-
-    if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
-      const terminatorIndex = findStringTerminatorIndex(input, index + 1);
-      if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      const sequence = input.slice(index, terminatorIndex);
-      const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
-      if (codePoint !== 0x9d || !shouldStripOscSequence(content)) {
-        append(sequence);
-      }
-      index = terminatorIndex;
-      continue;
-    }
-
-    append(input[index] ?? "");
-    index += 1;
-  }
-
-  return { visibleText, pendingControlSequence: "" };
-}
-
 function legacySafeThreadId(threadId: string): string {
   return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
@@ -645,27 +444,6 @@ function createTerminalSpawnEnv(
     }
   }
   return spawnEnv;
-}
-
-function normalizedRuntimeEnv(
-  env: Record<string, string> | undefined,
-): Record<string, string> | null {
-  if (!env) return null;
-  const entries = Object.entries(env);
-  if (entries.length === 0) return null;
-  return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
-}
-
-function describeThreadRuntimeFailure(
-  error: ThreadRuntimeError | ThreadRuntimeNotFoundError,
-): string {
-  if ("message" in error && typeof error.message === "string" && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (error._tag === "ThreadRuntimeNotFoundError") {
-    return `Thread runtime not found for '${error.threadId}'.`;
-  }
-  return "Thread runtime provisioning failed.";
 }
 
 interface TerminalManagerOptions {
@@ -957,7 +735,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         const raw = yield* fileSystem
           .readFileString(nextPath)
           .pipe(Effect.mapError(toTerminalHistoryError("read", threadId, terminalId)));
-        const capped = capHistory(raw, historyLineLimit);
+        const capped = capTerminalHistory(raw, historyLineLimit);
         if (capped !== raw) {
           yield* fileSystem
             .writeFileString(nextPath, capped)
@@ -982,7 +760,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       const raw = yield* fileSystem
         .readFileString(legacyPath)
         .pipe(Effect.mapError(toTerminalHistoryError("migrate", threadId, terminalId)));
-      const capped = capHistory(raw, historyLineLimit);
+      const capped = capTerminalHistory(raw, historyLineLimit);
       yield* fileSystem
         .writeFileString(nextPath, capped)
         .pipe(Effect.mapError(toTerminalHistoryError("migrate", threadId, terminalId)));
@@ -1069,53 +847,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       }
     });
 
-    const resolveTerminalStartContext = Effect.fn("terminal.resolveTerminalStartContext")(
-      function* (input: {
-        readonly threadId: string;
-        readonly cwd: string;
-        readonly worktreePath?: string | null;
-        readonly env?: Record<string, string>;
-      }) {
-        return yield* Effect.gen(function* () {
-          const runtimeThreadId = ThreadId.make(input.threadId);
-
-          yield* threadRuntime.ensureRuntime({
-            threadId: runtimeThreadId,
-            provider: null,
-            runtimeMode: "full-access",
-            requestedCwd: input.cwd,
-          });
-          yield* threadRuntime.startRuntime(runtimeThreadId);
-          yield* threadRuntime.touchRuntime(runtimeThreadId);
-
-          const launchContext = yield* threadRuntime.resolveLaunchContext(runtimeThreadId);
-          const executionContext = launchContext.execution;
-          const runtimeEnv = normalizedRuntimeEnv({
-            ...executionContext.env,
-            ...input.env,
-          });
-          const runtimeShell = launchContext.shellWrapperPath.trim();
-
-          return {
-            cwd: executionContext.cwd,
-            spawnCwd: launchContext.hostWorkspacePath,
-            worktreePath: input.worktreePath ?? executionContext.workspacePath,
-            runtimeEnv,
-            runtimeShell: runtimeShell || launchContext.shellWrapperPath,
-          } as const;
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new TerminalCwdError({
-                cwd: input.cwd,
-                reason: "statFailed",
-                cause:
-                  cause instanceof Error ? cause : new Error(describeThreadRuntimeFailure(cause)),
-              }),
-          ),
-        );
-      },
-    );
+    const resolveTerminalStartContext = (input: {
+      readonly threadId: string;
+      readonly cwd: string;
+      readonly worktreePath?: string | null;
+      readonly env?: Record<string, string>;
+    }) => resolveRuntimeTerminalStartContext({ threadRuntime, ...input });
 
     const getSession = Effect.fn("terminal.getSession")(function* (
       threadId: string,
@@ -1210,24 +947,18 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           }
 
           if (nextEvent.type === "output") {
-            const sanitized = sanitizeTerminalHistoryChunk(
-              session.pendingHistoryControlSequence,
+            const appendResult = appendTerminalSessionOutput(
+              session,
               nextEvent.data,
+              historyLineLimit,
             );
-            session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-            if (sanitized.visibleText.length > 0) {
-              session.history = capHistory(
-                `${session.history}${sanitized.visibleText}`,
-                historyLineLimit,
-              );
-            }
             session.updatedAt = new Date().toISOString();
 
             return {
               type: "output",
               threadId: session.threadId,
               terminalId: session.terminalId,
-              history: sanitized.visibleText.length > 0 ? session.history : null,
+              history: appendResult.historyForPersist,
               data: nextEvent.data,
             } as const;
           }
@@ -1456,7 +1187,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
                 threadId: session.threadId,
                 terminalId: session.terminalId,
                 createdAt: new Date().toISOString(),
-                snapshot: snapshot(session),
+                snapshot: snapshotTerminalSession(session),
               });
             }),
           ),
@@ -1722,7 +1453,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               },
               "started",
             );
-            return snapshot(session);
+            return snapshotTerminalSession(session);
           }
 
           const liveSession = existing.value;
@@ -1788,7 +1519,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               },
               "started",
             );
-            return snapshot(liveSession);
+            return snapshotTerminalSession(liveSession);
           }
 
           if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
@@ -1798,7 +1529,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             liveSession.process.resize(targetCols, targetRows);
           }
 
-          return snapshot(liveSession);
+          return snapshotTerminalSession(liveSession);
         }),
       );
 
@@ -1953,7 +1684,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             },
             "restarted",
           );
-          return snapshot(session);
+          return snapshotTerminalSession(session);
         }),
       );
 

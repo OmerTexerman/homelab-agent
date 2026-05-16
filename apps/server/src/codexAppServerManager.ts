@@ -17,6 +17,7 @@ import {
   type ProviderTurnStartResult,
   RuntimeMode,
   ProviderInteractionMode,
+  DEFAULT_MODEL_BY_PROVIDER,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Effect, Context } from "effect";
@@ -32,6 +33,7 @@ import {
   type CodexAccountSnapshot,
 } from "./provider/codexAccount";
 import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer";
+import { expandHomePath } from "./pathExpansion";
 
 export { buildCodexInitializeParams } from "./provider/codexAppServer";
 export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount";
@@ -356,7 +358,7 @@ function buildCodexCollaborationMode(input: {
   if (input.interactionMode === undefined) {
     return undefined;
   }
-  const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
+  const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL_BY_PROVIDER.codex;
   return {
     mode: input.interactionMode,
     settings: {
@@ -468,16 +470,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const codexBinaryPath = input.binaryPath;
       const codexHomePath = input.homePath;
+      const resolvedCodexHomePath = codexHomePath ? expandHomePath(codexHomePath) : undefined;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: processCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(resolvedCodexHomePath ? { homePath: resolvedCodexHomePath } : {}),
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: processCwd,
         env: {
           ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
+          ...(resolvedCodexHomePath ? { CODEX_HOME: resolvedCodexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
@@ -1541,7 +1544,7 @@ function assertSupportedCodexCliVersion(input: {
     cwd: input.cwd,
     env: {
       ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+      ...(input.homePath ? { CODEX_HOME: expandHomePath(input.homePath) } : {}),
     },
     encoding: "utf8",
     shell: process.platform === "win32",

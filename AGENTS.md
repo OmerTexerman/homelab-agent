@@ -13,10 +13,13 @@ agents such as Codex and Claude Code.
 This fork keeps useful upstream CLI/provider integration patterns, but the
 product is no longer a repository-first coding UI. The core model is:
 
-- one isolated runtime container per thread
+- one shared project runtime/container per logical project by default
+- threads in a project normally execute in that shared runtime/container
+- isolated runtime clones for explicit containment or concurrent work
 - logical projects and threads in the sidebar, not host filesystem projects
 - shared homelab knowledge, secret brokerage, and runtime bootstrap state
-- durable promoted discoveries instead of giant static prompt files
+- searchable project-local memory plus durable promoted discoveries instead of
+  giant static prompt files
 
 ## Core Priorities
 
@@ -42,7 +45,7 @@ Long-term maintainability is a core priority.
 
 - `apps/server/src`
   Backend runtime, orchestration, providers, terminals, homelab APIs, and
-  thread container lifecycle.
+  project/thread runtime lifecycle.
 - `apps/web/src`
   Browser UI for projects, threads, chat, terminals, workspace browsing, and
   settings.
@@ -66,7 +69,8 @@ Long-term maintainability is a core priority.
 
 ## Product Model
 
-- Threads own execution.
+- Projects own the default runtime/container and project-local memory scope.
+- Threads own provider sessions and turns.
 - Shared homelab systems own durable knowledge, secret references, and runtime
   bootstrap state.
 - The browser UI is not primarily a Git client or a local editor shell.
@@ -82,6 +86,10 @@ Thread runtimes generate in-container `AGENTS.md` and `CLAUDE.md` files from:
 Keep those instruction files aligned with the actual product behavior. They
 should describe the agent as a homelab operations agent, encourage real
 research, and avoid telling the model to assume infrastructure details.
+As the shared project runtime architecture lands, those files should also
+explain that threads may share a project runtime/container, project-local memory
+is searchable through generated `.homelab` views, and global homelab promotion
+is explicit.
 
 That means explicitly steering the runtime agent toward:
 
@@ -94,8 +102,10 @@ That means explicitly steering the runtime agent toward:
 
 - `docs/README.md`
 - `docs/product-direction.md`
+- `docs/project-runtime-architecture.md`
 - `docs/codebase.md`
 - `docs/codebase-audit.md`
+- `docs/upstream-sync.md`
 
 ## Reference Repos
 

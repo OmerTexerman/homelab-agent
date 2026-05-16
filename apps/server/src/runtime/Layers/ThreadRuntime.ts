@@ -12,11 +12,11 @@ import {
   type RuntimeSessionId as RuntimeSessionIdModel,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
-import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { SessionCredentialService } from "../../auth/Services/SessionCredentialService.ts";
+import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
 import { ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
@@ -29,6 +29,36 @@ import {
   CLAUDE_RUNTIME_WRAPPER,
   SHELL_RUNTIME_WRAPPER,
 } from "../launchers.ts";
+import {
+  CONTAINER_WORKSPACE_PATH,
+  homePathForThread,
+  hostWorkspacePathForContainerPath,
+  isWithinContainerWorkspace,
+  managedWorkspacePath,
+  normalizeRequestedCwd,
+  runtimeBinDirForThread,
+  runtimeRootPath,
+} from "./ThreadRuntimePaths.ts";
+import {
+  buildRuntimeAuthSyncEntries,
+  buildRuntimeContainerPathValue,
+  buildRuntimeEnvironment,
+  buildRuntimeMountSpecs,
+  type DockerMountSpec,
+  renderSecretEnvFile,
+  renderShellInitFile,
+  type RuntimeAuthSyncEntry,
+  runtimeAccessTokenPath,
+  runtimeBashProfilePath,
+  runtimeBashRcPath,
+  runtimeCodexAuthPath,
+  runtimeHomelabBinPath,
+  runtimeProfilePath,
+  runtimeSecretEnvPath,
+  runtimeZshEnvPath,
+  type RuntimeHostBindings,
+  shQuote,
+} from "./RuntimeExecutionContext.ts";
 import {
   ThreadRuntime,
   ThreadRuntimeError,
@@ -52,22 +82,6 @@ export interface ThreadRuntimeLiveOptions {
   ) => Effect.Effect<ProcessRunResult, ThreadRuntimeError>;
 }
 
-interface DockerMountSpec {
-  readonly source: string;
-  readonly target: string;
-  readonly readOnly?: boolean;
-}
-
-interface RuntimeAuthBindings {
-  readonly codexHostAuthPath?: string;
-  readonly claudeHostAuthPath?: string;
-  readonly claudeHostAuthJsonPath?: string;
-  readonly sshAuthSockPath?: string;
-  readonly dockerSocketPath?: string;
-}
-
-interface RuntimeHostBindings extends RuntimeAuthBindings {}
-
 interface DockerContainerInspectMount {
   readonly Source?: string;
   readonly Destination?: string;
@@ -82,6 +96,7 @@ interface DockerContainerInspectResult {
   readonly Config?: {
     readonly Image?: string;
     readonly WorkingDir?: string;
+    readonly Labels?: Record<string, string> | null;
   };
   readonly Mounts?: ReadonlyArray<DockerContainerInspectMount>;
 }
@@ -95,14 +110,6 @@ interface PersistedRuntimeImageBuildState {
 interface PersistedRuntimeAccessTokenState {
   readonly version: 1;
   readonly token: string;
-}
-
-type RuntimeAuthSyncMode = "overwrite" | "if-missing";
-
-interface RuntimeAuthSyncEntry {
-  readonly sourcePath: string;
-  readonly targetPath: string;
-  readonly mode: RuntimeAuthSyncMode;
 }
 
 const ThreadRuntimeBackendSchema = Schema.Literal("docker");
@@ -161,27 +168,13 @@ const DEFAULT_RUNTIME_NETWORK = process.env.HOMELAB_AGENT_RUNTIME_NETWORK?.trim(
 const DEFAULT_CONTAINER_SHELL_PATH = process.env.HOMELAB_AGENT_RUNTIME_SHELL?.trim() || "/bin/bash";
 const DEFAULT_RUNTIME_IDLE_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_RUNTIME_IDLE_POLL_INTERVAL_MS = 60_000;
+const RUNTIME_IMAGE_FINGERPRINT_LABEL = "homelab.runtime.fingerprint";
 const CONTAINER_RUNTIME_ROOT = "/runtime";
 const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
-const CONTAINER_WORKSPACE_PATH = "/workspace";
-const CONTAINER_HOMELAB_BIN_PATH = `${CONTAINER_HOME_PATH}/.homelab/bin`;
-const CONTAINER_TOOL_BIN_PATH = "/opt/homelab/bin";
-const DEFAULT_CONTAINER_PATH = `${CONTAINER_HOMELAB_BIN_PATH}:${CONTAINER_TOOL_BIN_PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
-const RUNTIME_SECRET_ENV_BASENAME = ".homelab-runtime.env";
-const RUNTIME_ACCESS_TOKEN_BASENAME = ".homelab-runtime-token";
 const RUNTIME_SERVER_HOST_ALIAS = "host.docker.internal";
 const RUNTIME_AGENTS_FILENAME = "AGENTS.md";
 const RUNTIME_CLAUDE_FILENAME = "CLAUDE.md";
 const KEEPALIVE_COMMAND = "trap : TERM INT; while sleep 3600; do :; done";
-const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
-const CODEX_AUTH_IF_MISSING_RELATIVE_PATHS = ["config.toml", "rules"];
-const CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS = [".credentials.json"];
-const CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS = [
-  "settings.json",
-  "settings.local.json",
-  "plugins/installed_plugins.json",
-  "plugins/known_marketplaces.json",
-];
 const FORWARDED_ENV_DENYLIST = new Set([
   "_",
   "BASH_ENV",
@@ -221,131 +214,6 @@ function makeRuntimeId(threadId: ThreadIdModel): RuntimeSessionIdModel {
   return RuntimeSessionId.make(runtimeName(threadId));
 }
 
-function runtimeRootPath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(threadRuntimesDir, encodeThreadSegment(String(threadId)));
-}
-
-function runtimeBinDirForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "bin");
-}
-
-function managedWorkspacePath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "workspace");
-}
-
-function homePathForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "home");
-}
-
-function runtimeCodexAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".codex");
-}
-
-function runtimeClaudeAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude");
-}
-
-function runtimeClaudeAuthJsonPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude.json");
-}
-
-function runtimeSecretEnvPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_SECRET_ENV_BASENAME);
-}
-
-function runtimeAccessTokenPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_ACCESS_TOKEN_BASENAME);
-}
-
-function runtimeHomelabRootPath(homePath: string): string {
-  return nodePath.join(homePath, ".homelab");
-}
-
-function runtimeHomelabBinPath(homePath: string): string {
-  return nodePath.join(runtimeHomelabRootPath(homePath), "bin");
-}
-
-function runtimeBashProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".bash_profile");
-}
-
-function runtimeBashRcPath(homePath: string): string {
-  return nodePath.join(homePath, ".bashrc");
-}
-
-function runtimeProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".profile");
-}
-
-function runtimeZshEnvPath(homePath: string): string {
-  return nodePath.join(homePath, ".zshenv");
-}
-
-function normalizeRequestedCwd(
-  threadRuntimesDir: string,
-  threadId: ThreadIdModel,
-  requestedCwd: string | undefined,
-): string | undefined {
-  const normalized = requestedCwd?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const logicalProjectPath = parseLogicalProjectWorkspacePath(normalized);
-  if (logicalProjectPath) {
-    if (!logicalProjectPath.relativePath) {
-      return CONTAINER_WORKSPACE_PATH;
-    }
-    const mappedPath = nodePath.posix.normalize(
-      nodePath.posix.join(CONTAINER_WORKSPACE_PATH, logicalProjectPath.relativePath),
-    );
-    return isWithinContainerWorkspace(mappedPath) ? mappedPath : CONTAINER_WORKSPACE_PATH;
-  }
-
-  const normalizedContainerPath = nodePath.posix.normalize(normalized.replace(/\\/g, "/"));
-  const managedWorkspace = managedWorkspacePath(threadRuntimesDir, threadId);
-  const normalizedHostPath = nodePath.normalize(normalized);
-
-  if (
-    normalizedHostPath === managedWorkspace ||
-    normalizedHostPath.startsWith(`${managedWorkspace}${nodePath.sep}`)
-  ) {
-    const relativePath = nodePath.relative(managedWorkspace, normalizedHostPath);
-    return relativePath
-      ? nodePath.posix.join(CONTAINER_WORKSPACE_PATH, ...relativePath.split(nodePath.sep))
-      : CONTAINER_WORKSPACE_PATH;
-  }
-
-  if (nodePath.isAbsolute(normalized)) {
-    if (
-      normalizedContainerPath === CONTAINER_WORKSPACE_PATH ||
-      normalizedContainerPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)
-    ) {
-      return normalizedContainerPath;
-    }
-    return CONTAINER_WORKSPACE_PATH;
-  }
-
-  return nodePath.posix.join(CONTAINER_WORKSPACE_PATH, normalized.replace(/\\/g, "/"));
-}
-
-function isWithinContainerWorkspace(targetPath: string): boolean {
-  return (
-    targetPath === CONTAINER_WORKSPACE_PATH || targetPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)
-  );
-}
-
-function hostWorkspacePathForContainerPath(
-  managedWorkspace: string,
-  containerPath: string,
-): string {
-  if (containerPath === CONTAINER_WORKSPACE_PATH) {
-    return managedWorkspace;
-  }
-
-  const relativePath = nodePath.posix.relative(CONTAINER_WORKSPACE_PATH, containerPath);
-  return nodePath.join(managedWorkspace, ...relativePath.split("/"));
-}
-
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -382,94 +250,6 @@ function syncRuntimeAuthEntry(entry: RuntimeAuthSyncEntry): void {
   }
 
   copyPathSync(entry.sourcePath, entry.targetPath);
-}
-
-function addRuntimeAuthSyncEntries(
-  entries: RuntimeAuthSyncEntry[],
-  input: {
-    readonly sourceRoot: string;
-    readonly targetRoot: string;
-    readonly overwriteRelativePaths: ReadonlyArray<string>;
-    readonly ifMissingRelativePaths: ReadonlyArray<string>;
-  },
-): void {
-  for (const relativePath of input.overwriteRelativePaths) {
-    entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
-      mode: "overwrite",
-    });
-  }
-
-  for (const relativePath of input.ifMissingRelativePaths) {
-    entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
-      mode: "if-missing",
-    });
-  }
-}
-
-function buildRuntimeAuthSyncEntries(
-  runtime: ThreadRuntimeDescriptor,
-  hostBindings: RuntimeHostBindings,
-  runtimeHomePath: string,
-): ReadonlyArray<RuntimeAuthSyncEntry> {
-  const entries: RuntimeAuthSyncEntry[] = [];
-
-  if (hostBindings.codexHostAuthPath) {
-    addRuntimeAuthSyncEntries(entries, {
-      sourceRoot: hostBindings.codexHostAuthPath,
-      targetRoot: runtimeCodexAuthPath(runtimeHomePath),
-      overwriteRelativePaths: CODEX_AUTH_OVERWRITE_RELATIVE_PATHS,
-      ifMissingRelativePaths: CODEX_AUTH_IF_MISSING_RELATIVE_PATHS,
-    });
-  }
-
-  if (hostBindings.claudeHostAuthPath) {
-    addRuntimeAuthSyncEntries(entries, {
-      sourceRoot: hostBindings.claudeHostAuthPath,
-      targetRoot: runtimeClaudeAuthPath(runtimeHomePath),
-      overwriteRelativePaths: CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS,
-      ifMissingRelativePaths: CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS,
-    });
-  }
-
-  if (hostBindings.claudeHostAuthJsonPath) {
-    entries.push({
-      sourcePath: hostBindings.claudeHostAuthJsonPath,
-      targetPath: runtimeClaudeAuthJsonPath(runtimeHomePath),
-      mode: "overwrite",
-    });
-  }
-
-  return entries;
-}
-
-function buildRuntimeEnvironment(input: {
-  readonly cwd: string;
-  readonly workspacePath: string;
-  readonly homePath: string;
-  readonly threadId: ThreadIdModel;
-  readonly runtimeId: RuntimeSessionIdModel;
-  readonly materializedEnv: Readonly<Record<string, string>>;
-  readonly baseEnvironment?: Readonly<Record<string, string>>;
-  readonly containerShellPath: string;
-}): Readonly<Record<string, string>> {
-  const runtimeEnvPath = runtimeSecretEnvPath(input.homePath);
-  return {
-    BASH_ENV: runtimeEnvPath,
-    ENV: runtimeEnvPath,
-    HOME: input.homePath,
-    PWD: input.cwd,
-    SHELL: input.containerShellPath,
-    T3_THREAD_ID: String(input.threadId),
-    T3_RUNTIME_ID: String(input.runtimeId),
-    WORKSPACE: input.workspacePath,
-    ...input.materializedEnv,
-    ...input.baseEnvironment,
-    CODEX_HOME: runtimeCodexAuthPath(input.homePath),
-  };
 }
 
 function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExecutionContext {
@@ -512,67 +292,6 @@ function upsertRuntimeDescriptor(
   const nextRuntimes = runtimes.slice();
   nextRuntimes[existingIndex] = nextRuntime;
   return nextRuntimes;
-}
-
-function shQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function renderSecretEnvFile(env: Readonly<Record<string, string>>): string {
-  const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
-  if (entries.length === 0) {
-    return "# managed by homelab-agent\n";
-  }
-  return [
-    "# managed by homelab-agent",
-    ...entries.map(([key, value]) => `export ${key}=${shQuote(value)}`),
-    "",
-  ].join("\n");
-}
-
-function renderShellInitFile(input: {
-  readonly homePath: string;
-  readonly shell: "bash" | "profile" | "zsh";
-}): string {
-  const envPath = runtimeSecretEnvPath(input.homePath);
-  if (input.shell === "profile") {
-    return [
-      "# managed by homelab-agent",
-      `[ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
-      "",
-    ].join("\n");
-  }
-
-  if (input.shell === "bash") {
-    return [
-      "# managed by homelab-agent",
-      "__homelab_runtime_refresh_env() {",
-      `  [ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
-      "}",
-      "__homelab_runtime_refresh_env",
-      'case ";${PROMPT_COMMAND:-};" in',
-      '  *";__homelab_runtime_refresh_env;"*) ;;',
-      '  "") PROMPT_COMMAND="__homelab_runtime_refresh_env" ;;',
-      '  *) PROMPT_COMMAND="__homelab_runtime_refresh_env;${PROMPT_COMMAND}" ;;',
-      "esac",
-      "",
-    ].join("\n");
-  }
-
-  return [
-    "# managed by homelab-agent",
-    "function __homelab_runtime_refresh_env() {",
-    `  [[ -f ${shQuote(envPath)} ]] && source ${shQuote(envPath)}`,
-    "}",
-    "__homelab_runtime_refresh_env",
-    "if [[ -o interactive ]]; then",
-    "  typeset -ga precmd_functions",
-    "  if (( ${precmd_functions[(Ie)__homelab_runtime_refresh_env]} == 0 )); then",
-    "    precmd_functions+=(__homelab_runtime_refresh_env)",
-    "  fi",
-    "fi",
-    "",
-  ].join("\n");
 }
 
 function renderHomelabSecretToFileScript(): string {
@@ -1539,22 +1258,6 @@ function renderDockerExecWrapper(input: {
   ].join("\n");
 }
 
-function normalizeMountSpecs(
-  mounts: ReadonlyArray<DockerMountSpec>,
-): ReadonlyArray<DockerMountSpec> {
-  const seen = new Set<string>();
-  const normalized: DockerMountSpec[] = [];
-  for (const mount of mounts) {
-    const key = `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    normalized.push(mount);
-  }
-  return normalized;
-}
-
 function toDockerMountFlag(mount: DockerMountSpec): string {
   return mount.readOnly === true
     ? `${mount.source}:${mount.target}:ro`
@@ -1615,11 +1318,18 @@ function isContainerCompatible(
   inspect: DockerContainerInspectResult,
   runtime: ThreadRuntimeDescriptor,
   mounts: ReadonlyArray<DockerMountSpec>,
+  expectedImageFingerprint?: string,
 ): boolean {
   if (inspect.Config?.Image !== runtime.imageRef) {
     return false;
   }
   if (inspect.Config?.WorkingDir !== runtime.cwd) {
+    return false;
+  }
+  if (
+    expectedImageFingerprint &&
+    inspect.Config?.Labels?.[RUNTIME_IMAGE_FINGERPRINT_LABEL] !== expectedImageFingerprint
+  ) {
     return false;
   }
 
@@ -1693,15 +1403,13 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       version: 1,
       runtimes: [...runtimes],
     };
-    const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
 
-    return Effect.succeed(`${JSON.stringify(persistedState, null, 2)}\n`).pipe(
-      Effect.tap(() => fileSystem.makeDirectory(path.dirname(statePath), { recursive: true })),
-      Effect.tap((encoded) => fileSystem.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fileSystem.rename(tempPath, statePath)),
-      Effect.ensuring(
-        fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true })),
-      ),
+    return writeFileStringAtomically({
+      filePath: statePath,
+      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1713,17 +1421,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   };
 
   const writeRuntimeImageBuildState = (buildState: PersistedRuntimeImageBuildState) => {
-    const tempPath = `${runtimeImageBuildStatePath}.${process.pid}.${Date.now()}.tmp`;
-
-    return Effect.succeed(`${JSON.stringify(buildState, null, 2)}\n`).pipe(
-      Effect.tap(() =>
-        fileSystem.makeDirectory(path.dirname(runtimeImageBuildStatePath), { recursive: true }),
-      ),
-      Effect.tap((encoded) => fileSystem.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fileSystem.rename(tempPath, runtimeImageBuildStatePath)),
-      Effect.ensuring(
-        fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true })),
-      ),
+    return writeFileStringAtomically({
+      filePath: runtimeImageBuildStatePath,
+      contents: `${JSON.stringify(buildState, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1940,34 +1643,15 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   );
 
   const buildMountSpecs = (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) =>
-    normalizeMountSpecs([
+    buildRuntimeMountSpecs(
       {
-        source: managedWorkspacePath(threadRuntimesDir, runtime.threadId),
-        target: runtime.workspacePath,
+        threadRuntimesDir,
+        threadId: runtime.threadId,
+        workspacePath: runtime.workspacePath,
+        homePath: runtime.homePath,
       },
-      {
-        source: homePathForThread(threadRuntimesDir, runtime.threadId),
-        target: runtime.homePath,
-      },
-      ...(hostBindings.sshAuthSockPath
-        ? [
-            {
-              source: hostBindings.sshAuthSockPath,
-              target: hostBindings.sshAuthSockPath,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-      ...(hostBindings.dockerSocketPath
-        ? [
-            {
-              source: hostBindings.dockerSocketPath,
-              target: hostBindings.dockerSocketPath,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-    ]);
-
-  const buildContainerPathValue = (): string => DEFAULT_CONTAINER_PATH;
+      hostBindings,
+    );
 
   const readRuntimeAccessTokenState = Effect.fn("threadRuntime.readRuntimeAccessTokenState")(
     function* (
@@ -2138,11 +1822,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const syncHostAuthIntoRuntimeHome = Effect.fn("threadRuntime.syncHostAuthIntoRuntimeHome")(
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
-      const syncEntries = buildRuntimeAuthSyncEntries(
-        runtime,
+      const syncEntries = buildRuntimeAuthSyncEntries({
         hostBindings,
-        homePathForThread(threadRuntimesDir, runtime.threadId),
-      );
+        runtimeHomePath: homePathForThread(threadRuntimesDir, runtime.threadId),
+      });
       if (syncEntries.length === 0) {
         return;
       }
@@ -2309,7 +1992,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
       const claudeWrapperPath = nodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER);
       const shellWrapperPath = nodePath.join(binDir, SHELL_RUNTIME_WRAPPER);
-      const containerPathValue = buildContainerPathValue();
+      const containerPathValue = buildRuntimeContainerPathValue();
 
       yield* fileSystem.makeDirectory(binDir, { recursive: true }).pipe(
         Effect.mapError(
@@ -2576,9 +2259,13 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     hostBindings: RuntimeHostBindings,
   ) {
     const mounts = buildMountSpecs(runtime, hostBindings);
+    const expectedImageFingerprint =
+      runtime.imageRef === localRuntimeImageBuildSpec.imageRef
+        ? localRuntimeImageBuildSpec.fingerprint
+        : undefined;
 
     let inspect = yield* inspectContainerByName(runtime.containerName);
-    if (inspect && !isContainerCompatible(inspect, runtime, mounts)) {
+    if (inspect && !isContainerCompatible(inspect, runtime, mounts, expectedImageFingerprint)) {
       yield* removeContainerIfPresent(runtime.containerName);
       inspect = undefined;
     }

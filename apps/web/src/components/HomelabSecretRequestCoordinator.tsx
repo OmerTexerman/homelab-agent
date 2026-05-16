@@ -7,6 +7,7 @@ import {
   homelabSecretsQueryOptions,
 } from "~/lib/homelabSecretsReactQuery";
 import { ensureLocalApi } from "~/localApi";
+import { deriveNextSecretDecision } from "~/userDecisionQueue";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -42,16 +43,16 @@ export function HomelabSecretRequestCoordinator() {
       return;
     }
 
-    const nextSecret =
-      secretsQuery.data?.secrets.find(
-        (secret) => !secret.hasValue && !handledKeysRef.current.has(secret.key),
-      ) ?? null;
-    if (!nextSecret) {
+    const nextDecision = deriveNextSecretDecision(
+      secretsQuery.data?.secrets,
+      handledKeysRef.current,
+    );
+    if (!nextDecision) {
       return;
     }
 
     setValue("");
-    setActiveSecretKey(nextSecret.key);
+    setActiveSecretKey(nextDecision.secret.key);
   }, [activeSecretKey, secretsQuery.data?.secrets]);
 
   const closeModal = (secretKey: string | null) => {

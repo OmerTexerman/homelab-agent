@@ -1,18 +1,10 @@
-// @effect-diagnostics nodeBuiltinImport:off
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Expand a leading `~` (or `~/…`, `~\…`) in a user-supplied path to the
- * current user's home directory. Spawned processes don't get shell
- * expansion, so env vars like `CODEX_HOME=~/.codex-work` would be passed
- * verbatim and treated as relative paths by the receiver.
- *
- * Matches the behavior of the other `expandHomePath` helpers in the
- * workspace layers and CLI bootstrap: `~` alone and both `~/` and `~\`
- * separators are handled. Returns the input unchanged if it doesn't
- * start with `~` or is empty. Does not handle `~user` (other-user)
- * expansion.
+ * Expand a leading `~` in user-supplied paths before passing them to spawned
+ * processes. Child process env values are not shell-expanded, so `CODEX_HOME`
+ * would otherwise be treated as a literal relative path.
  */
 export function expandHomePath(value: string): string {
   if (!value) return value;

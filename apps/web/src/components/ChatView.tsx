@@ -42,21 +42,23 @@ import {
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
-  deriveCompletionDividerBeforeEntryId,
   derivePendingApprovals,
   derivePendingUserInputs,
-  derivePhase,
-  deriveTimelineEntries,
-  deriveActiveWorkStartedAt,
   deriveActivePlanState,
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
-  hasToolActivityForTurn,
-  isLatestTurnSettled,
   formatElapsed,
 } from "../session-logic";
+import {
+  deriveActiveWorkStartedAt,
+  deriveCompletionDividerBeforeEntryId,
+  derivePhase,
+  deriveTimelineEntries,
+  hasToolActivityForTurn,
+  isLatestTurnSettled,
+} from "../threadTimeline";
 import { isScrollContainerNearBottom } from "../chat-scroll";
 import {
   buildPendingUserInputAnswers,
@@ -65,6 +67,13 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
+import {
+  activePendingApprovalFromDecision,
+  activePendingUserInputFromDecision,
+  deriveChatUserDecisionQueue,
+  getActiveChatUserDecision,
+  shouldShowPlanFollowUpFromDecision,
+} from "../userDecisionQueue";
 import {
   selectProjectsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
@@ -971,7 +980,10 @@ export default function ChatView(props: ChatViewProps) {
     const lastVisitedAt = activeThreadLastVisitedAt ? Date.parse(activeThreadLastVisitedAt) : NaN;
     if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= turnCompletedAt) return;
 
-    markThreadVisited(scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)));
+    markThreadVisited(
+      scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
+      activeLatestTurn.completedAt,
+    );
   }, [
     activeLatestTurn?.completedAt,
     activeThreadLastVisitedAt,
@@ -1024,7 +1036,35 @@ export default function ChatView(props: ChatViewProps) {
     () => derivePendingUserInputs(threadActivities),
     [threadActivities],
   );
-  const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activeProposedPlan = useMemo(() => {
+    if (!latestTurnSettled) {
+      return null;
+    }
+    return findLatestProposedPlan(
+      activeThread?.proposedPlans ?? [],
+      activeLatestTurn?.turnId ?? null,
+    );
+  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  const planFollowUpEligible =
+    interactionMode === "plan" &&
+    latestTurnSettled &&
+    hasActionableProposedPlan(activeProposedPlan);
+  const userDecisionQueue = useMemo(
+    () =>
+      deriveChatUserDecisionQueue({
+        pendingApprovals,
+        pendingUserInputs,
+        planFollowUp: {
+          enabled: planFollowUpEligible,
+          proposedPlan: activeProposedPlan,
+        },
+      }),
+    [activeProposedPlan, pendingApprovals, pendingUserInputs, planFollowUpEligible],
+  );
+  const activeUserDecision = getActiveChatUserDecision(userDecisionQueue);
+  const activePendingApproval = activePendingApprovalFromDecision(activeUserDecision);
+  const activePendingUserInput = activePendingUserInputFromDecision(activeUserDecision);
+  const showPlanFollowUpPrompt = shouldShowPlanFollowUpFromDecision(activeUserDecision);
   const activePendingDraftAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -1057,15 +1097,6 @@ export default function ChatView(props: ChatViewProps) {
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
   const sidebarProposedPlan = useMemo(
     () =>
       findSidebarProposedPlan({
@@ -1080,12 +1111,6 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
-    latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
-  const activePendingApproval = pendingApprovals[0] ?? null;
   const {
     beginLocalDispatch,
     resetLocalDispatch,

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { ApprovalRequestId, DEFAULT_MODEL_BY_PROVIDER, ThreadId } from "@t3tools/contracts";
 
 import {
   buildCodexInitializeParams,
@@ -352,7 +352,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: "plus",
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.3-codex");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 
   it("keeps spark for supported plans", () => {
@@ -372,7 +372,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: null,
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.3-codex");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 });
 

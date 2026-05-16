@@ -18,7 +18,7 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 import { draftSessionHasMeaningfulWork } from "../draftThreadLifecycle";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
+import { isLatestTurnSettled } from "../threadTimeline";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;

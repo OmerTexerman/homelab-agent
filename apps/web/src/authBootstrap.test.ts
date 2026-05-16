@@ -353,7 +353,7 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("surfaces the backend auth error message when manual pairing fails", async () => {
+  it("surfaces a friendly error message when an invalid pairing token is submitted", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -391,7 +391,7 @@ describe("resolveInitialServerAuthGateState", () => {
       },
     });
     await expect(submitServerAuthCredential("expired-token")).rejects.toMatchObject({
-      message: "Invalid bootstrap credential.",
+      message: "Invalid pairing token. Check the token and try again.",
       status: 401,
     });
   });

@@ -1,12 +1,8 @@
-import * as DateTime from "effect/DateTime";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
+import { Effect, FileSystem, Option, Schema } from "effect";
 
-import { writeFileStringAtomically } from "./atomicWrite.ts";
-import { type ServerConfigShape } from "./config.ts";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";
+import { writeFileStringAtomically } from "./atomicWrite";
+import { type ServerConfigShape } from "./config";
+import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 
 export const PersistedServerRuntimeState = Schema.Struct({
   version: Schema.Literal(1),
@@ -34,15 +30,14 @@ const runtimeOriginForConfig = (
 export const makePersistedServerRuntimeState = (input: {
   readonly config: Pick<ServerConfigShape, "host">;
   readonly port: number;
-}): Effect.Effect<PersistedServerRuntimeState> =>
-  Effect.map(DateTime.now, (now) => ({
-    version: 1,
-    pid: process.pid,
-    ...(input.config.host ? { host: input.config.host } : {}),
-    port: input.port,
-    origin: runtimeOriginForConfig(input.config, input.port),
-    startedAt: DateTime.formatIso(now),
-  }));
+}): PersistedServerRuntimeState => ({
+  version: 1,
+  pid: process.pid,
+  ...(input.config.host ? { host: input.config.host } : {}),
+  port: input.port,
+  origin: runtimeOriginForConfig(input.config, input.port),
+  startedAt: new Date().toISOString(),
+});
 
 export const persistServerRuntimeState = (input: {
   readonly path: string;
