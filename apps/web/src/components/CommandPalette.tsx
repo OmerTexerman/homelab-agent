@@ -118,6 +118,10 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
+import {
+  shouldShowEditorOpenInControls,
+  shouldShowRemoteProjectCloneUi,
+} from "../productCapabilities";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const BROWSE_STALE_TIME_MS = 30_000;
@@ -421,6 +425,8 @@ function OpenCommandPaletteDialog() {
   const primaryEnvironmentLabel = readPrimaryEnvironmentDescriptor()?.label ?? null;
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((state) => state.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
+  const showRemoteProjectCloneUi = shouldShowRemoteProjectCloneUi();
+  const showEditorOpenInControls = shouldShowEditorOpenInControls();
 
   const addProjectEnvironmentOptions = useMemo(() => {
     const options: AddProjectEnvironmentOption[] = [];
@@ -791,9 +797,9 @@ function OpenCommandPaletteDialog() {
         {
           kind: "action",
           value: `action:add-project:${environmentId}:local`,
-          searchTerms: ["local", "folder", "directory", "browse"],
-          title: "Local folder",
-          description: "Browse a folder on disk",
+          searchTerms: ["project", "path", "folder", "directory", "browse", "environment"],
+          title: "Project path",
+          description: "Browse a path in this environment",
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           keepOpen: true,
           run: async () => {
@@ -801,6 +807,10 @@ function OpenCommandPaletteDialog() {
           },
         },
       ];
+
+      if (!showRemoteProjectCloneUi) {
+        return [{ value: `sources:${environmentId}`, label: "Projects", items: sourceItems }];
+      }
 
       const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
         "url",
@@ -873,7 +883,12 @@ function OpenCommandPaletteDialog() {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [
+      openSourceControlSettings,
+      showRemoteProjectCloneUi,
+      startAddProjectBrowse,
+      startAddProjectClone,
+    ],
   );
 
   const startAddProjectSourceSelection = useCallback(
@@ -881,7 +896,9 @@ function OpenCommandPaletteDialog() {
       setAddProjectEnvironmentId(environmentId);
       setAddProjectCloneFlow(null);
       const target = { environmentId };
-      const initialDiscovery = getSourceControlDiscoverySnapshot(target).data;
+      const initialDiscovery = showRemoteProjectCloneUi
+        ? getSourceControlDiscoverySnapshot(target).data
+        : null;
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: buildAddProjectSourceGroups(
@@ -890,7 +907,7 @@ function OpenCommandPaletteDialog() {
         ),
       });
 
-      if (initialDiscovery) {
+      if (!showRemoteProjectCloneUi || initialDiscovery) {
         return;
       }
 
@@ -913,7 +930,7 @@ function OpenCommandPaletteDialog() {
         });
       });
     },
-    [buildAddProjectSourceGroups],
+    [buildAddProjectSourceGroups, showRemoteProjectCloneUi],
   );
 
   const addProjectEnvironmentItems: CommandPaletteActionItem[] = addProjectEnvironmentOptions.map(
@@ -1024,24 +1041,26 @@ function OpenCommandPaletteDialog() {
   actionItems.push({
     kind: "action",
     value: "action:add-project",
-    searchTerms: [
-      "add project",
-      "folder",
-      "directory",
-      "browse",
-      "clone",
-      "remote",
-      "repository",
-      "repo",
-      "git",
-      "github",
-      "gitlab",
-      "bitbucket",
-      "azure",
-      "devops",
-      "url",
-      "environment",
-    ],
+    searchTerms: showRemoteProjectCloneUi
+      ? [
+          "add project",
+          "folder",
+          "directory",
+          "browse",
+          "clone",
+          "remote",
+          "repository",
+          "repo",
+          "git",
+          "github",
+          "gitlab",
+          "bitbucket",
+          "azure",
+          "devops",
+          "url",
+          "environment",
+        ]
+      : ["add project", "folder", "directory", "browse", "environment"],
     title: "Add project",
     icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
     keepOpen: true,
@@ -1405,6 +1424,7 @@ function OpenCommandPaletteDialog() {
     !isRemoteProjectPending;
   const fileManagerName = getLocalFileManagerName(navigator.platform);
   const canOpenProjectFromFileManager =
+    showEditorOpenInControls &&
     isBrowsing &&
     browseEnvironmentId !== null &&
     primaryEnvironmentId !== null &&
@@ -1680,7 +1700,7 @@ function OpenCommandPaletteDialog() {
                   : willCreateProjectPath
                     ? {
                         emptyStateMessage:
-                          "Press Enter to create this folder and add it as a project.",
+                          "Press Enter to create this directory and add it as a project.",
                       }
                     : {})}
           />

@@ -1,6 +1,7 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
@@ -204,7 +205,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           : isConnecting
             ? "Connecting"
             : isPreparingWorktree
-              ? "Preparing worktree"
+              ? HOMELAB_PRODUCT_COPY.preparingRuntime
               : isSendBusy
                 ? "Sending"
                 : "Send message"

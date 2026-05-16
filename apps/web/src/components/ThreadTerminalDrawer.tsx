@@ -48,6 +48,7 @@ import {
 import { readEnvironmentApi } from "~/environmentApi";
 import { readLocalApi } from "~/localApi";
 import { selectTerminalEventEntries, useTerminalStateStore } from "../terminalStateStore";
+import { shouldShowEditorOpenInControls } from "../productCapabilities";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
@@ -497,6 +498,11 @@ export function TerminalViewport({
                     error instanceof Error ? error.message : "Unable to open link",
                   );
                 });
+                return;
+              }
+
+              if (!shouldShowEditorOpenInControls()) {
+                writeSystemMessage(latestTerminal, "Open paths from the Runtime Workspace panel.");
                 return;
               }
 

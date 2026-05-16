@@ -17,6 +17,8 @@ material.
 - [upstream-sync.md](./upstream-sync.md)
   Playbook for rebasing/pulling from upstream while keeping homelab-specific
   behavior isolated behind fork-owned modules.
+- [provider-runtime-support.md](./provider-runtime-support.md)
+  Current Cursor/OpenCode provider wiring status and runtime-container blockers.
 
 ## Reference
 

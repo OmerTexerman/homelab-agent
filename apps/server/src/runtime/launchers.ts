@@ -6,6 +6,8 @@ import type { ThreadRuntimeLaunchContext } from "./Services/ThreadRuntime.ts";
 export const RUNTIME_BIN_DIRNAME = "bin";
 export const CODEX_RUNTIME_WRAPPER = "codex";
 export const CLAUDE_RUNTIME_WRAPPER = "claude";
+export const CURSOR_RUNTIME_WRAPPER = "agent";
+export const OPENCODE_RUNTIME_WRAPPER = "opencode";
 export const SHELL_RUNTIME_WRAPPER = "runtime-shell";
 
 export function runtimeWrapperBinaryPath(
@@ -21,6 +23,14 @@ export function runtimeCodexBinaryPath(context: ThreadRuntimeLaunchContext): str
 
 export function runtimeClaudeBinaryPath(context: ThreadRuntimeLaunchContext): string {
   return runtimeWrapperBinaryPath(context, CLAUDE_RUNTIME_WRAPPER);
+}
+
+export function runtimeCursorBinaryPath(context: ThreadRuntimeLaunchContext): string {
+  return runtimeWrapperBinaryPath(context, CURSOR_RUNTIME_WRAPPER);
+}
+
+export function runtimeOpenCodeBinaryPath(context: ThreadRuntimeLaunchContext): string {
+  return runtimeWrapperBinaryPath(context, OPENCODE_RUNTIME_WRAPPER);
 }
 
 export function runtimeShellWrapperPath(context: ThreadRuntimeLaunchContext): string {

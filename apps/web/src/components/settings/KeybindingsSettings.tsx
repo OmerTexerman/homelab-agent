@@ -28,6 +28,7 @@ import {
   type ServerUpsertKeybindingInput,
 } from "@t3tools/contracts";
 
+import { APP_BASE_NAME } from "../../branding";
 import { isElectron } from "../../env";
 import { openInPreferredEditor } from "../../editorPreferences";
 import { formatShortcutLabel } from "../../keybindings";
@@ -61,6 +62,7 @@ import {
 } from "./KeybindingsSettings.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { shouldShowEditorOpenInControls } from "../../productCapabilities";
 
 function KeybindingPill({ value }: { value: string }) {
   const parts = value.split("+");
@@ -246,8 +248,8 @@ function UnknownWhenVariableWarning({
         }
       />
       <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-relaxed">
-        T3 Code does not recognize this condition yet. It can still be saved, but it may not match
-        unless the runtime provides it.
+        {APP_BASE_NAME} does not recognize this condition yet. It can still be saved, but it may not
+        match unless the runtime provides it.
       </TooltipPopup>
     </Tooltip>
   );
@@ -1203,34 +1205,33 @@ export function KeybindingsSettingsPanel() {
               />
               <TooltipPopup side="top">Add keybinding</TooltipPopup>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                    disabled={!keybindingsConfigPath}
-                    onClick={openKeybindingsFile}
-                    aria-label="Open keybindings.json"
-                  >
-                    <FileJsonIcon className="size-3" />
-                  </Button>
-                }
-              />
-              <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
-            </Tooltip>
+            {shouldShowEditorOpenInControls() ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                      disabled={!keybindingsConfigPath}
+                      onClick={openKeybindingsFile}
+                      aria-label="Open keybindings.json"
+                    >
+                      <FileJsonIcon className="size-3" />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
+              </Tooltip>
+            ) : null}
           </div>
         }
       >
         {!isElectron ? (
           <div className="flex items-start gap-2 border-b border-warning/20 bg-warning/5 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground sm:px-4">
             <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
-            <p>
-              Some shortcuts may be claimed by the browser before T3 Code sees them. Use the desktop
-              app for better keybinding support.
-            </p>
+            <p>Some shortcuts may be claimed by the browser before {APP_BASE_NAME} sees them.</p>
           </div>
         ) : null}
 

@@ -149,6 +149,7 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
+import { ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -192,6 +193,14 @@ import {
   isVersionMismatchDismissed,
   resolveServerConfigVersionMismatch,
 } from "../versionSkew";
+import {
+  selectThreadWorkspacePanelOpen,
+  useWorkspacePanelStateStore,
+} from "../workspacePanelStateStore";
+import {
+  shouldShowPrimarySourceControlUi,
+  shouldShowRuntimeWorkspaceExplorer,
+} from "../productCapabilities";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -200,6 +209,7 @@ const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_TURN_DIFF_SUMMARY_BY_MESSAGE_ID = new Map<MessageId, TurnDiffSummary>();
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -811,8 +821,10 @@ export default function ChatView(props: ChatViewProps) {
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
-  const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const showRuntimeWorkspaceExplorer = shouldShowRuntimeWorkspaceExplorer();
+  const canCheckoutPullRequestIntoThread = showSourceControlUi && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -859,6 +871,30 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+  const workspacePanelOpen = useWorkspacePanelStateStore((state) =>
+    selectThreadWorkspacePanelOpen(state.workspacePanelOpenByThreadKey, activeThreadRef),
+  );
+  const setWorkspacePanelOpen = useWorkspacePanelStateStore((state) => state.setWorkspacePanelOpen);
+  const toggleWorkspacePanel = useWorkspacePanelStateStore((state) => state.toggleWorkspacePanel);
+  const workspaceExplorerAvailable =
+    showRuntimeWorkspaceExplorer &&
+    isServerThread &&
+    activeThreadRef !== null &&
+    activeProject !== undefined;
+
+  const closeWorkspaceExplorer = useCallback(() => {
+    if (!activeThreadRef) {
+      return;
+    }
+    setWorkspacePanelOpen(activeThreadRef, false);
+  }, [activeThreadRef, setWorkspacePanelOpen]);
+
+  const toggleWorkspaceExplorer = useCallback(() => {
+    if (!activeThreadRef || !workspaceExplorerAvailable) {
+      return;
+    }
+    toggleWorkspacePanel(activeThreadRef);
+  }, [activeThreadRef, toggleWorkspacePanel, workspaceExplorerAvailable]);
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -1572,6 +1608,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     return byMessageId;
   }, [turnDiffSummaries]);
+  const visibleTurnDiffSummaryByAssistantMessageId = showSourceControlUi
+    ? turnDiffSummaryByAssistantMessageId
+    : EMPTY_TURN_DIFF_SUMMARY_BY_MESSAGE_ID;
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -1588,7 +1627,7 @@ export default function ChatView(props: ChatViewProps) {
         if (nextEntry.message.role === "user") {
           break;
         }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+        const summary = visibleTurnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
         if (!summary) {
           continue;
         }
@@ -1603,7 +1642,11 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  }, [
+    inferredCheckpointTurnCountByTurnId,
+    timelineEntries,
+    visibleTurnDiffSummaryByAssistantMessageId,
+  ]);
 
   const completionSummary = useMemo(() => {
     if (!latestTurnSettled) return null;
@@ -1630,7 +1673,10 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const gitStatusQuery = useGitStatus({ environmentId, cwd: gitCwd });
+  const gitStatusQuery = useGitStatus({
+    environmentId,
+    cwd: showSourceControlUi ? gitCwd : null,
+  });
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -1659,7 +1705,7 @@ export default function ChatView(props: ChatViewProps) {
       ? terminalLaunchContext
       : (storeServerTerminalLaunchContext ?? null);
   // Default true while loading to avoid toolbar flicker.
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const isGitRepo = showSourceControlUi ? (gitStatusQuery.data?.isRepo ?? true) : false;
   const terminalShortcutLabelOptions = useMemo(
     () => ({
       context: {
@@ -3457,7 +3503,7 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
-      if (!isServerThread) {
+      if (!isServerThread || !showSourceControlUi) {
         return;
       }
       onDiffPanelOpen?.();
@@ -3475,7 +3521,7 @@ export default function ChatView(props: ChatViewProps) {
         },
       });
     },
-    [environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
+    [environmentId, isServerThread, navigate, onDiffPanelOpen, showSourceControlUi, threadId],
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
@@ -3527,6 +3573,8 @@ export default function ChatView(props: ChatViewProps) {
           availableEditors={availableEditors}
           terminalAvailable={activeProject !== undefined}
           terminalOpen={terminalState.terminalOpen}
+          workspaceExplorerAvailable={workspaceExplorerAvailable}
+          workspaceExplorerOpen={workspacePanelOpen}
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
@@ -3536,6 +3584,7 @@ export default function ChatView(props: ChatViewProps) {
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
+          onToggleWorkspaceExplorer={toggleWorkspaceExplorer}
           onToggleDiff={onToggleDiff}
         />
       </header>
@@ -3563,7 +3612,7 @@ export default function ChatView(props: ChatViewProps) {
               timelineEntries={timelineEntries}
               completionDividerBeforeEntryId={completionDividerBeforeEntryId}
               completionSummary={completionSummary}
-              turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+              turnDiffSummaryByAssistantMessageId={visibleTurnDiffSummaryByAssistantMessageId}
               activeThreadEnvironmentId={activeThread.environmentId}
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}
@@ -3598,7 +3647,7 @@ export default function ChatView(props: ChatViewProps) {
           <div
             className={cn(
               "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
-              isGitRepo
+              showSourceControlUi && isGitRepo
                 ? "pb-[calc(env(safe-area-inset-bottom)+0.25rem)]"
                 : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
             )}
@@ -3679,7 +3728,7 @@ export default function ChatView(props: ChatViewProps) {
                 />
               </div>
             </div>
-            {isGitRepo && (
+            {showSourceControlUi && isGitRepo && (
               <BranchToolbar
                 environmentId={activeThread.environmentId}
                 threadId={activeThread.id}
@@ -3703,7 +3752,7 @@ export default function ChatView(props: ChatViewProps) {
             )}
           </div>
 
-          {pullRequestDialogState ? (
+          {showSourceControlUi && pullRequestDialogState ? (
             <PullRequestThreadDialog
               key={pullRequestDialogState.key}
               open
@@ -3721,6 +3770,16 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
         </div>
         {/* end chat column */}
+
+        {showRuntimeWorkspaceExplorer && workspacePanelOpen && isServerThread ? (
+          <ThreadWorkspacePanel
+            environmentId={activeThread.environmentId}
+            threadId={activeThread.id}
+            open={workspacePanelOpen}
+            onClose={closeWorkspaceExplorer}
+            resolvedTheme={resolvedTheme}
+          />
+        ) : null}
 
         {/* Plan sidebar */}
         {planSidebarOpen && !shouldUsePlanSidebarSheet ? (

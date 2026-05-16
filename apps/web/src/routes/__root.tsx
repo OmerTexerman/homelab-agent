@@ -63,6 +63,7 @@ import {
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { shouldShowEditorOpenInControls } from "../productCapabilities";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -373,35 +374,41 @@ function EventRouter() {
           type: "warning",
           title: "Invalid keybindings configuration",
           description: issue.message,
-          actionVariant: "outline",
-          actionProps: {
-            children: "Open keybindings.json",
-            onClick: () => {
-              const api = readLocalApi();
-              if (!api) {
-                return;
-              }
+          ...(shouldShowEditorOpenInControls()
+            ? {
+                actionVariant: "outline" as const,
+                actionProps: {
+                  children: "Open keybindings.json",
+                  onClick: () => {
+                    const api = readLocalApi();
+                    if (!api) {
+                      return;
+                    }
 
-              void Promise.resolve(serverConfig ?? api.server.getConfig())
-                .then((config) => {
-                  const editor = resolveAndPersistPreferredEditor(config.availableEditors);
-                  if (!editor) {
-                    throw new Error("No available editors found.");
-                  }
-                  return api.shell.openInEditor(config.keybindingsConfigPath, editor);
-                })
-                .catch((error) => {
-                  toastManager.add(
-                    stackedThreadToast({
-                      type: "error",
-                      title: "Unable to open keybindings file",
-                      description:
-                        error instanceof Error ? error.message : "Unknown error opening file.",
-                    }),
-                  );
-                });
-            },
-          },
+                    void Promise.resolve(serverConfig ?? api.server.getConfig())
+                      .then((config) => {
+                        const editor = resolveAndPersistPreferredEditor(config.availableEditors);
+                        if (!editor) {
+                          throw new Error("No available editors found.");
+                        }
+                        return api.shell.openInEditor(config.keybindingsConfigPath, editor);
+                      })
+                      .catch((error) => {
+                        toastManager.add(
+                          stackedThreadToast({
+                            type: "error",
+                            title: "Unable to open keybindings file",
+                            description:
+                              error instanceof Error
+                                ? error.message
+                                : "Unknown error opening file.",
+                          }),
+                        );
+                      });
+                  },
+                },
+              }
+            : {}),
         }),
       );
     },

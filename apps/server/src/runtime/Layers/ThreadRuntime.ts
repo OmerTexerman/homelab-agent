@@ -28,6 +28,8 @@ import { normalizeRuntimeImageRef, resolveLocalRuntimeImageBuildSpec } from "../
 import {
   CODEX_RUNTIME_WRAPPER,
   CLAUDE_RUNTIME_WRAPPER,
+  CURSOR_RUNTIME_WRAPPER,
+  OPENCODE_RUNTIME_WRAPPER,
   SHELL_RUNTIME_WRAPPER,
 } from "../launchers.ts";
 import {
@@ -1992,6 +1994,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
       const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
       const claudeWrapperPath = nodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER);
+      const cursorWrapperPath = nodePath.join(binDir, CURSOR_RUNTIME_WRAPPER);
+      const openCodeWrapperPath = nodePath.join(binDir, OPENCODE_RUNTIME_WRAPPER);
       const shellWrapperPath = nodePath.join(binDir, SHELL_RUNTIME_WRAPPER);
       const containerPathValue = buildRuntimeContainerPathValue();
 
@@ -2025,6 +2029,26 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
         ...(containerPathValue ? { pathValue: containerPathValue } : {}),
       });
+      const cursorScript = renderDockerExecWrapper({
+        dockerBinaryPath,
+        containerName: runtime.containerName,
+        runtime,
+        hostWorkspacePath,
+        command: CURSOR_RUNTIME_WRAPPER,
+        interactive: false,
+        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
+        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
+      });
+      const openCodeScript = renderDockerExecWrapper({
+        dockerBinaryPath,
+        containerName: runtime.containerName,
+        runtime,
+        hostWorkspacePath,
+        command: OPENCODE_RUNTIME_WRAPPER,
+        interactive: false,
+        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
+        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
+      });
       const shellScript = renderDockerExecWrapper({
         dockerBinaryPath,
         containerName: runtime.containerName,
@@ -2051,6 +2075,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       yield* Effect.all([
         writeExecutable(codexWrapperPath, codexScript),
         writeExecutable(claudeWrapperPath, claudeScript),
+        writeExecutable(cursorWrapperPath, cursorScript),
+        writeExecutable(openCodeWrapperPath, openCodeScript),
         writeExecutable(shellWrapperPath, shellScript),
       ]);
     },

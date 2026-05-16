@@ -111,6 +111,7 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -311,7 +312,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     <>
       {props.activeContextWindow ? <ContextWindowMeter usage={props.activeContextWindow} /> : null}
       {props.isPreparingWorktree ? (
-        <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
+        <span className="text-muted-foreground/70 text-xs">
+          {HOMELAB_PRODUCT_COPY.preparingRuntimeEllipsis}
+        </span>
       ) : null}
       <ComposerPrimaryActions
         compact={props.compact}
@@ -2205,7 +2208,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             side="top"
                             className="max-w-64 whitespace-normal leading-tight"
                           >
-                            Draft attachment could not be saved locally and may be lost on
+                            Draft attachment could not be saved in this browser and may be lost on
                             navigation.
                           </TooltipPopup>
                         </Tooltip>

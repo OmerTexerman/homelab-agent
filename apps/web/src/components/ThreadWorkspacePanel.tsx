@@ -39,6 +39,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 
 interface ThreadWorkspaceTreeNode {
   readonly path: string;
@@ -735,7 +736,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     >
       <button
         type="button"
-        aria-label="Resize file manager panel"
+        aria-label="Resize runtime workspace panel"
         className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
         onPointerDown={handlePanelResizePointerDown}
         onPointerMove={handlePanelResizePointerMove}
@@ -751,9 +752,11 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-foreground">Thread Filesystem</div>
+            <div className="text-sm font-medium text-foreground">
+              {HOMELAB_PRODUCT_COPY.runtimeWorkspaceTitle}
+            </div>
             <div className="truncate text-[11px] text-muted-foreground">
-              Real paths inside the runtime container
+              {HOMELAB_PRODUCT_COPY.runtimeWorkspaceSubtitle}
             </div>
           </div>
           <Button
@@ -816,7 +819,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
               onChange={(event) => setPathDraft(event.target.value)}
               placeholder="/workspace"
               className="h-8 min-w-0 flex-1 font-mono text-xs"
-              aria-label="Container path"
+              aria-label="Runtime path"
             />
             <Button type="submit" variant="outline" size="xs">
               Go

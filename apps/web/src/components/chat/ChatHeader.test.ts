@@ -45,4 +45,15 @@ describe("shouldShowOpenInPicker", () => {
       }),
     ).toBe(false);
   });
+
+  it("hides the picker when editor launch controls are disabled", () => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        editorOpenInControls: false,
+      }),
+    ).toBe(false);
+  });
 });
