@@ -59,6 +59,7 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
+import { deriveComposerDecisionState } from "../decisionQueueReadModel";
 import {
   selectProjectsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
@@ -1290,10 +1291,53 @@ export default function ChatView(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = timelineControl.phase;
-  const pendingApprovals = timelineControl.pendingApprovals;
-  const pendingUserInputs = timelineControl.pendingUserInputs;
-  const activePendingApproval = timelineControl.activePendingApproval;
-  const activePendingUserInput = timelineControl.activePendingUserInput;
+  const {
+    beginLocalDispatch,
+    resetLocalDispatch,
+    localDispatchStartedAt,
+    isPreparingWorktree,
+    isSendBusy,
+  } = useLocalDispatchState({
+    activeThread,
+    activeLatestTurn,
+    phase,
+    activePendingApproval: timelineControl.activePendingApproval?.requestId ?? null,
+    activePendingUserInput: timelineControl.activePendingUserInput?.requestId ?? null,
+    threadError: activeThread?.error,
+  });
+  const threadTimeline = useMemo(
+    () =>
+      deriveThreadTimelineReadModel({
+        thread: activeThread ?? null,
+        threadPlanCatalog,
+        interactionMode,
+        optimisticUserMessages,
+        attachmentPreviewHandoffByMessageId,
+        localDispatchStartedAt,
+        isSendBusy,
+        isConnecting,
+        isRevertingCheckpoint,
+        controlState: timelineControl,
+      }),
+    [
+      activeThread,
+      attachmentPreviewHandoffByMessageId,
+      interactionMode,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      localDispatchStartedAt,
+      optimisticUserMessages,
+      threadPlanCatalog,
+      timelineControl,
+    ],
+  );
+  const decisionQueue = threadTimeline.decisionQueue;
+  const composerDecisionState = useMemo(
+    () => deriveComposerDecisionState(decisionQueue),
+    [decisionQueue],
+  );
+  const activePendingUserInput = composerDecisionState.activePendingUserInput;
   const activePendingDraftAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -1326,20 +1370,6 @@ export default function ChatView(props: ChatViewProps) {
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const {
-    beginLocalDispatch,
-    resetLocalDispatch,
-    localDispatchStartedAt,
-    isPreparingWorktree,
-    isSendBusy,
-  } = useLocalDispatchState({
-    activeThread,
-    activeLatestTurn,
-    phase,
-    activePendingApproval: activePendingApproval?.requestId ?? null,
-    activePendingUserInput: activePendingUserInput?.requestId ?? null,
-    threadError: activeThread?.error,
-  });
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -1481,33 +1511,6 @@ export default function ChatView(props: ChatViewProps) {
       }
     };
   }, [attachmentPreviewHandoffByMessageId, clearAttachmentPreviewHandoff, serverMessages]);
-  const threadTimeline = useMemo(
-    () =>
-      deriveThreadTimelineReadModel({
-        thread: activeThread ?? null,
-        threadPlanCatalog,
-        interactionMode,
-        optimisticUserMessages,
-        attachmentPreviewHandoffByMessageId,
-        localDispatchStartedAt,
-        isSendBusy,
-        isConnecting,
-        isRevertingCheckpoint,
-        controlState: timelineControl,
-      }),
-    [
-      activeThread,
-      attachmentPreviewHandoffByMessageId,
-      interactionMode,
-      isConnecting,
-      isRevertingCheckpoint,
-      isSendBusy,
-      localDispatchStartedAt,
-      optimisticUserMessages,
-      threadPlanCatalog,
-      timelineControl,
-    ],
-  );
   const timelineEntries = threadTimeline.entries;
   const isWorking = threadTimeline.ui.isWorking;
   const activeWorkStartedAt = threadTimeline.activeTurn.startedAt;
@@ -1517,7 +1520,7 @@ export default function ChatView(props: ChatViewProps) {
   const sidebarProposedPlan = threadTimeline.sidebarProposedPlan;
   const activePlan = threadTimeline.activePlan;
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
-  const showPlanFollowUpPrompt = threadTimeline.showPlanFollowUpPrompt;
+  const showPlanFollowUpPrompt = composerDecisionState.showPlanFollowUpPrompt;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -3581,16 +3584,13 @@ export default function ChatView(props: ChatViewProps) {
                   isSendBusy={isSendBusy}
                   isPreparingWorktree={isPreparingWorktree}
                   environmentUnavailable={activeEnvironmentUnavailableState}
-                  activePendingApproval={activePendingApproval}
-                  pendingApprovals={pendingApprovals}
-                  pendingUserInputs={pendingUserInputs}
+                  decisionQueue={decisionQueue}
                   activePendingProgress={activePendingProgress}
                   activePendingResolvedAnswers={activePendingResolvedAnswers}
                   activePendingIsResponding={activePendingIsResponding}
                   activePendingDraftAnswers={activePendingDraftAnswers}
                   activePendingQuestionIndex={activePendingQuestionIndex}
                   respondingRequestIds={respondingRequestIds}
-                  showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                   activeProposedPlan={activeProposedPlan}
                   activePlan={activePlan as { turnId?: TurnId } | null}
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}

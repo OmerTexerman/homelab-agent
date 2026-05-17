@@ -18,7 +18,6 @@ import {
   findLatestProposedPlan,
   findSidebarProposedPlan,
   formatElapsed,
-  hasActionableProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
   type ActivePlanState,
@@ -28,6 +27,10 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "./session-logic";
+import {
+  deriveDecisionQueueReadModel,
+  type DecisionQueueReadModel,
+} from "./decisionQueueReadModel";
 import type { ChatMessage, ProposedPlan, SessionPhase, Thread } from "./types";
 
 export type ThreadTimelineEntryPhase =
@@ -97,6 +100,7 @@ export interface ThreadTimelineReadModel {
   readonly activeProposedPlan: LatestProposedPlanState | null;
   readonly sidebarProposedPlan: LatestProposedPlanState | null;
   readonly activePlan: ActivePlanState | null;
+  readonly decisionQueue: DecisionQueueReadModel;
   readonly showPlanFollowUpPrompt: boolean;
   readonly activeTurn: {
     readonly id: TurnId | null;
@@ -233,22 +237,33 @@ export function deriveThreadTimelineReadModel(
     input.localDispatchStartedAt ?? null,
   );
   const activeTurnInProgress = isWorking || !controlState.latestTurnSettled;
-  const pendingDecision =
-    controlState.activePendingApproval !== null || controlState.activePendingUserInput !== null;
+  const activeProposedPlan = controlState.latestTurnSettled
+    ? findLatestProposedPlan(proposedPlans, latestTurnId)
+    : null;
+  const decisionQueue = deriveDecisionQueueReadModel({
+    context: {
+      threadId: thread?.id ?? null,
+      projectId: thread?.projectId ?? null,
+      runtimeId: thread?.runtimeId ?? null,
+    },
+    pendingApprovals: controlState.pendingApprovals,
+    pendingUserInputs: controlState.pendingUserInputs,
+    planFollowUp: {
+      enabled: input.interactionMode === "plan" && controlState.latestTurnSettled,
+      proposedPlan: activeProposedPlan,
+    },
+  });
   const timelineEntries = decorateTimelineEntries(
     deriveTimelineEntries(timelineMessages.messages, [...proposedPlans], workLogEntries),
     {
       activeTurnId: latestTurnId,
       latestTurnSettled: controlState.latestTurnSettled,
-      pendingDecision,
+      pendingDecision: decisionQueue.ui.blocksTurn,
       waitingOnProjectRuntime: runtime.waitingOnProjectRuntime,
       optimisticMessageIds: timelineMessages.optimisticMessageIds,
       threadError: thread?.error ?? null,
     },
   );
-  const activeProposedPlan = controlState.latestTurnSettled
-    ? findLatestProposedPlan(proposedPlans, latestTurnId)
-    : null;
   const sidebarProposedPlan = findSidebarProposedPlan({
     threads: input.threadPlanCatalog ?? (thread ? [thread] : []),
     latestTurn,
@@ -256,11 +271,7 @@ export function deriveThreadTimelineReadModel(
     threadId: thread?.id ?? null,
   });
   const activePlan = deriveActivePlanState(activities, latestTurnId ?? undefined);
-  const showPlanFollowUpPrompt =
-    controlState.pendingUserInputs.length === 0 &&
-    input.interactionMode === "plan" &&
-    controlState.latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
+  const showPlanFollowUpPrompt = decisionQueue.showPlanFollowUpPrompt;
   const completionSummary = deriveCompletionSummary({
     latestTurn,
     latestTurnSettled: controlState.latestTurnSettled,
@@ -279,11 +290,12 @@ export function deriveThreadTimelineReadModel(
     workLogEntries,
     pendingApprovals: controlState.pendingApprovals,
     pendingUserInputs: controlState.pendingUserInputs,
-    activePendingApproval: controlState.activePendingApproval,
-    activePendingUserInput: controlState.activePendingUserInput,
+    activePendingApproval: decisionQueue.activePendingApproval,
+    activePendingUserInput: decisionQueue.activePendingUserInput,
     activeProposedPlan,
     sidebarProposedPlan,
     activePlan,
+    decisionQueue,
     showPlanFollowUpPrompt,
     activeTurn: {
       id: latestTurnId,
@@ -292,8 +304,8 @@ export function deriveThreadTimelineReadModel(
         isWorking,
         isSendBusy: input.isSendBusy === true,
         latestTurnSettled: controlState.latestTurnSettled,
-        activePendingApproval: controlState.activePendingApproval,
-        activePendingUserInput: controlState.activePendingUserInput,
+        activePendingApproval: decisionQueue.activePendingApproval,
+        activePendingUserInput: decisionQueue.activePendingUserInput,
         waitingOnProjectRuntime: runtime.waitingOnProjectRuntime,
         threadError: thread?.error ?? null,
       }),

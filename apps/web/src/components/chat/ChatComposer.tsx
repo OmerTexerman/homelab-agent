@@ -107,7 +107,10 @@ import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelS
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
-import type { PendingApproval, PendingUserInput } from "../../session-logic";
+import {
+  deriveComposerDecisionState,
+  type DecisionQueueReadModel,
+} from "../../decisionQueueReadModel";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
@@ -402,10 +405,8 @@ export interface ChatComposerProps {
     readonly connectionState: "connecting" | "disconnected" | "error";
   } | null;
 
-  // Pending approvals / inputs
-  activePendingApproval: PendingApproval | null;
-  pendingApprovals: PendingApproval[];
-  pendingUserInputs: PendingUserInput[];
+  // Pending approvals / inputs / plan follow-up
+  decisionQueue: DecisionQueueReadModel;
   activePendingProgress: {
     questionIndex: number;
     isLastQuestion: boolean;
@@ -420,7 +421,6 @@ export interface ChatComposerProps {
   respondingRequestIds: ApprovalRequestId[];
 
   // Plan
-  showPlanFollowUpPrompt: boolean;
   activeProposedPlan: Thread["proposedPlans"][number] | null;
   activePlan: { turnId?: TurnId } | null;
   sidebarProposedPlan: { turnId?: TurnId } | null;
@@ -509,16 +509,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     isPreparingWorktree,
     environmentUnavailable,
-    activePendingApproval,
-    pendingApprovals,
-    pendingUserInputs,
+    decisionQueue,
     activePendingProgress,
     activePendingResolvedAnswers,
     activePendingIsResponding,
     activePendingDraftAnswers,
     activePendingQuestionIndex,
     respondingRequestIds,
-    showPlanFollowUpPrompt,
     activeProposedPlan,
     activePlan,
     sidebarProposedPlan,
@@ -952,8 +949,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [nonPersistedComposerImageIds],
   );
 
+  const composerDecisionState = useMemo(
+    () => deriveComposerDecisionState(decisionQueue),
+    [decisionQueue],
+  );
+  const activePendingApproval = composerDecisionState.activePendingApproval;
+  const pendingApprovals = composerDecisionState.pendingApprovals;
+  const pendingUserInputs = composerDecisionState.pendingUserInputs;
+  const showPlanFollowUpPrompt = composerDecisionState.showPlanFollowUpPrompt;
   const isComposerApprovalState = activePendingApproval !== null;
-  const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activePendingUserInput = composerDecisionState.activePendingUserInput;
   const hasComposerHeader =
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
@@ -2268,7 +2273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 disabled={
                   isConnecting ||
-                  isComposerApprovalState ||
+                  composerDecisionState.disabledByDecision ||
                   (environmentUnavailable !== null && activePendingProgress === null)
                 }
               />

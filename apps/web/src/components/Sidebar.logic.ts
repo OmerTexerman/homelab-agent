@@ -18,7 +18,7 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 import { draftSessionHasMeaningfulWork } from "../draftThreadLifecycle";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../threadTimeline";
+import { deriveSidebarThreadDecisionQueue } from "../decisionQueueReadModel";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -475,8 +475,9 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
   const { thread } = input;
+  const decisionQueue = deriveSidebarThreadDecisionQueue({ thread });
 
-  if (thread.hasPendingApprovals) {
+  if (decisionQueue.activeDecision?.kind === "provider-approval") {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -485,7 +486,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (decisionQueue.activeDecision?.kind === "provider-user-input") {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
@@ -512,12 +513,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+  if (decisionQueue.activeDecision?.kind === "plan-follow-up") {
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
