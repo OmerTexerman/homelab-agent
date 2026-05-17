@@ -2,15 +2,24 @@ import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildRuntimeControlEnvironment,
   buildRuntimeAuthSyncEntries,
   buildRuntimeEnvironment,
   buildRuntimeMountSpecs,
+  buildRuntimeWrapperScriptSpecs,
+  buildThreadRuntimeDescriptor,
   normalizeMountSpecs,
+  providerProcessCwdForLaunchContext,
   renderSecretEnvFile,
   renderShellInitFile,
   runtimeCodexAuthPath,
   runtimeSecretEnvPath,
+  toLaunchContext,
 } from "./RuntimeExecutionContext.ts";
+
+function basename(filePath: string): string {
+  return filePath.split("/").at(-1) ?? filePath;
+}
 
 describe("buildRuntimeEnvironment", () => {
   it("builds the canonical environment for a thread runtime", () => {
@@ -44,6 +53,44 @@ describe("buildRuntimeEnvironment", () => {
       SHARED: "base",
       CODEX_HOME: runtimeCodexAuthPath("/runtime/home"),
     });
+  });
+});
+
+describe("buildThreadRuntimeDescriptor", () => {
+  it("derives runtime storage policy from shared and isolated runtime ids", () => {
+    const shared = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-shared"),
+      runtimeId: RuntimeSessionId.make("project-runtime:project-alpha"),
+      provider: "codex",
+      runtimeMode: "full-access",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-05-17T00:00:00.000Z",
+    });
+    const isolated = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-isolated"),
+      runtimeId: RuntimeSessionId.make("isolated-runtime:thread-isolated"),
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-05-17T00:00:00.000Z",
+    });
+
+    expect(shared.containerName).toBe("runtime-cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
+    expect(isolated.containerName).toBe("runtime-aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtaXNvbGF0ZWQ");
+    expect(
+      toLaunchContext({ threadRuntimesDir: "/state/thread-runtimes", runtime: shared })
+        .hostRuntimePath,
+    ).toBe("/state/thread-runtimes/cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
+    expect(
+      toLaunchContext({ threadRuntimesDir: "/state/thread-runtimes", runtime: isolated })
+        .hostRuntimePath,
+    ).toBe("/state/thread-runtimes/aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtaXNvbGF0ZWQ");
   });
 });
 
@@ -152,6 +199,73 @@ describe("buildRuntimeMountSpecs", () => {
   });
 });
 
+describe("runtime wrapper planning", () => {
+  it("plans Codex, Claude, OpenCode, and shell wrappers with runtime env sourcing", () => {
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-wrappers"),
+      runtimeId: RuntimeSessionId.make("project-runtime:project-wrappers"),
+      provider: "codex",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace/service",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {
+        BOOTSTRAP_ENV: "enabled",
+      },
+      containerShellPath: "/bin/zsh",
+      now: "2026-05-17T00:00:00.000Z",
+    });
+
+    const files = new Map(
+      buildRuntimeWrapperScriptSpecs({
+        threadRuntimesDir: "/state/thread-runtimes",
+        runtime,
+        dockerBinaryPath: "docker",
+        containerShellPath: "/bin/zsh",
+      }).map((file) => [basename(file.filePath), file]),
+    );
+
+    expect(files.get("codex")?.contents).toContain(
+      "sh '/runtime/home/.homelab-runtime.env' 'codex'",
+    );
+    expect(files.get("claude")?.contents).toContain(
+      "sh '/runtime/home/.homelab-runtime.env' 'claude'",
+    );
+    expect(files.get("opencode")?.contents).toContain(
+      "sh '/runtime/home/.homelab-runtime.env' 'opencode'",
+    );
+    expect(files.get("runtime-shell")?.contents).toContain("/bin/zsh");
+    expect(files.get("runtime-shell")?.contents).toContain(
+      "PATH=/runtime/home/.homelab/bin:/opt/homelab/bin:",
+    );
+    expect(files.get("codex")?.mode).toBe(0o755);
+  });
+
+  it("preserves provider cwd separately from the host wrapper process cwd", () => {
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-cwd"),
+      runtimeId: RuntimeSessionId.make("project-runtime:project-cwd"),
+      provider: "codex",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace/service",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-05-17T00:00:00.000Z",
+    });
+    const launchContext = toLaunchContext({
+      threadRuntimesDir: "/state/thread-runtimes",
+      runtime,
+    });
+
+    expect(launchContext.execution.cwd).toBe("/workspace/service");
+    expect(providerProcessCwdForLaunchContext(launchContext)).toBe(
+      "/state/thread-runtimes/cHJvamVjdC1ydW50aW1lOnByb2plY3QtY3dk/workspace/service",
+    );
+  });
+});
+
 describe("runtime file rendering", () => {
   it("renders sorted shell exports with shell quoting", () => {
     expect(renderSecretEnvFile({ ZED: "last", ALPHA: "has ' quote" })).toBe(
@@ -169,5 +283,25 @@ describe("runtime file rendering", () => {
     expect(renderShellInitFile({ homePath: "/runtime/home", shell: "zsh" })).toContain(
       "precmd_functions",
     );
+  });
+
+  it("builds runtime control env with all materialized homelab secrets", () => {
+    expect(
+      buildRuntimeControlEnvironment({
+        secretEnv: {
+          FIRST_SECRET: "one",
+          SECOND_SECRET: "two",
+        },
+        serverUrl: "http://host.docker.internal:3456",
+        threadId: ThreadId.make("thread-secrets"),
+        runtimeAccessToken: "runtime-token",
+      }),
+    ).toEqual({
+      FIRST_SECRET: "one",
+      SECOND_SECRET: "two",
+      HOMELAB_AGENT_SERVER_URL: "http://host.docker.internal:3456",
+      HOMELAB_AGENT_THREAD_ID: "thread-secrets",
+      HOMELAB_AGENT_RUNTIME_TOKEN: "runtime-token",
+    });
   });
 });

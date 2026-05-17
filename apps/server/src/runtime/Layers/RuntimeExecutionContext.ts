@@ -1,15 +1,43 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import nodePath from "node:path";
+import { Buffer } from "node:buffer";
 
 import type {
+  ProviderKind as ProviderKindModel,
+  RuntimeMode as RuntimeModeModel,
   RuntimeSessionId as RuntimeSessionIdModel,
   ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
+import { RuntimeSessionId } from "@t3tools/contracts";
 
-import { homePathForThread, managedWorkspacePath } from "./ThreadRuntimePaths.ts";
+import { normalizeRuntimeImageRef } from "../image.ts";
+import {
+  CODEX_RUNTIME_WRAPPER,
+  CLAUDE_RUNTIME_WRAPPER,
+  CURSOR_RUNTIME_WRAPPER,
+  OPENCODE_RUNTIME_WRAPPER,
+  SHELL_RUNTIME_WRAPPER,
+} from "../launchers.ts";
+import type {
+  ThreadExecutionContext,
+  ThreadRuntimeDescriptor,
+  ThreadRuntimeLaunchContext,
+} from "../Services/ThreadRuntime.ts";
+import {
+  CONTAINER_WORKSPACE_PATH,
+  homePathForThread,
+  hostWorkspacePathForContainerPath,
+  isWithinContainerWorkspace,
+  managedWorkspacePath,
+  normalizeRequestedCwd,
+  runtimeBinDirForThread,
+  runtimeRootPath,
+} from "./ThreadRuntimePaths.ts";
 
 const RUNTIME_SECRET_ENV_BASENAME = ".homelab-runtime.env";
 const RUNTIME_ACCESS_TOKEN_BASENAME = ".homelab-runtime-token";
+export const CONTAINER_RUNTIME_ROOT = "/runtime";
+export const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
 const DEFAULT_CONTAINER_PATH =
   "/runtime/home/.homelab/bin:/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
@@ -21,6 +49,32 @@ const CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS = [
   "plugins/installed_plugins.json",
   "plugins/known_marketplaces.json",
 ];
+const FORWARDED_ENV_DENYLIST = new Set([
+  "_",
+  "BASH_ENV",
+  "BASHOPTS",
+  "BASHPID",
+  "CODEX_HOME",
+  "ENV",
+  "EUID",
+  "GROUPS",
+  "HOME",
+  "HOSTNAME",
+  "IFS",
+  "OLDPWD",
+  "OPTERR",
+  "OPTIND",
+  "PATH",
+  "PIPESTATUS",
+  "POSIXLY_CORRECT",
+  "PPID",
+  "PS4",
+  "PWD",
+  "SHELLOPTS",
+  "SHLVL",
+  "UID",
+  "WORKSPACE",
+]);
 
 export interface DockerMountSpec {
   readonly source: string;
@@ -57,11 +111,168 @@ export interface RuntimeEnvironmentInput {
   readonly containerShellPath: string;
 }
 
+export interface RuntimeDescriptorInput {
+  readonly threadRuntimesDir: string;
+  readonly threadId: ThreadIdModel;
+  readonly runtimeId?: RuntimeSessionIdModel;
+  readonly provider: ProviderKindModel | null;
+  readonly runtimeMode: RuntimeModeModel;
+  readonly imageRef?: string;
+  readonly requestedCwd?: string;
+  readonly baseEnvironment?: Readonly<Record<string, string>>;
+  readonly bootstrapImageRef: string;
+  readonly bootstrapEnv: Readonly<Record<string, string>>;
+  readonly containerShellPath: string;
+  readonly now: string;
+  readonly existing?: ThreadRuntimeDescriptor;
+}
+
 export interface RuntimeMountContext {
   readonly threadRuntimesDir: string;
   readonly runtimeStorageId: string;
   readonly workspacePath: string;
   readonly homePath: string;
+}
+
+export interface RuntimeStorageLayout {
+  readonly storageId: string;
+  readonly hostRuntimePath: string;
+  readonly hostWorkspacePath: string;
+  readonly hostHomePath: string;
+  readonly hostBinDir: string;
+  readonly hostHomelabBinDir: string;
+}
+
+export interface RuntimeGeneratedTextFile {
+  readonly filePath: string;
+  readonly contents: string;
+  readonly mode?: number;
+}
+
+export function encodeRuntimeSegment(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+export function runtimeNameFromRuntimeId(runtimeId: RuntimeSessionIdModel): string {
+  return `runtime-${encodeRuntimeSegment(String(runtimeId))}`;
+}
+
+export function threadRuntimeIdForThread(threadId: ThreadIdModel): RuntimeSessionIdModel {
+  return RuntimeSessionId.make(`runtime-${encodeRuntimeSegment(String(threadId))}`);
+}
+
+export function runtimeStorageIdFor(
+  runtime: Pick<ThreadRuntimeDescriptor, "threadId" | "runtimeId">,
+): string {
+  return runtime.runtimeId === threadRuntimeIdForThread(runtime.threadId)
+    ? String(runtime.threadId)
+    : String(runtime.runtimeId);
+}
+
+export function buildRuntimeStorageLayout(input: {
+  readonly threadRuntimesDir: string;
+  readonly runtimeStorageId: string;
+}): RuntimeStorageLayout {
+  const hostRuntimePath = runtimeRootPath(input.threadRuntimesDir, input.runtimeStorageId);
+  const hostHomePath = homePathForThread(input.threadRuntimesDir, input.runtimeStorageId);
+  return {
+    storageId: input.runtimeStorageId,
+    hostRuntimePath,
+    hostWorkspacePath: managedWorkspacePath(input.threadRuntimesDir, input.runtimeStorageId),
+    hostHomePath,
+    hostBinDir: runtimeBinDirForThread(input.threadRuntimesDir, input.runtimeStorageId),
+    hostHomelabBinDir: runtimeHomelabBinPath(hostHomePath),
+  };
+}
+
+export function buildRuntimeStorageLayoutForRuntime(input: {
+  readonly threadRuntimesDir: string;
+  readonly runtime: Pick<ThreadRuntimeDescriptor, "threadId" | "runtimeId">;
+}): RuntimeStorageLayout {
+  return buildRuntimeStorageLayout({
+    threadRuntimesDir: input.threadRuntimesDir,
+    runtimeStorageId: runtimeStorageIdFor(input.runtime),
+  });
+}
+
+export function buildThreadRuntimeDescriptor(
+  input: RuntimeDescriptorInput,
+): ThreadRuntimeDescriptor {
+  const runtimeId =
+    input.runtimeId ?? input.existing?.runtimeId ?? threadRuntimeIdForThread(input.threadId);
+  const storageId = runtimeStorageIdFor({ threadId: input.threadId, runtimeId });
+  const cwd =
+    normalizeRequestedCwd(input.threadRuntimesDir, storageId, input.requestedCwd) ??
+    normalizeRequestedCwd(input.threadRuntimesDir, storageId, input.existing?.cwd) ??
+    CONTAINER_WORKSPACE_PATH;
+  const workspacePath = CONTAINER_WORKSPACE_PATH;
+  const imageRef = normalizeRuntimeImageRef(
+    input.imageRef?.trim() || input.existing?.imageRef || input.bootstrapImageRef,
+  );
+
+  return {
+    threadId: input.threadId,
+    runtimeId,
+    backend: "docker",
+    status: input.existing?.status ?? "ready",
+    health: input.existing?.health ?? "unknown",
+    provider: input.provider,
+    runtimeMode: input.runtimeMode,
+    imageRef,
+    containerName: input.existing?.containerName ?? runtimeNameFromRuntimeId(runtimeId),
+    containerId: input.existing?.containerId ?? null,
+    workspacePath,
+    homePath: CONTAINER_HOME_PATH,
+    cwd,
+    shell: nodePath.join(
+      runtimeBinDirForThread(input.threadRuntimesDir, storageId),
+      SHELL_RUNTIME_WRAPPER,
+    ),
+    env: buildRuntimeEnvironment({
+      cwd,
+      workspacePath,
+      homePath: CONTAINER_HOME_PATH,
+      threadId: input.threadId,
+      runtimeId,
+      materializedEnv: input.bootstrapEnv,
+      containerShellPath: input.containerShellPath,
+      ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
+    }),
+    createdAt: input.existing?.createdAt ?? input.now,
+    updatedAt: input.now,
+    lastStartedAt: input.existing?.lastStartedAt ?? null,
+    lastStoppedAt: input.existing?.lastStoppedAt ?? null,
+    lastError: input.existing?.lastError ?? null,
+  };
+}
+
+export function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExecutionContext {
+  return {
+    threadId: runtime.threadId,
+    runtimeId: runtime.runtimeId,
+    backend: runtime.backend,
+    containerId: runtime.containerId,
+    workspacePath: runtime.workspacePath,
+    homePath: runtime.homePath,
+    cwd: runtime.cwd,
+    shell: runtime.shell,
+    env: runtime.env,
+  };
+}
+
+export function toLaunchContext(input: {
+  readonly threadRuntimesDir: string;
+  readonly runtime: ThreadRuntimeDescriptor;
+}): ThreadRuntimeLaunchContext {
+  const layout = buildRuntimeStorageLayoutForRuntime(input);
+  return {
+    execution: toExecutionContext(input.runtime),
+    hostRuntimePath: layout.hostRuntimePath,
+    hostWorkspacePath: layout.hostWorkspacePath,
+    hostHomePath: layout.hostHomePath,
+    hostBinDir: layout.hostBinDir,
+    shellWrapperPath: input.runtime.shell,
+  };
 }
 
 export function runtimeCodexAuthPath(homePath: string): string {
@@ -124,6 +335,20 @@ export function buildRuntimeEnvironment(
     ...input.materializedEnv,
     ...input.baseEnvironment,
     CODEX_HOME: runtimeCodexAuthPath(input.homePath),
+  };
+}
+
+export function buildRuntimeControlEnvironment(input: {
+  readonly secretEnv: Readonly<Record<string, string>>;
+  readonly serverUrl: string;
+  readonly threadId: ThreadIdModel;
+  readonly runtimeAccessToken?: string;
+}): Readonly<Record<string, string>> {
+  return {
+    ...input.secretEnv,
+    HOMELAB_AGENT_SERVER_URL: input.serverUrl,
+    HOMELAB_AGENT_THREAD_ID: String(input.threadId),
+    ...(input.runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: input.runtimeAccessToken } : {}),
   };
 }
 
@@ -214,6 +439,108 @@ export function buildRuntimeContainerPathValue(): string {
   return DEFAULT_CONTAINER_PATH;
 }
 
+export function buildRuntimeShellInitFileSpecs(input: {
+  readonly threadRuntimesDir: string;
+  readonly runtime: ThreadRuntimeDescriptor;
+}): ReadonlyArray<RuntimeGeneratedTextFile> {
+  const layout = buildRuntimeStorageLayoutForRuntime(input);
+  return [
+    {
+      filePath: runtimeProfilePath(layout.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "profile" }),
+    },
+    {
+      filePath: runtimeBashProfilePath(layout.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "profile" }),
+    },
+    {
+      filePath: runtimeBashRcPath(layout.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "bash" }),
+    },
+    {
+      filePath: runtimeZshEnvPath(layout.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "zsh" }),
+    },
+  ];
+}
+
+export function buildRuntimeWrapperScriptSpecs(input: {
+  readonly threadRuntimesDir: string;
+  readonly runtime: ThreadRuntimeDescriptor;
+  readonly dockerBinaryPath: string;
+  readonly containerShellPath: string;
+}): ReadonlyArray<RuntimeGeneratedTextFile> {
+  const layout = buildRuntimeStorageLayoutForRuntime(input);
+  const containerPathValue = buildRuntimeContainerPathValue();
+  const base = {
+    dockerBinaryPath: input.dockerBinaryPath,
+    containerName: input.runtime.containerName,
+    runtime: input.runtime,
+    hostWorkspacePath: layout.hostWorkspacePath,
+    sourceEnvFilePath: runtimeSecretEnvPath(input.runtime.homePath),
+    ...(containerPathValue ? { pathValue: containerPathValue } : {}),
+  };
+
+  return [
+    {
+      filePath: nodePath.join(layout.hostBinDir, CODEX_RUNTIME_WRAPPER),
+      contents: renderDockerExecWrapper({
+        ...base,
+        command: CODEX_RUNTIME_WRAPPER,
+        interactive: false,
+      }),
+      mode: 0o755,
+    },
+    {
+      filePath: nodePath.join(layout.hostBinDir, CLAUDE_RUNTIME_WRAPPER),
+      contents: renderDockerExecWrapper({
+        ...base,
+        command: CLAUDE_RUNTIME_WRAPPER,
+        interactive: false,
+      }),
+      mode: 0o755,
+    },
+    {
+      filePath: nodePath.join(layout.hostBinDir, CURSOR_RUNTIME_WRAPPER),
+      contents: renderDockerExecWrapper({
+        ...base,
+        command: CURSOR_RUNTIME_WRAPPER,
+        interactive: false,
+      }),
+      mode: 0o755,
+    },
+    {
+      filePath: nodePath.join(layout.hostBinDir, OPENCODE_RUNTIME_WRAPPER),
+      contents: renderDockerExecWrapper({
+        ...base,
+        command: OPENCODE_RUNTIME_WRAPPER,
+        interactive: false,
+      }),
+      mode: 0o755,
+    },
+    {
+      filePath: nodePath.join(layout.hostBinDir, SHELL_RUNTIME_WRAPPER),
+      contents: renderDockerExecWrapper({
+        ...base,
+        command: input.containerShellPath,
+        interactive: true,
+      }),
+      mode: 0o755,
+    },
+  ];
+}
+
+export function providerProcessCwdForLaunchContext(
+  launchContext: ThreadRuntimeLaunchContext,
+): string {
+  return isWithinContainerWorkspace(launchContext.execution.cwd)
+    ? hostWorkspacePathForContainerPath(
+        launchContext.hostWorkspacePath,
+        launchContext.execution.cwd,
+      )
+    : launchContext.hostWorkspacePath;
+}
+
 export function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -271,6 +598,96 @@ export function renderShellInitFile(input: {
     "    precmd_functions+=(__homelab_runtime_refresh_env)",
     "  fi",
     "fi",
+    "",
+  ].join("\n");
+}
+
+function renderEnvForwardingSnippet(): string {
+  return [
+    "while IFS='=' read -r key _; do",
+    '  case "$key" in',
+    ...[...FORWARDED_ENV_DENYLIST]
+      .toSorted((left, right) => left.localeCompare(right))
+      .map((entry) => `    ${entry}) continue ;;`),
+    "  esac",
+    '  docker_args+=(-e "$key")',
+    "done < <(env)",
+  ].join("\n");
+}
+
+export function renderDockerExecWrapper(input: {
+  readonly dockerBinaryPath: string;
+  readonly containerName: string;
+  readonly runtime: ThreadRuntimeDescriptor;
+  readonly hostWorkspacePath: string;
+  readonly command: string;
+  readonly interactive: boolean;
+  readonly pathValue?: string;
+  readonly sourceEnvFilePath?: string;
+}): string {
+  const staticEnvEntries = Object.entries(input.runtime.env)
+    .filter(
+      ([key]) => key !== "HOME" && key !== "PWD" && key !== "WORKSPACE" && key !== "CODEX_HOME",
+    )
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  const dockerExecFlags = input.interactive
+    ? [
+        "if [ -t 0 ] && [ -t 1 ]; then",
+        '  docker_args=(exec -i -t -w "$workdir")',
+        "else",
+        '  docker_args=(exec -i -w "$workdir")',
+        "fi",
+      ].join("\n")
+    : 'docker_args=(exec -i -w "$workdir")';
+  const explicitEnvLines = [
+    `docker_args+=(-e "HOME=${input.runtime.homePath}")`,
+    'docker_args+=(-e "PWD=$workdir")',
+    `docker_args+=(-e "WORKSPACE=${input.runtime.workspacePath}")`,
+    `docker_args+=(-e "CODEX_HOME=${runtimeCodexAuthPath(input.runtime.homePath)}")`,
+    ...(input.pathValue ? [`docker_args+=(-e "PATH=${input.pathValue}")`] : []),
+    ...staticEnvEntries.map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
+  ];
+
+  const commandLine = input.sourceEnvFilePath
+    ? `docker_args+=(${shQuote(input.containerName)} /bin/sh -lc ${shQuote(
+        [
+          'env_file="$1"',
+          "shift",
+          'if [ -f "$env_file" ]; then',
+          "  set -a",
+          '  . "$env_file"',
+          "  set +a",
+          "fi",
+          'exec "$@"',
+        ].join("\n"),
+      )} sh ${shQuote(input.sourceEnvFilePath)} ${shQuote(input.command)})`
+    : `docker_args+=(${shQuote(input.containerName)} ${shQuote(input.command)})`;
+
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    `docker_bin=${shQuote(input.dockerBinaryPath)}`,
+    `host_workspace=${shQuote(input.hostWorkspacePath)}`,
+    `container_workspace=${shQuote(input.runtime.workspacePath)}`,
+    `workdir=${shQuote(input.runtime.cwd)}`,
+    'current_pwd="${PWD:-$host_workspace}"',
+    'case "$current_pwd" in',
+    '  "$host_workspace")',
+    '    workdir="$container_workspace"',
+    "    ;;",
+    '  "$host_workspace"/*)',
+    '    relative_path="${current_pwd#"$host_workspace"/}"',
+    '    workdir="$container_workspace/$relative_path"',
+    "    ;;",
+    '  "$container_workspace"|"$container_workspace"/*)',
+    '    workdir="$current_pwd"',
+    "    ;;",
+    "esac",
+    dockerExecFlags,
+    renderEnvForwardingSnippet(),
+    ...explicitEnvLines,
+    commandLine,
+    'exec "$docker_bin" "${docker_args[@]}" "$@"',
     "",
   ].join("\n");
 }

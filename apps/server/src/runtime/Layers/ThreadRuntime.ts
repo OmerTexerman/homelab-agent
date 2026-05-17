@@ -22,52 +22,40 @@ import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
 import { ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
-import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
-import { normalizeRuntimeImageRef, resolveLocalRuntimeImageBuildSpec } from "../image.ts";
+import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
+import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
+import { resolveLocalRuntimeImageBuildSpec } from "../image.ts";
 import {
-  CODEX_RUNTIME_WRAPPER,
-  CLAUDE_RUNTIME_WRAPPER,
-  CURSOR_RUNTIME_WRAPPER,
-  OPENCODE_RUNTIME_WRAPPER,
-  SHELL_RUNTIME_WRAPPER,
-} from "../launchers.ts";
-import {
-  CONTAINER_WORKSPACE_PATH,
   homePathForThread,
   hostWorkspacePathForContainerPath,
   isWithinContainerWorkspace,
   managedWorkspacePath,
-  normalizeRequestedCwd,
-  runtimeBinDirForThread,
   runtimeRootPath,
 } from "./ThreadRuntimePaths.ts";
 import {
+  buildRuntimeControlEnvironment,
   buildRuntimeAuthSyncEntries,
-  buildRuntimeContainerPathValue,
-  buildRuntimeEnvironment,
   buildRuntimeMountSpecs,
+  buildRuntimeShellInitFileSpecs,
+  buildRuntimeStorageLayoutForRuntime,
+  buildRuntimeWrapperScriptSpecs,
+  buildThreadRuntimeDescriptor,
   type DockerMountSpec,
   renderSecretEnvFile,
-  renderShellInitFile,
   type RuntimeAuthSyncEntry,
   runtimeAccessTokenPath,
-  runtimeBashProfilePath,
-  runtimeBashRcPath,
-  runtimeCodexAuthPath,
   runtimeHomelabBinPath,
-  runtimeProfilePath,
+  runtimeStorageIdFor,
   runtimeSecretEnvPath,
-  runtimeZshEnvPath,
   type RuntimeHostBindings,
-  shQuote,
+  toExecutionContext,
+  toLaunchContext,
 } from "./RuntimeExecutionContext.ts";
 import {
   ThreadRuntime,
   ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
-  type ThreadExecutionContext,
-  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
@@ -172,58 +160,10 @@ const DEFAULT_CONTAINER_SHELL_PATH = process.env.HOMELAB_AGENT_RUNTIME_SHELL?.tr
 const DEFAULT_RUNTIME_IDLE_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_RUNTIME_IDLE_POLL_INTERVAL_MS = 60_000;
 const RUNTIME_IMAGE_FINGERPRINT_LABEL = "homelab.runtime.fingerprint";
-const CONTAINER_RUNTIME_ROOT = "/runtime";
-const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
 const RUNTIME_SERVER_HOST_ALIAS = "host.docker.internal";
 const RUNTIME_AGENTS_FILENAME = "AGENTS.md";
 const RUNTIME_CLAUDE_FILENAME = "CLAUDE.md";
 const KEEPALIVE_COMMAND = "trap : TERM INT; while sleep 3600; do :; done";
-const FORWARDED_ENV_DENYLIST = new Set([
-  "_",
-  "BASH_ENV",
-  "BASHOPTS",
-  "BASHPID",
-  "CODEX_HOME",
-  "ENV",
-  "EUID",
-  "GROUPS",
-  "HOME",
-  "HOSTNAME",
-  "IFS",
-  "OLDPWD",
-  "OPTERR",
-  "OPTIND",
-  "PATH",
-  "PIPESTATUS",
-  "POSIXLY_CORRECT",
-  "PPID",
-  "PS4",
-  "PWD",
-  "SHELLOPTS",
-  "SHLVL",
-  "UID",
-  "WORKSPACE",
-]);
-
-function encodeThreadSegment(threadId: string): string {
-  return Buffer.from(threadId, "utf8").toString("base64url");
-}
-
-function runtimeNameFromId(runtimeId: RuntimeSessionIdModel): string {
-  return `runtime-${encodeThreadSegment(String(runtimeId))}`;
-}
-
-function makeRuntimeId(threadId: ThreadIdModel): RuntimeSessionIdModel {
-  return RuntimeSessionId.make(`runtime-${encodeThreadSegment(String(threadId))}`);
-}
-
-function runtimeStorageId(
-  runtime: Pick<ThreadRuntimeDescriptor, "threadId" | "runtimeId">,
-): string {
-  return runtime.runtimeId === makeRuntimeId(runtime.threadId)
-    ? String(runtime.threadId)
-    : String(runtime.runtimeId);
-}
 
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -261,35 +201,6 @@ function syncRuntimeAuthEntry(entry: RuntimeAuthSyncEntry): void {
   }
 
   copyPathSync(entry.sourcePath, entry.targetPath);
-}
-
-function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExecutionContext {
-  return {
-    threadId: runtime.threadId,
-    runtimeId: runtime.runtimeId,
-    backend: runtime.backend,
-    containerId: runtime.containerId,
-    workspacePath: runtime.workspacePath,
-    homePath: runtime.homePath,
-    cwd: runtime.cwd,
-    shell: runtime.shell,
-    env: runtime.env,
-  };
-}
-
-function toLaunchContext(
-  threadRuntimesDir: string,
-  runtime: ThreadRuntimeDescriptor,
-): ThreadRuntimeLaunchContext {
-  const storageId = runtimeStorageId(runtime);
-  return {
-    execution: toExecutionContext(runtime),
-    hostRuntimePath: runtimeRootPath(threadRuntimesDir, storageId),
-    hostWorkspacePath: managedWorkspacePath(threadRuntimesDir, storageId),
-    hostHomePath: homePathForThread(threadRuntimesDir, storageId),
-    hostBinDir: runtimeBinDirForThread(threadRuntimesDir, storageId),
-    shellWrapperPath: runtime.shell,
-  };
 }
 
 function upsertRuntimeDescriptor(
@@ -1383,96 +1294,6 @@ through the best available interface. If you discover something new, promote it.
 `;
 }
 
-function renderEnvForwardingSnippet(): string {
-  return [
-    "while IFS='=' read -r key _; do",
-    '  case "$key" in',
-    ...[...FORWARDED_ENV_DENYLIST]
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((entry) => `    ${entry}) continue ;;`),
-    "  esac",
-    '  docker_args+=(-e "$key")',
-    "done < <(env)",
-  ].join("\n");
-}
-
-function renderDockerExecWrapper(input: {
-  readonly dockerBinaryPath: string;
-  readonly containerName: string;
-  readonly runtime: ThreadRuntimeDescriptor;
-  readonly hostWorkspacePath: string;
-  readonly command: string;
-  readonly interactive: boolean;
-  readonly pathValue?: string;
-  readonly sourceEnvFilePath?: string;
-}): string {
-  const staticEnvEntries = Object.entries(input.runtime.env)
-    .filter(
-      ([key]) => key !== "HOME" && key !== "PWD" && key !== "WORKSPACE" && key !== "CODEX_HOME",
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right));
-  const dockerExecFlags = input.interactive
-    ? [
-        "if [ -t 0 ] && [ -t 1 ]; then",
-        '  docker_args=(exec -i -t -w "$workdir")',
-        "else",
-        '  docker_args=(exec -i -w "$workdir")',
-        "fi",
-      ].join("\n")
-    : 'docker_args=(exec -i -w "$workdir")';
-  const explicitEnvLines = [
-    `docker_args+=(-e "HOME=${input.runtime.homePath}")`,
-    'docker_args+=(-e "PWD=$workdir")',
-    `docker_args+=(-e "WORKSPACE=${input.runtime.workspacePath}")`,
-    `docker_args+=(-e "CODEX_HOME=${runtimeCodexAuthPath(input.runtime.homePath)}")`,
-    ...(input.pathValue ? [`docker_args+=(-e "PATH=${input.pathValue}")`] : []),
-    ...staticEnvEntries.map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
-  ];
-
-  const commandLine = input.sourceEnvFilePath
-    ? `docker_args+=(${shQuote(input.containerName)} /bin/sh -lc ${shQuote(
-        [
-          'env_file="$1"',
-          "shift",
-          'if [ -f "$env_file" ]; then',
-          "  set -a",
-          '  . "$env_file"',
-          "  set +a",
-          "fi",
-          'exec "$@"',
-        ].join("\n"),
-      )} sh ${shQuote(input.sourceEnvFilePath)} ${shQuote(input.command)})`
-    : `docker_args+=(${shQuote(input.containerName)} ${shQuote(input.command)})`;
-
-  return [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    `docker_bin=${shQuote(input.dockerBinaryPath)}`,
-    `host_workspace=${shQuote(input.hostWorkspacePath)}`,
-    `container_workspace=${shQuote(input.runtime.workspacePath)}`,
-    `workdir=${shQuote(input.runtime.cwd)}`,
-    'current_pwd="${PWD:-$host_workspace}"',
-    'case "$current_pwd" in',
-    '  "$host_workspace")',
-    '    workdir="$container_workspace"',
-    "    ;;",
-    '  "$host_workspace"/*)',
-    '    relative_path="${current_pwd#"$host_workspace"/}"',
-    '    workdir="$container_workspace/$relative_path"',
-    "    ;;",
-    '  "$container_workspace"|"$container_workspace"/*)',
-    '    workdir="$current_pwd"',
-    "    ;;",
-    "esac",
-    dockerExecFlags,
-    renderEnvForwardingSnippet(),
-    ...explicitEnvLines,
-    commandLine,
-    'exec "$docker_bin" "${docker_args[@]}" "$@"',
-    "",
-  ].join("\n");
-}
-
 function toDockerMountFlag(mount: DockerMountSpec): string {
   return mount.readOnly === true
     ? `${mount.source}:${mount.target}:ro`
@@ -1572,7 +1393,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const { cwd, stateDir } = serverConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const bootstrapRegistry = yield* RuntimeBootstrapRegistry;
+  const bootstrapResolver = yield* RuntimeBootstrapResolver;
   const serverSettings = yield* ServerSettingsService;
   const writeSemaphore = yield* Semaphore.make(1);
   const runtimeImageBuildSemaphore = yield* Semaphore.make(1);
@@ -1782,22 +1603,17 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
   const ensureRuntimeDirectories = (runtime: ThreadRuntimeDescriptor) => {
-    const storageId = runtimeStorageId(runtime);
-    const threadRoot = runtimeRootPath(threadRuntimesDir, storageId);
-    const managedWorkspace = managedWorkspacePath(threadRuntimesDir, storageId);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, storageId);
-    const runtimeBinDir = runtimeBinDirForThread(threadRuntimesDir, storageId);
-    const runtimeHomelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
+    const layout = buildRuntimeStorageLayoutForRuntime({ threadRuntimesDir, runtime });
 
     return Effect.gen(function* () {
-      yield* fileSystem.makeDirectory(threadRoot, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeHomePath, { recursive: true });
-      yield* fileSystem.makeDirectory(managedWorkspace, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeBinDir, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeHomelabBinDir, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostRuntimePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostHomePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostWorkspacePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostBinDir, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostHomelabBinDir, { recursive: true });
       if (isWithinContainerWorkspace(runtime.cwd)) {
         yield* fileSystem.makeDirectory(
-          hostWorkspacePathForContainerPath(managedWorkspace, runtime.cwd),
+          hostWorkspacePathForContainerPath(layout.hostWorkspacePath, runtime.cwd),
           { recursive: true },
         );
       }
@@ -1862,7 +1678,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     buildRuntimeMountSpecs(
       {
         threadRuntimesDir,
-        runtimeStorageId: runtimeStorageId(runtime),
+        runtimeStorageId: runtimeStorageIdFor(runtime),
         workspacePath: runtime.workspacePath,
         homePath: runtime.homePath,
       },
@@ -1874,7 +1690,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       runtime: ThreadRuntimeDescriptor,
     ): Effect.fn.Return<PersistedRuntimeAccessTokenState | undefined, ThreadRuntimeError> {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
+        homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
       );
       const exists = yield* fileSystem.exists(tokenPath).pipe(Effect.orElseSucceed(() => false));
       if (!exists) {
@@ -1927,7 +1743,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeAccessTokenState = Effect.fn("threadRuntime.writeRuntimeAccessTokenState")(
     function* (runtime: ThreadRuntimeDescriptor, state: PersistedRuntimeAccessTokenState) {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
+        homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
       );
       yield* fileSystem.writeFileString(tokenPath, `${JSON.stringify(state, null, 2)}\n`).pipe(
         Effect.tap(() => fileSystem.chmod(tokenPath, 0o600)),
@@ -2040,7 +1856,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
       const syncEntries = buildRuntimeAuthSyncEntries({
         hostBindings,
-        runtimeHomePath: homePathForThread(threadRuntimesDir, runtimeStorageId(runtime)),
+        runtimeHomePath: homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
       });
       if (syncEntries.length === 0) {
         return;
@@ -2078,14 +1894,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           )
         : {};
     const runtimeAccessToken = yield* resolveRuntimeAccessToken(runtime);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const secretEnvPath = runtimeSecretEnvPath(runtimeHomePath);
-    const controlEnv = {
-      ...secretEnv,
-      HOMELAB_AGENT_SERVER_URL: resolveRuntimeServerUrl(),
-      HOMELAB_AGENT_THREAD_ID: String(runtime.threadId),
-      ...(runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: runtimeAccessToken } : {}),
-    } satisfies Readonly<Record<string, string>>;
+    const controlEnv = buildRuntimeControlEnvironment({
+      secretEnv,
+      serverUrl: resolveRuntimeServerUrl(),
+      threadId: runtime.threadId,
+      ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
+    });
 
     yield* fileSystem.writeFileString(secretEnvPath, renderSecretEnvFile(controlEnv)).pipe(
       Effect.tap(() => fileSystem.chmod(secretEnvPath, 0o600)),
@@ -2102,7 +1918,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeToolScripts = Effect.fn("threadRuntime.writeRuntimeToolScripts")(function* (
     runtime: ThreadRuntimeDescriptor,
   ) {
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const homelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
     const homelabCliPath = nodePath.join(homelabBinDir, "homelab");
     const homelabSecretToFilePath = nodePath.join(homelabBinDir, "homelab-secret-to-file");
@@ -2141,7 +1957,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeInstructionFiles = Effect.fn("threadRuntime.writeRuntimeInstructionFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageId(runtime));
+      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
       const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
       const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
 
@@ -2168,7 +1984,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageId(runtime));
       const writeFile = (filePath: string, contents: string) =>
         fileSystem.writeFileString(filePath, contents).pipe(
           Effect.mapError(
@@ -2180,40 +1995,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           ),
         );
 
-      yield* Effect.all([
-        writeFile(
-          runtimeProfilePath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
+      yield* Effect.all(
+        buildRuntimeShellInitFileSpecs({ threadRuntimesDir, runtime }).map((file) =>
+          writeFile(file.filePath, file.contents),
         ),
-        writeFile(
-          runtimeBashProfilePath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
-        ),
-        writeFile(
-          runtimeBashRcPath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "bash" }),
-        ),
-        writeFile(
-          runtimeZshEnvPath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "zsh" }),
-        ),
-      ]);
+      );
     },
   );
 
   const writeRuntimeWrapperScripts = Effect.fn("threadRuntime.writeRuntimeWrapperScripts")(
     function* (runtime: ThreadRuntimeDescriptor, _hostBindings: RuntimeHostBindings) {
-      const storageId = runtimeStorageId(runtime);
-      const binDir = runtimeBinDirForThread(threadRuntimesDir, storageId);
-      const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, storageId);
-      const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
-      const claudeWrapperPath = nodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER);
-      const cursorWrapperPath = nodePath.join(binDir, CURSOR_RUNTIME_WRAPPER);
-      const openCodeWrapperPath = nodePath.join(binDir, OPENCODE_RUNTIME_WRAPPER);
-      const shellWrapperPath = nodePath.join(binDir, SHELL_RUNTIME_WRAPPER);
-      const containerPathValue = buildRuntimeContainerPathValue();
+      const layout = buildRuntimeStorageLayoutForRuntime({ threadRuntimesDir, runtime });
 
-      yield* fileSystem.makeDirectory(binDir, { recursive: true }).pipe(
+      yield* fileSystem.makeDirectory(layout.hostBinDir, { recursive: true }).pipe(
         Effect.mapError(
           (cause) =>
             new ThreadRuntimeError({
@@ -2223,60 +2017,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ),
       );
 
-      const codexScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: CODEX_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const claudeScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: CLAUDE_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const cursorScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: CURSOR_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const openCodeScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: OPENCODE_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const shellScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: containerShellPath,
-        interactive: true,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-
-      const writeExecutable = (filePath: string, contents: string) =>
+      const writeExecutable = (filePath: string, contents: string, mode: number | undefined) =>
         fileSystem.writeFileString(filePath, contents).pipe(
-          Effect.tap(() => fileSystem.chmod(filePath, 0o755)),
+          Effect.tap(() => fileSystem.chmod(filePath, mode ?? 0o755)),
           Effect.mapError(
             (cause) =>
               new ThreadRuntimeError({
@@ -2286,13 +2029,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           ),
         );
 
-      yield* Effect.all([
-        writeExecutable(codexWrapperPath, codexScript),
-        writeExecutable(claudeWrapperPath, claudeScript),
-        writeExecutable(cursorWrapperPath, cursorScript),
-        writeExecutable(openCodeWrapperPath, openCodeScript),
-        writeExecutable(shellWrapperPath, shellScript),
-      ]);
+      yield* Effect.all(
+        buildRuntimeWrapperScriptSpecs({
+          threadRuntimesDir,
+          runtime,
+          dockerBinaryPath,
+          containerShellPath,
+        }).map((file) => writeExecutable(file.filePath, file.contents, file.mode)),
+      );
     },
   );
 
@@ -2548,63 +2292,46 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly bootstrapVersion?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {
-    const materialized = yield* bootstrapRegistry.materializeForThread(input.threadId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadRuntimeError({
-            message: "Failed to materialize thread runtime bootstrap.",
-            cause,
-          }),
-      ),
-    );
-    const runtimeId = input.runtimeId ?? input.existing?.runtimeId ?? makeRuntimeId(input.threadId);
-    const storageId =
-      runtimeId === makeRuntimeId(input.threadId) ? String(input.threadId) : String(runtimeId);
-    const cwd =
-      normalizeRequestedCwd(threadRuntimesDir, storageId, input.requestedCwd) ??
-      normalizeRequestedCwd(threadRuntimesDir, storageId, input.existing?.cwd) ??
-      CONTAINER_WORKSPACE_PATH;
-    const workspacePath = CONTAINER_WORKSPACE_PATH;
-    const imageRef = normalizeRuntimeImageRef(
-      input.imageRef?.trim() || input.existing?.imageRef || materialized.imageRef,
-    );
-    const now = new Date().toISOString();
-    const runtimeShellPath = nodePath.join(
-      runtimeBinDirForThread(threadRuntimesDir, storageId),
-      SHELL_RUNTIME_WRAPPER,
-    );
+    const bootstrap = yield* bootstrapResolver
+      .resolveForRuntime({
+        threadId: input.threadId,
+        ...(input.bootstrapVersion !== undefined
+          ? { bootstrapVersion: input.bootstrapVersion }
+          : {}),
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: "Failed to resolve thread runtime bootstrap.",
+              cause,
+            }),
+        ),
+      );
 
-    return {
+    if (bootstrap.versionFallback) {
+      yield* Effect.logDebug("runtime bootstrap version fell back to active blueprint", {
+        threadId: input.threadId,
+        requestedBootstrapVersion: bootstrap.versionFallback.requestedBootstrapVersion,
+        resolvedBootstrapVersion: bootstrap.versionFallback.resolvedBootstrapVersion,
+      });
+    }
+
+    return buildThreadRuntimeDescriptor({
+      threadRuntimesDir,
       threadId: input.threadId,
-      runtimeId,
-      backend: "docker",
-      status: input.existing?.status ?? "ready",
-      health: input.existing?.health ?? "unknown",
+      ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
       provider: input.provider,
       runtimeMode: input.runtimeMode,
-      imageRef,
-      containerName: input.existing?.containerName ?? runtimeNameFromId(runtimeId),
-      containerId: input.existing?.containerId ?? null,
-      workspacePath,
-      homePath: CONTAINER_HOME_PATH,
-      cwd,
-      shell: runtimeShellPath,
-      env: buildRuntimeEnvironment({
-        cwd,
-        workspacePath,
-        homePath: CONTAINER_HOME_PATH,
-        threadId: input.threadId,
-        runtimeId,
-        materializedEnv: materialized.env,
-        containerShellPath,
-        ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
-      }),
-      createdAt: input.existing?.createdAt ?? now,
-      updatedAt: now,
-      lastStartedAt: input.existing?.lastStartedAt ?? null,
-      lastStoppedAt: input.existing?.lastStoppedAt ?? null,
-      lastError: input.existing?.lastError ?? null,
-    } satisfies ThreadRuntimeDescriptor;
+      ...(input.imageRef !== undefined ? { imageRef: input.imageRef } : {}),
+      ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
+      ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
+      bootstrapImageRef: bootstrap.materialization.imageRef,
+      bootstrapEnv: bootstrap.materialization.env,
+      containerShellPath,
+      now: new Date().toISOString(),
+      ...(input.existing !== undefined ? { existing: input.existing } : {}),
+    });
   });
 
   const touchRuntime = Effect.fn("threadRuntime.touchRuntime")(function* (threadId: ThreadIdModel) {
@@ -2804,7 +2531,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     destroyRuntime: (threadId) =>
       Effect.gen(function* () {
         const runtime = yield* getRuntimeOrNotFound(threadId);
-        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtimeStorageId(runtime));
+        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtimeStorageIdFor(runtime));
         const remainingBindings = yield* Ref.get(runtimesRef).pipe(
           Effect.map((current) =>
             current.filter(
@@ -2835,19 +2562,21 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       getRuntimeOrNotFound(threadId).pipe(Effect.map(toExecutionContext)),
     resolveLaunchContext: (threadId) =>
       getRuntimeOrNotFound(threadId).pipe(
-        Effect.map((runtime) => toLaunchContext(threadRuntimesDir, runtime)),
+        Effect.map((runtime) => toLaunchContext({ threadRuntimesDir, runtime })),
       ),
     streamEvents: Stream.fromPubSub(events),
   } satisfies ThreadRuntimeShape;
 });
 
 export const ThreadRuntimeLive = Layer.effect(ThreadRuntime, makeThreadRuntime()).pipe(
+  Layer.provideMerge(RuntimeBootstrapResolverLive),
   Layer.provideMerge(RuntimeBootstrapRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
 );
 
 export function makeThreadRuntimeLive(options?: ThreadRuntimeLiveOptions) {
   return Layer.effect(ThreadRuntime, makeThreadRuntime(options)).pipe(
+    Layer.provideMerge(RuntimeBootstrapResolverLive),
     Layer.provideMerge(RuntimeBootstrapRegistryLive),
   );
 }

@@ -1,9 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { ThreadRuntimeLaunchContext } from "../Services/ThreadRuntime.ts";
-import {
-  hostWorkspacePathForContainerPath,
-  isWithinContainerWorkspace,
-} from "./ThreadRuntimePaths.ts";
+import { providerProcessCwdForLaunchContext } from "./RuntimeExecutionContext.ts";
 
 export interface ProviderRuntimeEnvironment {
   readonly launchContext: ThreadRuntimeLaunchContext;
@@ -22,12 +19,7 @@ export function buildProviderRuntimeEnvironment(input: {
   readonly launchContext: ThreadRuntimeLaunchContext;
   readonly commandPath: string;
 }): ProviderRuntimeEnvironment {
-  const processCwd = isWithinContainerWorkspace(input.launchContext.execution.cwd)
-    ? hostWorkspacePathForContainerPath(
-        input.launchContext.hostWorkspacePath,
-        input.launchContext.execution.cwd,
-      )
-    : input.launchContext.hostWorkspacePath;
+  const processCwd = providerProcessCwdForLaunchContext(input.launchContext);
   return {
     launchContext: input.launchContext,
     commandPath: input.commandPath,

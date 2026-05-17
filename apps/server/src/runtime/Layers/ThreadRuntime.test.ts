@@ -6,7 +6,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer } from "effect";
 
@@ -543,6 +543,59 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }),
   );
 
+  it.effect(
+    "uses runtime-id derived storage and container names for shared and isolated runtimes",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const runtime = yield* ThreadRuntime;
+        const sharedRuntimeId = RuntimeSessionId.make("project-runtime:project-alpha");
+        const isolatedRuntimeId = RuntimeSessionId.make("isolated-runtime:thread-runtime-isolated");
+
+        const shared = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-shared-binding"),
+          runtimeId: sharedRuntimeId,
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const isolated = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-isolated"),
+          runtimeId: isolatedRuntimeId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const sharedLaunch = yield* runtime.resolveLaunchContext(shared.threadId);
+        const isolatedLaunch = yield* runtime.resolveLaunchContext(isolated.threadId);
+
+        assert.equal(shared.containerName, "runtime-cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
+        assert.equal(
+          isolated.containerName,
+          "runtime-aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
+        );
+        assert.equal(
+          path.basename(sharedLaunch.hostRuntimePath),
+          "cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE",
+        );
+        assert.equal(
+          path.basename(isolatedLaunch.hostRuntimePath),
+          "aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
+        );
+        assert.equal(
+          sharedLaunch.hostWorkspacePath,
+          path.join(sharedLaunch.hostRuntimePath, "workspace"),
+        );
+        assert.equal(
+          isolatedLaunch.hostHomePath,
+          path.join(isolatedLaunch.hostRuntimePath, "home"),
+        );
+      }),
+  );
+
   it.effect("refreshes auth files without clobbering runtime codex config", () =>
     Effect.gen(function* () {
       docker.calls.length = 0;
@@ -715,6 +768,45 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 });
 
 runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
+  it.effect(
+    "injects all registered homelab secrets into runtime env without writing them to instruction files",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        mutableRuntimeSecretEnv = {
+          FIRST_REGISTERED_SECRET: "first-secret-value",
+          SECOND_REGISTERED_SECRET: "second-secret-value",
+        };
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-secret-injection"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const agentsPath = path.join(launchContext.hostWorkspacePath, "AGENTS.md");
+        const claudePath = path.join(launchContext.hostWorkspacePath, "CLAUDE.md");
+
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        assert.match(secretEnvContents, /export FIRST_REGISTERED_SECRET='first-secret-value'/);
+        assert.match(secretEnvContents, /export SECOND_REGISTERED_SECRET='second-secret-value'/);
+
+        const generatedContext = [
+          yield* fileSystem.readFileString(agentsPath),
+          yield* fileSystem.readFileString(claudePath),
+        ].join("\n");
+        assert.doesNotMatch(generatedContext, /first-secret-value/);
+        assert.doesNotMatch(generatedContext, /second-secret-value/);
+      }),
+  );
+
   it.effect(
     "rewrites the runtime secret env file after secrets change without restarting docker",
     () =>
