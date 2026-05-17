@@ -48,6 +48,8 @@ import {
   ProviderAdapterRegistry,
   type ProviderAdapterRegistryShape,
 } from "../Services/ProviderAdapterRegistry.ts";
+import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
+import type { ProviderReadiness } from "../ProviderSelectionPolicy.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
@@ -81,6 +83,7 @@ const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const noProviderReadiness: ProviderReadiness | undefined = undefined;
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -610,6 +613,66 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
     assert.instanceOf(failure, ProviderValidationError);
     assert.include(failure.issue, "Provider instance 'codex_personal' is disabled");
     assert.equal(codex.startSession.mock.calls.length, 0);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive uses ProviderRegistry policy before adapter selection", () =>
+  Effect.gen(function* () {
+    const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
+    const registry = makeAdapterRegistryMock({
+      [CURSOR_DRIVER]: cursor.adapter,
+    });
+    const providerRegistry: ProviderRegistryShape = {
+      getProviders: Effect.succeed([]),
+      refresh: () => Effect.succeed([]),
+      refreshInstance: () => Effect.succeed([]),
+      getProviderReadiness: () => Effect.succeed(noProviderReadiness),
+      resolveProviderSelection: () =>
+        Effect.succeed({
+          _tag: "unavailable" as const,
+          requestedInstanceId: ProviderInstanceId.make("cursor"),
+          issue:
+            "Cursor Agent is not available for Project Runtime sessions until a pinned runtime binary is configured.",
+        }),
+      getSelectableProviders: () => Effect.succeed([]),
+      getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+        Effect.succeed({
+          provider,
+          packageName: null,
+          update: null,
+        }),
+      setProviderMaintenanceActionState: () => Effect.succeed([]),
+      streamChanges: Stream.empty,
+    };
+    const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
+    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(Layer.succeed(ProviderRegistry, providerRegistry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    );
+
+    const failure = yield* Effect.flip(
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* provider.startSession(asThreadId("thread-policy-blocked"), {
+          provider: CURSOR_DRIVER,
+          providerInstanceId: ProviderInstanceId.make("cursor"),
+          threadId: asThreadId("thread-policy-blocked"),
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(providerLayer)),
+    );
+
+    assert.instanceOf(failure, ProviderValidationError);
+    assert.include(failure.issue, "Project Runtime");
+    assert.equal(cursor.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 

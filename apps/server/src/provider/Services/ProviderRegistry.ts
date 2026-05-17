@@ -1,12 +1,15 @@
 /**
  * ProviderRegistry - Provider snapshot service.
  *
- * Owns provider install/auth/version/model snapshots and exposes the latest
- * provider state to transport layers.
+ * Owns provider install/auth/version/model snapshots and the runtime-aware
+ * selection policy built from those snapshots. User-facing readiness should
+ * mean Project Runtime readiness unless a caller explicitly asks for host
+ * context.
  *
  * @module ProviderRegistry
  */
 import type {
+  ModelSelection,
   ProviderInstanceId,
   ProviderDriverKind,
   ServerProvider,
@@ -16,6 +19,11 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import type {
+  ProviderReadiness,
+  ProviderSelectionResult,
+  ProviderSelectionRuntimeContext,
+} from "../ProviderSelectionPolicy.ts";
 
 export type ProviderMaintenanceActionKind = "update";
 
@@ -47,6 +55,37 @@ export interface ProviderRegistryShape {
   readonly refreshInstance: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /**
+   * Resolve runtime-aware readiness for one provider instance. The default
+   * context is the Homelab Project Runtime because user-facing provider
+   * status must mean "usable from a Project Runtime", not merely "host CLI
+   * probe succeeded".
+   */
+  readonly getProviderReadiness: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly runtimeContext?: ProviderSelectionRuntimeContext | undefined;
+  }) => Effect.Effect<ProviderReadiness | undefined>;
+
+  /**
+   * Central provider/model selection policy. Answers whether a requested
+   * instance/model is usable and, when allowed, which fallback execution
+   * target should run instead.
+   */
+  readonly resolveProviderSelection: (input: {
+    readonly requestedInstanceId?: ProviderInstanceId | undefined;
+    readonly requestedProvider?: ProviderDriverKind | undefined;
+    readonly modelSelection?: ModelSelection | undefined;
+    readonly runtimeContext?: ProviderSelectionRuntimeContext | undefined;
+    readonly allowFallback?: boolean | undefined;
+  }) => Effect.Effect<ProviderSelectionResult>;
+
+  /**
+   * Runtime-ready provider snapshots suitable for user-facing pickers.
+   */
+  readonly getSelectableProviders: (input?: {
+    readonly runtimeContext?: ProviderSelectionRuntimeContext | undefined;
+  }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**
    * Resolve the maintenance capabilities owned by one live provider instance.

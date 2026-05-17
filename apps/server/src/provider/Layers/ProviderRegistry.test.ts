@@ -747,9 +747,25 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               instanceId: cursorInstanceId,
             });
 
-            assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, [
-              ...initialProvider.models,
-            ]);
+            const projectedProviders = yield* registry.getProviders;
+            assert.deepStrictEqual(projectedProviders[0]?.models, [...initialProvider.models]);
+            assert.equal(projectedProviders[0]?.status, "error");
+            assert.include(projectedProviders[0]?.message ?? "", "Project Runtime");
+            const hostReadiness = yield* registry.getProviderReadiness({
+              instanceId: cursorInstanceId,
+              runtimeContext: { environment: "host" },
+            });
+            assert.equal(hostReadiness?.usable, true);
+            assert.deepStrictEqual(
+              yield* registry.getProviderMaintenanceCapabilitiesForInstance(
+                cursorInstanceId,
+                cursorDriver,
+              ),
+              makeManualOnlyProviderMaintenanceCapabilities({
+                provider: cursorDriver,
+                packageName: null,
+              }),
+            );
             yield* PubSub.publish(changes, refreshedProvider);
 
             let cachedProvider = yield* readProviderStatusCache(filePath);

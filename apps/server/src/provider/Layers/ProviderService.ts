@@ -1,9 +1,9 @@
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
- * Routes validated transport/API calls to provider adapters through
- * `ProviderAdapterRegistry` and `ProviderSessionDirectory`, and exposes a
- * unified provider event stream for subscribers.
+ * Routes transport/API calls through `ProviderRegistry` selection policy,
+ * `ProviderAdapterRegistry` adapter lookup, and `ProviderSessionDirectory`,
+ * and exposes a unified provider event stream for subscribers.
  *
  * It does not implement provider protocol details (adapter concern).
  *
@@ -50,6 +50,7 @@ import {
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
+import { ProviderRegistry } from "../Services/ProviderRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
@@ -224,6 +225,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
 
   const registry = yield* ProviderAdapterRegistry;
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry);
   const directory = yield* ProviderSessionDirectory;
   const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
@@ -319,6 +321,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly threadId: ThreadId;
     readonly runtimeId?: RuntimeSessionId;
     readonly provider: ProviderDriverKind;
+    readonly runtimeProvider: ProviderKind | null;
     readonly runtimeMode: ProviderSession["runtimeMode"];
     readonly requestedCwd?: string;
     readonly operation: string;
@@ -329,12 +332,37 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           threadId: input.threadId,
           ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
           provider: input.provider,
-          runtimeProvider: runtimeProviderForDriver(input.provider),
+          runtimeProvider: input.runtimeProvider,
           runtimeMode: input.runtimeMode,
           ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
           operation: input.operation,
         })
       : Effect.sync(() => undefined);
+
+  const resolveProviderSelectionTarget = Effect.fn("resolveProviderSelectionTarget")(
+    function* (input: {
+      readonly operation: string;
+      readonly instanceId: ProviderInstanceId;
+      readonly requestedProvider?: ProviderDriverKind | undefined;
+      readonly modelSelection?: ModelSelection | undefined;
+    }) {
+      if (Option.isNone(providerRegistry)) {
+        return undefined;
+      }
+      const selection = yield* providerRegistry.value.resolveProviderSelection({
+        requestedInstanceId: input.instanceId,
+        ...(input.requestedProvider !== undefined
+          ? { requestedProvider: input.requestedProvider }
+          : {}),
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        allowFallback: false,
+      });
+      if (selection._tag === "unavailable") {
+        return yield* toValidationError(input.operation, selection.issue);
+      }
+      return selection.target;
+    },
+  );
 
   // Rebuild the map of id → adapter from the registry and fork a new event
   // subscription for every instance that is either brand new or whose adapter
@@ -387,6 +415,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       "provider.thread_id": input.binding.threadId,
     });
     return yield* Effect.gen(function* () {
+      const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const selectionTarget = yield* resolveProviderSelectionTarget({
+        operation: input.operation,
+        instanceId: bindingInstanceId,
+        requestedProvider: input.binding.provider,
+        ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+      });
       const adapter = yield* registry.getByInstance(bindingInstanceId);
       const hasResumeCursor =
         input.binding.resumeCursor !== null && input.binding.resumeCursor !== undefined;
@@ -418,10 +453,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
-      const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
       const executionContext = yield* resolveProviderExecutionContext({
         threadId: input.binding.threadId,
         provider: input.binding.provider,
+        runtimeProvider:
+          selectionTarget?.runtimeProvider ?? runtimeProviderForDriver(input.binding.provider),
         runtimeMode: input.binding.runtimeMode ?? "full-access",
         ...(persistedCwd ? { requestedCwd: persistedCwd } : {}),
         operation: input.operation,
@@ -433,7 +469,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         provider: input.binding.provider,
         providerInstanceId: bindingInstanceId,
         ...(resumeCwd ? { cwd: resumeCwd } : {}),
-        ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+        ...(selectionTarget?.modelSelection
+          ? { modelSelection: selectionTarget.modelSelection }
+          : persistedModelSelection
+            ? { modelSelection: persistedModelSelection }
+            : {}),
         ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
         runtimeMode: input.binding.runtimeMode ?? "full-access",
       });
@@ -567,7 +607,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       return yield* Effect.gen(function* () {
         const instanceInfo = yield* registry.getInstanceInfo(resolvedInstanceId);
-        const resolvedProvider = instanceInfo.driverKind;
+        const selectionTarget = yield* resolveProviderSelectionTarget({
+          operation: "ProviderService.startSession",
+          instanceId: resolvedInstanceId,
+          ...(parsed.provider !== undefined ? { requestedProvider: parsed.provider } : {}),
+          ...(parsed.modelSelection !== undefined ? { modelSelection: parsed.modelSelection } : {}),
+        });
+        const resolvedProvider = selectionTarget?.driverKind ?? instanceInfo.driverKind;
         metricProvider = resolvedProvider;
         if (parsed.provider !== undefined && parsed.provider !== resolvedProvider) {
           return yield* toValidationError(
@@ -579,6 +625,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...parsed,
           threadId,
           provider: resolvedProvider,
+          ...(selectionTarget?.modelSelection !== undefined
+            ? { modelSelection: selectionTarget.modelSelection }
+            : {}),
         };
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
@@ -621,6 +670,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           threadId,
           ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
           provider: resolvedProvider,
+          runtimeProvider:
+            selectionTarget?.runtimeProvider ?? runtimeProviderForDriver(resolvedProvider),
           runtimeMode: input.runtimeMode,
           ...(effectiveCwd !== undefined ? { requestedCwd: effectiveCwd } : {}),
           operation: "ProviderService.startSession",

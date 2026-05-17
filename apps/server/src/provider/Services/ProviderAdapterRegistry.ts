@@ -3,9 +3,10 @@
  *
  * Maps a `ProviderInstanceId` (the new per-instance routing key) or a
  * `ProviderDriverKind` (legacy single-instance-per-driver key) to the concrete
- * adapter service (Codex, Claude, etc). It does not own session lifecycle
- * or routing rules; `ProviderService` uses this registry together with
- * `ProviderSessionDirectory`.
+ * adapter service (Codex, Claude, etc). It deliberately remains a narrow
+ * adapter factory facade: provider readiness, runtime support, model fallback,
+ * and selection policy live in `ProviderRegistry`, while `ProviderService`
+ * uses this registry only after policy has selected an execution target.
  *
  * During the driver/instance migration this tag exposes both flavours:
  *

@@ -635,6 +635,14 @@ const buildAppUnderTest = (options?: {
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([]),
           refresh: () => Effect.succeed([]),
+          refreshInstance: () => Effect.succeed([]),
+          getProviderReadiness: () => Effect.succeed(undefined),
+          resolveProviderSelection: () =>
+            Effect.succeed({
+              _tag: "unavailable" as const,
+              issue: "No provider instance is available.",
+            }),
+          getSelectableProviders: () => Effect.succeed([]),
           streamChanges: Stream.empty,
           ...options?.layers?.providerRegistry,
         }),

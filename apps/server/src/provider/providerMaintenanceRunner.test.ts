@@ -19,6 +19,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
+import type { ProviderReadiness } from "./ProviderSelectionPolicy.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import {
   clearLatestProviderVersionCacheForTests,
@@ -34,6 +35,7 @@ const CODEX_INSTANCE_ID = ProviderInstanceId.make("codex");
 const CURSOR_INSTANCE_ID = ProviderInstanceId.make("cursor");
 const OPENCODE_INSTANCE_ID = ProviderInstanceId.make("opencode");
 const encoder = new TextEncoder();
+const noProviderReadiness: ProviderReadiness | undefined = undefined;
 
 afterEach(() => {
   clearLatestProviderVersionCacheForTests();
@@ -185,6 +187,13 @@ function makeRegistry(
       getProviders: Ref.get(providersRef),
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
+      getProviderReadiness: () => Effect.succeed(noProviderReadiness),
+      resolveProviderSelection: () =>
+        Effect.succeed({
+          _tag: "unavailable" as const,
+          issue: "No provider instance is available.",
+        }),
+      getSelectableProviders: () => Ref.get(providersRef),
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),
       setProviderMaintenanceActionState,

@@ -1,6 +1,7 @@
 /**
  * ProviderRegistryLive — aggregates per-instance snapshot streams into a
- * single materialized list.
+ * single materialized list and applies Homelab's provider capability /
+ * selection policy before snapshots reach UI or orchestration consumers.
  *
  * Historically this Layer composed four per-kind Live Layers
  * (`CodexProviderLive`, `ClaudeProviderLive`, …) that each exposed a
@@ -54,6 +55,12 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
+import {
+  interpretProviderReadiness,
+  listSelectableProviders,
+  projectProviderSnapshotForRuntime,
+  resolveProviderSelection as resolveProviderSelectionPolicy,
+} from "../ProviderSelectionPolicy.ts";
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -111,6 +118,13 @@ export const mergeProviderSnapshot = (
         ...nextProvider,
         models: mergeProviderModels(previousProvider.models, nextProvider.models),
       };
+
+const applyProviderSelectionPolicy = (provider: ServerProvider): ServerProvider =>
+  projectProviderSnapshotForRuntime(provider);
+
+const applyProviderSelectionPolicyList = (
+  providers: ReadonlyArray<ServerProvider>,
+): ReadonlyArray<ServerProvider> => providers.map(applyProviderSelectionPolicy);
 
 export const mergeProviderSnapshots = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -680,15 +694,64 @@ export const ProviderRegistryLive = Layer.effect(
     });
 
     return {
-      getProviders: Ref.get(providersRef),
+      getProviders: Ref.get(providersRef).pipe(Effect.map(applyProviderSelectionPolicyList)),
       refresh: (provider?: ProviderDriverKind) =>
-        refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
+        refresh(provider).pipe(
+          Effect.catchCause(recoverRefreshFailure),
+          Effect.map(applyProviderSelectionPolicyList),
+        ),
       refreshInstance: (instanceId: ProviderInstanceId) =>
-        refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+        refreshInstance(instanceId).pipe(
+          Effect.catchCause(recoverRefreshFailure),
+          Effect.map(applyProviderSelectionPolicyList),
+        ),
+      getProviderReadiness: (input) =>
+        Ref.get(providersRef).pipe(
+          Effect.map((providers) => {
+            const provider = providers.find(
+              (candidate) => candidate.instanceId === input.instanceId,
+            );
+            return provider
+              ? interpretProviderReadiness(provider, input.runtimeContext)
+              : undefined;
+          }),
+        ),
+      resolveProviderSelection: (input) =>
+        Ref.get(providersRef).pipe(
+          Effect.map((providers) =>
+            resolveProviderSelectionPolicy({
+              providers,
+              ...(input.requestedInstanceId !== undefined
+                ? { requestedInstanceId: input.requestedInstanceId }
+                : {}),
+              ...(input.requestedProvider !== undefined
+                ? { requestedProvider: input.requestedProvider }
+                : {}),
+              ...(input.modelSelection !== undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
+              ...(input.runtimeContext !== undefined
+                ? { runtimeContext: input.runtimeContext }
+                : {}),
+              ...(input.allowFallback !== undefined ? { allowFallback: input.allowFallback } : {}),
+            }),
+          ),
+        ),
+      getSelectableProviders: (input) =>
+        Ref.get(providersRef).pipe(
+          Effect.map((providers) =>
+            listSelectableProviders({
+              providers,
+              ...(input?.runtimeContext !== undefined
+                ? { runtimeContext: input.runtimeContext }
+                : {}),
+            }),
+          ),
+        ),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {
-        return Stream.fromPubSub(changesPubSub);
+        return Stream.fromPubSub(changesPubSub).pipe(Stream.map(applyProviderSelectionPolicyList));
       },
     } satisfies ProviderRegistryShape;
   }),
