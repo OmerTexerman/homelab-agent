@@ -5,6 +5,7 @@ import type {
   OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { DEFAULT_THREAD_RUNTIME_MODE } from "@t3tools/contracts";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -19,7 +20,12 @@ import {
 } from "./commandInvariants.ts";
 import {
   defaultProjectRuntimeId,
+  isStandaloneProjectId,
   isolatedThreadRuntimeId,
+  standaloneProjectDefaultRuntimeId,
+  standaloneProjectId,
+  standaloneProjectTitle,
+  standaloneProjectWorkspaceRoot,
 } from "../runtime/ProjectRuntimePolicy.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -207,6 +213,150 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.standalone.create": {
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const projectId = standaloneProjectId();
+      const existingProject = readModel.projects.find(
+        (project) => isStandaloneProjectId(project.id) && project.deletedAt === null,
+      );
+      const defaultRuntimeId =
+        existingProject?.defaultRuntimeId ?? standaloneProjectDefaultRuntimeId();
+      const runtimeSelectionMode = command.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      const runtimeId =
+        runtimeSelectionMode === "isolated"
+          ? isolatedThreadRuntimeId(command.threadId)
+          : defaultRuntimeId;
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId,
+          runtimeId,
+          runtimeSelectionMode,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      if (existingProject) {
+        return threadCreatedEvent;
+      }
+
+      const projectCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "project.created",
+        payload: {
+          projectId,
+          title: standaloneProjectTitle(),
+          workspaceRoot: standaloneProjectWorkspaceRoot(),
+          defaultRuntimeId,
+          defaultModelSelection: command.modelSelection,
+          scripts: [],
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      return [
+        projectCreatedEvent,
+        {
+          ...threadCreatedEvent,
+          causationEventId: projectCreatedEvent.eventId,
+        },
+      ];
+    }
+
+    case "thread.standalone.promote-to-project": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!isStandaloneProjectId(thread.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a standalone thread.`,
+        });
+      }
+      yield* requireProjectAbsent({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+
+      const defaultRuntimeId = defaultProjectRuntimeId(command.projectId);
+      const runtimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      const runtimeId =
+        runtimeSelectionMode === "isolated"
+          ? (thread.runtimeId ?? isolatedThreadRuntimeId(thread.id))
+          : defaultRuntimeId;
+      const projectCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "project.created",
+        payload: {
+          projectId: command.projectId,
+          title: command.title,
+          workspaceRoot: createLogicalProjectWorkspaceRoot(command.projectId),
+          defaultRuntimeId,
+          defaultModelSelection:
+            command.defaultModelSelection !== undefined
+              ? command.defaultModelSelection
+              : thread.modelSelection,
+          scripts: [],
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      return [
+        projectCreatedEvent,
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          causationEventId: projectCreatedEvent.eventId,
+          type: "thread.meta-updated",
+          payload: {
+            threadId: command.threadId,
+            projectId: command.projectId,
+            runtimeId,
+            runtimeSelectionMode,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.delete": {

@@ -1,12 +1,18 @@
 import {
+  ProjectId,
   RuntimeSessionId,
   DEFAULT_THREAD_RUNTIME_MODE,
   type OrchestrationProject,
   type OrchestrationThread,
-  type ProjectId,
   type ThreadId,
   type ThreadRuntimeMode,
 } from "@t3tools/contracts";
+import {
+  STANDALONE_PROJECT_ID,
+  STANDALONE_PROJECT_TITLE,
+  createStandaloneProjectWorkspaceRoot,
+  isStandaloneProjectId as isStandaloneProjectIdValue,
+} from "@t3tools/shared/standaloneProject";
 
 export interface ProjectRuntimeAssignment {
   readonly projectId: ProjectId;
@@ -23,6 +29,26 @@ export function defaultProjectRuntimeId(projectId: ProjectId): RuntimeSessionId 
 
 export function isolatedThreadRuntimeId(threadId: ThreadId): RuntimeSessionId {
   return RuntimeSessionId.make(`isolated-runtime:${String(threadId)}`);
+}
+
+export function standaloneProjectId(): ProjectId {
+  return ProjectId.make(STANDALONE_PROJECT_ID);
+}
+
+export function standaloneProjectTitle(): string {
+  return STANDALONE_PROJECT_TITLE;
+}
+
+export function standaloneProjectWorkspaceRoot(): string {
+  return createStandaloneProjectWorkspaceRoot();
+}
+
+export function isStandaloneProjectId(projectId: ProjectId | string): boolean {
+  return isStandaloneProjectIdValue(String(projectId));
+}
+
+export function standaloneProjectDefaultRuntimeId(): RuntimeSessionId {
+  return defaultProjectRuntimeId(standaloneProjectId());
 }
 
 export function defaultRuntimeIdForProject(

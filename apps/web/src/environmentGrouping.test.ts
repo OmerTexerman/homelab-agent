@@ -6,6 +6,11 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime";
+import {
+  STANDALONE_PROJECT_ID,
+  STANDALONE_PROJECT_TITLE,
+  createStandaloneProjectWorkspaceRoot,
+} from "@t3tools/shared/standaloneProject";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +28,7 @@ import {
   derivePhysicalProjectKey,
   resolveProjectGroupingMode,
 } from "./logicalProject";
+import { buildSidebarProjectSnapshots } from "./sidebarProjectGrouping";
 import type { Project, SidebarThreadSummary } from "./types";
 import { DEFAULT_INTERACTION_MODE } from "./types";
 
@@ -641,6 +647,29 @@ describe("environment grouping", () => {
         allProjects.find((p) => p.id === remoteOnlyProjectId)!,
       );
       expect(groups.get(remoteKey)).toHaveLength(1);
+    });
+
+    it("surfaces the hidden standalone project as a separate scratch group", () => {
+      const state = makeFixtureState();
+      const standaloneProject = makeProject({
+        id: ProjectId.make(STANDALONE_PROJECT_ID),
+        environmentId: primaryEnvId,
+        name: "Internal Standalone Project",
+        cwd: createStandaloneProjectWorkspaceRoot(),
+      });
+      const snapshots = buildSidebarProjectSnapshots({
+        projects: [...selectProjectsAcrossEnvironments(state), standaloneProject],
+        settings: DEFAULT_GROUPING_SETTINGS,
+        primaryEnvironmentId: primaryEnvId,
+        resolveEnvironmentLabel: () => null,
+      });
+
+      const standalone = snapshots.find((snapshot) => snapshot.isStandalone);
+      expect(standalone).toBeDefined();
+      expect(standalone?.displayName).toBe(STANDALONE_PROJECT_TITLE);
+      expect(standalone?.memberProjects).toHaveLength(1);
+      expect(standalone?.memberProjects[0]?.isStandalone).toBe(true);
+      expect(snapshots.filter((snapshot) => !snapshot.isStandalone)).toHaveLength(3);
     });
   });
 });

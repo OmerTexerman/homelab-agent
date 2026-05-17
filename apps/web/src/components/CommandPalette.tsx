@@ -10,6 +10,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -77,7 +78,14 @@ import {
 } from "../lib/projectPaths";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject } from "../lib/threadSort";
-import { cn, isMacPlatform, isWindowsPlatform, newCommandId, newProjectId } from "../lib/utils";
+import {
+  cn,
+  isMacPlatform,
+  isWindowsPlatform,
+  newCommandId,
+  newProjectId,
+  newThreadId,
+} from "../lib/utils";
 import {
   selectProjectsAcrossEnvironments,
   selectSidebarThreadsAcrossEnvironments,
@@ -128,6 +136,7 @@ import {
   shouldShowEditorOpenInControls,
   shouldShowRemoteProjectCloneUi,
 } from "../productCapabilities";
+import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -416,6 +425,10 @@ function OpenCommandPaletteDialog() {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const normalProjects = useMemo(
+    () => projects.filter((project) => !isStandaloneProject({ id: project.id, cwd: project.cwd })),
+    [projects],
+  );
   const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const keybindings = useServerKeybindings();
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
@@ -665,7 +678,7 @@ function OpenCommandPaletteDialog() {
   const projectSearchItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects,
+        projects: normalProjects,
         valuePrefix: "project",
         icon: (project) => (
           <ProjectFavicon
@@ -676,13 +689,13 @@ function OpenCommandPaletteDialog() {
         ),
         runProject: openProjectFromSearch,
       }),
-    [openProjectFromSearch, projects],
+    [normalProjects, openProjectFromSearch],
   );
 
   const projectThreadItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects,
+        projects: normalProjects,
         valuePrefix: "new-thread-in",
         description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
         additionalSearchTerms: ["new thread", "shared runtime", "project runtime", "queue"],
@@ -711,7 +724,7 @@ function OpenCommandPaletteDialog() {
       activeThread,
       defaultProjectRef,
       handleNewThread,
-      projects,
+      normalProjects,
       settings.defaultThreadEnvMode,
     ],
   );
@@ -719,7 +732,7 @@ function OpenCommandPaletteDialog() {
   const isolatedProjectThreadItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects,
+        projects: normalProjects,
         valuePrefix: "new-isolated-thread-in",
         description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
         additionalSearchTerms: [
@@ -748,7 +761,7 @@ function OpenCommandPaletteDialog() {
       activeThread,
       defaultProjectRef,
       handleNewThread,
-      projects,
+      normalProjects,
       settings.defaultThreadEnvMode,
     ],
   );
@@ -1100,12 +1113,106 @@ function OpenCommandPaletteDialog() {
     openAddProjectFlow();
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
+  const createStandaloneThread = useCallback(
+    async (runtimeSelectionMode: ThreadRuntimeMode = "shared") => {
+      const environmentId = defaultAddProjectEnvironmentId;
+      if (!environmentId) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "No runtime environment available",
+            description: "Connect an environment before creating standalone threads.",
+          }),
+        );
+        return;
+      }
+
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Runtime environment unavailable",
+            description: "Reconnect this environment before creating standalone threads.",
+          }),
+        );
+        return;
+      }
+
+      const threadId = newThreadId();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.standalone.create",
+          commandId: newCommandId(),
+          threadId,
+          title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          runtimeSelectionMode,
+          createdAt: new Date().toISOString(),
+        });
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+        });
+        setOpen(false);
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to create standalone thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [defaultAddProjectEnvironmentId, navigate, setOpen],
+  );
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
-  if (projects.length > 0) {
-    const activeProjectTitle = currentProjectId
-      ? (projectTitleById.get(currentProjectId) ?? null)
-      : null;
+  actionItems.push({
+    kind: "action",
+    value: "action:new-standalone-thread",
+    searchTerms: ["new thread", "standalone", "scratch", "one-off", "chat", "create"],
+    title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+    description: HOMELAB_PRODUCT_COPY.standalone.newThreadDescription,
+    icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await createStandaloneThread("shared");
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:new-isolated-standalone-thread",
+    searchTerms: [
+      "new thread",
+      "standalone",
+      "scratch",
+      "one-off",
+      "isolated runtime",
+      "runtime clone",
+      "parallel",
+      "containment",
+    ],
+    title: HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction,
+    description: HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadDescription,
+    icon: <GitBranchPlusIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await createStandaloneThread("isolated");
+    },
+  });
+
+  if (normalProjects.length > 0) {
+    const activeProjectTitle =
+      currentProjectId && normalProjects.some((project) => project.id === currentProjectId)
+        ? (projectTitleById.get(currentProjectId) ?? null)
+        : null;
 
     if (activeProjectTitle) {
       actionItems.push({
@@ -1306,7 +1413,7 @@ function OpenCommandPaletteDialog() {
       if (cwd.length === 0) return;
 
       const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === browseEnvironmentId),
+        normalProjects.filter((project) => project.environmentId === browseEnvironmentId),
         cwd,
       );
       if (existing) {
@@ -1366,7 +1473,7 @@ function OpenCommandPaletteDialog() {
       currentProjectCwdForBrowse,
       handleNewThread,
       navigate,
-      projects,
+      normalProjects,
       setOpen,
       settings.defaultThreadEnvMode,
       settings.sidebarThreadSortOrder,

@@ -20,6 +20,18 @@ export const HOMELAB_PRODUCT_COPY = {
     emptySidebarDescription:
       "A logical project owns one Project Runtime. Threads inside that project use it by default; isolated clones are explicit.",
   },
+  standalone: {
+    title: "Standalone Threads",
+    shortTitle: "Scratch",
+    newThreadAction: "New standalone thread",
+    newThreadDescription:
+      "One-off work in the scratch runtime and memory scope; promote it into a project later.",
+    newIsolatedThreadAction: "New isolated standalone thread",
+    newIsolatedThreadDescription:
+      "One-off work in an isolated scratch runtime clone for containment or parallel work.",
+    promoteAction: "Promote to project",
+    promoteDescription: "Move this thread into a new named logical project.",
+  },
   projectRuntime: {
     title: "Project Runtime",
     defaultThreadRuntimeTitle: "Default Project Runtime",

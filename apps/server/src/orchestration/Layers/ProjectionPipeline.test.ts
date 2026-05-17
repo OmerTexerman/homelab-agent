@@ -6,6 +6,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  RuntimeSessionId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -222,6 +223,130 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
 
       const pendingTurnStarts = yield* projectionTurnRepository.listPendingTurnStarts();
       assert.deepStrictEqual(pendingTurnStarts, []);
+    }),
+  );
+
+  it.effect("updates projection project membership when a thread is moved", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const standaloneProjectId = ProjectId.make("system:standalone");
+      const promotedProjectId = ProjectId.make("project-promoted");
+      const threadId = ThreadId.make("thread-promoted");
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("evt-move-project-standalone"),
+        aggregateKind: "project",
+        aggregateId: standaloneProjectId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-move-1"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-move-1"),
+        metadata: {},
+        payload: {
+          projectId: standaloneProjectId,
+          title: "Standalone Threads",
+          workspaceRoot: "homelab://project/system%3Astandalone",
+          defaultRuntimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("evt-move-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-move-2"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-move-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: standaloneProjectId,
+          runtimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+          runtimeSelectionMode: "shared",
+          title: "Promote me",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("evt-move-project-promoted"),
+        aggregateKind: "project",
+        aggregateId: promotedProjectId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-move-3"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-move-3"),
+        metadata: {},
+        payload: {
+          projectId: promotedProjectId,
+          title: "Promoted",
+          workspaceRoot: "homelab://project/project-promoted",
+          defaultRuntimeId: RuntimeSessionId.make("project-runtime:project-promoted"),
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.meta-updated",
+        eventId: EventId.make("evt-move-thread-project"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-move-4"),
+        causationEventId: EventId.make("evt-move-project-promoted"),
+        correlationId: CommandId.make("cmd-move-4"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: promotedProjectId,
+          runtimeId: RuntimeSessionId.make("project-runtime:project-promoted"),
+          runtimeSelectionMode: "shared",
+          updatedAt: now,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly threadId: string;
+        readonly projectId: string;
+        readonly runtimeId: string;
+      }>`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          runtime_id AS "runtimeId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+
+      assert.deepEqual(rows, [
+        {
+          threadId: "thread-promoted",
+          projectId: "project-promoted",
+          runtimeId: "project-runtime:project-promoted",
+        },
+      ]);
     }),
   );
 });

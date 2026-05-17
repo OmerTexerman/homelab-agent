@@ -9,6 +9,11 @@ import {
   type OrchestrationProject,
   type OrchestrationThread,
 } from "@t3tools/contracts";
+import {
+  STANDALONE_PROJECT_ID,
+  STANDALONE_PROJECT_TITLE,
+  createStandaloneProjectWorkspaceRoot,
+} from "@t3tools/shared/standaloneProject";
 import { describe, expect, it } from "vitest";
 
 import { redactHomelabViewText, renderHomelabContextViewFiles } from "./HomelabContextView.ts";
@@ -176,6 +181,41 @@ describe("HomelabContextView", () => {
       messagesPath: ".homelab/threads/thread_thread-1/messages.jsonl",
       messageCount: 2,
     });
+  });
+
+  it("renders standalone threads under the hidden standalone project scope", () => {
+    const standaloneProjectId = ProjectId.make(STANDALONE_PROJECT_ID);
+    const standaloneRuntimeId = RuntimeSessionId.make("project-runtime:system:standalone");
+    const standaloneProject: Pick<
+      OrchestrationProject,
+      "id" | "title" | "workspaceRoot" | "defaultRuntimeId"
+    > = {
+      id: standaloneProjectId,
+      title: STANDALONE_PROJECT_TITLE,
+      workspaceRoot: createStandaloneProjectWorkspaceRoot(),
+      defaultRuntimeId: standaloneRuntimeId,
+    };
+    const thread = makeThread({
+      id: ThreadId.make("thread-standalone"),
+      projectId: standaloneProjectId,
+      runtimeId: standaloneRuntimeId,
+      title: "Scratch router check",
+    });
+
+    const files = byPath(
+      renderHomelabContextViewFiles({
+        project: standaloneProject,
+        threads: [thread],
+      }),
+    );
+
+    expect(files.get(".homelab/README.md")).toContain("Standalone Threads Homelab Context");
+    expect(files.get(".homelab/threads/thread_thread-standalone/summary.md")).toContain(
+      "Project: system:standalone",
+    );
+    expect(files.get(".homelab/threads/index.jsonl")).toContain(
+      "project-runtime:system:standalone",
+    );
   });
 
   it("redacts common secret value shapes while preserving broker placeholders", () => {

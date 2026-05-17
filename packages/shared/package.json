@@ -75,6 +75,10 @@
       "types": "./src/workspace.ts",
       "import": "./src/workspace.ts"
     },
+    "./standaloneProject": {
+      "types": "./src/standaloneProject.ts",
+      "import": "./src/standaloneProject.ts"
+    },
     "./providerInterruptions": {
       "types": "./src/providerInterruptions.ts",
       "import": "./src/providerInterruptions.ts"

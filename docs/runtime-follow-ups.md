@@ -4,19 +4,27 @@
 
 Goal: support one-off threads without weakening the invariant that every thread has a runtime and memory scope.
 
-Conservative model:
+Implemented model:
 
-- Create a hidden logical project named `Standalone Threads` or `Scratch`.
-- Give it a normal default runtime id such as `project-runtime:<standalone-project-id>`.
-- New one-off threads are regular shared-runtime threads in that hidden project unless the user explicitly asks for an isolated clone.
-- Sidebar copy can surface the group as `Standalone Threads` while keeping storage, memory, and runtime policy unchanged under the hood.
+- Hidden logical project id: `system:standalone`.
+- Hidden logical workspace root: `homelab://project/system%3Astandalone`.
+- Hidden default runtime id: `project-runtime:system:standalone`.
+- UI copy surfaces the group as `Standalone Threads` / `Scratch`, and normal project sorting/counts ignore it.
+- `thread.standalone.create` lazily creates the hidden project before creating the first standalone thread.
+- Shared standalone threads use the hidden project's default runtime; isolated standalone threads use `isolated-runtime:<thread-id>`.
+- `.homelab` generation and project-local memory use the hidden project scope because standalone threads are still regular project threads.
+- `thread.standalone.promote-to-project` V1 creates a new logical project and moves the same thread id into it. Shared promoted threads switch to the new project's default runtime; isolated promoted threads keep their isolated runtime id.
 
-Required actions:
+Promotion V1 memory behavior:
 
-- Add `Create standalone thread` as a command palette action.
-- Add `Promote standalone thread to project`, which creates a project and moves or copies the thread's memory scope into the new project.
-- Add `Move thread to existing project`, preserving transcript identity and making any memory-scope migration explicit.
-- Add server-side migration tests that standalone threads still resolve a valid `runtimeId`, `runtimeSelectionMode`, and project-local memory scope.
+- Transcript identity moves with the thread, so promoted project transcript search can find the moved conversation.
+- Durable project memory entries created under `system:standalone` do not automatically migrate in V1. They remain explicitly scoped to `Standalone Threads`.
+
+Follow-up:
+
+- Add `Move thread to existing project`, preserving transcript identity.
+- Add richer memory migration controls for promote/move flows, including explicit copy or move of durable promoted discoveries.
+- Add runtime filesystem migration or snapshot/restore behavior if standalone runtime state must follow a promoted shared thread.
 
 ## Chat Export
 

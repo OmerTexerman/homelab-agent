@@ -38,9 +38,11 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  DEFAULT_MODEL,
   type ContextMenuItem,
   type DesktopUpdateState,
   ProjectId,
+  ProviderInstanceId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
   type ThreadEnvMode,
@@ -66,7 +68,7 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform, newCommandId } from "../lib/utils";
+import { isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
@@ -206,6 +208,7 @@ import {
   shouldShowPrimarySourceControlUi,
   shouldShowSidebarProjectGroupingControls,
 } from "../productCapabilities";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1457,6 +1460,58 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject, showCompatibilityWorkspaceControls],
   );
 
+  const createStandaloneThreadForMember = useCallback(
+    (member: SidebarProjectGroupMember, options?: { runtimeSelectionMode?: ThreadRuntimeMode }) => {
+      void (async () => {
+        const api = readEnvironmentApi(member.environmentId);
+        if (!api) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Runtime environment unavailable",
+              description: "Reconnect this environment before creating standalone threads.",
+            }),
+          );
+          return;
+        }
+
+        const threadId = newThreadId();
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "thread.standalone.create",
+            commandId: newCommandId(),
+            threadId,
+            title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+            modelSelection: member.defaultModelSelection ?? {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: DEFAULT_MODEL,
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared",
+            createdAt: new Date().toISOString(),
+          });
+          if (isMobile) {
+            setOpenMobile(false);
+          }
+          await router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(scopeThreadRef(member.environmentId, threadId)),
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create standalone thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [isMobile, router, setOpenMobile],
+  );
+
   const handleProjectButtonContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -1464,6 +1519,58 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       void (async () => {
         const api = readLocalApi();
         if (!api) return;
+
+        if (project.isStandalone) {
+          const actionHandlers = new Map<string, () => void>();
+          const buildRuntimeModeMenuItem = (
+            runtimeSelectionMode: ThreadRuntimeMode,
+          ): ContextMenuItem<string> => {
+            const label =
+              runtimeSelectionMode === "isolated"
+                ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
+                : HOMELAB_PRODUCT_COPY.standalone.newThreadAction;
+
+            if (project.memberProjects.length === 1) {
+              const member = project.memberProjects[0]!;
+              actionHandlers.set(runtimeSelectionMode, () => {
+                createStandaloneThreadForMember(member, { runtimeSelectionMode });
+              });
+              return {
+                id: runtimeSelectionMode,
+                label,
+              };
+            }
+
+            return {
+              id: `${runtimeSelectionMode}:submenu`,
+              label,
+              children: project.memberProjects.map((member) => {
+                const id = `${runtimeSelectionMode}:${member.physicalProjectKey}`;
+                actionHandlers.set(id, () => {
+                  createStandaloneThreadForMember(member, { runtimeSelectionMode });
+                });
+                return {
+                  id,
+                  label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+                };
+              }),
+            };
+          };
+
+          const clicked = await api.contextMenu.show(
+            [buildRuntimeModeMenuItem("shared"), buildRuntimeModeMenuItem("isolated")],
+            {
+              x: event.clientX,
+              y: event.clientY,
+            },
+          );
+          if (!clicked) {
+            return;
+          }
+
+          actionHandlers.get(clicked)?.();
+          return;
+        }
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
@@ -1558,10 +1665,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       copyPathToClipboard,
+      createStandaloneThreadForMember,
       handleRemoveProject,
       openProjectGroupingDialog,
       openProjectRenameDialog,
       project.groupedProjectCount,
+      project.isStandalone,
       project.memberProjects,
       showCompatibilityWorkspaceControls,
       showProjectGroupingControls,
@@ -1691,6 +1800,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
   const createThreadForProjectMember = useCallback(
     (member: SidebarProjectGroupMember, options?: { runtimeSelectionMode?: ThreadRuntimeMode }) => {
+      if (member.isStandalone) {
+        createStandaloneThreadForMember(member, options);
+        return;
+      }
+
       const currentRouteParams =
         router.state.matches[router.state.matches.length - 1]?.params ?? {};
       const currentRouteTarget = resolveThreadRouteTarget(currentRouteParams);
@@ -1740,7 +1854,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared",
       });
     },
-    [defaultThreadEnvMode, handleNewThread, isMobile, router, setOpenMobile],
+    [
+      createStandaloneThreadForMember,
+      defaultThreadEnvMode,
+      handleNewThread,
+      isMobile,
+      router,
+      setOpenMobile,
+    ],
   );
 
   const handleCreateThreadClick = useCallback(
@@ -2013,12 +2134,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
+      const isStandaloneThread = isStandaloneProjectId(thread.projectId);
       const sharedThreadCopy = sidebarThreadCreationRuntimeCopy("shared");
       const isolatedThreadCopy = sidebarThreadCreationRuntimeCopy("isolated");
       const clicked = await api.contextMenu.show(
         [
           { id: "new-shared-thread", label: sharedThreadCopy.label },
           { id: "new-isolated-thread", label: isolatedThreadCopy.label },
+          ...(isStandaloneThread
+            ? [{ id: "promote-to-project", label: HOMELAB_PRODUCT_COPY.standalone.promoteAction }]
+            : []),
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           ...(showCompatibilityWorkspaceControls
@@ -2033,12 +2158,59 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (clicked === "new-shared-thread" || clicked === "new-isolated-thread") {
         const runtimeSelectionMode: ThreadRuntimeMode =
           clicked === "new-isolated-thread" ? "isolated" : "shared";
+        if (isStandaloneThread && threadProject) {
+          createStandaloneThreadForMember(threadProject, { runtimeSelectionMode });
+          return;
+        }
         void handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
           branch: thread.branch,
           worktreePath: thread.worktreePath,
           envMode: thread.worktreePath ? "worktree" : defaultThreadEnvMode,
           runtimeSelectionMode,
         });
+        return;
+      }
+
+      if (clicked === "promote-to-project") {
+        const title = window.prompt("Project name", thread.title)?.trim().replace(/\s+/g, " ");
+        if (!title) {
+          return;
+        }
+        const environmentApi = readEnvironmentApi(thread.environmentId);
+        if (!environmentApi) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Runtime environment unavailable",
+              description: "Reconnect this environment before promoting the thread.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          await environmentApi.orchestration.dispatchCommand({
+            type: "thread.standalone.promote-to-project",
+            commandId: newCommandId(),
+            threadId: thread.id,
+            projectId: newProjectId(),
+            title,
+            createdAt: new Date().toISOString(),
+          });
+          toastManager.add({
+            type: "success",
+            title: "Thread promoted to project",
+            description: title,
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to promote thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
         return;
       }
 
@@ -2087,6 +2259,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       appSettingsConfirmThreadDelete,
+      createStandaloneThreadForMember,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
@@ -2114,7 +2287,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onClick={handleProjectButtonClick}
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
-          aria-label={`Project ${project.displayName}`}
+          aria-label={project.isStandalone ? project.displayName : `Project ${project.displayName}`}
         >
           {!projectExpanded && projectStatus ? (
             <span
@@ -2138,15 +2311,21 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               }`}
             />
           )}
-          <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
+          {project.isStandalone ? (
+            <SquarePenIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+          ) : (
+            <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
+          )}
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate text-xs font-medium text-foreground/90">
               {project.displayName}
             </span>
             <span className="shrink-0 rounded border border-border/60 px-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/55 max-sm:hidden">
-              Project
+              {project.isStandalone
+                ? HOMELAB_PRODUCT_COPY.standalone.shortTitle
+                : HOMELAB_PRODUCT_COPY.project.singular}
             </span>
-            {project.groupedProjectCount > 1 ? (
+            {!project.isStandalone && project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-[10px] text-muted-foreground/60">
                 {project.groupedProjectCount} projects
               </span>
@@ -2183,7 +2362,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               <div className="pointer-events-none absolute top-1 right-1.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
                 <button
                   type="button"
-                  aria-label={`${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in ${project.displayName}`}
+                  aria-label={
+                    project.isStandalone
+                      ? HOMELAB_PRODUCT_COPY.standalone.newThreadAction
+                      : `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in ${project.displayName}`
+                  }
                   data-testid="new-thread-button"
                   className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={handleCreateThreadClick}
@@ -2195,9 +2378,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           />
           <TooltipPopup side="top">
-            {newThreadShortcutLabel
-              ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} (${newThreadShortcutLabel})`
-              : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction}
+            {project.isStandalone
+              ? HOMELAB_PRODUCT_COPY.standalone.newThreadAction
+              : newThreadShortcutLabel
+                ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} (${newThreadShortcutLabel})`
+                : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction}
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -2671,6 +2856,7 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>["handleNewThread"];
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  standaloneProjects: readonly SidebarProjectSnapshot[];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -2712,6 +2898,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
+    standaloneProjects,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -2838,6 +3025,34 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          {standaloneProjects.length > 0 ? (
+            <SidebarMenu className={sortedProjects.length > 0 ? "mb-1" : undefined}>
+              {standaloneProjects.map((project) => (
+                <SidebarProjectListRow
+                  key={project.projectKey}
+                  project={project}
+                  isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
+                  activeRouteThreadKey={
+                    activeRouteProjectKey === project.projectKey ? routeThreadKey : null
+                  }
+                  newThreadShortcutLabel={newThreadShortcutLabel}
+                  handleNewThread={handleNewThread}
+                  archiveThread={archiveThread}
+                  deleteThread={deleteThread}
+                  threadJumpLabelByKey={threadJumpLabelByKey}
+                  attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                  expandThreadListForProject={expandThreadListForProject}
+                  collapseThreadListForProject={collapseThreadListForProject}
+                  dragInProgressRef={dragInProgressRef}
+                  suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                  suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+                  isManualProjectSorting={false}
+                  dragHandleProps={null}
+                />
+              ))}
+            </SidebarMenu>
+          ) : null}
+
           {isManualProjectSorting ? (
             <DndContext
               sensors={projectDnDSensors}
@@ -2913,7 +3128,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             </SidebarMenu>
           )}
 
-          {projectsLength === 0 && (
+          {projectsLength === 0 && standaloneProjects.length === 0 && (
             <div className="space-y-1 px-3 pt-4 text-center">
               <div className="text-xs font-medium text-foreground/75">
                 {HOMELAB_PRODUCT_COPY.project.emptySidebarTitle}
@@ -3019,6 +3234,14 @@ export default function Sidebar() {
 
   const sidebarProjectByKey = useMemo(
     () => new Map(sidebarProjects.map((project) => [project.projectKey, project] as const)),
+    [sidebarProjects],
+  );
+  const standaloneSidebarProjects = useMemo(
+    () => sidebarProjects.filter((project) => project.isStandalone),
+    [sidebarProjects],
+  );
+  const normalSidebarProjects = useMemo(
+    () => sidebarProjects.filter((project) => !project.isStandalone),
     [sidebarProjects],
   );
   const sidebarThreadByKey = useMemo(
@@ -3132,8 +3355,10 @@ export default function Sidebar() {
       dragInProgressRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const activeProject = sidebarProjects.find((project) => project.projectKey === active.id);
-      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
+      const activeProject = normalSidebarProjects.find(
+        (project) => project.projectKey === active.id,
+      );
+      const overProject = normalSidebarProjects.find((project) => project.projectKey === over.id);
       if (!activeProject || !overProject) return;
       const activeMemberKeys = activeProject.memberProjects.map(
         (member) => member.physicalProjectKey,
@@ -3141,7 +3366,7 @@ export default function Sidebar() {
       const overMemberKeys = overProject.memberProjects.map((member) => member.physicalProjectKey);
       reorderProjects(activeMemberKeys, overMemberKeys);
     },
-    [sidebarProjectSortOrder, reorderProjects, sidebarProjects],
+    [sidebarProjectSortOrder, reorderProjects, normalSidebarProjects],
   );
 
   const handleProjectDragStart = useCallback(
@@ -3182,7 +3407,7 @@ export default function Sidebar() {
     [sidebarThreads],
   );
   const sortedProjects = useMemo(() => {
-    const sortableProjects = sidebarProjects.map((project) => ({
+    const sortableProjects = normalSidebarProjects.map((project) => ({
       ...project,
       id: project.projectKey,
     }));
@@ -3209,13 +3434,17 @@ export default function Sidebar() {
     physicalToLogicalKey,
     projectPhysicalKeyByScopedRef,
     sidebarProjectByKey,
-    sidebarProjects,
+    normalSidebarProjects,
     visibleThreads,
   ]);
+  const visibleSidebarProjects = useMemo(
+    () => [...standaloneSidebarProjects, ...sortedProjects],
+    [standaloneSidebarProjects, sortedProjects],
+  );
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const visibleSidebarThreadKeys = useMemo(
     () =>
-      sortedProjects.flatMap((project) => {
+      visibleSidebarProjects.flatMap((project) => {
         const projectThreads = sortThreads(
           (threadsByProjectKey.get(project.projectKey) ?? []).filter(
             (thread) => thread.archivedAt === null,
@@ -3253,7 +3482,7 @@ export default function Sidebar() {
       expandedThreadListsByProject,
       projectExpandedById,
       routeThreadKey,
-      sortedProjects,
+      visibleSidebarProjects,
       threadsByProjectKey,
     ],
   );
@@ -3584,6 +3813,7 @@ export default function Sidebar() {
             handleNewThread={handleNewThread}
             archiveThread={archiveThread}
             deleteThread={deleteThread}
+            standaloneProjects={standaloneSidebarProjects}
             sortedProjects={sortedProjects}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}
@@ -3598,7 +3828,7 @@ export default function Sidebar() {
             suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
             suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
             attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
-            projectsLength={projects.length}
+            projectsLength={normalSidebarProjects.length}
           />
 
           <SidebarSeparator />

@@ -10,8 +10,13 @@ import { describe, expect, it } from "vitest";
 import {
   defaultProjectRuntimeId,
   defaultRuntimeIdForProject,
+  isStandaloneProjectId,
   isolatedThreadRuntimeId,
   resolveProjectRuntimeAssignment,
+  standaloneProjectDefaultRuntimeId,
+  standaloneProjectId,
+  standaloneProjectTitle,
+  standaloneProjectWorkspaceRoot,
 } from "./ProjectRuntimePolicy.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -47,6 +52,15 @@ describe("project runtime policy", () => {
     expect(defaultRuntimeIdForProject(makeProject({ defaultRuntimeId: null }))).toBe(
       "project-runtime:project-1",
     );
+  });
+
+  it("defines the hidden standalone project runtime policy", () => {
+    expect(standaloneProjectId()).toBe("system:standalone");
+    expect(standaloneProjectTitle()).toBe("Standalone Threads");
+    expect(standaloneProjectWorkspaceRoot()).toBe("homelab://project/system%3Astandalone");
+    expect(standaloneProjectDefaultRuntimeId()).toBe("project-runtime:system:standalone");
+    expect(isStandaloneProjectId(standaloneProjectId())).toBe(true);
+    expect(isStandaloneProjectId(projectId)).toBe(false);
   });
 
   it("assigns shared threads to the project default runtime with single-writer queueing", () => {

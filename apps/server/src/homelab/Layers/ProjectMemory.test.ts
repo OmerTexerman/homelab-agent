@@ -99,4 +99,105 @@ layer("ProjectMemory", (it) => {
       );
     }),
   );
+
+  it.effect("keeps durable memory project-scoped when a standalone transcript is promoted", () =>
+    Effect.gen(function* () {
+      const projectMemory = yield* ProjectMemory;
+      const threads = yield* ProjectionThreadRepository;
+      const messages = yield* ProjectionThreadMessageRepository;
+      const standaloneProjectId = ProjectId.make("system:standalone");
+      const promotedProjectId = ProjectId.make("project-promoted-memory");
+      const threadId = ThreadId.make("thread-promoted-memory");
+      const now = "2026-05-17T14:00:00.000Z";
+
+      yield* threads.upsert({
+        threadId,
+        projectId: standaloneProjectId,
+        runtimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+        runtimeSelectionMode: "shared",
+        title: "Scratch Grafana note",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurnId: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        deletedAt: null,
+      });
+      yield* messages.upsert({
+        messageId: MessageId.make("message-promoted-memory"),
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "Grafana scratch transcript follows the thread when it is promoted.",
+        isStreaming: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const memory = yield* projectMemory.create({
+        projectId: standaloneProjectId,
+        sourceThreadId: threadId,
+        summary: "Standalone-only Grafana memory",
+        body: "This durable memory entry remains in the standalone project scope in V1.",
+        tags: ["grafana"],
+      });
+
+      yield* threads.upsert({
+        threadId,
+        projectId: promotedProjectId,
+        runtimeId: RuntimeSessionId.make("project-runtime:project-promoted-memory"),
+        runtimeSelectionMode: "shared",
+        title: "Scratch Grafana note",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurnId: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        deletedAt: null,
+      });
+
+      const promotedMemory = yield* projectMemory.list({
+        projectId: promotedProjectId,
+      });
+      const promotedSearch = yield* projectMemory.search({
+        projectId: promotedProjectId,
+        query: "grafana",
+        includeTranscripts: true,
+      });
+      const standaloneMemory = yield* projectMemory.list({
+        projectId: standaloneProjectId,
+      });
+
+      assert.deepEqual(promotedMemory, []);
+      assert.equal(
+        promotedSearch.some((result) => result.kind === "transcript"),
+        true,
+      );
+      assert.deepEqual(
+        standaloneMemory.map((entry) => entry.id),
+        [memory.id],
+      );
+    }),
+  );
 });

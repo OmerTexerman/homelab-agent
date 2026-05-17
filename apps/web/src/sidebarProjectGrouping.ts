@@ -1,5 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime";
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
+import { STANDALONE_PROJECT_TITLE, isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
@@ -13,11 +14,13 @@ export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
 export interface SidebarProjectGroupMember extends Project {
   physicalProjectKey: string;
   environmentLabel: string | null;
+  isStandalone: boolean;
 }
 
 export interface SidebarProjectSnapshot extends Project {
   projectKey: string;
   displayName: string;
+  isStandalone: boolean;
   groupedProjectCount: number;
   environmentPresence: EnvironmentPresence;
   memberProjects: readonly SidebarProjectGroupMember[];
@@ -52,6 +55,7 @@ export function buildSidebarProjectSnapshots(input: {
       ...project,
       physicalProjectKey: derivePhysicalProjectKey(project),
       environmentLabel: input.resolveEnvironmentLabel(project.environmentId),
+      isStandalone: isStandaloneProject({ id: project.id, cwd: project.cwd }),
     };
     const existing = groupedMembers.get(logicalKey);
     if (existing) {
@@ -98,13 +102,15 @@ export function buildSidebarProjectSnapshots(input: {
     result.push({
       ...representative,
       projectKey: logicalKey,
-      displayName:
-        members.length > 1
+      displayName: representative.isStandalone
+        ? STANDALONE_PROJECT_TITLE
+        : members.length > 1
           ? deriveProjectGroupLabel({
               representative,
               members,
             })
           : representative.name,
+      isStandalone: members.some((member) => member.isStandalone),
       groupedProjectCount: members.length,
       environmentPresence:
         hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",

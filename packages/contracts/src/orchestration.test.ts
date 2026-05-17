@@ -179,6 +179,54 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
   }),
 );
 
+it.effect("decodes standalone thread create commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.standalone.create",
+      commandId: "cmd-standalone",
+      threadId: "thread-standalone",
+      runtimeSelectionMode: "isolated",
+      title: "Scratch task",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (parsed.type !== "thread.standalone.create") {
+      throw new Error(`Unexpected command type ${parsed.type}`);
+    }
+    assert.strictEqual(parsed.runtimeSelectionMode, "isolated");
+    assert.deepStrictEqual(parsed.modelSelection, {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    });
+  }),
+);
+
+it.effect("decodes standalone promote-to-project commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.standalone.promote-to-project",
+      commandId: "cmd-promote",
+      threadId: "thread-standalone",
+      projectId: "project-promoted",
+      title: "Promoted project",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (parsed.type !== "thread.standalone.promote-to-project") {
+      throw new Error(`Unexpected command type ${parsed.type}`);
+    }
+    assert.strictEqual(parsed.threadId, "thread-standalone");
+    assert.strictEqual(parsed.projectId, "project-promoted");
+    assert.strictEqual(parsed.defaultModelSelection, undefined);
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
