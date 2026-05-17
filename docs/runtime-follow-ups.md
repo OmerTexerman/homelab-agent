@@ -22,12 +22,51 @@ Required actions:
 
 Goal: export a thread transcript without making export a provider- or UI-specific feature.
 
-Preferred first slice:
+Completed first slice:
 
-- Add `Export chat as Markdown` and `Export chat as JSON` to the thread actions menu.
-- Keep JSON close to the transport/thread timeline schema so it is durable for automation.
-- Render Markdown from the local timeline read model, including user messages, assistant messages, tool calls, timestamps, provider, model, runtime id, and runtime selection mode.
-- Defer PDF until Markdown/JSON are stable.
+- Added active-chat header actions for `Export Markdown` and `Export JSON`.
+- Added a client-side `chatExport` read model that renders from the local
+  thread timeline read model and active project/thread/provider metadata.
+- JSON includes an export version, exported timestamp, project/thread/runtime
+  metadata, provider/model context, timeline entries, messages, work log
+  entries, pending approvals/user-input prompts, proposed plans, active plans,
+  and turn diff summaries.
+- Markdown includes readable project/thread/runtime/provider metadata,
+  chronological user and assistant messages, tool/work log entries, proposed
+  plans, pending approvals/user-input prompts, active plans, changed files, and
+  timestamps.
+- Export stays client-side and avoids provider-specific raw event payloads.
+
+Follow-up:
+
+- Defer PDF until the Markdown/JSON structure is stable.
+
+## Home And Project Overview
+
+Goal: replace the current no-active-thread/default panel with an actually useful Homelab Agent overview.
+
+Current problems:
+
+- The surface reads like nested status cards instead of an operational workspace.
+- It keeps showing setup/checklist content even after the environment is usable.
+- The homelab graph is described but not visualized.
+- The page does not help the user understand projects, runtimes, standalone work, memory, recent activity, or what needs attention.
+
+Preferred direction:
+
+- Make the default view an operational dashboard, not a marketing/setup panel.
+- Show a real homelab graph or topology view when graph data exists.
+- Show useful empty states when no graph data exists, without pretending a graph is present.
+- Surface active Project Runtimes, queued/running threads, provider readiness, memory/recent discoveries, and pending decisions.
+- Keep setup guidance contextual and dismissible once the system is healthy.
+- Avoid card-in-card layouts and generic AI dashboard composition.
+
+Candidate slices:
+
+- Add a pure home overview read model that derives graph, runtime, provider, memory, and decision summaries.
+- Add a simple graph/topology visualization from existing homelab entities and relations.
+- Replace the current setup checklist with compact health/status rows and actionable links.
+- Add visual regression coverage for empty, partially configured, and populated homelab states.
 
 ## Full Server And Web Runtime Smoke
 

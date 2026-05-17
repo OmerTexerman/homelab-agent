@@ -9,13 +9,15 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { DiffIcon, FolderTreeIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, DownloadIcon, FolderTreeIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import {
   HOMELAB_PRODUCT_COPY,
@@ -48,6 +50,8 @@ interface ChatHeaderProps {
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
+  onExportMarkdown: () => void;
+  onExportJson: () => void;
   onToggleTerminal: () => void;
   onToggleWorkspaceExplorer: () => void;
   onToggleDiff: () => void;
@@ -91,6 +95,8 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  onExportMarkdown,
+  onExportJson,
   onToggleTerminal,
   onToggleWorkspaceExplorer,
   onToggleDiff,
@@ -152,6 +158,25 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="outline"
+                className="shrink-0"
+                aria-label="Export chat"
+                title="Export chat"
+              />
+            }
+          >
+            <DownloadIcon className="size-3" />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            <MenuItem onClick={onExportMarkdown}>Export Markdown</MenuItem>
+            <MenuItem onClick={onExportJson}>Export JSON</MenuItem>
+          </MenuPopup>
+        </Menu>
         <Tooltip>
           <TooltipTrigger
             render={

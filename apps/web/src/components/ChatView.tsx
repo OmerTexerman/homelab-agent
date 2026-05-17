@@ -51,6 +51,13 @@ import {
   deriveThreadTimelineControlState,
   deriveThreadTimelineReadModel,
 } from "../threadTimelineReadModel";
+import {
+  buildChatExportFilename,
+  buildChatExportJson,
+  buildChatExportMarkdown,
+  buildChatExportReadModel,
+  downloadTextFile,
+} from "../chatExport";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   buildPendingUserInputAnswers,
@@ -1601,6 +1608,43 @@ export default function ChatView(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const buildActiveChatExport = useCallback(() => {
+    if (!activeThread) {
+      return null;
+    }
+    return buildChatExportReadModel({
+      exportedAt: new Date().toISOString(),
+      thread: activeThread,
+      project: activeProject ?? null,
+      timeline: threadTimeline,
+      providerSnapshot: activeProviderStatus,
+      runtimeId: activeThread.runtimeId ?? activeProject?.defaultRuntimeId ?? null,
+      runtimeSelectionMode: activeThread.runtimeSelectionMode ?? "shared",
+      turnDiffSummaries: activeThread.turnDiffSummaries,
+    });
+  }, [activeProject, activeProviderStatus, activeThread, threadTimeline]);
+  const exportChatAsMarkdown = useCallback(() => {
+    const chatExport = buildActiveChatExport();
+    if (!chatExport) {
+      return;
+    }
+    downloadTextFile(
+      buildChatExportFilename(chatExport, "markdown"),
+      buildChatExportMarkdown(chatExport),
+      "text/markdown;charset=utf-8",
+    );
+  }, [buildActiveChatExport]);
+  const exportChatAsJson = useCallback(() => {
+    const chatExport = buildActiveChatExport();
+    if (!chatExport) {
+      return;
+    }
+    downloadTextFile(
+      buildChatExportFilename(chatExport, "json"),
+      buildChatExportJson(chatExport),
+      "application/json;charset=utf-8",
+    );
+  }, [buildActiveChatExport]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -3488,6 +3532,8 @@ export default function ChatView(props: ChatViewProps) {
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
+          onExportMarkdown={exportChatAsMarkdown}
+          onExportJson={exportChatAsJson}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleWorkspaceExplorer={toggleWorkspaceExplorer}
           onToggleDiff={onToggleDiff}
