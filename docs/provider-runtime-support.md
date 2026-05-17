@@ -22,11 +22,19 @@ provider instances that the server reports as ready.
   provider contracts/settings, model selection metadata, and provider status UI.
 - The devcontainer and runtime image install `opencode-ai@1.15.1`.
 - Thread runtimes now generate an `opencode` wrapper in the runtime bin directory.
-- The existing OpenCode adapter starts or connects to an OpenCode HTTP server and then creates an
-  SDK client from the server URL it reports. Running that server inside a thread container needs a
-  container-reachable URL/port strategy before the adapter can safely switch to the runtime wrapper.
-  Until that is implemented, the built-in managed OpenCode path is reported as blocked. Configure
-  an external OpenCode server URL to use OpenCode.
-- Remaining provider event work: once the managed runtime URL/port strategy is in place, route
-  OpenCode's SDK events through `ProviderEventCanonicalizer` with only an OpenCode-native
-  translation layer in `apps/server/src/provider/Layers/OpenCodeAdapter.ts`.
+- Managed OpenCode starts `opencode serve` through the Project Runtime wrapper. Runtime containers
+  publish the managed OpenCode container port (`4096/tcp`) to a Docker-assigned localhost host port,
+  and `RuntimeExecutionContext` carries that published endpoint into the provider launch context.
+- Adapter startup passes the runtime wrapper path, runtime host cwd, container cwd, runtime env, and
+  published URL candidates into `OpenCodeRuntime`. `OpenCodeRuntime` waits for the OpenCode serve
+  process to report readiness, then verifies that Homelab Agent can reach one of the published
+  runtime URLs before creating the SDK client.
+- Session scope cleanup runs through the runtime shell wrapper to terminate the managed
+  `opencode serve` process, so the runtime port is freed when the provider session stops.
+- External OpenCode server URLs still bypass the runtime wrapper and are not owned by the adapter
+  lifecycle.
+- If Homelab Agent runs inside a devcontainer and `127.0.0.1:<published-port>` is not the host
+  gateway, set `HOMELAB_AGENT_OPENCODE_MANAGED_HOST` to the app-server-reachable host name, such as
+  `host.docker.internal`. The configured host is tried before the published localhost candidates.
+- OpenCode SDK events are translated in `apps/server/src/provider/Layers/OpenCodeAdapter.ts` and
+  routed through `ProviderEventCanonicalizer` before entering the provider runtime event stream.

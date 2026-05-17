@@ -41,6 +41,7 @@ import {
   buildRuntimeStorageLayoutForRuntime,
   buildRuntimeWrapperScriptSpecs,
   buildThreadRuntimeDescriptor,
+  OPENCODE_MANAGED_SERVER_CONTAINER_PORT,
   type DockerMountSpec,
   renderSecretEnvFile,
   type RuntimeAuthSyncEntry,
@@ -90,6 +91,15 @@ interface DockerContainerInspectResult {
     readonly Labels?: Record<string, string> | null;
   };
   readonly Mounts?: ReadonlyArray<DockerContainerInspectMount>;
+  readonly NetworkSettings?: {
+    readonly Ports?: Record<
+      string,
+      null | ReadonlyArray<{
+        readonly HostIp?: string;
+        readonly HostPort?: string;
+      }>
+    >;
+  };
 }
 
 interface PersistedRuntimeImageBuildState {
@@ -132,6 +142,13 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   cwd: Schema.String,
   shell: Schema.String,
   env: RuntimeEnvSchema,
+  managedOpenCodeServer: Schema.optional(
+    Schema.Struct({
+      containerPort: Schema.Number,
+      hostIp: Schema.String,
+      hostPort: Schema.Number,
+    }),
+  ),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   lastStartedAt: Schema.NullOr(Schema.String),
@@ -1379,11 +1396,33 @@ function isContainerCompatible(
       .filter((value): value is string => value !== undefined),
   );
 
-  return mounts.every((mount) =>
-    actualMounts.has(
-      `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
-    ),
+  return (
+    mounts.every((mount) =>
+      actualMounts.has(
+        `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
+      ),
+    ) && readManagedOpenCodeServerEndpoint(inspect) !== undefined
   );
+}
+
+function readManagedOpenCodeServerEndpoint(
+  inspect: DockerContainerInspectResult,
+): ThreadRuntimeDescriptor["managedOpenCodeServer"] | undefined {
+  const bindings =
+    inspect.NetworkSettings?.Ports?.[`${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`];
+  const firstBinding = Array.isArray(bindings) ? bindings[0] : undefined;
+  if (!firstBinding?.HostPort) {
+    return undefined;
+  }
+  const hostPort = Number.parseInt(firstBinding.HostPort, 10);
+  if (!Number.isFinite(hostPort) || hostPort <= 0) {
+    return undefined;
+  }
+  return {
+    containerPort: OPENCODE_MANAGED_SERVER_CONTAINER_PORT,
+    hostIp: firstBinding.HostIp?.trim() || "127.0.0.1",
+    hostPort,
+  };
 }
 
 const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
@@ -2125,6 +2164,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`,
       "--network",
       runtimeNetwork,
+      "-p",
+      `127.0.0.1::${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`,
       "-w",
       input.runtime.cwd,
       ...input.mounts.flatMap((mount) => ["-v", toDockerMountFlag(mount)]),
@@ -2500,6 +2541,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* ensureRuntimeImageReady(normalizedRuntime);
 
         const inspect = yield* ensureRunningContainer(normalizedRuntime, hostBindings);
+        const managedOpenCodeServer = readManagedOpenCodeServerEndpoint(inspect);
+        if (!managedOpenCodeServer) {
+          return yield* new ThreadRuntimeError({
+            message: `Docker container '${normalizedRuntime.containerName}' did not report a published OpenCode server port.`,
+          });
+        }
         const now = new Date().toISOString();
         const startedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime: ThreadRuntimeDescriptor = {
@@ -2507,6 +2554,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             status: "running",
             health: "healthy",
             containerId: inspect.Id?.trim() || normalizedRuntime.containerId,
+            managedOpenCodeServer,
             updatedAt: now,
             lastStartedAt: now,
             lastError: null,

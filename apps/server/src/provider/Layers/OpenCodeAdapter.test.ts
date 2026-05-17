@@ -1,4 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -17,11 +21,17 @@ import {
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  RuntimeSessionId,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  ThreadRuntime,
+  type ThreadRuntimeLaunchContext,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
@@ -56,6 +66,21 @@ const runtimeMock = {
     startCalls: [] as string[],
     sessionCreateUrls: [] as string[],
     authHeaders: [] as Array<string | null>,
+    connectCalls: [] as Array<{
+      readonly binaryPath: string;
+      readonly serverUrl?: string | null;
+      readonly environment?: NodeJS.ProcessEnv;
+      readonly cwd?: string;
+      readonly port?: number;
+      readonly hostname?: string;
+      readonly reachableUrls?: ReadonlyArray<string>;
+      readonly cleanupCommand?: {
+        readonly commandPath: string;
+        readonly args: ReadonlyArray<string>;
+        readonly environment?: NodeJS.ProcessEnv;
+        readonly cwd?: string;
+      };
+    }>,
     abortCalls: [] as string[],
     closeCalls: [] as string[],
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
@@ -69,6 +94,7 @@ const runtimeMock = {
     this.state.startCalls.length = 0;
     this.state.sessionCreateUrls.length = 0;
     this.state.authHeaders.length = 0;
+    this.state.connectCalls.length = 0;
     this.state.abortCalls.length = 0;
     this.state.closeCalls.length = 0;
     this.state.revertCalls.length = 0;
@@ -98,9 +124,28 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
+  connectToOpenCodeServer: ({
+    binaryPath,
+    serverUrl,
+    environment,
+    cwd,
+    port,
+    hostname,
+    reachableUrls,
+    cleanupCommand,
+  }) =>
     Effect.gen(function* () {
-      const url = serverUrl ?? "http://127.0.0.1:4301";
+      runtimeMock.state.connectCalls.push({
+        binaryPath,
+        ...(serverUrl !== undefined ? { serverUrl } : {}),
+        ...(environment !== undefined ? { environment } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
+        ...(port !== undefined ? { port } : {}),
+        ...(hostname !== undefined ? { hostname } : {}),
+        ...(reachableUrls !== undefined ? { reachableUrls } : {}),
+        ...(cleanupCommand !== undefined ? { cleanupCommand } : {}),
+      });
+      const url = serverUrl ?? reachableUrls?.[0] ?? "http://127.0.0.1:4301";
       // Unconditionally register a scope finalizer for test observability —
       // preserves the `closeCalls` / `closeError` probes that the existing
       // suites rely on. Production code never attaches a finalizer to an
@@ -188,6 +233,63 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
   listBindings: () => Effect.succeed([]),
 });
 
+function makeThreadRuntimeLaunchContext(input: {
+  readonly baseDir: string;
+  readonly threadId: ThreadId;
+  readonly managedOpenCodeServer?: ThreadRuntimeLaunchContext["managedOpenCodeServer"];
+}): ThreadRuntimeLaunchContext {
+  const runtimeId = RuntimeSessionId.make(`project-runtime:${input.threadId}`);
+  const hostWorkspacePath = path.join(input.baseDir, "workspace");
+  const hostHomePath = path.join(input.baseDir, "home");
+  const hostBinDir = path.join(input.baseDir, "bin");
+  return {
+    execution: {
+      threadId: input.threadId,
+      runtimeId,
+      backend: "docker",
+      containerId: "container-opencode",
+      workspacePath: "/workspace",
+      homePath: "/runtime/home",
+      cwd: "/workspace/app",
+      shell: path.join(hostBinDir, "runtime-shell"),
+      env: {
+        T3_RUNTIME_ID: runtimeId,
+        T3_THREAD_ID: input.threadId,
+        WORKSPACE: "/workspace",
+      },
+      ...(input.managedOpenCodeServer !== undefined
+        ? { managedOpenCodeServer: input.managedOpenCodeServer }
+        : {}),
+    },
+    hostRuntimePath: input.baseDir,
+    hostWorkspacePath,
+    hostHomePath,
+    hostBinDir,
+    shellWrapperPath: path.join(hostBinDir, "runtime-shell"),
+    ...(input.managedOpenCodeServer !== undefined
+      ? { managedOpenCodeServer: input.managedOpenCodeServer }
+      : {}),
+  };
+}
+
+function makeThreadRuntimeTestLayer(launchContext: ThreadRuntimeLaunchContext) {
+  const service: ThreadRuntimeShape = {
+    ensureRuntime: () => Effect.die(new Error("ThreadRuntime.ensureRuntime is not used")),
+    getRuntime: () => Effect.die(new Error("ThreadRuntime.getRuntime is not used")),
+    listRuntimes: () => Effect.die(new Error("ThreadRuntime.listRuntimes is not used")),
+    startRuntime: () => Effect.die(new Error("ThreadRuntime.startRuntime is not used")),
+    stopRuntime: () => Effect.die(new Error("ThreadRuntime.stopRuntime is not used")),
+    touchRuntime: () => Effect.die(new Error("ThreadRuntime.touchRuntime is not used")),
+    refreshRuntimeEnvironment: () =>
+      Effect.die(new Error("ThreadRuntime.refreshRuntimeEnvironment is not used")),
+    destroyRuntime: () => Effect.die(new Error("ThreadRuntime.destroyRuntime is not used")),
+    resolveExecutionContext: () => Effect.succeed(launchContext.execution),
+    resolveLaunchContext: () => Effect.succeed(launchContext),
+    streamEvents: Stream.never,
+  };
+  return Layer.succeed(ThreadRuntime, service);
+}
+
 // The adapter now receives its settings as a plain argument (the old design
 // read from `ServerSettingsService` internally). The test-only
 // `ServerSettingsService` below is still kept because other dependencies in
@@ -229,7 +331,7 @@ const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
-  it.effect("blocks managed OpenCode serving until a reachable runtime URL exists", () => {
+  it.effect("blocks managed OpenCode serving when no runtime URL plan is available", () => {
     const blockedSettings = decodeOpenCodeSettings({
       binaryPath: "fake-opencode",
       serverUrl: "",
@@ -257,8 +359,75 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       if (result._tag !== "Failure") return;
       assert.equal(result.failure._tag, "ProviderAdapterProcessError");
       assert.equal(result.failure.threadId, "thread-opencode-blocked");
+      assert.match(result.failure.detail, /no reachable runtime URL plan/);
       assert.equal(runtimeMock.state.sessionCreateUrls.length, 0);
     }).pipe(Effect.provide(blockedLayer));
+  });
+
+  it.effect("starts managed OpenCode through the runtime wrapper and published URL plan", () => {
+    const managedSettings = decodeOpenCodeSettings({
+      binaryPath: "fake-opencode",
+      serverUrl: "",
+      serverPassword: "",
+    });
+    const threadId = asThreadId("thread-managed-opencode");
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-runtime-"));
+    const launchContext = makeThreadRuntimeLaunchContext({
+      baseDir,
+      threadId,
+      managedOpenCodeServer: {
+        containerPort: 4096,
+        hostIp: "127.0.0.1",
+        hostPort: 32_045,
+      },
+    });
+    fs.mkdirSync(launchContext.hostBinDir, { recursive: true });
+    fs.mkdirSync(path.join(launchContext.hostWorkspacePath, "app"), { recursive: true });
+    fs.writeFileSync(path.join(launchContext.hostBinDir, "opencode"), "#!/usr/bin/env bash\n");
+    const managedLayer = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(managedSettings)).pipe(
+      Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(makeThreadRuntimeTestLayer(launchContext)),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const session = yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(session.cwd, "/workspace/app");
+      assert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:32045"]);
+      assert.equal(runtimeMock.state.connectCalls.length, 1);
+      const connectCall = runtimeMock.state.connectCalls[0];
+      assert.equal(connectCall?.binaryPath, path.join(launchContext.hostBinDir, "opencode"));
+      assert.equal(connectCall?.cwd, path.join(launchContext.hostWorkspacePath, "app"));
+      assert.equal(connectCall?.hostname, "0.0.0.0");
+      assert.equal(connectCall?.port, 4096);
+      assert.deepEqual(connectCall?.reachableUrls, [
+        "http://127.0.0.1:32045",
+        "http://localhost:32045",
+      ]);
+      assert.equal(connectCall?.cleanupCommand?.commandPath, launchContext.shellWrapperPath);
+      assert.deepEqual(connectCall?.cleanupCommand?.args, [
+        "-lc",
+        "pkill -TERM -f '[o]pencode.*serve.*--port=4096' || true\nsleep 1\npkill -KILL -f '[o]pencode.*serve.*--port=4096' || true",
+      ]);
+      assert.equal(
+        connectCall?.cleanupCommand?.cwd,
+        path.join(launchContext.hostWorkspacePath, "app"),
+      );
+      assert.equal(
+        connectCall?.environment?.T3_RUNTIME_ID,
+        String(launchContext.execution.runtimeId),
+      );
+      assert.equal(connectCall?.environment?.T3_THREAD_ID, String(threadId));
+    }).pipe(Effect.provide(managedLayer));
   });
 
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>

@@ -8,7 +8,9 @@ import {
   buildRuntimeMountSpecs,
   buildRuntimeWrapperScriptSpecs,
   buildThreadRuntimeDescriptor,
+  managedOpenCodeServerCandidateUrls,
   normalizeMountSpecs,
+  planManagedOpenCodeRuntimeServer,
   providerProcessCwdForLaunchContext,
   renderSecretEnvFile,
   renderShellInitFile,
@@ -263,6 +265,103 @@ describe("runtime wrapper planning", () => {
     expect(providerProcessCwdForLaunchContext(launchContext)).toBe(
       "/state/thread-runtimes/cHJvamVjdC1ydW50aW1lOnByb2plY3QtY3dk/workspace/service",
     );
+  });
+
+  it("plans managed OpenCode runtime server URLs from the published runtime port", () => {
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-opencode-plan"),
+      runtimeId: RuntimeSessionId.make("project-runtime:project-opencode-plan"),
+      provider: "opencode",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace/service",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {
+        RUNTIME_ENV: "enabled",
+      },
+      containerShellPath: "/bin/bash",
+      now: "2026-05-17T00:00:00.000Z",
+      existing: {
+        ...buildThreadRuntimeDescriptor({
+          threadRuntimesDir: "/state/thread-runtimes",
+          threadId: ThreadId.make("thread-opencode-plan"),
+          runtimeId: RuntimeSessionId.make("project-runtime:project-opencode-plan"),
+          provider: "opencode",
+          runtimeMode: "full-access",
+          requestedCwd: "/workspace/service",
+          bootstrapImageRef: "runtime:test",
+          bootstrapEnv: {},
+          containerShellPath: "/bin/bash",
+          now: "2026-05-17T00:00:00.000Z",
+        }),
+        managedOpenCodeServer: {
+          containerPort: 4096,
+          hostIp: "127.0.0.1",
+          hostPort: 32_100,
+        },
+      },
+    });
+    const launchContext = toLaunchContext({
+      threadRuntimesDir: "/state/thread-runtimes",
+      runtime,
+    });
+    const commandPath = "/state/thread-runtimes/bin/opencode";
+
+    const plan = planManagedOpenCodeRuntimeServer({ launchContext, commandPath });
+
+    expect(plan).toEqual({
+      commandPath,
+      cleanupCommandPath: launchContext.shellWrapperPath,
+      cleanupArgs: [
+        "-lc",
+        "pkill -TERM -f '[o]pencode.*serve.*--port=4096' || true\nsleep 1\npkill -KILL -f '[o]pencode.*serve.*--port=4096' || true",
+      ],
+      processCwd:
+        "/state/thread-runtimes/cHJvamVjdC1ydW50aW1lOnByb2plY3Qtb3BlbmNvZGUtcGxhbg/workspace/service",
+      providerCwd: "/workspace/service",
+      environment: runtime.env,
+      hostname: "0.0.0.0",
+      port: 4096,
+      candidateUrls: ["http://127.0.0.1:32100", "http://localhost:32100"],
+    });
+  });
+
+  it("returns no managed OpenCode plan when the runtime has no published port", () => {
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: "/state/thread-runtimes",
+      threadId: ThreadId.make("thread-opencode-no-plan"),
+      runtimeId: RuntimeSessionId.make("project-runtime:project-opencode-no-plan"),
+      provider: "opencode",
+      runtimeMode: "full-access",
+      bootstrapImageRef: "runtime:test",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-05-17T00:00:00.000Z",
+    });
+
+    expect(
+      planManagedOpenCodeRuntimeServer({
+        launchContext: toLaunchContext({
+          threadRuntimesDir: "/state/thread-runtimes",
+          runtime,
+        }),
+        commandPath: "/state/thread-runtimes/bin/opencode",
+      }),
+    ).toBeNull();
+  });
+
+  it("prefers a configured managed OpenCode host before published localhost candidates", () => {
+    expect(
+      managedOpenCodeServerCandidateUrls({
+        hostIp: "127.0.0.1",
+        hostPort: 32_101,
+        configuredHost: "host.docker.internal",
+      }),
+    ).toEqual([
+      "http://host.docker.internal:32101",
+      "http://127.0.0.1:32101",
+      "http://localhost:32101",
+    ]);
   });
 });
 

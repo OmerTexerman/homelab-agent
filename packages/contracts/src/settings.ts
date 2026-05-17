@@ -302,7 +302,7 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Server URL",
         description:
-          "OpenCode currently requires an external server URL; managed Project Runtime serving is blocked until container URL bridging is implemented.",
+          "Optional external OpenCode server URL. Leave empty to start managed OpenCode inside the Project Runtime.",
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4096",
           clearWhenEmpty: "omit",

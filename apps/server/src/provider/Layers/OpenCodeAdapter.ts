@@ -16,6 +16,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
@@ -26,7 +27,13 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { runtimeOpenCodeBinaryPath } from "../../runtime/launchers.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  canonicalizeProviderRuntimeEvents,
+  makeProviderEventCanonicalizer,
+} from "./ProviderEventCanonicalizer.ts";
+import { resolveProviderRuntimeEnvironment } from "./runtimeLaunch.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -35,7 +42,6 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
-import { OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE } from "./OpenCodeProvider.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -458,6 +464,8 @@ export function makeOpenCodeAdapter(
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("opencode");
     const serverConfig = yield* ServerConfig;
     const openCodeRuntime = yield* OpenCodeRuntime;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const canonicalizer = makeProviderEventCanonicalizer();
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -501,7 +509,9 @@ export function makeOpenCodeAdapter(
     );
 
     const emit = (event: ProviderRuntimeEvent) =>
-      Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+      Queue.offerAll(runtimeEvents, canonicalizeProviderRuntimeEvents(canonicalizer, [event])).pipe(
+        Effect.asVoid,
+      );
     const writeNativeEvent = (
       threadId: ThreadId,
       event: {
@@ -1018,17 +1028,40 @@ export function makeOpenCodeAdapter(
 
     const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
       function* (input) {
-        const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
-        const directory = input.cwd ?? serverConfig.cwd;
-        if (serverUrl.trim().length === 0) {
+        const isExternalServer = serverUrl.trim().length > 0;
+        const runtimeEnvironment = isExternalServer
+          ? undefined
+          : yield* resolveProviderRuntimeEnvironment({
+              fileSystem,
+              provider: PROVIDER,
+              threadId: input.threadId,
+              wrapperPathFor: runtimeOpenCodeBinaryPath,
+            });
+        const managedServerPlan = runtimeEnvironment?.managedOpenCodeServer ?? null;
+        if (!isExternalServer && !managedServerPlan) {
           return yield* new ProviderAdapterProcessError({
             provider: PROVIDER,
             threadId: input.threadId,
-            detail: OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE,
+            detail:
+              "Managed OpenCode requires a Project Runtime with a published OpenCode server port, but no reachable runtime URL plan was available.",
           });
         }
+        const binaryPath =
+          isExternalServer || !managedServerPlan
+            ? openCodeSettings.binaryPath
+            : managedServerPlan.commandPath;
+        const directory = isExternalServer
+          ? (input.cwd ?? serverConfig.cwd)
+          : (managedServerPlan?.providerCwd ?? input.cwd ?? serverConfig.cwd);
+        const environment =
+          !isExternalServer && managedServerPlan
+            ? {
+                ...(options?.environment ?? process.env),
+                ...managedServerPlan.environment,
+              }
+            : options?.environment;
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1044,8 +1077,22 @@ export function makeOpenCodeAdapter(
               // process automatically. No manual `server.close()` needed.
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
-                serverUrl,
-                ...(options?.environment ? { environment: options.environment } : {}),
+                ...(isExternalServer ? { serverUrl } : {}),
+                ...(environment ? { environment } : {}),
+                ...(!isExternalServer && managedServerPlan
+                  ? {
+                      cwd: managedServerPlan.processCwd,
+                      hostname: managedServerPlan.hostname,
+                      port: managedServerPlan.port,
+                      reachableUrls: managedServerPlan.candidateUrls,
+                      cleanupCommand: {
+                        commandPath: managedServerPlan.cleanupCommandPath,
+                        args: managedServerPlan.cleanupArgs,
+                        cwd: managedServerPlan.processCwd,
+                        ...(environment !== undefined ? { environment } : {}),
+                      },
+                    }
+                  : {}),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,

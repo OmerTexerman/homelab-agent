@@ -38,6 +38,9 @@ const RUNTIME_SECRET_ENV_BASENAME = ".homelab-runtime.env";
 const RUNTIME_ACCESS_TOKEN_BASENAME = ".homelab-runtime-token";
 export const CONTAINER_RUNTIME_ROOT = "/runtime";
 export const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
+export const OPENCODE_MANAGED_SERVER_CONTAINER_HOSTNAME = "0.0.0.0";
+export const OPENCODE_MANAGED_SERVER_CONTAINER_PORT = 4096;
+export const OPENCODE_MANAGED_SERVER_HOST_ENV = "HOMELAB_AGENT_OPENCODE_MANAGED_HOST";
 const DEFAULT_CONTAINER_PATH =
   "/runtime/home/.homelab/bin:/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
@@ -149,6 +152,18 @@ export interface RuntimeGeneratedTextFile {
   readonly mode?: number;
 }
 
+export interface ManagedOpenCodeRuntimeServerPlan {
+  readonly commandPath: string;
+  readonly cleanupCommandPath: string;
+  readonly cleanupArgs: ReadonlyArray<string>;
+  readonly processCwd: string;
+  readonly providerCwd: string;
+  readonly environment: Readonly<Record<string, string>>;
+  readonly hostname: string;
+  readonly port: number;
+  readonly candidateUrls: ReadonlyArray<string>;
+}
+
 export function encodeRuntimeSegment(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
@@ -238,6 +253,9 @@ export function buildThreadRuntimeDescriptor(
       containerShellPath: input.containerShellPath,
       ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
     }),
+    ...(input.existing?.managedOpenCodeServer !== undefined
+      ? { managedOpenCodeServer: input.existing.managedOpenCodeServer }
+      : {}),
     createdAt: input.existing?.createdAt ?? input.now,
     updatedAt: input.now,
     lastStartedAt: input.existing?.lastStartedAt ?? null,
@@ -257,6 +275,9 @@ export function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExec
     cwd: runtime.cwd,
     shell: runtime.shell,
     env: runtime.env,
+    ...(runtime.managedOpenCodeServer !== undefined
+      ? { managedOpenCodeServer: runtime.managedOpenCodeServer }
+      : {}),
   };
 }
 
@@ -272,6 +293,9 @@ export function toLaunchContext(input: {
     hostHomePath: layout.hostHomePath,
     hostBinDir: layout.hostBinDir,
     shellWrapperPath: input.runtime.shell,
+    ...(input.runtime.managedOpenCodeServer !== undefined
+      ? { managedOpenCodeServer: input.runtime.managedOpenCodeServer }
+      : {}),
   };
 }
 
@@ -539,6 +563,69 @@ export function providerProcessCwdForLaunchContext(
         launchContext.execution.cwd,
       )
     : launchContext.hostWorkspacePath;
+}
+
+function urlHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function normalizePublishedHostIp(hostIp: string): string {
+  const trimmed = hostIp.trim();
+  return trimmed.length > 0 && trimmed !== "0.0.0.0" && trimmed !== "::" ? trimmed : "127.0.0.1";
+}
+
+export function managedOpenCodeServerCandidateUrls(input: {
+  readonly hostIp: string;
+  readonly hostPort: number;
+  readonly configuredHost?: string | undefined;
+}): ReadonlyArray<string> {
+  const configuredHost = input.configuredHost?.trim();
+  const publishedHost = normalizePublishedHostIp(input.hostIp);
+  const candidates = [
+    configuredHost ? `http://${urlHost(configuredHost)}:${input.hostPort}` : undefined,
+    `http://${urlHost(publishedHost)}:${input.hostPort}`,
+    publishedHost === "127.0.0.1" ? `http://localhost:${input.hostPort}` : undefined,
+  ].filter((value): value is string => value !== undefined);
+  return [...new Set(candidates)];
+}
+
+function managedOpenCodeCleanupArgs(port: number): ReadonlyArray<string> {
+  const pattern = `[o]pencode.*serve.*--port=${port}`;
+  return [
+    "-lc",
+    [
+      `pkill -TERM -f ${shQuote(pattern)} || true`,
+      "sleep 1",
+      `pkill -KILL -f ${shQuote(pattern)} || true`,
+    ].join("\n"),
+  ];
+}
+
+export function planManagedOpenCodeRuntimeServer(input: {
+  readonly launchContext: ThreadRuntimeLaunchContext;
+  readonly commandPath: string;
+  readonly configuredHost?: string | undefined;
+}): ManagedOpenCodeRuntimeServerPlan | null {
+  const endpoint = input.launchContext.managedOpenCodeServer;
+  if (!endpoint) {
+    return null;
+  }
+
+  return {
+    commandPath: input.commandPath,
+    cleanupCommandPath: input.launchContext.shellWrapperPath,
+    cleanupArgs: managedOpenCodeCleanupArgs(endpoint.containerPort),
+    processCwd: providerProcessCwdForLaunchContext(input.launchContext),
+    providerCwd: input.launchContext.execution.cwd,
+    environment: input.launchContext.execution.env,
+    hostname: OPENCODE_MANAGED_SERVER_CONTAINER_HOSTNAME,
+    port: endpoint.containerPort,
+    candidateUrls: managedOpenCodeServerCandidateUrls({
+      hostIp: endpoint.hostIp,
+      hostPort: endpoint.hostPort,
+      configuredHost: input.configuredHost ?? process.env[OPENCODE_MANAGED_SERVER_HOST_ENV],
+    }),
+  };
 }
 
 export function shQuote(value: string): string {

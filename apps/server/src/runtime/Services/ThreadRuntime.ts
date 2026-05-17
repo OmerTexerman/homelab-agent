@@ -27,6 +27,12 @@ export type ThreadRuntimeStatus =
 
 export type ThreadRuntimeHealth = "unknown" | "healthy" | "degraded" | "unhealthy";
 
+export interface ThreadRuntimeManagedOpenCodeServerEndpoint {
+  readonly containerPort: number;
+  readonly hostIp: string;
+  readonly hostPort: number;
+}
+
 export interface ThreadRuntimeDescriptor {
   readonly threadId: ThreadId;
   readonly runtimeId: RuntimeSessionId;
@@ -43,6 +49,7 @@ export interface ThreadRuntimeDescriptor {
   readonly cwd: string;
   readonly shell: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly lastStartedAt: string | null;
@@ -71,6 +78,7 @@ export interface ThreadExecutionContext {
   readonly cwd: string;
   readonly shell: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 
 export interface ThreadRuntimeLaunchContext {
@@ -80,6 +88,7 @@ export interface ThreadRuntimeLaunchContext {
   readonly hostHomePath: string;
   readonly hostBinDir: string;
   readonly shellWrapperPath: string;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 
 export interface ThreadRuntimeEvent {

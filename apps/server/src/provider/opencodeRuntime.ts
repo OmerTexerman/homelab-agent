@@ -36,6 +36,8 @@ const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
 
 const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
+const DEFAULT_OPENCODE_REACHABLE_URL_TIMEOUT_MS = 1_000;
+const DEFAULT_OPENCODE_CLEANUP_TIMEOUT_MS = 3_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 export interface OpenCodeServerProcess {
   readonly url: string;
@@ -105,6 +107,14 @@ export interface ParsedOpenCodeModelSlug {
   readonly modelID: string;
 }
 
+export interface OpenCodeServerCleanupCommand {
+  readonly commandPath: string;
+  readonly args: ReadonlyArray<string>;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
+  readonly timeoutMs?: number;
+}
+
 export interface OpenCodeRuntimeShape {
   /**
    * Spawns a local OpenCode server process. Its lifetime is bound to the caller's
@@ -115,8 +125,12 @@ export interface OpenCodeRuntimeShape {
   readonly startOpenCodeServerProcess: (input: {
     readonly binaryPath: string;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly cwd?: string;
     readonly port?: number;
     readonly hostname?: string;
+    readonly reachableUrls?: ReadonlyArray<string>;
+    readonly reachableUrlTimeoutMs?: number;
+    readonly cleanupCommand?: OpenCodeServerCleanupCommand;
     readonly timeoutMs?: number;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   /**
@@ -128,8 +142,12 @@ export interface OpenCodeRuntimeShape {
     readonly binaryPath: string;
     readonly serverUrl?: string | null;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly cwd?: string;
     readonly port?: number;
     readonly hostname?: string;
+    readonly reachableUrls?: ReadonlyArray<string>;
+    readonly reachableUrlTimeoutMs?: number;
+    readonly cleanupCommand?: OpenCodeServerCleanupCommand;
     readonly timeoutMs?: number;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
@@ -156,6 +174,17 @@ function parseServerUrlFromOutput(output: string): string | null {
     return match?.[1] ?? null;
   }
   return null;
+}
+
+function uniqueUrls(urls: ReadonlyArray<string>): ReadonlyArray<string> {
+  const normalized: string[] = [];
+  for (const url of urls) {
+    const trimmed = url.trim();
+    if (trimmed.length > 0 && !normalized.includes(trimmed)) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }
 
 export function parseOpenCodeModelSlug(
@@ -273,6 +302,42 @@ function ensureRuntimeError(
     : new OpenCodeRuntimeError({ operation, detail, cause });
 }
 
+const probeReachableUrl = (url: string, timeoutMs: number) =>
+  Effect.tryPromise({
+    try: async () => {
+      await fetch(url, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+      return url;
+    },
+    catch: (cause) =>
+      new OpenCodeRuntimeError({
+        operation: "selectReachableOpenCodeServerUrl",
+        detail: `Failed to reach ${url}: ${openCodeRuntimeErrorDetail(cause)}`,
+        cause,
+      }),
+  });
+
+const selectReachableOpenCodeServerUrl = Effect.fn("selectReachableOpenCodeServerUrl")(
+  function* (input: { readonly urls: ReadonlyArray<string>; readonly timeoutMs: number }) {
+    const urls = uniqueUrls(input.urls);
+    const failures: string[] = [];
+    for (const url of urls) {
+      const exit = yield* Effect.exit(probeReachableUrl(url, input.timeoutMs));
+      if (Exit.isSuccess(exit)) {
+        return exit.value;
+      }
+      failures.push(openCodeRuntimeErrorDetail(Cause.squash(exit.cause)));
+    }
+
+    return yield* new OpenCodeRuntimeError({
+      operation: "selectReachableOpenCodeServerUrl",
+      detail:
+        failures.length > 0
+          ? `OpenCode server started, but Homelab Agent could not reach any planned runtime URL. ${failures.join("; ")}`
+          : "OpenCode server started, but no runtime URL candidates were available.",
+    });
+  },
+);
+
 const makeOpenCodeRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const netService = yield* NetService.NetService;
@@ -344,6 +409,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               ...(input.environment ?? process.env),
               OPENCODE_CONFIG_CONTENT: OPENCODE_EMPTY_CONFIG_CONTENT,
             },
+            ...(input.cwd ? { cwd: input.cwd } : {}),
           }),
         )
         .pipe(
@@ -370,7 +436,33 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
                 // any serve process left in that group.
               }
             });
+      const cleanupCommand = input.cleanupCommand;
+      const cleanupRuntimeServer = cleanupCommand
+        ? Effect.gen(function* () {
+            const cleanup = cleanupCommand;
+            const cleanupChild = yield* spawner.spawn(
+              ChildProcess.make(cleanup.commandPath, [...cleanup.args], {
+                shell: process.platform === "win32",
+                env: cleanup.environment ?? input.environment ?? process.env,
+                ...((cleanup.cwd ?? input.cwd) ? { cwd: cleanup.cwd ?? input.cwd } : {}),
+              }),
+            );
+            yield* Effect.all(
+              [
+                collectStreamAsString(cleanupChild.stdout),
+                collectStreamAsString(cleanupChild.stderr),
+                cleanupChild.exitCode,
+              ],
+              { concurrency: "unbounded" },
+            );
+          }).pipe(
+            Effect.scoped,
+            Effect.timeoutOption(cleanupCommand.timeoutMs ?? DEFAULT_OPENCODE_CLEANUP_TIMEOUT_MS),
+            Effect.ignore,
+          )
+        : Effect.void;
       const terminateChild = killOpenCodeProcessGroup("SIGTERM").pipe(
+        Effect.andThen(cleanupRuntimeServer),
         Effect.andThen(Effect.sleep("1 second")),
         Effect.andThen(killOpenCodeProcessGroup("SIGKILL")),
         Effect.ignore,
@@ -459,8 +551,16 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         });
       }
 
+      const selectedUrl =
+        input.reachableUrls && input.reachableUrls.length > 0
+          ? yield* selectReachableOpenCodeServerUrl({
+              urls: input.reachableUrls,
+              timeoutMs: input.reachableUrlTimeoutMs ?? DEFAULT_OPENCODE_REACHABLE_URL_TIMEOUT_MS,
+            })
+          : readyOption.value;
+
       return {
-        url: readyOption.value,
+        url: selectedUrl,
         exitCode: child.exitCode.pipe(
           Effect.map(Number),
           Effect.orElseSucceed(() => 0),
@@ -482,8 +582,14 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     return startOpenCodeServerProcess({
       binaryPath: input.binaryPath,
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
+      ...(input.reachableUrls !== undefined ? { reachableUrls: input.reachableUrls } : {}),
+      ...(input.reachableUrlTimeoutMs !== undefined
+        ? { reachableUrlTimeoutMs: input.reachableUrlTimeoutMs }
+        : {}),
+      ...(input.cleanupCommand !== undefined ? { cleanupCommand: input.cleanupCommand } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     }).pipe(
       Effect.map((server) => ({

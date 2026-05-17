@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   ProviderDriverKind,
   type ModelCapabilities,
   type OpenCodeSettings,
@@ -28,8 +29,8 @@ const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
-export const OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE =
-  "OpenCode is installed in the Project Runtime image, but Homelab Agent cannot use its managed OpenCode server yet because the server would run inside the project runtime container without a reachable URL. Configure an external OpenCode server URL to use OpenCode.";
+export const OPENCODE_MANAGED_RUNTIME_READY_MESSAGE =
+  "Managed OpenCode is runtime-ready. Homelab Agent starts OpenCode inside each Project Runtime and verifies the published runtime server URL before opening a session.";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
   readonly cause: unknown;
@@ -166,6 +167,16 @@ function inferDefaultAgent(agents: ReadonlyArray<Agent>): string | undefined {
 const DEFAULT_OPENCODE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+const MANAGED_OPENCODE_DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.opencode;
+
+const MANAGED_OPENCODE_DEFAULT_MODELS: ReadonlyArray<ServerProviderModel> = [
+  {
+    slug: MANAGED_OPENCODE_DEFAULT_MODEL,
+    name: MANAGED_OPENCODE_DEFAULT_MODEL,
+    isCustom: false,
+    capabilities: DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+  },
+];
 
 function openCodeCapabilitiesForModel(input: {
   readonly providerID: string;
@@ -361,7 +372,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       enabled: openCodeSettings.enabled,
       checkedAt,
       models: providerModelsFromSettings(
-        [],
+        MANAGED_OPENCODE_DEFAULT_MODELS,
         PROVIDER,
         customModels,
         DEFAULT_OPENCODE_MODEL_CAPABILITIES,
@@ -369,9 +380,9 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       probe: {
         installed: true,
         version: null,
-        status: "error",
-        auth: { status: "unknown" },
-        message: OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE,
+        status: "ready",
+        auth: { status: "unknown", type: "opencode" },
+        message: OPENCODE_MANAGED_RUNTIME_READY_MESSAGE,
       },
     });
   }

@@ -96,23 +96,30 @@ describe("ProviderSelectionPolicy", () => {
     expect(interpretProviderReadiness(projected).usable).toBe(false);
   });
 
-  it("blocks OpenCode managed mode but allows an external OpenCode server snapshot", () => {
+  it("treats managed OpenCode as Project Runtime usable and preserves external server snapshots", () => {
     const managed = provider({
       instanceId: "opencode",
       driver: OPENCODE,
-      status: "error",
       message:
-        "OpenCode is installed in the Project Runtime image, but Homelab Agent cannot use its managed OpenCode server yet.",
+        "Managed OpenCode is runtime-ready. Homelab Agent starts OpenCode inside each Project Runtime and verifies the published runtime server URL before opening a session.",
       models: [model({ slug: "openai/gpt-5" })],
     });
     const managedResult = resolveProviderSelection({
       providers: [managed],
       requestedInstanceId: ProviderInstanceId.make("opencode"),
+      modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
     });
 
     expect(managedResult).toMatchObject({
-      _tag: "unavailable",
-      issue: expect.stringContaining("OpenCode"),
+      _tag: "selected",
+      target: {
+        instanceId: ProviderInstanceId.make("opencode"),
+        runtimeSupport: {
+          kind: "project-runtime-wrapper",
+          supported: true,
+          runtimeProvider: "opencode",
+        },
+      },
     });
 
     const external = provider({

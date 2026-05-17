@@ -1,6 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { ThreadRuntimeLaunchContext } from "../Services/ThreadRuntime.ts";
-import { providerProcessCwdForLaunchContext } from "./RuntimeExecutionContext.ts";
+import {
+  planManagedOpenCodeRuntimeServer,
+  providerProcessCwdForLaunchContext,
+  type ManagedOpenCodeRuntimeServerPlan,
+} from "./RuntimeExecutionContext.ts";
 
 export interface ProviderRuntimeEnvironment {
   readonly launchContext: ThreadRuntimeLaunchContext;
@@ -13,6 +17,7 @@ export interface ProviderRuntimeEnvironment {
   readonly hostHomePath: string;
   readonly hostBinDir: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly managedOpenCodeServer: ManagedOpenCodeRuntimeServerPlan | null;
 }
 
 export function buildProviderRuntimeEnvironment(input: {
@@ -31,5 +36,6 @@ export function buildProviderRuntimeEnvironment(input: {
     hostHomePath: input.launchContext.hostHomePath,
     hostBinDir: input.launchContext.hostBinDir,
     env: input.launchContext.execution.env,
+    managedOpenCodeServer: planManagedOpenCodeRuntimeServer(input),
   };
 }

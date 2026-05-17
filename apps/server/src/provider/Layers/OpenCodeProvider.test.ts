@@ -117,15 +117,19 @@ const makeOpenCodeSettings = (overrides?: Partial<OpenCodeSettings>): OpenCodeSe
   });
 
 it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
-  it.effect("marks the managed Project Runtime server path as blocked without a server URL", () =>
+  it.effect("marks managed Project Runtime OpenCode as runtime-ready without a server URL", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
 
-      assert.equal(snapshot.status, "error");
+      assert.equal(snapshot.status, "ready");
       assert.equal(snapshot.installed, true);
       assert.equal(
         snapshot.message,
-        "OpenCode is installed in the Project Runtime image, but Homelab Agent cannot use its managed OpenCode server yet because the server would run inside the project runtime container without a reachable URL. Configure an external OpenCode server URL to use OpenCode.",
+        "Managed OpenCode is runtime-ready. Homelab Agent starts OpenCode inside each Project Runtime and verifies the published runtime server URL before opening a session.",
+      );
+      assert.equal(
+        snapshot.models.some((model) => model.slug === "openai/gpt-5"),
+        true,
       );
       assert.equal(runtimeMock.state.closeCalls, 0);
     }),

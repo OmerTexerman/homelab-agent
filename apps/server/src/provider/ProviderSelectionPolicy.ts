@@ -83,7 +83,7 @@ const CURSOR_PROJECT_RUNTIME_BLOCKED_MESSAGE =
   "Cursor Agent is not available for Project Runtime sessions until a pinned, installable runtime binary and authentication strategy are configured.";
 
 const OPENCODE_PROJECT_RUNTIME_BLOCKED_MESSAGE =
-  "OpenCode managed mode is blocked for Project Runtime sessions until Homelab Agent can expose a container-reachable OpenCode server URL. Configure an external OpenCode server URL to use OpenCode.";
+  "OpenCode managed mode needs a Project Runtime with a reachable published OpenCode server URL. Configure an external OpenCode server URL or recreate the Project Runtime so the managed port is published.";
 
 function providerLabel(provider: ServerProvider): string {
   return provider.displayName?.trim() || String(provider.driver);
@@ -95,9 +95,15 @@ export function runtimeProviderForDriver(provider: ProviderDriverKind): Provider
       return "codex";
     case "claudeAgent":
       return "claudeAgent";
+    case "opencode":
+      return "opencode";
     default:
       return null;
   }
+}
+
+function isConfiguredOpenCodeServer(provider: ServerProvider): boolean {
+  return (provider.message ?? "").toLowerCase().includes("configured opencode server");
 }
 
 export function resolveProviderRuntimeSupport(
@@ -121,21 +127,19 @@ export function resolveProviderRuntimeSupport(
     };
   }
 
-  const runtimeProvider = runtimeProviderForDriver(provider.driver);
-  if (runtimeProvider) {
-    return {
-      supported: true,
-      kind: "project-runtime-wrapper",
-      runtimeProvider,
-    };
-  }
-
   if (provider.driver === ProviderDriverKind.make("opencode")) {
     if (provider.status === "ready") {
+      if (isConfiguredOpenCodeServer(provider)) {
+        return {
+          supported: true,
+          kind: "external-server",
+          runtimeProvider: null,
+        };
+      }
       return {
         supported: true,
-        kind: "external-server",
-        runtimeProvider: null,
+        kind: "project-runtime-wrapper",
+        runtimeProvider: "opencode",
       };
     }
     return {
@@ -143,6 +147,15 @@ export function resolveProviderRuntimeSupport(
       kind: "unavailable",
       runtimeProvider: null,
       reason: provider.message ?? OPENCODE_PROJECT_RUNTIME_BLOCKED_MESSAGE,
+    };
+  }
+
+  const runtimeProvider = runtimeProviderForDriver(provider.driver);
+  if (runtimeProvider) {
+    return {
+      supported: true,
+      kind: "project-runtime-wrapper",
+      runtimeProvider,
     };
   }
 

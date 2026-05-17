@@ -29,6 +29,7 @@ interface FakeDockerContainer {
   image: string;
   workdir: string;
   mounts: FakeDockerMount[];
+  ports: Record<string, Array<{ HostIp: string; HostPort: string }>>;
   labels: Record<string, string>;
   running: boolean;
 }
@@ -83,6 +84,9 @@ class FakeDockerRunner {
                 Destination: mount.target,
                 RW: !mount.readOnly,
               })),
+              NetworkSettings: {
+                Ports: container.ports,
+              },
             },
           ]),
         });
@@ -118,6 +122,7 @@ class FakeDockerRunner {
         let name = "";
         let workdir = "";
         const mounts: FakeDockerMount[] = [];
+        const ports: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
         let index = 1;
 
         while (index < input.length) {
@@ -140,6 +145,20 @@ class FakeDockerRunner {
             continue;
           }
           if (value === "--add-host") {
+            index += 2;
+            continue;
+          }
+          if (value === "-p") {
+            const rawPort = input[index + 1] ?? "";
+            const match = rawPort.match(/^([^:]+)::(\d+)\/tcp$/);
+            if (match) {
+              ports[`${match[2]}/tcp`] = [
+                {
+                  HostIp: match[1] ?? "127.0.0.1",
+                  HostPort: String(32_000 + this.nextId),
+                },
+              ];
+            }
             index += 2;
             continue;
           }
@@ -182,6 +201,7 @@ class FakeDockerRunner {
           image,
           workdir,
           mounts,
+          ports,
           labels: Object.assign({}, this.imageLabels.get(image)),
           running: true,
         });
@@ -497,6 +517,15 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
       assert.notEqual(networkFlagIndex, -1);
       assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      const openCodePortFlagIndex = runCall.findIndex((entry) => entry === "-p");
+      assert.notEqual(openCodePortFlagIndex, -1);
+      assert.equal(runCall[openCodePortFlagIndex + 1], "127.0.0.1::4096/tcp");
+      assert.deepEqual(started.managedOpenCodeServer, {
+        containerPort: 4096,
+        hostIp: "127.0.0.1",
+        hostPort: 32_001,
+      });
+      assert.deepEqual(launchContext.managedOpenCodeServer, started.managedOpenCodeServer);
       const runtimeCodexHome = path.join(runtimeHome, ".codex");
       assert.equal(
         yield* fileSystem.readFileString(path.join(runtimeCodexHome, "auth.json")),

@@ -52,7 +52,7 @@ export const ProviderOptionSelection = Schema.Struct({
 });
 export type ProviderOptionSelection = typeof ProviderOptionSelection.Type;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "opencode"]);
 export type ProviderKind = typeof ProviderKind.Type;
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;

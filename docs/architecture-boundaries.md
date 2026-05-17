@@ -52,9 +52,6 @@ should follow the runtime id for shared Project Runtimes.
 
 ## Known Gaps
 
-- OpenCode managed URL strategy: managed OpenCode still needs a
-  container-reachable server URL/port strategy before the built-in runtime path
-  can be marked ready.
 - Cursor pinned CLI: Cursor remains blocked for Project Runtime execution until
   the repo has a pinned installable CLI artifact and an authentication strategy.
 - Snapshot restore: checkpoint projection can identify restore targets and stale
