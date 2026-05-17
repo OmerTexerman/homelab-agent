@@ -9,15 +9,25 @@ import {
 import { SETTINGS_NAV_ITEMS } from "./components/settings/SettingsSidebarNav";
 
 describe("Homelab product copy", () => {
-  it("describes project-scoped shared runtimes for settings", () => {
+  it("describes project-scoped runtimes with Project Runtime language", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle).toBe(
-      "Default thread runtime",
+      "Default Project Runtime",
     );
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeDescription).toBe(
-      "Threads in a project use that project's shared runtime by default.",
+      "New threads use their project's Project Runtime unless isolation is selected explicitly.",
     );
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue).toBe(
-      "Use each project's shared runtime",
+      "Use Project Runtime",
+    );
+    expect(HOMELAB_PRODUCT_COPY.project.searchDescription).toBe(
+      "Project with its own Project Runtime",
+    );
+    expect(HOMELAB_PRODUCT_COPY.project.emptySidebarDescription).not.toMatch(/shared runtime/i);
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.waitingThreadDescription).not.toMatch(
+      /shared runtime|shared Project Runtime/i,
+    );
+    expect(HOMELAB_PRODUCT_COPY.composer.defaultPlaceholder).not.toMatch(
+      /repo|files\/folders|\$use skills/i,
     );
   });
 

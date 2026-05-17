@@ -36,7 +36,7 @@ export function isCodexCliVersionSupported(version: CodexCliVersion): boolean {
 export function formatCodexCliUpgradeMessage(version: CodexCliVersion): string {
   return `Codex CLI v${formatCodexCliVersion(
     version,
-  )} is too old for T3 Code. Upgrade to v${formatCodexCliVersion(
+  )} is too old for Homelab Agent. Upgrade to v${formatCodexCliVersion(
     MIN_SUPPORTED_CODEX_CLI_VERSION,
-  )} or newer and restart T3 Code.`;
+  )} or newer and restart Homelab Agent.`;
 }

@@ -825,7 +825,7 @@ function OpenCommandPaletteDialog() {
         {
           kind: "action",
           value: `action:add-project:${environmentId}:new`,
-          searchTerms: ["new project", "project", "shared runtime", "runtime"],
+          searchTerms: ["new project", "project", "project runtime", "runtime"],
           title: HOMELAB_PRODUCT_COPY.project.newAction,
           description: HOMELAB_PRODUCT_COPY.project.searchDescription,
           icon: <ServerIcon className={ITEM_ICON_CLASS} />,
@@ -1104,8 +1104,8 @@ function OpenCommandPaletteDialog() {
     kind: "action",
     value: "action:add-project",
     searchTerms: showRemoteProjectCloneUi
-      ? ["new project", "project", "runtime", "shared runtime", "import", "environment"]
-      : ["new project", "project", "runtime", "shared runtime", "environment"],
+      ? ["new project", "project", "runtime", "project runtime", "import", "environment"]
+      : ["new project", "project", "runtime", "project runtime", "environment"],
     title: HOMELAB_PRODUCT_COPY.project.newAction,
     description: HOMELAB_PRODUCT_COPY.project.searchDescription,
     icon: <ServerIcon className={ITEM_ICON_CLASS} />,
@@ -1815,8 +1815,8 @@ function OpenCommandPaletteDialog() {
               ? {
                   emptyStateMessage:
                     query.trim().length === 0
-                      ? "Enter a project name. The project gets its own shared runtime."
-                      : "Press Enter to create this project with its own shared runtime.",
+                      ? "Enter a project name. The project gets its own Project Runtime."
+                      : "Press Enter to create this project with its own Project Runtime.",
                 }
               : addProjectCloneFlow?.step === "repository"
                 ? {

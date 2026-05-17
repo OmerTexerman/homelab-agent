@@ -15,18 +15,23 @@ export const HOMELAB_PRODUCT_COPY = {
     newAction: "New project",
     createAction: "Create project",
     createPlaceholder: "Project name",
-    searchDescription: "Project with its own shared runtime",
+    searchDescription: "Project with its own Project Runtime",
     emptySidebarTitle: "No projects yet",
     emptySidebarDescription:
-      "A project is a workspace with its own shared runtime. Threads inside that project use that project runtime by default.",
+      "A logical project owns one Project Runtime. Threads inside that project use it by default; isolated clones are explicit.",
   },
   projectRuntime: {
     title: "Project Runtime",
-    defaultThreadRuntimeTitle: "Default thread runtime",
+    defaultThreadRuntimeTitle: "Default Project Runtime",
     defaultThreadRuntimeDescription:
-      "Threads in a project use that project's shared runtime by default.",
-    defaultThreadRuntimeValue: "Use each project's shared runtime",
-    isolatedRuntimeValue: "Use isolated runtimes by default",
+      "New threads use their project's Project Runtime unless isolation is selected explicitly.",
+    defaultThreadRuntimeValue: "Use Project Runtime",
+    isolatedRuntimeValue: "Use isolated runtime clones by default",
+    waitingThreadDescription: "This thread is waiting on the Project Runtime",
+    terminalUnavailableDescription:
+      "Terminal is unavailable until this thread has a Project Runtime.",
+    workspaceExplorerUnavailableDescription:
+      "Workspace explorer is unavailable until this thread has a Project Runtime.",
   },
   settings: {
     devicesAndSessions: "Devices & Sessions",
@@ -37,6 +42,10 @@ export const HOMELAB_PRODUCT_COPY = {
   preparingRuntimeEllipsis: "Preparing runtime...",
   runtimeWorkspaceTitle: "Runtime Workspace",
   runtimeWorkspaceSubtitle: "Files inside this project runtime",
+  composer: {
+    disconnectedPlaceholder: "Ask a follow-up, attach evidence, or describe the next operation",
+    defaultPlaceholder: "Ask about services, runbooks, runtime files, or / for commands",
+  },
 } as const;
 
 export function shouldShowPrimarySourceControlUi(): boolean {

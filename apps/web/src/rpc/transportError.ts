@@ -3,7 +3,7 @@ import { isProviderInterruptionMessage } from "@t3tools/shared/providerInterrupt
 const TRANSPORT_ERROR_PATTERNS = [
   /\bSocketCloseError\b/i,
   /\bSocketOpenError\b/i,
-  /Unable to connect to the T3 server WebSocket\./i,
+  /Unable to connect to the Homelab Agent server WebSocket\./i,
   /\bping timeout\b/i,
 ] as const;
 

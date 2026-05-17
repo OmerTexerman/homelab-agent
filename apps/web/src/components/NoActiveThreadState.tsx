@@ -96,12 +96,12 @@ export function NoActiveThreadState() {
                   Homelab Agent
                 </p>
                 <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-                  Thread runtimes stay thin. Homelab context comes from tools.
+                  Projects keep the runtime. Threads bring the provider session.
                 </h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  Threads start inside a project with lightweight operating instructions, then pull
-                  current architecture, services, secrets, and runtime bootstrap state from Homelab
-                  Agent as they work.
+                  Threads start inside a logical project and use its Project Runtime by default.
+                  They pull current architecture, services, secrets, and bootstrap state from
+                  Homelab Agent as they work.
                 </p>
                 <div className="mt-5 flex flex-wrap gap-2">
                   <Button
@@ -138,7 +138,7 @@ export function NoActiveThreadState() {
                   icon={<BotIcon className="size-4" />}
                   label="Providers"
                   value={`${readyProviders}/${providerStatuses.length}`}
-                  detail="Authenticated provider CLIs ready for runtime sessions."
+                  detail="Authenticated provider CLIs ready for Project Runtime sessions."
                 />
                 <StatusCard
                   icon={<KeyRoundIcon className="size-4" />}
@@ -160,7 +160,7 @@ export function NoActiveThreadState() {
                   icon={<WrenchIcon className="size-4" />}
                   label="Bootstrap"
                   value={String(bootstrapMutationCount)}
-                  detail="Project runtime mutations future threads inherit."
+                  detail="Project Runtime mutations future threads inherit."
                 />
               </div>
             </section>
@@ -181,8 +181,8 @@ export function NoActiveThreadState() {
                 </div>
                 <div className="mt-4 grid gap-3">
                   <ChecklistRow
-                    title="Authenticate Codex and Claude on the host"
-                    detail="Threads mount that auth into their isolated runtime homes."
+                    title="Authenticate Codex and Claude for runtime use"
+                    detail="Project Runtimes mount provider auth so threads can start provider sessions."
                     complete={readyProviders > 0}
                   />
                   <ChecklistRow
@@ -197,7 +197,7 @@ export function NoActiveThreadState() {
                   />
                   <ChecklistRow
                     title="Keep runtime bootstrap intentional"
-                    detail="Mutations should explain what future runtimes need and why."
+                    detail="Mutations should explain what future Project Runtimes need and why."
                     complete={bootstrapMutationCount > 0}
                   />
                 </div>
@@ -206,7 +206,7 @@ export function NoActiveThreadState() {
               <div className="rounded-3xl border border-border/60 bg-card/25 p-5">
                 <h2 className="text-sm font-semibold text-foreground">Runtime tools</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Inside each thread runtime, use the `homelab` CLI instead of relying on static
+                  Inside a Project Runtime, use the `homelab` CLI instead of relying on static
                   prompt context.
                 </p>
                 <div className="mt-4 space-y-2 rounded-2xl border border-border/60 bg-background/40 p-4 font-mono text-xs text-muted-foreground">

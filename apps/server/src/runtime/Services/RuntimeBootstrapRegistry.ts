@@ -1,6 +1,6 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 /**
- * RuntimeBootstrapRegistry - Shared runtime mutation catalog.
+ * RuntimeBootstrapRegistry - Project Runtime mutation catalog.
  *
  * Owns the durable bootstrap state that future thread runtimes inherit. This is
  * the server-side seam for "one thread learned we need this tool / file /
@@ -57,7 +57,7 @@ export class RuntimeBootstrapRegistryError extends Data.TaggedError(
 }> {}
 
 export interface RuntimeBootstrapRegistryShape {
-  /** Read the active shared runtime blueprint used for new threads. */
+  /** Read the active Project Runtime blueprint used for new threads. */
   readonly getActiveBlueprint: () => Effect.Effect<
     RuntimeBlueprintDescriptor,
     RuntimeBootstrapRegistryError

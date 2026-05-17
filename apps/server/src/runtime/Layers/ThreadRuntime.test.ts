@@ -416,6 +416,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.match(homelabCliContents, /project-memory\/search/);
       assert.match(homelabCliContents, /cmd_memory_propose/);
       assert.match(homelabCliContents, /Waiting for secret/);
+      assert.match(homelabCliContents, /Project Runtime bootstrap descriptor/);
+      assert.doesNotMatch(homelabCliContents, /shared runtime bootstrap descriptor/);
       assert.match(
         homelabCliContents,
         /Create or update a secret reference, open the secure UI prompt, and wait for the value/,

@@ -13,6 +13,7 @@ import { useCallback, useMemo } from "react";
 import { readEnvironmentApi } from "~/environmentApi";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import {
@@ -245,7 +246,7 @@ export function ProjectRuntimePanel({
           </div>
           <span className="text-xs text-muted-foreground">
             {waitingForRuntime
-              ? "This thread is waiting on the shared Project Runtime"
+              ? HOMELAB_PRODUCT_COPY.projectRuntime.waitingThreadDescription
               : queueSummary}
           </span>
           {detail?.queue.active ? (

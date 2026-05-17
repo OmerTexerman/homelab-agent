@@ -58,7 +58,7 @@ describe("ProjectRuntimePanel logic", () => {
     ).toBe("provider turn; 1 queued");
   });
 
-  it("detects when the current thread is waiting for the shared runtime", () => {
+  it("detects when the current thread is waiting for the Project Runtime", () => {
     const queue: ProjectRuntimeQueueSnapshot = {
       ...queueBase,
       queued: [

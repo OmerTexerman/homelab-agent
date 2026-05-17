@@ -78,6 +78,7 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
@@ -111,7 +112,6 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -2263,8 +2263,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "disconnected"
                             }`
                           : phase === "disconnected"
-                            ? "Ask for follow-up changes or attach images"
-                            : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                            ? HOMELAB_PRODUCT_COPY.composer.disconnectedPlaceholder
+                            : HOMELAB_PRODUCT_COPY.composer.defaultPlaceholder
                 }
                 disabled={
                   isConnecting ||

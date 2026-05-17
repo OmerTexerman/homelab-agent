@@ -606,7 +606,7 @@ def promotion_example_payload():
                     "id": "observation-grafana-http-check",
                     "sourceKind": "manual",
                     "summary": "Grafana responded successfully on port 3000",
-                    "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+                    "detail": "Verified from the Project Runtime after probing the HTTP endpoint.",
                     "threadId": thread_id,
                     "entityIds": ["service-grafana", "host-truenas"],
                     "createdAt": now,
@@ -956,7 +956,7 @@ def build_parser():
     secret_request_parser.set_defaults(func=cmd_secret_request)
 
     bootstrap_parser = subparsers.add_parser(
-        "bootstrap", help="Inspect the shared runtime bootstrap descriptor for future threads."
+        "bootstrap", help="Inspect the Project Runtime bootstrap descriptor for future threads."
     )
     bootstrap_parser.set_defaults(func=cmd_bootstrap)
 
@@ -1266,7 +1266,7 @@ cat <<'EOF' | homelab promote --stdin
         "id": "observation-example-service-http-check",
         "sourceKind": "manual",
         "summary": "The service responded successfully",
-        "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+        "detail": "Verified from the Project Runtime after probing the HTTP endpoint.",
         "entityIds": ["service-example", "host-main"],
         "createdAt": "2026-04-13T20:00:00.000Z"
       }

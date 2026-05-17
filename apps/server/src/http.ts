@@ -1,6 +1,7 @@
 import Mime from "@effect/platform-node/Mime";
 import { ThreadId } from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,7 @@ import {
   HttpBody,
   HttpClient,
   HttpClientResponse,
+  HttpMiddleware,
   HttpRouter,
   HttpServerResponse,
   HttpServerRequest,
@@ -35,6 +37,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   browserApiCorsHeaders,
+  isBrowserApiCorsOriginAllowed,
 } from "./httpCors.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
@@ -44,11 +47,32 @@ const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" vi
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
-export const browserApiCorsLayer = HttpRouter.cors({
+const credentialedBrowserApiCorsMiddleware = HttpMiddleware.cors({
+  allowedOrigins: isBrowserApiCorsOriginAllowed,
   allowedMethods: [...browserApiCorsAllowedMethods],
   allowedHeaders: [...browserApiCorsAllowedHeaders],
+  credentials: true,
   maxAge: 600,
 });
+
+const isWebSocketUpgradeRequest = (request: {
+  readonly method: string;
+  readonly headers: Record<string, string | undefined>;
+}): boolean =>
+  request.method === "GET" &&
+  request.headers.upgrade?.toLowerCase() === "websocket" &&
+  request.headers.connection?.toLowerCase().includes("upgrade") === true;
+
+export const browserApiCorsLayer = HttpRouter.middleware(
+  (httpApp) =>
+    Effect.withFiber((fiber) => {
+      const request = Context.getUnsafe(fiber.context, HttpServerRequest.HttpServerRequest);
+      return isWebSocketUpgradeRequest(request)
+        ? httpApp
+        : credentialedBrowserApiCorsMiddleware(httpApp);
+    }),
+  { global: true },
+);
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname

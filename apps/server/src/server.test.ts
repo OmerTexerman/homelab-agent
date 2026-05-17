@@ -104,6 +104,10 @@ import {
   type ThreadRuntimeShape,
 } from "./runtime/Services/ThreadRuntime.ts";
 import {
+  ProjectRuntimeLifecycle,
+  type ProjectRuntimeLifecycleShape,
+} from "./runtime/Services/ProjectRuntimeLifecycle.ts";
+import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
 } from "./observability/Services/BrowserTraceCollector.ts";
@@ -152,6 +156,52 @@ const defaultModelSelection = {
   instanceId: "codex",
   model: "gpt-5-codex",
 } as const;
+
+const makeMockProjectRuntimeOperationResult = (
+  projectId = defaultProjectId,
+  runtimeId = RuntimeSessionId.make(`runtime-${projectId}`),
+) => {
+  const now = new Date().toISOString();
+  return {
+    runtime: {
+      runtime: {
+        id: runtimeId,
+        projectId,
+        kind: "project" as const,
+        parentRuntimeId: null,
+        lifecycleState: "running" as const,
+        executionLock: "idle" as const,
+        filesystemRoot: "/workspace",
+        homeRoot: "/home/vscode",
+        containerName: "homelab-agent-runtime-test",
+        containerId: null,
+        createdAt: now,
+        updatedAt: now,
+        lastStartedAt: now,
+        lastStoppedAt: null,
+        lastError: null,
+      },
+      queue: {
+        runtimeId,
+        executionLock: "idle" as const,
+        active: null,
+        queued: [],
+        updatedAt: now,
+      },
+      snapshots: [],
+      restoreAvailable: false,
+      warnings: [],
+    },
+  };
+};
+
+const makeMockProjectRuntimeLifecycleOperation = (input) =>
+  Effect.succeed(
+    makeMockProjectRuntimeOperationResult(
+      input.projectId,
+      input.runtimeId ?? RuntimeSessionId.make(`runtime-${input.projectId}`),
+    ),
+  );
 
 const makeDefaultVcsLocalStatus = (
   overrides: Partial<{
@@ -529,6 +579,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     threadRuntime?: Partial<ThreadRuntimeShape>;
+    projectRuntimeLifecycle?: Partial<ProjectRuntimeLifecycleShape>;
     threadWorkspace?: Partial<ThreadWorkspaceShape>;
   };
 }) =>
@@ -755,6 +806,17 @@ const buildAppUnderTest = (options?: {
             Effect.succeed(makeMockThreadRuntimeLaunchContext(threadId)),
           streamEvents: Stream.empty,
           ...options?.layers?.threadRuntime,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ProjectRuntimeLifecycle)({
+          get: makeMockProjectRuntimeLifecycleOperation,
+          wake: makeMockProjectRuntimeLifecycleOperation,
+          archive: makeMockProjectRuntimeLifecycleOperation,
+          reset: makeMockProjectRuntimeLifecycleOperation,
+          cleanupScratch: makeMockProjectRuntimeLifecycleOperation,
+          createSnapshot: makeMockProjectRuntimeLifecycleOperation,
+          ...options?.layers?.projectRuntimeLifecycle,
         }),
       ),
       Layer.provide(
@@ -1168,8 +1230,9 @@ const splitHeaderTokens = (value: string | null) =>
     .filter((token) => token.length > 0)
     .toSorted();
 
-const assertBrowserApiCorsHeaders = (headers: Headers) => {
-  assert.equal(headers.get("access-control-allow-origin"), "*");
+const assertBrowserApiCorsHeaders = (headers: Headers, origin = crossOriginClientOrigin) => {
+  assert.equal(headers.get("access-control-allow-origin"), origin);
+  assert.equal(headers.get("access-control-allow-credentials"), "true");
   assert.deepEqual(splitHeaderTokens(headers.get("access-control-allow-methods")), [
     "GET",
     "OPTIONS",
@@ -2205,7 +2268,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       assert.equal(response.status, 204);
-      assert.equal(response.headers["access-control-allow-origin"], "*");
+      assert.equal(response.headers["access-control-allow-origin"], "http://localhost:5733");
+      assert.equal(response.headers["access-control-allow-credentials"], "true");
       assert.deepEqual(localTraceRecords, [
         {
           type: "otlp-span",
@@ -2438,7 +2502,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(response.status, 204);
-      assertBrowserApiCorsHeaders(response.headers);
+      assertBrowserApiCorsHeaders(response.headers, "http://localhost:5733");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

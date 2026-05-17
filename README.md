@@ -3,12 +3,12 @@
 Homelab Agent is a browser-based runtime for operating a homelab with coding
 agents such as Codex and Claude Code.
 
-Each thread gets an isolated runtime container, a terminal, provider-backed
-chat, and access to shared homelab systems for knowledge, bootstrap state, and
-secret references. The goal is not to be a code editor in the browser. The goal
-is to give agents a controlled environment where they can understand
-infrastructure, take action, and promote durable discoveries back into the
-system.
+Each logical project owns a Project Runtime: the containerized environment where
+project threads run provider-backed sessions, use terminals, share useful files,
+and access homelab knowledge, bootstrap state, and secret references. The goal
+is not to be a code editor in the browser. The goal is to give agents a
+controlled environment where they can understand infrastructure, take action,
+and promote durable discoveries back into the system.
 
 ## Upstream
 
@@ -24,7 +24,7 @@ The fork intentionally keeps useful upstream pieces such as:
 The fork intentionally diverges in the product model:
 
 - logical projects instead of host filesystem projects
-- isolated per-thread runtimes instead of repo/worktree-first execution
+- project-scoped runtimes instead of repo/worktree-first execution
 - a homelab knowledge system instead of large static agent markdown files
 - secret brokerage and runtime bootstrap flows designed for an always-online app
 
@@ -51,14 +51,14 @@ See [NOTICE.md](./NOTICE.md) for attribution details.
 - `packages/shared`
   Small shared runtime helpers.
 - `docker/runtime`
-  Local runtime image used for thread containers.
+  Local runtime image used for Project Runtime containers.
 - `.docs` and `.plans`
   Historical upstream/internal notes. Useful for background, but not the best starting point for active fork work.
 
 ## Current Direction
 
-- Thread-first execution model with one isolated runtime per thread
-- Browser UI for managing projects, threads, terminals, files, and approvals
+- Project Runtime-first execution model with one default runtime per logical project
+- Browser UI for managing projects, threads, Project Runtimes, terminals, files, and approvals
 - Shared homelab graph for services, architecture, and promoted discoveries
 - Secret request flow that avoids pasting sensitive values into chat
 - Runtime bootstrap layer so future threads inherit tooling changes safely
@@ -93,10 +93,10 @@ Use `bun run test` for tests. Do not use `bun test`.
 
 ## Runtime Notes
 
-- Provider auth stays on the host and is made available inside thread runtimes.
+- Provider auth stays on the host and is made available inside Project Runtimes.
 - Runtime containers are built locally from `docker/runtime/Dockerfile`.
-- Thread workspaces are isolated from each other.
-- Idle thread runtimes can sleep and wake back up when the thread becomes active again.
+- Threads in a project use that project's Project Runtime by default.
+- Idle Project Runtimes can sleep and wake back up when project work resumes.
 
 ## License
 

@@ -242,8 +242,8 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
           <DialogHeader className="border-b border-border/70 bg-background">
             <DialogTitle>Add provider instance</DialogTitle>
             <DialogDescription>
-              Configure an additional provider instance — for example, a second Codex install
-              pointed at a different workspace.
+              Configure an additional provider instance, such as a second Codex account, home, or
+              binary path.
             </DialogDescription>
             <div className="grid grid-cols-3 gap-2">
               {wizardSteps.map((step, index) => (

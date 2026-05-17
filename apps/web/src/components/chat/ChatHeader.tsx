@@ -18,6 +18,7 @@ import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import {
+  HOMELAB_PRODUCT_COPY,
   shouldShowEditorOpenInControls,
   shouldShowPrimarySourceControlUi,
   shouldShowRuntimeWorkspaceExplorer,
@@ -169,7 +170,7 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="bottom">
             {!terminalAvailable
-              ? "Terminal is unavailable until this thread has a project runtime."
+              ? HOMELAB_PRODUCT_COPY.projectRuntime.terminalUnavailableDescription
               : terminalToggleShortcutLabel
                 ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
                 : "Toggle terminal drawer"}
@@ -194,7 +195,7 @@ export const ChatHeader = memo(function ChatHeader({
             />
             <TooltipPopup side="bottom">
               {!workspaceExplorerAvailable
-                ? "Workspace explorer is unavailable until this thread has a project runtime."
+                ? HOMELAB_PRODUCT_COPY.projectRuntime.workspaceExplorerUnavailableDescription
                 : "Toggle runtime workspace explorer"}
             </TooltipPopup>
           </Tooltip>

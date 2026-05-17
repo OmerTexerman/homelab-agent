@@ -895,7 +895,7 @@ export function ProjectRuntimeSettingsPanel() {
                   }
                 }}
               >
-                <SelectTrigger className="w-full sm:w-64" aria-label="Default thread runtime">
+                <SelectTrigger className="w-full sm:w-64" aria-label="Default Project Runtime">
                   <SelectValue>
                     {settings.defaultThreadEnvMode === "worktree"
                       ? HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue
@@ -920,7 +920,7 @@ export function ProjectRuntimeSettingsPanel() {
         />
         <SettingsRow
           title="Runtime ownership"
-          description="Each project owns its shared runtime/container. Threads inside that project use it unless isolation is explicitly selected."
+          description="Each logical project owns a Project Runtime. Threads inside that project use it unless an isolated clone is selected."
           control={
             <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
               Per project
@@ -961,7 +961,7 @@ export function MemoryKnowledgeSettingsPanel() {
         />
         <SettingsRow
           title="Runtime bootstrap state"
-          description="Bootstrap mutations available to thread runtimes through homelab tools."
+          description="Project Runtime bootstrap mutations available through homelab tools."
           control={
             <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
               {homelabSetupStatusQuery.isLoading ? "Loading" : `${bootstrapMutationCount} entries`}
