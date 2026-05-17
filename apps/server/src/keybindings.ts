@@ -50,6 +50,7 @@ import {
   compileResolvedKeybindingsConfig,
   parseKeybindingShortcut,
 } from "@t3tools/shared/keybindings";
+import { watchDirectoryShallow } from "./shallowDirectoryWatch.ts";
 
 export {
   DEFAULT_KEYBINDINGS,
@@ -585,8 +586,10 @@ const makeKeybindings = Effect.gen(function* () {
 
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
-    // `fs.watch` can fire before the content has been flushed to disk.
-    const debouncedKeybindingsEvents = fs.watch(keybindingsConfigDir).pipe(
+    // `fs.watch` can fire before the content has been flushed to disk. Use a
+    // shallow watcher because runtime homes live below the same state directory
+    // and may contain provider-auth files the host process cannot watch.
+    const debouncedKeybindingsEvents = watchDirectoryShallow(keybindingsConfigDir).pipe(
       Stream.filter((event) => {
         return (
           event.path === keybindingsConfigFile ||

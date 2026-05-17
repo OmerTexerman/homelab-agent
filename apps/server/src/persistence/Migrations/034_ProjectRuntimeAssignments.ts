@@ -1,23 +1,42 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+function columnExists(
+  tableColumns: ReadonlyArray<{ readonly name: string }>,
+  columnName: string,
+): boolean {
+  return tableColumns.some((column) => column.name === columnName);
+}
+
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-
-  yield* sql`
-    ALTER TABLE projection_projects
-    ADD COLUMN default_runtime_id TEXT
+  const projectColumns = yield* sql<{ readonly name: string }>`
+    PRAGMA table_info(projection_projects)
+  `;
+  const threadColumns = yield* sql<{ readonly name: string }>`
+    PRAGMA table_info(projection_threads)
   `;
 
-  yield* sql`
-    ALTER TABLE projection_threads
-    ADD COLUMN runtime_id TEXT
-  `;
+  if (!columnExists(projectColumns, "default_runtime_id")) {
+    yield* sql`
+      ALTER TABLE projection_projects
+      ADD COLUMN default_runtime_id TEXT
+    `;
+  }
 
-  yield* sql`
-    ALTER TABLE projection_threads
-    ADD COLUMN runtime_selection_mode TEXT NOT NULL DEFAULT 'shared'
-  `;
+  if (!columnExists(threadColumns, "runtime_id")) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN runtime_id TEXT
+    `;
+  }
+
+  if (!columnExists(threadColumns, "runtime_selection_mode")) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN runtime_selection_mode TEXT NOT NULL DEFAULT 'shared'
+    `;
+  }
 
   yield* sql`
     UPDATE projection_projects

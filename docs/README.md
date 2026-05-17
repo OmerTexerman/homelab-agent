@@ -10,6 +10,9 @@ material.
 - [project-runtime-architecture.md](./project-runtime-architecture.md)
   Shared project runtime/container design, project-local memory, queueing,
   lifecycle, and implementation sequence.
+- [architecture-boundaries.md](./architecture-boundaries.md)
+  Fork-owned boundary modules for runtime, provider, terminal, checkpoint, and
+  UI read-model policy, plus upstream rebase guidance.
 - [codebase.md](./codebase.md)
   Map of the active code paths and where to start reading the implementation.
 - [codebase-audit.md](./codebase-audit.md)

@@ -64,7 +64,9 @@ state, call the homelab module, and adapt the result back.
 
 ## Fork-Owned Boundaries
 
-Prefer these modules or equivalent successors for homelab product behavior:
+Prefer these modules or equivalent successors for homelab product behavior. See
+[architecture-boundaries.md](./architecture-boundaries.md) for ownership and
+non-ownership details.
 
 - `RuntimeWorkspace`
 - `ProjectRuntimeQueue`
@@ -72,8 +74,17 @@ Prefer these modules or equivalent successors for homelab product behavior:
 - `HomelabContextView`
 - `RuntimeSecretInjection`
 - `RuntimeTerminalContext`
-- provider event canonicalization/projection policy modules
-- chat timeline and user decision queue modules
+- `apps/web/src/threadTimelineReadModel.ts`
+- `apps/web/src/decisionQueueReadModel.ts`
+- `apps/server/src/provider/Layers/ProviderEventCanonicalizer.ts`
+- `apps/server/src/orchestration/Layers/ProviderRuntimeProjectionPolicy.ts`
+- `apps/server/src/orchestration/Layers/ProviderCommandPolicy.ts`
+- `apps/server/src/orchestration/Layers/CheckpointProjectionPolicy.ts`
+- `apps/server/src/terminal/Layers/TerminalSession.ts`
+- `apps/server/src/provider/ProviderSelectionPolicy.ts`
+- `apps/server/src/runtime/Layers/RuntimeExecutionContext.ts`
+- `apps/server/src/runtime/Services/RuntimeBootstrapResolver.ts`
+- `apps/server/src/runtime/Layers/RuntimeBootstrapResolver.ts`
 
 Fork-owned modules should have focused tests. This gives upstream syncs a stable
 regression surface even when upstream files churn.

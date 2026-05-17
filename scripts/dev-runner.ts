@@ -124,6 +124,10 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
   });
 }
 
+function envBoolean(value: boolean): string {
+  return value ? "true" : "false";
+}
+
 interface CreateDevRunnerEnvInput {
   readonly mode: DevMode;
   readonly baseEnv: NodeJS.ProcessEnv;
@@ -184,19 +188,19 @@ export function createDevRunnerEnv({
     }
 
     if (!isDesktopMode && noBrowser !== undefined) {
-      output.T3CODE_NO_BROWSER = noBrowser ? "1" : "0";
+      output.T3CODE_NO_BROWSER = envBoolean(noBrowser);
     } else if (!isDesktopMode) {
       delete output.T3CODE_NO_BROWSER;
     }
 
     if (autoBootstrapProjectFromCwd !== undefined) {
-      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = autoBootstrapProjectFromCwd ? "1" : "0";
+      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = envBoolean(autoBootstrapProjectFromCwd);
     } else {
       delete output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD;
     }
 
     if (logWebSocketEvents !== undefined) {
-      output.T3CODE_LOG_WS_EVENTS = logWebSocketEvents ? "1" : "0";
+      output.T3CODE_LOG_WS_EVENTS = envBoolean(logWebSocketEvents);
     } else {
       delete output.T3CODE_LOG_WS_EVENTS;
     }

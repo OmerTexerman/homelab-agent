@@ -6,7 +6,8 @@
  * text generation model selection).
  *
  * Follows the same pattern as `keybindings.ts`: JSON file + Cache + PubSub +
- * Semaphore + FileSystem.watch for concurrency and external edit detection.
+ * Semaphore + shallow directory watching for concurrency and external edit
+ * detection.
  *
  * @module ServerSettings
  */
@@ -49,6 +50,7 @@ import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJso
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerSecretStore } from "./auth/Services/ServerSecretStore.ts";
+import { watchDirectoryShallow } from "./shallowDirectoryWatch.ts";
 
 const encodeServerSettings = Schema.encodeEffect(ServerSettings);
 const encodeServerSettingsJson = Schema.encodeUnknownEffect(fromJsonStringPretty(ServerSettings));
@@ -499,8 +501,10 @@ const makeServerSettings = Effect.gen(function* () {
 
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
-    // `fs.watch` can fire before the content has been flushed to disk.
-    const debouncedSettingsEvents = fs.watch(settingsDir).pipe(
+    // `fs.watch` can fire before the content has been flushed to disk. Use a
+    // shallow watcher because runtime homes live below the same state directory
+    // and may contain provider-auth files the host process cannot watch.
+    const debouncedSettingsEvents = watchDirectoryShallow(settingsDir).pipe(
       Stream.filter((event) => {
         return (
           event.path === settingsFile ||
