@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProjectMemoryId } from "./projectMemory.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
@@ -533,6 +534,31 @@ const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const StandaloneThreadMoveMemoryMigrationMode = Schema.Literals(["none", "copy", "move"]);
+export type StandaloneThreadMoveMemoryMigrationMode =
+  typeof StandaloneThreadMoveMemoryMigrationMode.Type;
+
+export const StandaloneThreadMoveMemoryMigration = Schema.Struct({
+  mode: StandaloneThreadMoveMemoryMigrationMode,
+  memoryIds: Schema.optional(Schema.Array(ProjectMemoryId)),
+});
+export type StandaloneThreadMoveMemoryMigration = typeof StandaloneThreadMoveMemoryMigration.Type;
+
+export const StandaloneThreadMoveRuntimeHandling = Schema.Struct({
+  filesystem: Schema.Literal("no-merge"),
+});
+export type StandaloneThreadMoveRuntimeHandling = typeof StandaloneThreadMoveRuntimeHandling.Type;
+
+const ThreadStandaloneMoveToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.move-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
+  runtimeHandling: Schema.optional(StandaloneThreadMoveRuntimeHandling),
+  createdAt: IsoDateTime,
+});
+
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
@@ -695,6 +721,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCreateCommand,
   ThreadStandaloneCreateCommand,
   ThreadStandalonePromoteToProjectCommand,
+  ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -718,6 +745,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCreateCommand,
   ThreadStandaloneCreateCommand,
   ThreadStandalonePromoteToProjectCommand,
+  ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,

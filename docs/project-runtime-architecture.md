@@ -103,6 +103,10 @@ orchestration model:
   project runtime or an isolated runtime.
 - New shared threads attach to `project.defaultRuntimeId` automatically.
 - New isolated threads attach to `isolated-runtime:<thread-id>`.
+- Moving a standalone shared thread into an existing project reassigns it to
+  the target project's default runtime. Moving a standalone isolated thread
+  keeps its isolated runtime id. Neither path merges Scratch filesystem state
+  into the target Project Runtime.
 - Older persisted events and projections are backfilled through migration 034.
 
 Runtime assignment policy lives in `apps/server/src/runtime/ProjectRuntimePolicy.ts`.
@@ -269,6 +273,13 @@ with `homelab memory propose`. Search uses structured memory fields first, then
 thread transcript indexes for exact recovery. Promotion to global homelab
 knowledge remains explicit: a proposed memory entry can be marked promoted only
 when a normal homelab promotion envelope is submitted and recorded.
+
+Standalone threads use the hidden `system:standalone` project memory scope.
+When a standalone thread is moved to an existing project, the transcript moves
+with the thread automatically. Durable Scratch memory entries move only when the
+command/UI explicitly requests `copy` or `move`. Copying creates target-project
+entries while preserving source thread/message/file attribution; moving
+re-scopes the selected entries to the target project.
 
 ## Secrets
 

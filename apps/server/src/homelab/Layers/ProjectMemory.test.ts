@@ -105,7 +105,7 @@ layer("ProjectMemory", (it) => {
       const projectMemory = yield* ProjectMemory;
       const threads = yield* ProjectionThreadRepository;
       const messages = yield* ProjectionThreadMessageRepository;
-      const standaloneProjectId = ProjectId.make("system:standalone");
+      const standaloneProjectId = ProjectId.make("system:standalone-copy");
       const promotedProjectId = ProjectId.make("project-promoted-memory");
       const threadId = ThreadId.make("thread-promoted-memory");
       const now = "2026-05-17T14:00:00.000Z";
@@ -199,5 +199,145 @@ layer("ProjectMemory", (it) => {
         [memory.id],
       );
     }),
+  );
+
+  it.effect("copies relevant standalone project memory entries into the target project", () =>
+    Effect.gen(function* () {
+      const projectMemory = yield* ProjectMemory;
+      const standaloneProjectId = ProjectId.make("system:standalone-move");
+      const targetProjectId = ProjectId.make("project-existing-memory-copy");
+      const threadId = ThreadId.make("thread-copy-memory");
+      const otherThreadId = ThreadId.make("thread-other-memory");
+      const targetRuntimeId = RuntimeSessionId.make("project-runtime:project-existing-memory-copy");
+
+      const copiedSource = yield* projectMemory.create({
+        projectId: standaloneProjectId,
+        runtimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+        sourceThreadId: threadId,
+        summary: "Copy router memory",
+        body: "Router backup lives on nas-01.",
+        tags: ["router"],
+      });
+      const unrelated = yield* projectMemory.create({
+        projectId: standaloneProjectId,
+        sourceThreadId: otherThreadId,
+        summary: "Other scratch memory",
+        body: "This belongs to another standalone thread.",
+        tags: ["other"],
+      });
+
+      const result = yield* projectMemory.migrateStandaloneThreadEntries({
+        sourceProjectId: standaloneProjectId,
+        targetProjectId,
+        sourceThreadId: threadId,
+        targetRuntimeId,
+        migration: { mode: "copy" },
+      });
+
+      const standaloneEntries = yield* projectMemory.list({ projectId: standaloneProjectId });
+      const targetEntries = yield* projectMemory.list({ projectId: targetProjectId });
+
+      assert.equal(result.copiedEntries.length, 1);
+      assert.equal(result.movedEntries.length, 0);
+      assert.deepEqual(
+        standaloneEntries.map((entry) => entry.id).toSorted(),
+        [copiedSource.id, unrelated.id].toSorted(),
+      );
+      assert.equal(targetEntries.length, 1);
+      assert.notEqual(targetEntries[0]?.id, copiedSource.id);
+      assert.equal(targetEntries[0]?.projectId, targetProjectId);
+      assert.equal(targetEntries[0]?.runtimeId, targetRuntimeId);
+      assert.equal(targetEntries[0]?.sourceThreadId, threadId);
+      assert.deepEqual(targetEntries[0]?.tags, ["router", "copied-from-standalone"]);
+    }),
+  );
+
+  it.effect("moves only selected standalone project memory entries into the target project", () =>
+    Effect.gen(function* () {
+      const projectMemory = yield* ProjectMemory;
+      const standaloneProjectId = ProjectId.make("system:standalone-reject");
+      const targetProjectId = ProjectId.make("project-existing-memory-move");
+      const threadId = ThreadId.make("thread-move-memory");
+      const targetRuntimeId = RuntimeSessionId.make("isolated-runtime:thread-move-memory");
+
+      const movedSource = yield* projectMemory.create({
+        projectId: standaloneProjectId,
+        runtimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+        sourceThreadId: threadId,
+        summary: "Move router memory",
+        body: "This entry should move with the thread.",
+        tags: ["router"],
+      });
+      const retainedSource = yield* projectMemory.create({
+        projectId: standaloneProjectId,
+        runtimeId: RuntimeSessionId.make("project-runtime:system:standalone"),
+        sourceThreadId: threadId,
+        summary: "Retain router memory",
+        body: "This entry is not selected.",
+        tags: ["router"],
+      });
+
+      const result = yield* projectMemory.migrateStandaloneThreadEntries({
+        sourceProjectId: standaloneProjectId,
+        targetProjectId,
+        sourceThreadId: threadId,
+        targetRuntimeId,
+        migration: { mode: "move", memoryIds: [movedSource.id] },
+      });
+
+      const standaloneEntries = yield* projectMemory.list({ projectId: standaloneProjectId });
+      const targetEntries = yield* projectMemory.list({ projectId: targetProjectId });
+
+      assert.equal(result.copiedEntries.length, 0);
+      assert.deepEqual(
+        result.movedEntries.map((entry) => entry.id),
+        [movedSource.id],
+      );
+      assert.deepEqual(
+        standaloneEntries.map((entry) => entry.id),
+        [retainedSource.id],
+      );
+      assert.deepEqual(
+        targetEntries.map((entry) => entry.id),
+        [movedSource.id],
+      );
+      assert.equal(targetEntries[0]?.runtimeId, targetRuntimeId);
+      assert.equal(targetEntries[0]?.sourceThreadId, threadId);
+    }),
+  );
+
+  it.effect(
+    "rejects selected standalone memory entries that do not belong to the source thread",
+    () =>
+      Effect.gen(function* () {
+        const projectMemory = yield* ProjectMemory;
+        const standaloneProjectId = ProjectId.make("system:standalone");
+        const targetProjectId = ProjectId.make("project-existing-memory-reject");
+        const threadId = ThreadId.make("thread-memory-reject");
+        const otherThreadId = ThreadId.make("thread-memory-reject-other");
+        const otherEntry = yield* projectMemory.create({
+          projectId: standaloneProjectId,
+          sourceThreadId: otherThreadId,
+          summary: "Other thread memory",
+          body: "Not selectable for this move.",
+          tags: ["other"],
+        });
+
+        yield* Effect.flip(
+          projectMemory.migrateStandaloneThreadEntries({
+            sourceProjectId: standaloneProjectId,
+            targetProjectId,
+            sourceThreadId: threadId,
+            targetRuntimeId: RuntimeSessionId.make(
+              "project-runtime:project-existing-memory-reject",
+            ),
+            migration: { mode: "move", memoryIds: [otherEntry.id] },
+          }),
+        ).pipe(
+          Effect.map((error) => {
+            assert.match(error.message, /were not found for this thread/);
+          }),
+        );
+      }),
   );
 });

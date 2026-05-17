@@ -44,6 +44,9 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
+import { refreshActiveProjectContextViews } from "../../homelab/ProjectMemoryContextViews.ts";
+import { standaloneProjectId } from "../../runtime/ProjectRuntimePolicy.ts";
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
@@ -81,6 +84,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectMemory = yield* Effect.serviceOption(ProjectMemory);
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -98,6 +102,74 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         nextReadModel = yield* projectEvent(nextReadModel, event);
       }
       return nextReadModel;
+    });
+
+  const applyStandaloneMoveMemoryMigration = (input: {
+    readonly command: OrchestrationCommand;
+    readonly committedEvents: ReadonlyArray<OrchestrationEvent>;
+  }) =>
+    Effect.gen(function* () {
+      if (input.command.type !== "thread.standalone.move-to-project") {
+        return;
+      }
+      const command = input.command;
+
+      const memoryMigration = command.memoryMigration ?? { mode: "none" as const };
+      if (memoryMigration.mode === "none") {
+        return;
+      }
+      if (Option.isNone(projectMemory)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project memory service is unavailable for standalone thread memory migration.",
+        });
+      }
+
+      const threadMovedEvent = input.committedEvents.find(
+        (event): event is Extract<OrchestrationEvent, { type: "thread.meta-updated" }> =>
+          event.type === "thread.meta-updated" && event.payload.threadId === command.threadId,
+      );
+      const targetRuntimeId = threadMovedEvent?.payload.runtimeId ?? null;
+      yield* projectMemory.value
+        .migrateStandaloneThreadEntries({
+          sourceProjectId: standaloneProjectId(),
+          targetProjectId: command.projectId,
+          sourceThreadId: command.threadId,
+          targetRuntimeId,
+          migration: memoryMigration,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+    });
+
+  const refreshStandaloneMoveContextViews = (input: { readonly command: OrchestrationCommand }) =>
+    Effect.gen(function* () {
+      if (input.command.type !== "thread.standalone.move-to-project") {
+        return;
+      }
+      const command = input.command;
+
+      const logRefreshFailure = (cause: Cause.Cause<unknown>) =>
+        Effect.logWarning("failed to refresh context views after standalone thread move", {
+          threadId: command.threadId,
+          targetProjectId: command.projectId,
+          cause: Cause.pretty(cause),
+        });
+
+      yield* refreshActiveProjectContextViews(standaloneProjectId()).pipe(
+        Effect.catchCause(logRefreshFailure),
+      );
+      yield* refreshActiveProjectContextViews(command.projectId).pipe(
+        Effect.catchCause(logRefreshFailure),
+      );
     });
 
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
@@ -166,6 +238,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 committedEvents.push(savedEvent);
               }
 
+              yield* applyStandaloneMoveMemoryMigration({
+                command: envelope.command,
+                committedEvents,
+              });
+
               const lastSavedEvent = committedEvents.at(-1) ?? null;
               if (lastSavedEvent === null) {
                 return yield* new OrchestrationCommandInvariantError({
@@ -200,6 +277,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        yield* refreshStandaloneMoveContextViews({ command: envelope.command });
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
           if (index === 0) {

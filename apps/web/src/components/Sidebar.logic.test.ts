@@ -3,6 +3,7 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
   createThreadJumpHintVisibilityController,
+  buildStandaloneThreadMoveMemoryMigration,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -20,11 +21,14 @@ import {
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  standaloneThreadMoveMemoryDescription,
+  standaloneThreadMoveRuntimeDescription,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
   EnvironmentId,
   OrchestrationLatestTurn,
+  ProjectMemoryId,
   ProjectId,
   ProviderInstanceId,
   RuntimeSessionId,
@@ -38,6 +42,59 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("standalone thread move helpers", () => {
+  it("builds explicit no-memory migration options", () => {
+    expect(
+      buildStandaloneThreadMoveMemoryMigration({
+        mode: "none",
+        selection: "selected",
+        selectedMemoryIds: [ProjectMemoryId.make("memory-router")],
+      }),
+    ).toEqual({ mode: "none" });
+  });
+
+  it("builds all-relevant copy options without selected ids", () => {
+    expect(
+      buildStandaloneThreadMoveMemoryMigration({
+        mode: "copy",
+        selection: "all-relevant",
+        selectedMemoryIds: [ProjectMemoryId.make("memory-router")],
+      }),
+    ).toEqual({ mode: "copy" });
+  });
+
+  it("builds selected move options with selected ids", () => {
+    expect(
+      buildStandaloneThreadMoveMemoryMigration({
+        mode: "move",
+        selection: "selected",
+        selectedMemoryIds: [
+          ProjectMemoryId.make("memory-router"),
+          ProjectMemoryId.make("memory-dashboard"),
+        ],
+      }),
+    ).toEqual({
+      mode: "move",
+      memoryIds: ["memory-router", "memory-dashboard"],
+    });
+  });
+
+  it("keeps move dialog copy explicit about transcript, memory, and runtime filesystem state", () => {
+    expect(standaloneThreadMoveMemoryDescription("none", "all-relevant")).toContain(
+      "Chat transcript moves automatically",
+    );
+    expect(standaloneThreadMoveMemoryDescription("copy", "selected")).toContain(
+      "selected Scratch memory entries are copied",
+    );
+    expect(standaloneThreadMoveRuntimeDescription("shared")).toContain(
+      "Runtime filesystem state is not merged",
+    );
+    expect(standaloneThreadMoveRuntimeDescription("isolated")).toContain(
+      "keeps its isolated runtime",
+    );
+  });
+});
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;

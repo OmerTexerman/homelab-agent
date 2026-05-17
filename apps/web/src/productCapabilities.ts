@@ -31,6 +31,9 @@ export const HOMELAB_PRODUCT_COPY = {
       "One-off work in an isolated scratch runtime clone for containment or parallel work.",
     promoteAction: "Promote to project",
     promoteDescription: "Move this thread into a new named logical project.",
+    moveAction: "Move to project",
+    moveDescription:
+      "Move this chat transcript into an existing project. Memory and runtime files are handled explicitly.",
   },
   projectRuntime: {
     title: "Project Runtime",

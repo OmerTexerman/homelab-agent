@@ -766,6 +766,48 @@ function OpenCommandPaletteDialog() {
     ],
   );
 
+  const moveStandaloneThreadProjectItems = useMemo(() => {
+    if (!activeThread || !isStandaloneProject({ id: activeThread.projectId })) {
+      return [];
+    }
+
+    return buildProjectActionItems({
+      projects: normalProjects.filter(
+        (project) => project.environmentId === activeThread.environmentId,
+      ),
+      valuePrefix: "move-standalone-thread-to",
+      description: "Move the active chat transcript. Scratch memory and runtime files stay put.",
+      additionalSearchTerms: ["move", "standalone", "scratch", "project"],
+      icon: (project) => (
+        <ProjectFavicon
+          environmentId={project.environmentId}
+          cwd={project.cwd}
+          className={ITEM_ICON_CLASS}
+        />
+      ),
+      runProject: async (project) => {
+        const api = readEnvironmentApi(activeThread.environmentId);
+        if (!api) {
+          throw new Error("Runtime environment unavailable.");
+        }
+        await api.orchestration.dispatchCommand({
+          type: "thread.standalone.move-to-project",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          projectId: project.id,
+          memoryMigration: { mode: "none" },
+          runtimeHandling: { filesystem: "no-merge" },
+          createdAt: new Date().toISOString(),
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread moved to project",
+          description: project.name,
+        });
+      },
+    });
+  }, [activeThread, normalProjects]);
+
   const allThreadItems = useMemo(
     () =>
       buildThreadActionItems({
@@ -1207,6 +1249,20 @@ function OpenCommandPaletteDialog() {
       await createStandaloneThread("isolated");
     },
   });
+
+  if (moveStandaloneThreadProjectItems.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:move-standalone-thread-to",
+      searchTerms: ["move", "standalone", "scratch", "project"],
+      title: `${HOMELAB_PRODUCT_COPY.standalone.moveAction}...`,
+      description:
+        "Move the active chat transcript to an existing project. Memory and runtime files stay put.",
+      icon: <ServerIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: "projects", label: "Projects", items: moveStandaloneThreadProjectItems }],
+    });
+  }
 
   if (normalProjects.length > 0) {
     const activeProjectTitle =

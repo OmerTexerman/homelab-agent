@@ -14,16 +14,33 @@ Implemented model:
 - Shared standalone threads use the hidden project's default runtime; isolated standalone threads use `isolated-runtime:<thread-id>`.
 - `.homelab` generation and project-local memory use the hidden project scope because standalone threads are still regular project threads.
 - `thread.standalone.promote-to-project` V1 creates a new logical project and moves the same thread id into it. Shared promoted threads switch to the new project's default runtime; isolated promoted threads keep their isolated runtime id.
+- `thread.standalone.move-to-project` moves a standalone thread into an
+  existing logical project while preserving the same thread id and transcript
+  identity. Shared moved threads switch to the target project's default runtime;
+  isolated moved threads keep their isolated runtime id.
 
 Promotion V1 memory behavior:
 
 - Transcript identity moves with the thread, so promoted project transcript search can find the moved conversation.
 - Durable project memory entries created under `system:standalone` do not automatically migrate in V1. They remain explicitly scoped to `Standalone Threads`.
 
+Move-to-existing memory behavior:
+
+- Moving the chat transcript is automatic.
+- Runtime filesystem state is not merged from Scratch into the target Project
+  Runtime.
+- Durable Scratch project memory handling is explicit per move:
+  - `none` leaves memory entries scoped to `Standalone Threads`.
+  - `copy` creates target-project copies of selected or all relevant entries and
+    preserves source thread/message/file attribution.
+  - `move` re-scopes selected or all relevant entries to the target project.
+- Active `.homelab` views are refreshed for the Scratch source runtime and the
+  target project runtime after the move.
+
 Follow-up:
 
-- Add `Move thread to existing project`, preserving transcript identity.
-- Add richer memory migration controls for promote/move flows, including explicit copy or move of durable promoted discoveries.
+- Add richer memory migration controls for promote-to-new-project, including
+  explicit copy or move of durable promoted discoveries.
 - Add runtime filesystem migration or snapshot/restore behavior if standalone runtime state must follow a promoted shared thread.
 
 ## Chat Export

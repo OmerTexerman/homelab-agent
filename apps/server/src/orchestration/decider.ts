@@ -359,6 +359,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ];
     }
 
+    case "thread.standalone.move-to-project": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!isStandaloneProjectId(thread.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a standalone thread.`,
+        });
+      }
+
+      const targetProject = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (isStandaloneProjectId(targetProject.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Standalone threads cannot be moved to the standalone project.",
+        });
+      }
+
+      const runtimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      const runtimeId =
+        runtimeSelectionMode === "isolated"
+          ? (thread.runtimeId ?? isolatedThreadRuntimeId(thread.id))
+          : (targetProject.defaultRuntimeId ?? defaultProjectRuntimeId(targetProject.id));
+
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          projectId: targetProject.id,
+          runtimeId,
+          runtimeSelectionMode,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,

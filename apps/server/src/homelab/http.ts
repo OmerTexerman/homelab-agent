@@ -34,13 +34,13 @@ import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.t
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
-import {
-  homelabRuntimeBootstrapView,
-  runtimeBootstrapCatalogView,
-} from "../runtime/RuntimeBootstrapCatalogView.ts";
+import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ThreadRuntime } from "../runtime/Services/ThreadRuntime.ts";
-import { redactHomelabViewText, writeHomelabContextView } from "../runtime/HomelabContextView.ts";
+import {
+  listHomelabSecretsForRedaction,
+  redactHomelabViewText,
+  refreshActiveProjectContextViews,
+} from "./ProjectMemoryContextViews.ts";
 
 class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
   readonly message: string;
@@ -160,20 +160,6 @@ function redactProjectMemorySearchResult(
   };
 }
 
-const listHomelabSecretsForRedaction = Effect.gen(function* () {
-  const registryOption = yield* Effect.serviceOption(HomelabSecretRegistry);
-  if (Option.isNone(registryOption)) {
-    return [];
-  }
-  return yield* registryOption.value.listSecrets().pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      Effect.logWarning("failed to list homelab secrets for project memory redaction", {
-        detail: error.message,
-      }).pipe(Effect.as([])),
-    ),
-  );
-});
-
 const resolveProjectIdForMemoryRequest = (input: {
   readonly projectId?: ProjectId | undefined;
   readonly threadId?: ProjectMemoryListInput["threadId"] | undefined;
@@ -210,104 +196,6 @@ const resolveProjectIdForMemoryRequest = (input: {
       });
     }
     return thread.projectId;
-  });
-
-const refreshActiveProjectContextViews = (projectId: ProjectId) =>
-  Effect.gen(function* () {
-    const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
-    if (Option.isNone(threadRuntime)) {
-      return;
-    }
-
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const projectMemory = yield* ProjectMemory;
-    const readModel = yield* projectionSnapshotQuery.getSnapshot().pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Failed to read projection snapshot for project memory view refresh.",
-            status: 500,
-            cause,
-          }),
-      ),
-    );
-    const project = readModel.projects.find(
-      (entry) => entry.id === projectId && entry.deletedAt === null,
-    );
-    if (!project) {
-      return;
-    }
-
-    const projectThreads = readModel.threads.filter((entry) => entry.projectId === projectId);
-    const projectThreadIds = new Set(projectThreads.map((entry) => String(entry.id)));
-    const runtimes = yield* threadRuntime.value.listRuntimes().pipe(
-      Effect.catchTag("ThreadRuntimeError", (error) =>
-        Effect.logWarning("failed to list runtimes for project memory view refresh", {
-          projectId,
-          detail: error.message,
-        }).pipe(Effect.as([])),
-      ),
-    );
-    const runtimeThreadIds = [
-      ...new Map(
-        runtimes
-          .filter((runtime) => projectThreadIds.has(String(runtime.threadId)))
-          .filter((runtime) => runtime.status !== "stopped" && runtime.status !== "failed")
-          .map((runtime) => [String(runtime.runtimeId), runtime.threadId] as const),
-      ).values(),
-    ];
-    if (runtimeThreadIds.length === 0) {
-      return;
-    }
-
-    const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
-    const [memoryEntries, secrets, bootstrap] = yield* Effect.all([
-      projectMemory.list({ projectId, limit: 1_000 }).pipe(
-        Effect.catchTag("ProjectMemoryError", (error) =>
-          Effect.logWarning("failed to list project memory for view refresh", {
-            projectId,
-            detail: error.message,
-          }).pipe(Effect.as([])),
-        ),
-      ),
-      listHomelabSecretsForRedaction,
-      Option.isSome(runtimeBootstrapRegistry)
-        ? runtimeBootstrapRegistry.value.getCatalog().pipe(
-            Effect.map(homelabRuntimeBootstrapView),
-            Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
-              Effect.logWarning("failed to load runtime bootstrap catalog for view refresh", {
-                projectId,
-                detail: error.message,
-              }).pipe(Effect.as(undefined)),
-            ),
-          )
-        : Effect.void,
-    ]);
-
-    yield* Effect.forEach(
-      runtimeThreadIds,
-      (threadId) =>
-        Effect.gen(function* () {
-          const launchContext = yield* threadRuntime.value.resolveLaunchContext(threadId);
-          yield* writeHomelabContextView({
-            hostWorkspacePath: launchContext.hostWorkspacePath,
-            project,
-            threads: projectThreads,
-            memoryEntries,
-            secrets,
-            ...(bootstrap !== undefined ? { bootstrap } : {}),
-          });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("failed to refresh homelab context view after memory change", {
-              projectId,
-              threadId,
-              cause,
-            }),
-          ),
-        ),
-      { discard: true },
-    );
   });
 
 const parseKindsFromUrl = (url: URL) =>
@@ -691,14 +579,7 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
       body: input.body === undefined ? undefined : redactHomelabViewText(input.body, secrets),
       tags: input.tags?.map((tag) => redactHomelabViewText(tag, secrets)),
     });
-    yield* refreshActiveProjectContextViews(projectId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("failed to refresh runtime context views after memory create", {
-          projectId,
-          error,
-        }),
-      ),
-    );
+    yield* refreshActiveProjectContextViews(projectId);
     return HttpServerResponse.jsonUnsafe(redactProjectMemoryEntry(entry, secrets), { status: 201 });
   }).pipe(
     Effect.catchTag("AuthError", respondToAuthError),
@@ -731,14 +612,7 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
     const projectMemory = yield* ProjectMemory;
     const recorded = yield* recordPromotedDiscoveries(input.promotion);
     const entry = yield* projectMemory.markPromoted({ ...input, projectId });
-    yield* refreshActiveProjectContextViews(projectId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("failed to refresh runtime context views after memory promotion", {
-          projectId,
-          error,
-        }),
-      ),
-    );
+    yield* refreshActiveProjectContextViews(projectId);
     const secrets = yield* listHomelabSecretsForRedaction;
     return HttpServerResponse.jsonUnsafe(
       {

@@ -7,6 +7,9 @@ import type {
   ProjectMemoryPromoteInput,
   ProjectMemorySearchInput,
   ProjectMemorySearchResult,
+  RuntimeSessionId,
+  StandaloneThreadMoveMemoryMigration,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -33,6 +36,20 @@ export interface ProjectMemoryPromoteResolvedInput extends ProjectMemoryPromoteI
   readonly projectId: ProjectId;
 }
 
+export interface ProjectMemoryStandaloneMoveInput {
+  readonly sourceProjectId: ProjectId;
+  readonly targetProjectId: ProjectId;
+  readonly sourceThreadId: ThreadId;
+  readonly targetRuntimeId: RuntimeSessionId | null;
+  readonly migration: StandaloneThreadMoveMemoryMigration;
+}
+
+export interface ProjectMemoryStandaloneMoveResult {
+  readonly copiedEntries: ReadonlyArray<ProjectMemoryEntry>;
+  readonly movedEntries: ReadonlyArray<ProjectMemoryEntry>;
+  readonly skippedEntryIds: ReadonlyArray<ProjectMemoryId>;
+}
+
 export interface ProjectMemoryShape {
   readonly create: (
     input: ProjectMemoryCreateResolvedInput,
@@ -49,6 +66,9 @@ export interface ProjectMemoryShape {
   readonly markPromoted: (
     input: ProjectMemoryPromoteResolvedInput,
   ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;
+  readonly migrateStandaloneThreadEntries: (
+    input: ProjectMemoryStandaloneMoveInput,
+  ) => Effect.Effect<ProjectMemoryStandaloneMoveResult, ProjectMemoryError>;
 }
 
 export class ProjectMemory extends Context.Service<ProjectMemory, ProjectMemoryShape>()(

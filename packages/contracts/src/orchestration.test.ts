@@ -227,6 +227,38 @@ it.effect("decodes standalone promote-to-project commands", () =>
   }),
 );
 
+it.effect("decodes standalone move-to-project commands with memory controls", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.standalone.move-to-project",
+      commandId: "cmd-move-existing",
+      threadId: "thread-standalone",
+      projectId: "project-existing",
+      memoryMigration: {
+        mode: "copy",
+        memoryIds: ["memory-router", "memory-dashboard"],
+      },
+      runtimeHandling: {
+        filesystem: "no-merge",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (parsed.type !== "thread.standalone.move-to-project") {
+      throw new Error(`Unexpected command type ${parsed.type}`);
+    }
+    assert.strictEqual(parsed.threadId, "thread-standalone");
+    assert.strictEqual(parsed.projectId, "project-existing");
+    assert.deepStrictEqual(parsed.memoryMigration, {
+      mode: "copy",
+      memoryIds: ["memory-router", "memory-dashboard"],
+    });
+    assert.deepStrictEqual(parsed.runtimeHandling, {
+      filesystem: "no-merge",
+    });
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

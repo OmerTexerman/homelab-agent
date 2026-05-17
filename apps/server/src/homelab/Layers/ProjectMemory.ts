@@ -28,6 +28,7 @@ import {
 const DEFAULT_LIST_LIMIT = 200;
 const SEARCH_ENTRY_SCAN_LIMIT = 1_000;
 const DEFAULT_SEARCH_LIMIT = 20;
+const STANDALONE_MOVE_ENTRY_LIMIT = 1_000;
 
 const TranscriptSearchRow = Schema.Struct({
   threadId: ThreadId,
@@ -153,6 +154,16 @@ function toProjectMemoryError(message: string) {
       message,
       cause,
     });
+}
+
+function withUniqueTag(
+  tags: ReadonlyArray<ProjectMemoryEntry["tags"][number]>,
+  tag: string,
+): ProjectMemoryEntry["tags"] {
+  if (tags.includes(tag)) {
+    return [...tags];
+  }
+  return [...tags, tag];
 }
 
 const makeProjectMemory = Effect.gen(function* () {
@@ -293,12 +304,118 @@ const makeProjectMemory = Effect.gen(function* () {
       return updated;
     });
 
+  const migrateStandaloneThreadEntries: ProjectMemoryShape["migrateStandaloneThreadEntries"] = (
+    input,
+  ) =>
+    Effect.gen(function* () {
+      if (input.migration.mode === "none") {
+        return {
+          copiedEntries: [],
+          movedEntries: [],
+          skippedEntryIds: [],
+        };
+      }
+
+      const standaloneEntries = yield* repository
+        .listByProjectId({
+          projectId: input.sourceProjectId,
+          limit: STANDALONE_MOVE_ENTRY_LIMIT,
+        })
+        .pipe(
+          Effect.mapError(
+            toProjectMemoryError("Failed to list standalone project memory entries."),
+          ),
+        );
+      const relevantEntries = standaloneEntries.filter(
+        (entry) => entry.sourceThreadId === input.sourceThreadId,
+      );
+      const selectedIdSet =
+        input.migration.memoryIds !== undefined
+          ? new Set(input.migration.memoryIds.map((memoryId) => String(memoryId)))
+          : null;
+      const selectedEntries =
+        selectedIdSet === null
+          ? relevantEntries
+          : relevantEntries.filter((entry) => selectedIdSet.has(String(entry.id)));
+
+      if (selectedIdSet !== null && selectedEntries.length !== selectedIdSet.size) {
+        const foundIds = new Set(selectedEntries.map((entry) => String(entry.id)));
+        const missingIds = [...selectedIdSet].filter((memoryId) => !foundIds.has(memoryId));
+        return yield* new ProjectMemoryError({
+          message: `Selected standalone project memory entries were not found for this thread: ${missingIds.join(", ")}`,
+        });
+      }
+
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      if (input.migration.mode === "copy") {
+        const copiedEntries = yield* Effect.forEach(
+          selectedEntries,
+          (entry) =>
+            Effect.gen(function* () {
+              const copiedEntry: ProjectMemoryEntry = {
+                ...entry,
+                id: ProjectMemoryId.make(`project-memory:${crypto.randomUUID()}`),
+                projectId: input.targetProjectId,
+                runtimeId: input.targetRuntimeId,
+                tags: withUniqueTag(entry.tags, "copied-from-standalone"),
+                createdAt: now,
+                updatedAt: now,
+              };
+              yield* repository
+                .upsert(copiedEntry)
+                .pipe(
+                  Effect.mapError(
+                    toProjectMemoryError("Failed to copy standalone project memory entry."),
+                  ),
+                );
+              return copiedEntry;
+            }),
+          { concurrency: 1 },
+        );
+
+        return {
+          copiedEntries,
+          movedEntries: [],
+          skippedEntryIds: [],
+        };
+      }
+
+      const movedEntries = yield* Effect.forEach(
+        selectedEntries,
+        (entry) =>
+          Effect.gen(function* () {
+            const movedEntry: ProjectMemoryEntry = {
+              ...entry,
+              projectId: input.targetProjectId,
+              runtimeId: input.targetRuntimeId,
+              updatedAt: now,
+            };
+            yield* repository
+              .upsert(movedEntry)
+              .pipe(
+                Effect.mapError(
+                  toProjectMemoryError("Failed to move standalone project memory entry."),
+                ),
+              );
+            return movedEntry;
+          }),
+        { concurrency: 1 },
+      );
+
+      return {
+        copiedEntries: [],
+        movedEntries,
+        skippedEntryIds: [],
+      };
+    });
+
   return {
     create,
     getById,
     list,
     search,
     markPromoted,
+    migrateStandaloneThreadEntries,
   } satisfies ProjectMemoryShape;
 });
 

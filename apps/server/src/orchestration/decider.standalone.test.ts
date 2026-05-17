@@ -68,6 +68,30 @@ function standaloneCreateCommand(
   };
 }
 
+function projectCreatedEvent(projectId: ProjectId): PlannedEvent {
+  return {
+    type: "project.created",
+    eventId: asEventId(`evt-${String(projectId)}-created`),
+    aggregateKind: "project",
+    aggregateId: projectId,
+    occurredAt: now,
+    commandId: asCommandId(`cmd-${String(projectId)}-created`),
+    causationEventId: null,
+    correlationId: asCommandId(`cmd-${String(projectId)}-created`),
+    metadata: {},
+    payload: {
+      projectId,
+      title: `Project ${String(projectId)}`,
+      workspaceRoot: `homelab://project/${String(projectId)}`,
+      defaultRuntimeId: defaultProjectRuntimeId(projectId),
+      defaultModelSelection: modelSelection,
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+  };
+}
+
 describe("standalone thread orchestration", () => {
   it("creates the hidden standalone project lazily for the first standalone thread", async () => {
     const readModel = createEmptyReadModel(now);
@@ -229,6 +253,169 @@ describe("standalone thread orchestration", () => {
         runtimeSelectionMode: "isolated",
       },
     });
+  });
+
+  it("moves a standalone shared thread into an existing project runtime", async () => {
+    const targetProjectId = asProjectId("project-existing");
+    const initial = createEmptyReadModel(now);
+    const withStandalone = await applyPlannedEvents(
+      initial,
+      await decide(standaloneCreateCommand(), initial),
+    );
+    const withTargetProject = await applyPlannedEvents(
+      withStandalone,
+      projectCreatedEvent(targetProjectId),
+    );
+
+    const result = await decide(
+      {
+        type: "thread.standalone.move-to-project",
+        commandId: asCommandId("cmd-move-existing"),
+        threadId: asThreadId("thread-standalone-1"),
+        projectId: targetProjectId,
+        memoryMigration: { mode: "none" },
+        runtimeHandling: { filesystem: "no-merge" },
+        createdAt: now,
+      },
+      withTargetProject,
+    );
+    const events = Array.isArray(result) ? result : [result];
+    const moved = await applyPlannedEvents(withTargetProject, events);
+
+    expect(events.map((event) => event.type)).toEqual(["thread.meta-updated"]);
+    expect(events[0]).toMatchObject({
+      aggregateKind: "thread",
+      aggregateId: asThreadId("thread-standalone-1"),
+      payload: {
+        threadId: asThreadId("thread-standalone-1"),
+        projectId: targetProjectId,
+        runtimeId: defaultProjectRuntimeId(targetProjectId),
+        runtimeSelectionMode: "shared",
+      },
+    });
+    expect(
+      moved.threads.find((thread) => thread.id === asThreadId("thread-standalone-1")),
+    ).toMatchObject({
+      id: asThreadId("thread-standalone-1"),
+      projectId: targetProjectId,
+      runtimeId: defaultProjectRuntimeId(targetProjectId),
+      runtimeSelectionMode: "shared",
+    });
+  });
+
+  it("preserves isolated runtime identity when moving an isolated standalone thread", async () => {
+    const targetProjectId = asProjectId("project-existing-isolated");
+    const threadId = asThreadId("thread-standalone-isolated-move");
+    const initial = createEmptyReadModel(now);
+    const withStandalone = await applyPlannedEvents(
+      initial,
+      await decide(
+        standaloneCreateCommand({
+          threadId,
+          runtimeSelectionMode: "isolated",
+        }),
+        initial,
+      ),
+    );
+    const withTargetProject = await applyPlannedEvents(
+      withStandalone,
+      projectCreatedEvent(targetProjectId),
+    );
+
+    const result = await decide(
+      {
+        type: "thread.standalone.move-to-project",
+        commandId: asCommandId("cmd-move-isolated-existing"),
+        threadId,
+        projectId: targetProjectId,
+        memoryMigration: { mode: "none" },
+        runtimeHandling: { filesystem: "no-merge" },
+        createdAt: now,
+      },
+      withTargetProject,
+    );
+    const events = Array.isArray(result) ? result : [result];
+
+    expect(events[0]).toMatchObject({
+      type: "thread.meta-updated",
+      payload: {
+        threadId,
+        projectId: targetProjectId,
+        runtimeId: isolatedThreadRuntimeId(threadId),
+        runtimeSelectionMode: "isolated",
+      },
+    });
+  });
+
+  it("rejects moving a standalone thread to the standalone project", async () => {
+    const initial = createEmptyReadModel(now);
+    const withStandalone = await applyPlannedEvents(
+      initial,
+      await decide(standaloneCreateCommand(), initial),
+    );
+
+    await expect(
+      decide(
+        {
+          type: "thread.standalone.move-to-project",
+          commandId: asCommandId("cmd-move-to-standalone"),
+          threadId: asThreadId("thread-standalone-1"),
+          projectId: standaloneProjectId(),
+          memoryMigration: { mode: "none" },
+          runtimeHandling: { filesystem: "no-merge" },
+          createdAt: now,
+        },
+        withStandalone,
+      ),
+    ).rejects.toThrow("cannot be moved to the standalone project");
+  });
+
+  it("rejects moving a normal project thread through the standalone path", async () => {
+    const projectId = asProjectId("project-normal-move");
+    const threadId = asThreadId("thread-normal-move");
+    const readModel = await applyPlannedEvents(createEmptyReadModel(now), [
+      projectCreatedEvent(projectId),
+      {
+        type: "thread.created",
+        eventId: asEventId("evt-thread-normal-move"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: asCommandId("cmd-thread-normal-move"),
+        causationEventId: null,
+        correlationId: asCommandId("cmd-thread-normal-move"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          runtimeId: defaultProjectRuntimeId(projectId),
+          runtimeSelectionMode: "shared",
+          title: "Normal thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    ]);
+
+    await expect(
+      decide(
+        {
+          type: "thread.standalone.move-to-project",
+          commandId: asCommandId("cmd-move-normal"),
+          threadId,
+          projectId: asProjectId("project-target"),
+          memoryMigration: { mode: "none" },
+          runtimeHandling: { filesystem: "no-merge" },
+          createdAt: now,
+        },
+        readModel,
+      ),
+    ).rejects.toThrow("is not a standalone thread");
   });
 
   it("rejects promoting a normal project thread through the standalone path", async () => {

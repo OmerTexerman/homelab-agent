@@ -3,9 +3,12 @@ import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/clie
 import type {
   CommandId,
   EnvironmentId,
+  ProjectMemoryId,
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
+  StandaloneThreadMoveMemoryMigration,
+  StandaloneThreadMoveMemoryMigrationMode,
   ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
@@ -29,6 +32,7 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 export type SidebarThreadCreationRuntimeMode = ThreadRuntimeMode;
+export type StandaloneThreadMoveMemorySelection = "all-relevant" | "selected";
 type SidebarProject = {
   id: string;
   name: string;
@@ -49,6 +53,53 @@ export function sidebarThreadCreationRuntimeCopy(
   return {
     label: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction,
     description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
+  };
+}
+
+export function standaloneThreadMoveRuntimeDescription(
+  runtimeSelectionMode: ThreadRuntimeMode | null | undefined,
+): string {
+  if (runtimeSelectionMode === "isolated") {
+    return "This isolated thread keeps its isolated runtime. Runtime filesystem state is not merged into the target Project Runtime.";
+  }
+
+  return "This shared thread switches to the target Project Runtime. Runtime filesystem state is not merged from Scratch.";
+}
+
+export function standaloneThreadMoveMemoryDescription(
+  mode: StandaloneThreadMoveMemoryMigrationMode,
+  selection: StandaloneThreadMoveMemorySelection,
+): string {
+  if (mode === "none") {
+    return "Chat transcript moves automatically. Durable Scratch memory stays in Standalone Threads.";
+  }
+
+  const selectedCopy = selection === "selected" ? "selected" : "all relevant";
+  if (mode === "copy") {
+    return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are copied to the target project.`;
+  }
+
+  return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are moved to the target project.`;
+}
+
+export function buildStandaloneThreadMoveMemoryMigration(input: {
+  readonly mode: StandaloneThreadMoveMemoryMigrationMode;
+  readonly selection: StandaloneThreadMoveMemorySelection;
+  readonly selectedMemoryIds: ReadonlyArray<ProjectMemoryId>;
+}): StandaloneThreadMoveMemoryMigration {
+  if (input.mode === "none") {
+    return { mode: "none" };
+  }
+
+  if (input.selection === "selected") {
+    return {
+      mode: input.mode,
+      memoryIds: [...input.selectedMemoryIds],
+    };
+  }
+
+  return {
+    mode: input.mode,
   };
 }
 
