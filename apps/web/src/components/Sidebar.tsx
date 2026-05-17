@@ -3,6 +3,7 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
+  GitBranchPlusIcon,
   SearchIcon,
   ServerIcon,
   SettingsIcon,
@@ -43,6 +44,7 @@ import {
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
   type ThreadEnvMode,
+  type ThreadRuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -166,6 +168,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  sidebarThreadCreationRuntimeCopy,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -586,6 +589,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             </Tooltip>
           )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+          {thread.runtimeSelectionMode === "isolated" ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeLabel}
+                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-info-foreground/80"
+                  >
+                    <GitBranchPlusIcon className="size-3" />
+                  </span>
+                }
+              />
+              <TooltipPopup side="top">
+                {HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeLabel}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
           {renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -1670,7 +1690,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
 
   const createThreadForProjectMember = useCallback(
-    (member: SidebarProjectGroupMember) => {
+    (member: SidebarProjectGroupMember, options?: { runtimeSelectionMode?: ThreadRuntimeMode }) => {
       const currentRouteParams =
         router.state.matches[router.state.matches.length - 1]?.params ?? {};
       const currentRouteTarget = resolveThreadRouteTarget(currentRouteParams);
@@ -1717,6 +1737,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ? { worktreePath: seedContext.worktreePath }
           : {}),
         envMode: seedContext.envMode,
+        runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared",
       });
     },
     [defaultThreadEnvMode, handleNewThread, isMobile, router, setOpenMobile],
@@ -1757,6 +1778,67 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
         createThreadForProjectMember(targetMember);
+      })();
+    },
+    [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
+  );
+
+  const handleCreateThreadContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) {
+          return;
+        }
+
+        const actionHandlers = new Map<string, () => void>();
+        const buildRuntimeModeMenuItem = (
+          runtimeSelectionMode: ThreadRuntimeMode,
+        ): ContextMenuItem<string> => {
+          const copy = sidebarThreadCreationRuntimeCopy(runtimeSelectionMode);
+
+          if (project.memberProjects.length === 1) {
+            const member = project.memberProjects[0]!;
+            actionHandlers.set(runtimeSelectionMode, () => {
+              createThreadForProjectMember(member, { runtimeSelectionMode });
+            });
+            return {
+              id: runtimeSelectionMode,
+              label: copy.label,
+            };
+          }
+
+          return {
+            id: `${runtimeSelectionMode}:submenu`,
+            label: copy.label,
+            children: project.memberProjects.map((member) => {
+              const id = `${runtimeSelectionMode}:${member.physicalProjectKey}`;
+              actionHandlers.set(id, () => {
+                createThreadForProjectMember(member, { runtimeSelectionMode });
+              });
+              return {
+                id,
+                label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+              };
+            }),
+          };
+        };
+
+        const clicked = await api.contextMenu.show(
+          [buildRuntimeModeMenuItem("shared"), buildRuntimeModeMenuItem("isolated")],
+          {
+            x: event.clientX,
+            y: event.clientY,
+          },
+        );
+        if (!clicked) {
+          return;
+        }
+
+        actionHandlers.get(clicked)?.();
       })();
     },
     [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
@@ -1931,8 +2013,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
+      const sharedThreadCopy = sidebarThreadCreationRuntimeCopy("shared");
+      const isolatedThreadCopy = sidebarThreadCreationRuntimeCopy("isolated");
       const clicked = await api.contextMenu.show(
         [
+          { id: "new-shared-thread", label: sharedThreadCopy.label },
+          { id: "new-isolated-thread", label: isolatedThreadCopy.label },
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           ...(showCompatibilityWorkspaceControls
@@ -1943,6 +2029,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ],
         position,
       );
+
+      if (clicked === "new-shared-thread" || clicked === "new-isolated-thread") {
+        const runtimeSelectionMode: ThreadRuntimeMode =
+          clicked === "new-isolated-thread" ? "isolated" : "shared";
+        void handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          envMode: thread.worktreePath ? "worktree" : defaultThreadEnvMode,
+          runtimeSelectionMode,
+        });
+        return;
+      }
 
       if (clicked === "rename") {
         setRenamingThreadKey(threadKey);
@@ -1992,6 +2090,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      defaultThreadEnvMode,
+      handleNewThread,
       markThreadUnread,
       memberProjectByScopedKey,
       project.cwd,
@@ -2083,10 +2183,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               <div className="pointer-events-none absolute top-1 right-1.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
                 <button
                   type="button"
-                  aria-label={`Create new thread in ${project.displayName}`}
+                  aria-label={`${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in ${project.displayName}`}
                   data-testid="new-thread-button"
                   className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={handleCreateThreadClick}
+                  onContextMenu={handleCreateThreadContextMenu}
                 >
                   <SquarePenIcon className="size-3.5" />
                 </button>
@@ -2094,7 +2195,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           />
           <TooltipPopup side="top">
-            {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+            {newThreadShortcutLabel
+              ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} (${newThreadShortcutLabel})`
+              : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction}
           </TooltipPopup>
         </Tooltip>
       </div>

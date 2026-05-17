@@ -884,6 +884,28 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("stores and updates the draft thread runtime selection mode", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      runtimeSelectionMode: "isolated",
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      environmentId: TEST_ENVIRONMENT_ID,
+      projectId,
+      runtimeSelectionMode: "isolated",
+    });
+
+    store.setDraftThreadContext(draftId, {
+      runtimeSelectionMode: "shared",
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      runtimeSelectionMode: "shared",
+    });
+  });
+
   it("clears branch and worktree context when remapping a draft to another environment", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

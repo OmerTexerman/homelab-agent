@@ -3,6 +3,8 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveThreadActionProjectRef,
+  startNewIsolatedThreadFromContext,
+  startNewIsolatedThreadInProjectFromContext,
   startNewLocalThreadFromContext,
   startNewThreadFromContext,
   type ChatThreadActionContext,
@@ -71,6 +73,55 @@ describe("chatThreadActions", () => {
       branch: "feature/refactor",
       worktreePath: "/tmp/worktree",
       envMode: "worktree",
+    });
+  });
+
+  it("starts a contextual isolated runtime thread from the active draft thread", async () => {
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
+
+    const didStart = await startNewIsolatedThreadFromContext(
+      createContext({
+        activeDraftThread: {
+          environmentId: ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          branch: "feature/refactor",
+          worktreePath: "/tmp/worktree",
+          envMode: "worktree",
+        },
+        handleNewThread,
+      }),
+    );
+
+    expect(didStart).toBe(true);
+    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
+      branch: "feature/refactor",
+      worktreePath: "/tmp/worktree",
+      envMode: "worktree",
+      runtimeSelectionMode: "isolated",
+    });
+  });
+
+  it("starts an isolated runtime thread in a specific project", async () => {
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
+
+    await startNewIsolatedThreadInProjectFromContext(
+      createContext({
+        activeThread: {
+          environmentId: ENVIRONMENT_ID,
+          projectId: FALLBACK_PROJECT_ID,
+          branch: "feature/current",
+          worktreePath: null,
+        },
+        handleNewThread,
+      }),
+      scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID),
+    );
+
+    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
+      branch: "feature/current",
+      worktreePath: null,
+      envMode: "local",
+      runtimeSelectionMode: "isolated",
     });
   });
 

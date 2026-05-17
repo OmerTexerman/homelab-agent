@@ -6,6 +6,7 @@ import type {
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
+  ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
@@ -19,6 +20,7 @@ import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraf
 import { draftSessionHasMeaningfulWork } from "../draftThreadLifecycle";
 import { cn } from "../lib/utils";
 import { deriveSidebarThreadDecisionQueue } from "../decisionQueueReadModel";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -26,12 +28,29 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadCreationRuntimeMode = ThreadRuntimeMode;
 type SidebarProject = {
   id: string;
   name: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
+
+export function sidebarThreadCreationRuntimeCopy(
+  runtimeSelectionMode: SidebarThreadCreationRuntimeMode,
+): { label: string; description: string } {
+  if (runtimeSelectionMode === "isolated") {
+    return {
+      label: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction,
+      description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
+    };
+  }
+
+  return {
+    label: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction,
+    description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
+  };
+}
 
 export type ThreadTraversalDirection = "previous" | "next";
 

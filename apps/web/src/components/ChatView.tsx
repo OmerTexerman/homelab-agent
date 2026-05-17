@@ -2784,6 +2784,7 @@ export default function ChatView(props: ChatViewProps) {
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
+                      runtimeSelectionMode: activeThread.runtimeSelectionMode ?? "shared",
                       interactionMode,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,

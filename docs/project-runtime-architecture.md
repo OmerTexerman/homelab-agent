@@ -118,6 +118,13 @@ running, stopped/sleeping, archived, reset-pending/resetting, and failed without
 moving that state back into thread state. Waking a stopped runtime starts the
 runtime and regenerates `.homelab` before provider execution continues.
 
+Runtime containers receive `HOMELAB_AGENT_SERVER_URL` in
+`.homelab-runtime.env` so the generated `homelab` CLI can call the app server.
+Local Docker uses `host.docker.internal` with a host-gateway alias. When the app
+server itself is running inside a devcontainer, runtime containers should join
+the same Docker network and call the devcontainer IP instead. Advanced setups
+can override the detected URL with `HOMELAB_AGENT_RUNTIME_SERVER_URL`.
+
 ## Concurrency
 
 The default project runtime has a single active writer.

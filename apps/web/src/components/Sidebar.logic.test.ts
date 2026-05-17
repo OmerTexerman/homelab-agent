@@ -15,6 +15,7 @@ import {
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  sidebarThreadCreationRuntimeCopy,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
@@ -188,6 +189,22 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("sidebarThreadCreationRuntimeCopy", () => {
+  it("labels the default project runtime thread action as shared", () => {
+    expect(sidebarThreadCreationRuntimeCopy("shared")).toMatchObject({
+      label: "New thread in Project Runtime",
+      description: expect.stringContaining("shared runtime"),
+    });
+  });
+
+  it("labels isolated runtime thread creation as a runtime clone", () => {
+    expect(sidebarThreadCreationRuntimeCopy("isolated")).toMatchObject({
+      label: "New isolated runtime thread",
+      description: expect.stringContaining("runtime clone"),
+    });
   });
 });
 

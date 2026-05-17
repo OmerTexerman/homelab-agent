@@ -5,7 +5,7 @@ export const HOMELAB_PRODUCT_CAPABILITIES = {
   compatibilityHostPathProjectUi: false,
   runtimeWorkspaceExplorer: true,
   sidebarProjectGroupingControls: false,
-  threadRuntimeIsolationControls: false,
+  threadRuntimeIsolationControls: true,
 } as const;
 
 export const HOMELAB_PRODUCT_COPY = {
@@ -27,6 +27,12 @@ export const HOMELAB_PRODUCT_COPY = {
       "New threads use their project's Project Runtime unless isolation is selected explicitly.",
     defaultThreadRuntimeValue: "Use Project Runtime",
     isolatedRuntimeValue: "Use isolated runtime clones by default",
+    newSharedThreadAction: "New thread in Project Runtime",
+    newSharedThreadDescription: "Uses the project's shared runtime and queues with other turns.",
+    newIsolatedThreadAction: "New isolated runtime thread",
+    newIsolatedThreadDescription:
+      "Runs in a runtime clone for parallel work or containment; merge back explicitly.",
+    isolatedThreadBadgeLabel: "Isolated runtime clone",
     waitingThreadDescription: "This thread is waiting on the Project Runtime",
     terminalUnavailableDescription:
       "Terminal is unavailable until this thread has a Project Runtime.",

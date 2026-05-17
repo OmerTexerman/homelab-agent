@@ -99,6 +99,13 @@ interface DockerContainerInspectResult {
         readonly HostPort?: string;
       }>
     >;
+    readonly Networks?: Record<
+      string,
+      {
+        readonly IPAddress?: string;
+        readonly GlobalIPv6Address?: string;
+      }
+    >;
   };
 }
 
@@ -178,13 +185,100 @@ const DEFAULT_RUNTIME_IDLE_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_RUNTIME_IDLE_POLL_INTERVAL_MS = 60_000;
 const RUNTIME_IMAGE_FINGERPRINT_LABEL = "homelab.runtime.fingerprint";
 const RUNTIME_SERVER_HOST_ALIAS = "host.docker.internal";
+const RUNTIME_SERVER_URL_ENV = "HOMELAB_AGENT_RUNTIME_SERVER_URL";
 const RUNTIME_AGENTS_FILENAME = "AGENTS.md";
 const RUNTIME_CLAUDE_FILENAME = "CLAUDE.md";
 const KEEPALIVE_COMMAND = "trap : TERM INT; while sleep 3600; do :; done";
 
+interface CurrentContainerNetwork {
+  readonly networkName: string;
+  readonly ipAddress: string;
+}
+
+interface RuntimeDockerNetworkPlan {
+  readonly dockerNetwork: string;
+  readonly serverUrl: string;
+  readonly addHostGatewayAlias: boolean;
+}
+
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function urlHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function isLikelyRunningInsideContainer(): boolean {
+  if (
+    process.env.DEVCONTAINER ||
+    process.env.REMOTE_CONTAINERS ||
+    process.env.CODESPACES ||
+    process.env.container
+  ) {
+    return true;
+  }
+  if (nodeFs.existsSync("/.dockerenv")) {
+    return true;
+  }
+  try {
+    return /docker|containerd|kubepods|libpod/i.test(nodeFs.readFileSync("/proc/1/cgroup", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function currentContainerNameCandidates(): ReadonlyArray<string> {
+  return [
+    trimToUndefined(process.env.HOSTNAME),
+    trimToUndefined(nodeOs.hostname()),
+    trimToUndefined(process.env.CONTAINER_NAME),
+  ].filter(
+    (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
+  );
+}
+
+function selectCurrentContainerNetwork(
+  inspect: DockerContainerInspectResult,
+  preferredNetwork: string,
+): CurrentContainerNetwork | undefined {
+  const networks = inspect.NetworkSettings?.Networks;
+  if (!networks) {
+    return undefined;
+  }
+
+  const candidates = Object.entries(networks)
+    .map(([networkName, endpoint]) => ({
+      networkName,
+      ipAddress: trimToUndefined(endpoint.IPAddress) ?? trimToUndefined(endpoint.GlobalIPv6Address),
+    }))
+    .filter(
+      (candidate): candidate is CurrentContainerNetwork =>
+        candidate.ipAddress !== undefined && candidate.networkName !== "host",
+    );
+
+  return (
+    candidates.find((candidate) => candidate.networkName === preferredNetwork) ??
+    candidates.find((candidate) => candidate.networkName !== "bridge") ??
+    candidates[0]
+  );
+}
+
+function parseCurrentContainerNetwork(
+  output: string,
+  preferredNetwork: string,
+): CurrentContainerNetwork | undefined {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const inspect = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!inspect || typeof inspect !== "object") {
+      return undefined;
+    }
+    return selectCurrentContainerNetwork(inspect as DockerContainerInspectResult, preferredNetwork);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseDurationMs(value: string | undefined, fallback: number): number {
@@ -1441,7 +1535,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const statePath = path.join(stateDir, "thread-runtimes.json");
   const runtimeImageBuildStatePath = path.join(stateDir, "runtime-image-build.json");
   const dockerBinaryPath = options?.dockerBinaryPath ?? DEFAULT_DOCKER_BINARY_PATH;
-  const runtimeNetwork = options?.dockerNetwork ?? DEFAULT_RUNTIME_NETWORK;
+  const configuredRuntimeNetwork = options?.dockerNetwork ?? DEFAULT_RUNTIME_NETWORK;
+  const runtimeNetworkWasExplicit =
+    options?.dockerNetwork !== undefined ||
+    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_NETWORK) !== undefined;
   const containerShellPath = options?.containerShellPath ?? DEFAULT_CONTAINER_SHELL_PATH;
   const runtimeIdleTimeoutMs =
     options?.idleTimeoutMs ??
@@ -1472,6 +1569,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             cause,
           }),
       }));
+  const runtimeDockerNetworkPlanRef = yield* Ref.make<RuntimeDockerNetworkPlan | null>(null);
 
   const writeStateAtomically = (runtimes: ReadonlyArray<ThreadRuntimeDescriptor>) => {
     const persistedState: PersistedThreadRuntimeState = {
@@ -1887,9 +1985,78 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       .pipe(Effect.catchTag("SessionCredentialError", () => Effect.succeed(false)));
   });
 
-  const resolveRuntimeServerUrl = () =>
-    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL) ??
+  const resolveHostGatewayRuntimeServerUrl = () =>
     `http://${RUNTIME_SERVER_HOST_ALIAS}:${serverConfig.port}`;
+
+  const inspectCurrentContainerNetwork = Effect.fn("threadRuntime.inspectCurrentContainerNetwork")(
+    function* (): Effect.fn.Return<CurrentContainerNetwork | undefined, ThreadRuntimeError> {
+      if (!isLikelyRunningInsideContainer() && process.env.HOSTNAME === undefined) {
+        return undefined;
+      }
+
+      for (const candidate of currentContainerNameCandidates()) {
+        const result = yield* dockerRunner(["container", "inspect", candidate], {
+          timeoutMs: 5_000,
+          maxBufferBytes: 512 * 1024,
+        });
+        if (result.code !== 0) {
+          continue;
+        }
+        const network = parseCurrentContainerNetwork(result.stdout, configuredRuntimeNetwork);
+        if (network) {
+          return network;
+        }
+      }
+
+      return undefined;
+    },
+  );
+
+  const resolveRuntimeDockerNetworkPlan = Effect.fn(
+    "threadRuntime.resolveRuntimeDockerNetworkPlan",
+  )(function* (): Effect.fn.Return<RuntimeDockerNetworkPlan, ThreadRuntimeError> {
+    const cached = yield* Ref.get(runtimeDockerNetworkPlanRef);
+    if (cached) {
+      return cached;
+    }
+
+    const overrideServerUrl = trimToUndefined(process.env[RUNTIME_SERVER_URL_ENV]);
+    if (overrideServerUrl) {
+      const plan: RuntimeDockerNetworkPlan = {
+        dockerNetwork: configuredRuntimeNetwork,
+        serverUrl: overrideServerUrl,
+        addHostGatewayAlias: overrideServerUrl.includes(RUNTIME_SERVER_HOST_ALIAS),
+      };
+      yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+      return plan;
+    }
+
+    const currentContainerNetwork = yield* inspectCurrentContainerNetwork().pipe(
+      Effect.catchTag("ThreadRuntimeError", () => Effect.void),
+    );
+    if (currentContainerNetwork) {
+      const dockerNetwork = runtimeNetworkWasExplicit
+        ? configuredRuntimeNetwork
+        : currentContainerNetwork.networkName;
+      if (currentContainerNetwork.networkName === dockerNetwork) {
+        const plan: RuntimeDockerNetworkPlan = {
+          dockerNetwork,
+          serverUrl: `http://${urlHost(currentContainerNetwork.ipAddress)}:${serverConfig.port}`,
+          addHostGatewayAlias: false,
+        };
+        yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+        return plan;
+      }
+    }
+
+    const plan: RuntimeDockerNetworkPlan = {
+      dockerNetwork: configuredRuntimeNetwork,
+      serverUrl: resolveHostGatewayRuntimeServerUrl(),
+      addHostGatewayAlias: true,
+    };
+    yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+    return plan;
+  });
 
   const syncHostAuthIntoRuntimeHome = Effect.fn("threadRuntime.syncHostAuthIntoRuntimeHome")(
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
@@ -1935,9 +2102,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     const runtimeAccessToken = yield* resolveRuntimeAccessToken(runtime);
     const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const secretEnvPath = runtimeSecretEnvPath(runtimeHomePath);
+    const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const controlEnv = buildRuntimeControlEnvironment({
       secretEnv,
-      serverUrl: resolveRuntimeServerUrl(),
+      serverUrl: runtimeNetworkPlan.serverUrl,
       threadId: runtime.threadId,
       ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
     });
@@ -2155,15 +2323,17 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly runtime: ThreadRuntimeDescriptor;
     readonly mounts: ReadonlyArray<DockerMountSpec>;
   }) {
+    const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const args = [
       "run",
       "-d",
       "--name",
       input.runtime.containerName,
-      "--add-host",
-      `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`,
+      ...(runtimeNetworkPlan.addHostGatewayAlias
+        ? ["--add-host", `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`]
+        : []),
       "--network",
-      runtimeNetwork,
+      runtimeNetworkPlan.dockerNetwork,
       "-p",
       `127.0.0.1::${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`,
       "-w",

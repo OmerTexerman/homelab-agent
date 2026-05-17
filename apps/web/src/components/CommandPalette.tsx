@@ -21,6 +21,7 @@ import {
   CornerLeftUpIcon,
   FolderIcon,
   FolderPlusIcon,
+  GitBranchPlusIcon,
   LinkIcon,
   MessageSquareIcon,
   ServerIcon,
@@ -54,6 +55,8 @@ import {
   refreshSourceControlDiscovery,
 } from "../lib/sourceControlDiscoveryState";
 import {
+  startNewIsolatedThreadFromContext,
+  startNewIsolatedThreadInProjectFromContext,
   startNewThreadInProjectFromContext,
   startNewThreadFromContext,
 } from "../lib/chatThreadActions";
@@ -681,6 +684,8 @@ function OpenCommandPaletteDialog() {
       buildProjectActionItems({
         projects,
         valuePrefix: "new-thread-in",
+        description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
+        additionalSearchTerms: ["new thread", "shared runtime", "project runtime", "queue"],
         icon: (project) => (
           <ProjectFavicon
             environmentId={project.environmentId}
@@ -690,6 +695,43 @@ function OpenCommandPaletteDialog() {
         ),
         runProject: async (project) => {
           await startNewThreadInProjectFromContext(
+            {
+              activeDraftThread,
+              activeThread,
+              defaultProjectRef,
+              defaultThreadEnvMode: settings.defaultThreadEnvMode,
+              handleNewThread,
+            },
+            scopeProjectRef(project.environmentId, project.id),
+          );
+        },
+      }),
+    [
+      activeDraftThread,
+      activeThread,
+      defaultProjectRef,
+      handleNewThread,
+      projects,
+      settings.defaultThreadEnvMode,
+    ],
+  );
+
+  const isolatedProjectThreadItems = useMemo(
+    () =>
+      buildProjectActionItems({
+        projects,
+        valuePrefix: "new-isolated-thread-in",
+        description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
+        additionalSearchTerms: [
+          "new thread",
+          "isolated runtime",
+          "runtime clone",
+          "parallel",
+          "containment",
+        ],
+        icon: () => <GitBranchPlusIcon className={ITEM_ICON_CLASS} />,
+        runProject: async (project) => {
+          await startNewIsolatedThreadInProjectFromContext(
             {
               activeDraftThread,
               activeThread,
@@ -945,7 +987,7 @@ function OpenCommandPaletteDialog() {
         ? getSourceControlDiscoverySnapshot(target).data
         : null;
       pushPaletteView({
-        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+        addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
         groups: buildAddProjectSourceGroups(
           environmentId,
           buildAddProjectRemoteSourceReadiness(initialDiscovery),
@@ -965,7 +1007,7 @@ function OpenCommandPaletteDialog() {
           return [
             ...previousViews.slice(0, -1),
             {
-              addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+              addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
               groups: buildAddProjectSourceGroups(
                 environmentId,
                 buildAddProjectRemoteSourceReadiness(discovery),
@@ -1016,7 +1058,7 @@ function OpenCommandPaletteDialog() {
   const openAddProjectFlow = useCallback(() => {
     if (addProjectEnvironmentOptions.length > 1) {
       pushPaletteView({
-        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+        addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
         groups: addProjectEnvironmentGroups,
       });
       return;
@@ -1069,16 +1111,50 @@ function OpenCommandPaletteDialog() {
       actionItems.push({
         kind: "action",
         value: "action:new-thread",
-        searchTerms: ["new thread", "chat", "create", "draft"],
+        searchTerms: ["new thread", "chat", "create", "draft", "shared runtime", "project runtime"],
         title: (
           <>
-            New thread in <span className="font-semibold">{activeProjectTitle}</span>
+            {HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in{" "}
+            <span className="font-semibold">{activeProjectTitle}</span>
           </>
         ),
+        description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
         icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
         shortcutCommand: "chat.new",
         run: async () => {
           await startNewThreadFromContext({
+            activeDraftThread,
+            activeThread,
+            defaultProjectRef,
+            defaultThreadEnvMode: settings.defaultThreadEnvMode,
+            handleNewThread,
+          });
+        },
+      });
+
+      actionItems.push({
+        kind: "action",
+        value: "action:new-isolated-thread",
+        searchTerms: [
+          "new thread",
+          "chat",
+          "create",
+          "draft",
+          "isolated runtime",
+          "runtime clone",
+          "parallel",
+          "containment",
+        ],
+        title: (
+          <>
+            {HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction} in{" "}
+            <span className="font-semibold">{activeProjectTitle}</span>
+          </>
+        ),
+        description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
+        icon: <GitBranchPlusIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await startNewIsolatedThreadFromContext({
             activeDraftThread,
             activeThread,
             defaultProjectRef,
@@ -1092,11 +1168,32 @@ function OpenCommandPaletteDialog() {
     actionItems.push({
       kind: "submenu",
       value: "action:new-thread-in",
-      searchTerms: ["new thread", "project", "pick", "choose", "select"],
-      title: "New thread in...",
+      searchTerms: ["new thread", "project", "pick", "choose", "select", "shared runtime"],
+      title: `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in...`,
+      description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+
+    actionItems.push({
+      kind: "submenu",
+      value: "action:new-isolated-thread-in",
+      searchTerms: [
+        "new thread",
+        "project",
+        "pick",
+        "choose",
+        "select",
+        "isolated runtime",
+        "runtime clone",
+        "parallel",
+      ],
+      title: `${HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction} in...`,
+      description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
+      icon: <GitBranchPlusIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <GitBranchPlusIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: "projects", label: "Projects", items: isolatedProjectThreadItems }],
     });
   }
 

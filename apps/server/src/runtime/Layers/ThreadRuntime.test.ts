@@ -30,6 +30,7 @@ interface FakeDockerContainer {
   workdir: string;
   mounts: FakeDockerMount[];
   ports: Record<string, Array<{ HostIp: string; HostPort: string }>>;
+  networks: Record<string, { IPAddress: string }>;
   labels: Record<string, string>;
   running: boolean;
 }
@@ -86,6 +87,7 @@ class FakeDockerRunner {
               })),
               NetworkSettings: {
                 Ports: container.ports,
+                Networks: container.networks,
               },
             },
           ]),
@@ -121,6 +123,7 @@ class FakeDockerRunner {
       if (command === "run") {
         let name = "";
         let workdir = "";
+        let networkName = "bridge";
         const mounts: FakeDockerMount[] = [];
         const ports: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
         let index = 1;
@@ -141,6 +144,7 @@ class FakeDockerRunner {
             continue;
           }
           if (value === "--network") {
+            networkName = input[index + 1] ?? "bridge";
             index += 2;
             continue;
           }
@@ -202,6 +206,11 @@ class FakeDockerRunner {
           workdir,
           mounts,
           ports,
+          networks: {
+            [networkName]: {
+              IPAddress: `172.30.0.${this.nextId}`,
+            },
+          },
           labels: Object.assign({}, this.imageLabels.get(image)),
           running: true,
         });
@@ -265,16 +274,24 @@ function readDockerBuildLabels(args: ReadonlyArray<string>): Record<string, stri
 
 const docker = new FakeDockerRunner();
 
-function makeRuntimeLayer(
-  overrides: Partial<NonNullable<Parameters<typeof makeThreadRuntimeLive>[0]>> = {},
-) {
+type RuntimeLayerOverrides = Partial<
+  Omit<NonNullable<Parameters<typeof makeThreadRuntimeLive>[0]>, "dockerNetwork">
+> & {
+  readonly dockerNetwork?: string | undefined;
+};
+
+function makeRuntimeLayer(overrides: RuntimeLayerOverrides = {}) {
+  const { dockerNetwork: overrideDockerNetwork, ...restOverrides } = overrides;
+  const dockerNetwork = Object.hasOwn(overrides, "dockerNetwork")
+    ? overrideDockerNetwork
+    : "homelab-agent-test";
   return it.layer(
     makeThreadRuntimeLive({
       dockerBinaryPath: "docker",
-      dockerNetwork: "homelab-agent-test",
       containerShellPath: "/bin/zsh",
       dockerRunner: docker.run,
-      ...overrides,
+      ...(dockerNetwork !== undefined ? { dockerNetwork } : {}),
+      ...restOverrides,
     }).pipe(
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-test-" }).pipe(
@@ -296,6 +313,7 @@ function makeRuntimeLayer(
 }
 
 const runtimeLayer = makeRuntimeLayer();
+const runtimeLayerWithAutoNetwork = makeRuntimeLayer({ dockerNetwork: undefined });
 let mutableRuntimeSecretEnv: Readonly<Record<string, string>> = {};
 
 const runtimeLayerWithSecrets = it.layer(
@@ -572,6 +590,39 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }),
   );
 
+  it.effect("uses the host-gateway server URL for normal local docker runtimes", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-host-gateway"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+      const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+      const runCall = findRunCall(docker.calls);
+
+      assert.ok(runCall);
+      const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+      assert.notEqual(networkFlagIndex, -1);
+      assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      assert.equal(runCall.includes("--add-host"), true);
+      assert.match(
+        secretEnvContents,
+        /export HOMELAB_AGENT_SERVER_URL='http:\/\/host\.docker\.internal:0'/,
+      );
+    }),
+  );
+
   it.effect(
     "uses runtime-id derived storage and container names for shared and isolated runtimes",
     () =>
@@ -792,6 +843,67 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(docker.containers.size, 0);
       assert.equal(yield* fileSystem.exists(runtimeRoot), false);
       assert.equal(yield* runtime.getRuntime(descriptor.threadId), undefined);
+    }),
+  );
+});
+
+runtimeLayerWithAutoNetwork("ThreadRuntimeLive Docker server connectivity", (it) => {
+  it.effect("uses the current container network for runtime server access in devcontainers", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const previousHostname = process.env.HOSTNAME;
+      process.env.HOSTNAME = "devcontainer-host";
+      docker.containers.set("devcontainer-host", {
+        id: "devcontainer-host-id",
+        name: "devcontainer-host",
+        image: "devcontainer-image",
+        workdir: "/workspace",
+        mounts: [],
+        ports: {},
+        networks: {
+          "homelab-devcontainer-network": {
+            IPAddress: "172.28.0.4",
+          },
+        },
+        labels: {},
+        running: true,
+      });
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-devcontainer-network"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        const runCall = findRunCall(docker.calls);
+
+        assert.ok(runCall);
+        const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+        assert.notEqual(networkFlagIndex, -1);
+        assert.equal(runCall[networkFlagIndex + 1], "homelab-devcontainer-network");
+        assert.equal(runCall.includes("--add-host"), false);
+        assert.match(
+          secretEnvContents,
+          /export HOMELAB_AGENT_SERVER_URL='http:\/\/172\.28\.0\.4:0'/,
+        );
+      } finally {
+        if (previousHostname === undefined) {
+          delete process.env.HOSTNAME;
+        } else {
+          process.env.HOSTNAME = previousHostname;
+        }
+      }
     }),
   );
 });

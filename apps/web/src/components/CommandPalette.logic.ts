@@ -92,15 +92,17 @@ export function normalizeSearchText(value: string): string {
 export function buildProjectActionItems(input: {
   projects: ReadonlyArray<Project>;
   valuePrefix: string;
+  description?: string;
+  additionalSearchTerms?: ReadonlyArray<string>;
   icon: (project: Project) => ReactNode;
   runProject: (project: Project) => Promise<void>;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.name, project.cwd],
+    searchTerms: [project.name, project.cwd, ...(input.additionalSearchTerms ?? [])],
     title: project.name,
-    description: HOMELAB_PRODUCT_COPY.project.searchDescription,
+    description: input.description ?? HOMELAB_PRODUCT_COPY.project.searchDescription,
     icon: input.icon(project),
     run: async () => {
       await input.runProject(project);

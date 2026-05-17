@@ -1,5 +1,9 @@
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
-import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@t3tools/contracts";
+import {
+  DEFAULT_RUNTIME_MODE,
+  type ScopedProjectRef,
+  type ThreadRuntimeMode,
+} from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -37,6 +41,7 @@ function useNewThreadState() {
         branch?: string | null;
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
+        runtimeSelectionMode?: ThreadRuntimeMode;
       },
     ): Promise<void> => {
       const {
@@ -59,6 +64,7 @@ function useNewThreadState() {
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
+      const hasRuntimeSelectionModeOption = options?.runtimeSelectionMode !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const latestActiveDraftThread: DraftThreadState | null = currentRouteTarget
         ? currentRouteTarget.kind === "server"
@@ -67,11 +73,19 @@ function useNewThreadState() {
         : null;
       if (storedDraftThread) {
         return (async () => {
-          if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
+          if (
+            hasBranchOption ||
+            hasWorktreePathOption ||
+            hasEnvModeOption ||
+            hasRuntimeSelectionModeOption
+          ) {
             setDraftThreadContext(storedDraftThread.draftId, {
               ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
               ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
               ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
+              ...(hasRuntimeSelectionModeOption
+                ? { runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared" }
+                : {}),
             });
           }
           setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, storedDraftThread.draftId, {
@@ -96,11 +110,19 @@ function useNewThreadState() {
         latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
         latestActiveDraftThread.promotedTo == null
       ) {
-        if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
+        if (
+          hasBranchOption ||
+          hasWorktreePathOption ||
+          hasEnvModeOption ||
+          hasRuntimeSelectionModeOption
+        ) {
           setDraftThreadContext(currentRouteTarget.draftId, {
             ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
             ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
             ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
+            ...(hasRuntimeSelectionModeOption
+              ? { runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared" }
+              : {}),
           });
         }
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
@@ -108,9 +130,13 @@ function useNewThreadState() {
           createdAt: latestActiveDraftThread.createdAt,
           runtimeMode: latestActiveDraftThread.runtimeMode,
           interactionMode: latestActiveDraftThread.interactionMode,
+          runtimeSelectionMode: latestActiveDraftThread.runtimeSelectionMode,
           ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
           ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
           ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
+          ...(hasRuntimeSelectionModeOption
+            ? { runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared" }
+            : {}),
         });
         return Promise.resolve();
       }
@@ -126,6 +152,7 @@ function useNewThreadState() {
           worktreePath: options?.worktreePath ?? null,
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
+          runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared",
         });
         applyStickyState(draftId);
 

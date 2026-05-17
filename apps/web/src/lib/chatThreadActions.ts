@@ -1,5 +1,10 @@
 import { scopeProjectRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  ThreadRuntimeMode,
+} from "@t3tools/contracts";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 interface ThreadContextLike {
@@ -20,6 +25,7 @@ interface NewThreadHandler {
       branch?: string | null;
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
     },
   ): Promise<void>;
 }
@@ -73,6 +79,16 @@ export async function startNewThreadInProjectFromContext(
   await context.handleNewThread(projectRef, buildContextualThreadOptions(context));
 }
 
+export async function startNewIsolatedThreadInProjectFromContext(
+  context: ChatThreadActionContext,
+  projectRef: ScopedProjectRef,
+): Promise<void> {
+  await context.handleNewThread(projectRef, {
+    ...buildContextualThreadOptions(context),
+    runtimeSelectionMode: "isolated",
+  });
+}
+
 export async function startNewThreadFromContext(
   context: ChatThreadActionContext,
 ): Promise<boolean> {
@@ -82,6 +98,18 @@ export async function startNewThreadFromContext(
   }
 
   await startNewThreadInProjectFromContext(context, projectRef);
+  return true;
+}
+
+export async function startNewIsolatedThreadFromContext(
+  context: ChatThreadActionContext,
+): Promise<boolean> {
+  const projectRef = resolveThreadActionProjectRef(context);
+  if (!projectRef) {
+    return false;
+  }
+
+  await startNewIsolatedThreadInProjectFromContext(context, projectRef);
   return true;
 }
 

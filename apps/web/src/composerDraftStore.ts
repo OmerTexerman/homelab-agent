@@ -14,6 +14,7 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
+  ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import {
   parseScopedProjectKey,
@@ -175,6 +176,7 @@ const PersistedDraftThreadState = Schema.Struct({
   logicalProjectKey: Schema.optionalKey(Schema.String),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
+  runtimeSelectionMode: Schema.optionalKey(ThreadRuntimeMode),
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
@@ -244,6 +246,7 @@ export interface DraftSessionState {
   logicalProjectKey: string;
   createdAt: string;
   runtimeMode: RuntimeMode;
+  runtimeSelectionMode: ThreadRuntimeMode;
   interactionMode: ProviderInteractionMode;
   branch: string | null;
   worktreePath: string | null;
@@ -310,6 +313,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
   ) => void;
@@ -324,6 +328,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
   ) => void;
@@ -337,6 +342,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
   ) => void;
@@ -1156,6 +1162,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     runtimeMode?: RuntimeMode;
+    runtimeSelectionMode?: ThreadRuntimeMode;
     interactionMode?: ProviderInteractionMode;
   },
 ): DraftThreadState {
@@ -1182,6 +1189,8 @@ function createDraftThreadState(
     logicalProjectKey,
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    runtimeSelectionMode:
+      options?.runtimeSelectionMode ?? existingThread?.runtimeSelectionMode ?? "shared",
     interactionMode:
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
@@ -1220,6 +1229,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.logicalProjectKey === right.logicalProjectKey &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
+    left.runtimeSelectionMode === right.runtimeSelectionMode &&
     left.interactionMode === right.interactionMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -1357,6 +1367,8 @@ function normalizePersistedDraftThreads(
         runtimeMode: isRuntimeMode(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
+        runtimeSelectionMode:
+          candidateDraftThread.runtimeSelectionMode === "isolated" ? "isolated" : "shared",
         interactionMode:
           candidateDraftThread.interactionMode === "plan" ||
           candidateDraftThread.interactionMode === "default"
@@ -1406,6 +1418,7 @@ function normalizePersistedDraftThreads(
           logicalProjectKey,
           createdAt: new Date().toISOString(),
           runtimeMode: DEFAULT_RUNTIME_MODE,
+          runtimeSelectionMode: "shared",
           interactionMode: DEFAULT_INTERACTION_MODE,
           branch: null,
           worktreePath: null,
@@ -1921,6 +1934,7 @@ function toHydratedDraftThreadState(
       ),
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
+    runtimeSelectionMode: persistedDraftThread.runtimeSelectionMode ?? "shared",
     interactionMode: persistedDraftThread.interactionMode,
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
@@ -2120,6 +2134,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   ? existing.createdAt
                   : options.createdAt || existing.createdAt,
               runtimeMode: options.runtimeMode ?? existing.runtimeMode,
+              runtimeSelectionMode:
+                options.runtimeSelectionMode ?? existing.runtimeSelectionMode ?? "shared",
               interactionMode: options.interactionMode ?? existing.interactionMode,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
@@ -2138,6 +2154,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&
+              nextDraftThread.runtimeSelectionMode === existing.runtimeSelectionMode &&
               nextDraftThread.interactionMode === existing.interactionMode &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&

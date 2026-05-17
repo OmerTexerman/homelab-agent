@@ -65,6 +65,24 @@ describe("project runtime policy", () => {
     });
   });
 
+  it("defaults missing runtime mode to the shared project runtime", () => {
+    const assignment = resolveProjectRuntimeAssignment({
+      project: makeProject({ defaultRuntimeId: null }),
+      thread: {
+        id: threadId,
+        projectId,
+        runtimeId: null,
+      },
+    });
+
+    expect(assignment).toMatchObject({
+      runtimeId: "project-runtime:project-1",
+      runtimeSelectionMode: "shared",
+      queuePolicy: "shared-single-writer",
+      isolated: false,
+    });
+  });
+
   it("assigns isolated threads to their own concurrent runtime", () => {
     const assignment = resolveProjectRuntimeAssignment({
       project: makeProject(),

@@ -19,6 +19,12 @@ describe("Homelab product copy", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue).toBe(
       "Use Project Runtime",
     );
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction).toBe(
+      "New thread in Project Runtime",
+    );
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction).toBe(
+      "New isolated runtime thread",
+    );
     expect(HOMELAB_PRODUCT_COPY.project.searchDescription).toBe(
       "Project with its own Project Runtime",
     );
