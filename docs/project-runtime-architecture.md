@@ -243,6 +243,8 @@ runtime is already active. It includes:
   proposed-plan references.
 - `.homelab/memory/latest/*.md` as readable generated views for current memory
   entries.
+- `.homelab/bootstrap/` with the active runtime bootstrap version and durable
+  historical materializations available for replay.
 - `.homelab/index/*.jsonl` as stable search indexes for agents and scripts.
 
 Generated views must:
@@ -253,6 +255,7 @@ Generated views must:
   transcript or explicitly remembered
 - redact secret values and sensitive payloads
 - show secret references/placeholders such as `$CLOUDFLARE_API_TOKEN`
+- show bootstrap materialization versions without exposing raw env values
 - be regenerated from durable app state
 - reject or ignore direct edits
 

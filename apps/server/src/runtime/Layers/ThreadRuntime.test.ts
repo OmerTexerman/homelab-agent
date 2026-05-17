@@ -14,6 +14,7 @@ import { type ProcessRunResult } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { makeThreadRuntimeLive } from "./ThreadRuntime.ts";
 
@@ -481,7 +482,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.match(homelabCliContents, /project-memory\/search/);
       assert.match(homelabCliContents, /cmd_memory_propose/);
       assert.match(homelabCliContents, /Waiting for secret/);
-      assert.match(homelabCliContents, /Project Runtime bootstrap descriptor/);
+      assert.match(homelabCliContents, /historical Project Runtime bootstrap materializations/);
       assert.doesNotMatch(homelabCliContents, /shared runtime bootstrap descriptor/);
       assert.match(
         homelabCliContents,
@@ -617,6 +618,56 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(descriptor.cwd, "/workspace");
       assert.equal(descriptor.workspacePath, "/workspace");
     }),
+  );
+
+  it.effect(
+    "keeps a requested historical bootstrap materialization across descriptor refresh",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const runtime = yield* ThreadRuntime;
+        const registry = yield* RuntimeBootstrapRegistry;
+        const firstBlueprint = yield* registry.recordMutation({
+          id: "thread-runtime-historical-env",
+          sourceThreadId: ThreadId.make("thread-runtime-history-source"),
+          kind: "env",
+          summary: "Set historical env",
+          payload: {
+            key: "HISTORICAL_TOOL_HOME",
+            value: "/opt/historical",
+          },
+          createdAt: "2026-05-16T00:00:00.000Z",
+        });
+        const historicalVersion = firstBlueprint.bootstrapVersion;
+        yield* registry.recordMutation({
+          id: "thread-runtime-historical-env",
+          sourceThreadId: ThreadId.make("thread-runtime-history-source"),
+          kind: "env",
+          summary: "Set current env",
+          payload: {
+            key: "HISTORICAL_TOOL_HOME",
+            value: "/opt/current",
+          },
+          createdAt: "2026-05-17T00:00:00.000Z",
+        });
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-historical-bootstrap"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          bootstrapVersion: historicalVersion,
+        });
+        const refreshed = yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
+
+        assert.equal(descriptor.bootstrapVersion, historicalVersion);
+        assert.equal(descriptor.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+        assert.equal(refreshed.bootstrapVersion, historicalVersion);
+        assert.equal(refreshed.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+      }),
   );
 
   it.effect("uses the host-gateway server URL for normal local docker runtimes", () =>

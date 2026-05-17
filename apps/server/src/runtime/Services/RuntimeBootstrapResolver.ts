@@ -3,8 +3,8 @@
  * RuntimeBootstrapResolver - Active runtime bootstrap selection boundary.
  *
  * RuntimeBootstrapRegistry remains the durable catalog. This service resolves
- * the active materialization a runtime launch should use and records when a
- * requested historical version has to fall back to the active blueprint.
+ * the active or requested historical materialization a runtime launch should use
+ * and records when a requested historical version has to fall back to active.
  *
  * @module RuntimeBootstrapResolver
  */
@@ -16,6 +16,7 @@ import type {
   RuntimeBlueprintDescriptor,
   RuntimeBootstrapMaterialization,
 } from "./RuntimeBootstrapRegistry.ts";
+import type { RuntimeBootstrapResolutionKind } from "../RuntimeBootstrapVersionPolicy.ts";
 
 export interface RuntimeBootstrapVersionFallback {
   readonly requestedBootstrapVersion: string;
@@ -27,6 +28,7 @@ export interface RuntimeBootstrapResolution {
   readonly activeBlueprint: RuntimeBlueprintDescriptor;
   readonly materialization: RuntimeBootstrapMaterialization;
   readonly requestedBootstrapVersion: string | null;
+  readonly resolutionKind: RuntimeBootstrapResolutionKind;
   readonly versionFallback: RuntimeBootstrapVersionFallback | null;
 }
 

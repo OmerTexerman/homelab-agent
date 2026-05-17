@@ -127,6 +127,7 @@ export interface RuntimeDescriptorInput {
   readonly requestedCwd?: string;
   readonly baseEnvironment?: Readonly<Record<string, string>>;
   readonly bootstrapImageRef: string;
+  readonly bootstrapVersion: string;
   readonly bootstrapEnv: Readonly<Record<string, string>>;
   readonly containerShellPath: string;
   readonly now: string;
@@ -224,8 +225,13 @@ export function buildThreadRuntimeDescriptor(
     normalizeRequestedCwd(input.threadRuntimesDir, storageId, input.existing?.cwd) ??
     CONTAINER_WORKSPACE_PATH;
   const workspacePath = CONTAINER_WORKSPACE_PATH;
+  const shouldPreserveExistingImage =
+    input.existing?.bootstrapVersion === undefined ||
+    input.existing.bootstrapVersion === input.bootstrapVersion;
   const imageRef = normalizeRuntimeImageRef(
-    input.imageRef?.trim() || input.existing?.imageRef || input.bootstrapImageRef,
+    input.imageRef?.trim() ||
+      (shouldPreserveExistingImage ? input.existing?.imageRef : undefined) ||
+      input.bootstrapImageRef,
   );
 
   return {
@@ -246,6 +252,7 @@ export function buildThreadRuntimeDescriptor(
       runtimeBinDirForThread(input.threadRuntimesDir, storageId),
       SHELL_RUNTIME_WRAPPER,
     ),
+    bootstrapVersion: input.bootstrapVersion,
     env: buildRuntimeEnvironment({
       cwd,
       workspacePath,

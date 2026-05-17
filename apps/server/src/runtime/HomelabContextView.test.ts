@@ -148,6 +148,29 @@ describe("HomelabContextView", () => {
           },
         ],
         secrets,
+        bootstrap: {
+          activeBootstrapVersion: "bootstrap-current",
+          activeImageRef: "runtime:current",
+          activeUpdatedAt: now,
+          materializations: [
+            {
+              bootstrapVersion: "bootstrap-current",
+              imageRef: "runtime:current",
+              materializedAt: now,
+              envKeys: ["TOOL_HOME"],
+              mutationCount: 1,
+              mutationKinds: ["env"],
+            },
+            {
+              bootstrapVersion: "bootstrap-old",
+              imageRef: "runtime:old",
+              materializedAt: "2025-12-31T00:00:00.000Z",
+              envKeys: [],
+              mutationCount: 0,
+              mutationKinds: [],
+            },
+          ],
+        },
       }),
     );
 
@@ -168,6 +191,11 @@ describe("HomelabContextView", () => {
     expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("[REDACTED_SECRET]");
     expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("$GITHUB_TOKEN");
     expect(files.get(".homelab/index/memory.jsonl")).toContain("memory-backups");
+    expect(files.get(".homelab/bootstrap/README.md")).toContain(
+      "Active version: bootstrap-current",
+    );
+    expect(files.get(".homelab/bootstrap/materializations.jsonl")).toContain("bootstrap-old");
+    expect(files.get(".homelab/index/bootstrap.jsonl")).toContain("TOOL_HOME");
 
     const indexLine = files.get(".homelab/threads/index.jsonl")?.trim();
     expect(indexLine).toBeTruthy();

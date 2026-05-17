@@ -14,7 +14,9 @@ import {
   RuntimeBootstrapRegistry,
   RuntimeBootstrapRegistryError,
   type RuntimeBlueprintDescriptor,
+  type RuntimeBootstrapCatalog,
   type RuntimeBootstrapMaterialization,
+  type RuntimeBootstrapMaterializationRecord,
   type RuntimeBootstrapMutation,
   type RuntimeBootstrapRegistryShape,
 } from "../Services/RuntimeBootstrapRegistry.ts";
@@ -47,11 +49,31 @@ const RuntimeBlueprintDescriptorSchema = Schema.Struct({
   updatedAt: Schema.String,
 });
 
-const PersistedRuntimeBootstrapState = Schema.Struct({
+const RuntimeBootstrapMaterializationRecordSchema = Schema.Struct({
+  imageRef: TrimmedNonEmptyString,
+  bootstrapVersion: TrimmedNonEmptyString,
+  env: Schema.Record(Schema.String, Schema.String),
+  mutations: Schema.Array(RuntimeBootstrapMutationSchema),
+  materializedAt: Schema.String,
+});
+
+const PersistedRuntimeBootstrapStateV1 = Schema.Struct({
   version: Schema.Literal(1),
   activeBlueprint: RuntimeBlueprintDescriptorSchema,
 });
+
+const PersistedRuntimeBootstrapStateV2 = Schema.Struct({
+  version: Schema.Literal(2),
+  activeBlueprint: RuntimeBlueprintDescriptorSchema,
+  materializations: Schema.Array(RuntimeBootstrapMaterializationRecordSchema),
+});
+
+const PersistedRuntimeBootstrapState = Schema.Union([
+  PersistedRuntimeBootstrapStateV1,
+  PersistedRuntimeBootstrapStateV2,
+]);
 type PersistedRuntimeBootstrapState = typeof PersistedRuntimeBootstrapState.Type;
+type PersistedRuntimeBootstrapStateV2 = typeof PersistedRuntimeBootstrapStateV2.Type;
 
 const decodePersistedRuntimeBootstrapState = Schema.decodeUnknownEffect(
   PersistedRuntimeBootstrapState,
@@ -59,8 +81,18 @@ const decodePersistedRuntimeBootstrapState = Schema.decodeUnknownEffect(
 
 const DEFAULT_RUNTIME_IMAGE = defaultRuntimeImageRef();
 
-function nextBootstrapVersion(): string {
-  return `bootstrap-${Date.now()}`;
+function nextBootstrapVersion(existingVersions: ReadonlySet<string> = new Set()): string {
+  const baseVersion = `bootstrap-${Date.now()}`;
+  if (!existingVersions.has(baseVersion)) {
+    return baseVersion;
+  }
+
+  for (let index = 1; ; index += 1) {
+    const candidate = `${baseVersion}-${index}`;
+    if (!existingVersions.has(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 function defaultBlueprint(): RuntimeBlueprintDescriptor {
@@ -133,19 +165,131 @@ function materializeEnvironment(
   return env;
 }
 
-const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
+function materializeBlueprint(
+  blueprint: RuntimeBlueprintDescriptor,
+  materializedAt: string,
+): RuntimeBootstrapMaterializationRecord {
+  return {
+    imageRef: blueprint.imageRef,
+    bootstrapVersion: blueprint.bootstrapVersion,
+    env: materializeEnvironment(blueprint.mutations),
+    mutations: blueprint.mutations,
+    materializedAt,
+  };
+}
+
+function toMaterializationContent(value: RuntimeBootstrapMaterialization): string {
+  return JSON.stringify({
+    imageRef: value.imageRef,
+    bootstrapVersion: value.bootstrapVersion,
+    env: Object.fromEntries(
+      Object.entries(value.env).toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+    mutations: value.mutations,
+  });
+}
+
+function normalizeMaterializations(
+  materializations: ReadonlyArray<RuntimeBootstrapMaterializationRecord>,
+): ReadonlyArray<RuntimeBootstrapMaterializationRecord> {
+  const seenVersions = new Set<string>();
+  const normalized: RuntimeBootstrapMaterializationRecord[] = [];
+
+  for (const materialization of materializations) {
+    if (seenVersions.has(materialization.bootstrapVersion)) {
+      continue;
+    }
+    seenVersions.add(materialization.bootstrapVersion);
+    normalized.push(materialization);
+  }
+
+  return normalized;
+}
+
+function appendMaterializationIfMissing(
+  materializations: ReadonlyArray<RuntimeBootstrapMaterializationRecord>,
+  materialization: RuntimeBootstrapMaterializationRecord,
+): ReadonlyArray<RuntimeBootstrapMaterializationRecord> {
+  return materializations.some(
+    (entry) => entry.bootstrapVersion === materialization.bootstrapVersion,
+  )
+    ? materializations
+    : [...materializations, materialization];
+}
+
+function materializationForVersion(
+  materializations: ReadonlyArray<RuntimeBootstrapMaterializationRecord>,
+  bootstrapVersion: string,
+): RuntimeBootstrapMaterializationRecord | undefined {
+  const normalizedVersion = bootstrapVersion.trim();
+  return normalizedVersion
+    ? materializations.find((entry) => entry.bootstrapVersion === normalizedVersion)
+    : undefined;
+}
+
+function existingVersions(
+  state: Pick<PersistedRuntimeBootstrapStateV2, "materializations">,
+): ReadonlySet<string> {
+  return new Set(state.materializations.map((entry) => entry.bootstrapVersion));
+}
+
+function normalizePersistedState(input: {
+  readonly persisted: PersistedRuntimeBootstrapState;
+  readonly now: string;
+}): readonly [PersistedRuntimeBootstrapStateV2, boolean] {
+  if (input.persisted.version === 1) {
+    return [
+      {
+        version: 2,
+        activeBlueprint: input.persisted.activeBlueprint,
+        materializations: [materializeBlueprint(input.persisted.activeBlueprint, input.now)],
+      },
+      true,
+    ];
+  }
+
+  const normalizedMaterializations = normalizeMaterializations(input.persisted.materializations);
+  const activeMaterialization = materializationForVersion(
+    normalizedMaterializations,
+    input.persisted.activeBlueprint.bootstrapVersion,
+  );
+  const nextMaterializations = activeMaterialization
+    ? normalizedMaterializations
+    : appendMaterializationIfMissing(
+        normalizedMaterializations,
+        materializeBlueprint(input.persisted.activeBlueprint, input.now),
+      );
+  const changed =
+    nextMaterializations.length !== input.persisted.materializations.length ||
+    activeMaterialization === undefined;
+
+  return [
+    {
+      version: 2,
+      activeBlueprint: input.persisted.activeBlueprint,
+      materializations: nextMaterializations,
+    },
+    changed,
+  ];
+}
+
+function defaultPersistedState(now: string): PersistedRuntimeBootstrapStateV2 {
+  const activeBlueprint = defaultBlueprint();
+  return {
+    version: 2,
+    activeBlueprint,
+    materializations: [materializeBlueprint(activeBlueprint, now)],
+  };
+}
+
+export const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const writeSemaphore = yield* Semaphore.make(1);
   const statePath = path.join(stateDir, "runtime-bootstrap.json");
 
-  const writeBlueprintAtomically = (blueprint: RuntimeBlueprintDescriptor) => {
-    const persistedState: PersistedRuntimeBootstrapState = {
-      version: 1,
-      activeBlueprint: blueprint,
-    };
-
+  const writeStateAtomically = (persistedState: PersistedRuntimeBootstrapStateV2) => {
     return writeFileStringAtomically({
       filePath: statePath,
       contents: `${JSON.stringify(persistedState, null, 2)}\n`,
@@ -162,10 +306,10 @@ const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
     );
   };
 
-  const loadBlueprintFromDisk = Effect.gen(function* () {
+  const loadStateFromDisk = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(statePath).pipe(Effect.orElseSucceed(() => false));
     if (!exists) {
-      return defaultBlueprint();
+      return [defaultPersistedState(new Date().toISOString()), true] as const;
     }
 
     const raw = yield* fileSystem.readFileString(statePath).pipe(
@@ -179,7 +323,7 @@ const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
     );
     const trimmed = raw.trim();
     if (trimmed.length === 0) {
-      return defaultBlueprint();
+      return [defaultPersistedState(new Date().toISOString()), true] as const;
     }
 
     const parsed = yield* Effect.try({
@@ -201,67 +345,131 @@ const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
       ),
     );
 
-    return persisted.activeBlueprint;
+    return normalizePersistedState({
+      persisted,
+      now: new Date().toISOString(),
+    });
   }).pipe(
     Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
       Effect.logWarning("failed to load runtime bootstrap state, using defaults", {
         message: error.message,
         cause: error.cause,
         path: statePath,
-      }).pipe(Effect.as(defaultBlueprint())),
+      }).pipe(Effect.as([defaultPersistedState(new Date().toISOString()), false] as const)),
     ),
   );
 
-  const blueprintRef = yield* Ref.make(yield* loadBlueprintFromDisk);
+  const [loadedState, shouldPersistLoadedState] = yield* loadStateFromDisk;
+  if (shouldPersistLoadedState) {
+    yield* writeStateAtomically(loadedState);
+  }
 
-  const updateBlueprint = <A>(
-    mutate: (current: RuntimeBlueprintDescriptor) => readonly [A, RuntimeBlueprintDescriptor],
+  const stateRef = yield* Ref.make(loadedState);
+
+  const updateState = <A>(
+    mutate: (
+      current: PersistedRuntimeBootstrapStateV2,
+    ) => readonly [A, PersistedRuntimeBootstrapStateV2],
   ) =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const current = yield* Ref.get(blueprintRef);
-        const [result, nextBlueprint] = mutate(current);
-        yield* writeBlueprintAtomically(nextBlueprint);
-        yield* Ref.set(blueprintRef, nextBlueprint);
+        const current = yield* Ref.get(stateRef);
+        const [result, nextState] = mutate(current);
+        yield* writeStateAtomically(nextState);
+        yield* Ref.set(stateRef, nextState);
         return result;
       }),
     );
 
   return {
-    getActiveBlueprint: () => Ref.get(blueprintRef),
+    getActiveBlueprint: () => Ref.get(stateRef).pipe(Effect.map((state) => state.activeBlueprint)),
     recordMutation: (mutation) =>
-      updateBlueprint((current) => {
+      updateState((current) => {
         const updatedAt = new Date().toISOString();
+        const versions = existingVersions(current);
         const nextBlueprint: RuntimeBlueprintDescriptor = {
-          ...current,
-          mutations: upsertMutation(current.mutations, mutation),
-          bootstrapVersion: nextBootstrapVersion(),
+          ...current.activeBlueprint,
+          mutations: upsertMutation(current.activeBlueprint.mutations, mutation),
+          bootstrapVersion: nextBootstrapVersion(versions),
           updatedAt,
         };
+        const nextState: PersistedRuntimeBootstrapStateV2 = {
+          version: 2,
+          activeBlueprint: nextBlueprint,
+          materializations: appendMaterializationIfMissing(
+            current.materializations,
+            materializeBlueprint(nextBlueprint, updatedAt),
+          ),
+        };
 
-        return [nextBlueprint, nextBlueprint] as const;
+        return [nextBlueprint, nextState] as const;
       }),
     replaceActiveBlueprint: (blueprint) =>
-      updateBlueprint(() => {
+      updateState((current) => {
         const updatedAt = new Date().toISOString();
-        const nextBlueprint: RuntimeBlueprintDescriptor = {
+        const requestedVersion = blueprint.bootstrapVersion.trim();
+        const candidateBlueprint: RuntimeBlueprintDescriptor = {
           ...blueprint,
-          bootstrapVersion: blueprint.bootstrapVersion.trim() || nextBootstrapVersion(),
+          bootstrapVersion: requestedVersion || nextBootstrapVersion(existingVersions(current)),
           updatedAt,
         };
+        const candidateMaterialization = materializeBlueprint(candidateBlueprint, updatedAt);
+        const existingMaterialization = materializationForVersion(
+          current.materializations,
+          candidateBlueprint.bootstrapVersion,
+        );
+        const bootstrapVersion =
+          existingMaterialization === undefined ||
+          toMaterializationContent(existingMaterialization) ===
+            toMaterializationContent(candidateMaterialization)
+            ? candidateBlueprint.bootstrapVersion
+            : nextBootstrapVersion(existingVersions(current));
+        const nextBlueprint: RuntimeBlueprintDescriptor = {
+          ...candidateBlueprint,
+          bootstrapVersion,
+          updatedAt,
+        };
+        const nextState: PersistedRuntimeBootstrapStateV2 = {
+          version: 2,
+          activeBlueprint: nextBlueprint,
+          materializations: appendMaterializationIfMissing(
+            current.materializations,
+            materializeBlueprint(nextBlueprint, updatedAt),
+          ),
+        };
 
-        return [undefined, nextBlueprint] as const;
+        return [undefined, nextState] as const;
       }),
     materializeForThread: (_threadId: ThreadIdModel) =>
-      Ref.get(blueprintRef).pipe(
+      Ref.get(stateRef).pipe(
+        Effect.map((state) => {
+          const materialization = materializationForVersion(
+            state.materializations,
+            state.activeBlueprint.bootstrapVersion,
+          );
+          return (materialization ??
+            materializeBlueprint(
+              state.activeBlueprint,
+              state.activeBlueprint.updatedAt,
+            )) satisfies RuntimeBootstrapMaterialization;
+        }),
+      ),
+    getMaterialization: (bootstrapVersion) =>
+      Ref.get(stateRef).pipe(
         Effect.map(
-          (blueprint) =>
+          (state) => materializationForVersion(state.materializations, bootstrapVersion) ?? null,
+        ),
+      ),
+    listMaterializations: () =>
+      Ref.get(stateRef).pipe(Effect.map((state) => state.materializations)),
+    getCatalog: () =>
+      Ref.get(stateRef).pipe(
+        Effect.map(
+          (state) =>
             ({
-              imageRef: blueprint.imageRef,
-              bootstrapVersion: blueprint.bootstrapVersion,
-              env: materializeEnvironment(blueprint.mutations),
-              mutations: blueprint.mutations,
-            }) satisfies RuntimeBootstrapMaterialization,
+              activeBlueprint: state.activeBlueprint,
+              materializations: state.materializations,
+            }) satisfies RuntimeBootstrapCatalog,
         ),
       ),
   } satisfies RuntimeBootstrapRegistryShape;

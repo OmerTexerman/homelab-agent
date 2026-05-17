@@ -48,6 +48,7 @@ export interface ThreadRuntimeDescriptor {
   readonly homePath: string;
   readonly cwd: string;
   readonly shell: string;
+  readonly bootstrapVersion?: string | undefined;
   readonly env: Readonly<Record<string, string>>;
   readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
   readonly createdAt: string;

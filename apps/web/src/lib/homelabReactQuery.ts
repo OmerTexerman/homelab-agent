@@ -28,6 +28,17 @@ const EMPTY_HOME_LAB_SETUP_STATUS: HomelabSetupStatus = {
     mutations: [],
     updatedAt: new Date(0).toISOString(),
   },
+  runtimeBootstrapCatalog: {
+    activeBlueprint: {
+      backend: "docker",
+      imageRef: "homelab-agent-runtime:local",
+      bootstrapVersion: "bootstrap-uninitialized",
+      mutations: [],
+      updatedAt: new Date(0).toISOString(),
+    },
+    activeBootstrapVersion: "bootstrap-uninitialized",
+    availableMaterializations: [],
+  },
 };
 
 async function readEnvironmentJson<T>(url: string): Promise<T> {

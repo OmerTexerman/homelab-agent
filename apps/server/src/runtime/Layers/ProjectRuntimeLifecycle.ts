@@ -34,8 +34,10 @@ import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
 import { writeHomelabContextView } from "../HomelabContextView.ts";
+import { homelabRuntimeBootstrapView } from "../RuntimeBootstrapCatalogView.ts";
 import { defaultProjectRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
+import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime, type ThreadRuntimeDescriptor } from "../Services/ThreadRuntime.ts";
 import { encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
 import {
@@ -533,6 +535,13 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
             .list({ projectId: input.project.id, limit: 1_000 })
             .pipe(Effect.catch(() => Effect.succeed([])))
         : [];
+      const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
+      const bootstrap = Option.isSome(runtimeBootstrapRegistry)
+        ? yield* runtimeBootstrapRegistry.value.getCatalog().pipe(
+            Effect.map(homelabRuntimeBootstrapView),
+            Effect.catch(() => Effect.void),
+          )
+        : undefined;
 
       yield* writeHomelabContextView({
         hostWorkspacePath: launchContext.hostWorkspacePath,
@@ -540,6 +549,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         threads: input.threads,
         memoryEntries,
         secrets,
+        ...(bootstrap !== undefined ? { bootstrap } : {}),
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.mapError((cause) =>

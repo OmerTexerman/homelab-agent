@@ -20,7 +20,8 @@ runtime, terminal, or chat components.
 | `apps/server/src/provider/ProviderSelectionPolicy.ts`                                                                           | Choosing a usable provider instance/model for host or Project Runtime execution, including runtime support status for Codex, Claude, Cursor, and OpenCode.                                             | Installing provider CLIs, authenticating providers, opening managed OpenCode servers, or rendering settings UI.                                                              |
 | `apps/server/src/runtime/Layers/RuntimeExecutionContext.ts`                                                                     | Runtime ids, storage layout, Docker/container naming, generated runtime env, wrapper paths, mount specs, auth sync descriptors, and conversion to execution context.                                   | Docker lifecycle operations, snapshot archive/restore policy, bootstrap registry persistence, provider policy, terminal session state, or homelab knowledge materialization. |
 | `apps/server/src/runtime/Layers/ProjectRuntimeLifecycle.ts`                                                                     | Project Runtime lifecycle metadata, wake/archive/reset/cleanup controls, filesystem snapshot archive records, restore orchestration, and preservation boundaries for project/thread/memory state.      | Provider execution, durable project/thread projections, global homelab knowledge writes, secret value storage, or low-level Docker launch compatibility.                     |
-| `apps/server/src/runtime/Services/RuntimeBootstrapResolver.ts` and `apps/server/src/runtime/Layers/RuntimeBootstrapResolver.ts` | Resolving the active bootstrap blueprint/materialization for a runtime launch and reporting fallback when a requested version is unavailable.                                                          | Maintaining the durable bootstrap catalog, applying mutations inside containers, or restoring historical materializations.                                                   |
+| `apps/server/src/runtime/Services/RuntimeBootstrapResolver.ts` and `apps/server/src/runtime/Layers/RuntimeBootstrapResolver.ts` | Resolving the active or requested historical bootstrap materialization for a runtime launch and reporting fallback when a requested version is unavailable.                                            | Maintaining the durable bootstrap catalog or applying mutations inside containers.                                                                                           |
+| `apps/server/src/runtime/RuntimeBootstrapVersionPolicy.ts`                                                                      | Pure requested-vs-active-vs-fallback bootstrap materialization selection rules.                                                                                                                        | Registry persistence, container launch behavior, HTTP rendering, or ThreadRuntime descriptor mutation.                                                                       |
 
 ## Rebase Guidance
 
@@ -60,6 +61,7 @@ should follow the runtime id for shared Project Runtimes.
   isolated-runtime merge/discard flows, and stronger detection of user-created
   files that may contain sensitive values outside known broker/provider auth
   paths.
-- Historical bootstrap materializations: the resolver reports fallback when a
-  requested bootstrap version is unavailable, but durable historical
-  materialization replay is not implemented yet.
+- Historical bootstrap materialization replay is implemented for the durable
+  registry-backed materialization catalog. Remaining follow-up: apply richer
+  non-env mutation payloads inside containers as the bootstrap mutation model
+  grows beyond descriptor/history visibility.

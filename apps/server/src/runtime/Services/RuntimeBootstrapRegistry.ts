@@ -49,6 +49,15 @@ export interface RuntimeBootstrapMaterialization {
   readonly mutations: ReadonlyArray<RuntimeBootstrapMutation>;
 }
 
+export interface RuntimeBootstrapMaterializationRecord extends RuntimeBootstrapMaterialization {
+  readonly materializedAt: string;
+}
+
+export interface RuntimeBootstrapCatalog {
+  readonly activeBlueprint: RuntimeBlueprintDescriptor;
+  readonly materializations: ReadonlyArray<RuntimeBootstrapMaterializationRecord>;
+}
+
 export class RuntimeBootstrapRegistryError extends Data.TaggedError(
   "RuntimeBootstrapRegistryError",
 )<{
@@ -77,6 +86,20 @@ export interface RuntimeBootstrapRegistryShape {
   readonly materializeForThread: (
     threadId: ThreadId,
   ) => Effect.Effect<RuntimeBootstrapMaterialization, RuntimeBootstrapRegistryError>;
+
+  /** Read one immutable historical materialization by bootstrap version. */
+  readonly getMaterialization: (
+    bootstrapVersion: string,
+  ) => Effect.Effect<RuntimeBootstrapMaterializationRecord | null, RuntimeBootstrapRegistryError>;
+
+  /** List all durable bootstrap materializations known to the registry. */
+  readonly listMaterializations: () => Effect.Effect<
+    ReadonlyArray<RuntimeBootstrapMaterializationRecord>,
+    RuntimeBootstrapRegistryError
+  >;
+
+  /** Read the active blueprint and all historical materializations together. */
+  readonly getCatalog: () => Effect.Effect<RuntimeBootstrapCatalog, RuntimeBootstrapRegistryError>;
 }
 
 export class RuntimeBootstrapRegistry extends Context.Service<

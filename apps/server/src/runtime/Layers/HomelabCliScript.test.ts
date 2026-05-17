@@ -50,7 +50,19 @@ function createCliTestServer(): Server {
         respondJson(response, { secrets: [] });
         return;
       case "/api/homelab/runtime-bootstrap":
-        respondJson(response, { projectRuntime: { backend: "docker" } });
+        respondJson(response, {
+          activeBootstrapVersion: "bootstrap-cli",
+          availableMaterializations: [
+            {
+              bootstrapVersion: "bootstrap-cli",
+              imageRef: "runtime:test",
+              envKeys: [],
+              mutationCount: 0,
+              mutationKinds: [],
+              materializedAt: "2026-05-17T00:00:00.000Z",
+            },
+          ],
+        });
         return;
       default:
         response.writeHead(404, { "Content-Type": "application/json" });
@@ -109,7 +121,7 @@ describe("generated homelab CLI", () => {
     await expect(runHomelabCli(["snapshot"])).resolves.toContain('"entities"');
     await expect(runHomelabCli(["memory", "list"])).resolves.toContain('"entries"');
     await expect(runHomelabCli(["secrets"])).resolves.toContain('"secrets"');
-    await expect(runHomelabCli(["bootstrap"])).resolves.toContain('"projectRuntime"');
+    await expect(runHomelabCli(["bootstrap"])).resolves.toContain('"availableMaterializations"');
 
     expect(requests).toEqual([
       {

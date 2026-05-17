@@ -43,6 +43,8 @@ import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegis
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
+import { homelabRuntimeBootstrapView } from "../../runtime/RuntimeBootstrapCatalogView.ts";
+import { RuntimeBootstrapRegistry } from "../../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
 import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
 import {
@@ -598,12 +600,25 @@ const make = Effect.gen(function* () {
             ),
           )
       : [];
+    const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
+    const bootstrap = Option.isSome(runtimeBootstrapRegistry)
+      ? yield* runtimeBootstrapRegistry.value.getCatalog().pipe(
+          Effect.map(homelabRuntimeBootstrapView),
+          Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
+            Effect.logWarning("failed to load runtime bootstrap catalog for context view", {
+              threadId: input.threadId,
+              detail: error.message,
+            }).pipe(Effect.as(undefined)),
+          ),
+        )
+      : undefined;
     yield* writeHomelabContextView({
       hostWorkspacePath: launchContext.hostWorkspacePath,
       project,
       threads: readModel.threads.filter((entry) => entry.projectId === project.id),
       memoryEntries,
       secrets,
+      ...(bootstrap !== undefined ? { bootstrap } : {}),
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to write homelab context view", {

@@ -998,6 +998,47 @@ const buildAppUnderTest = (options?: {
               env: {},
               mutations: [],
             }),
+          getMaterialization: (bootstrapVersion) =>
+            Effect.succeed(
+              bootstrapVersion === "bootstrap-test"
+                ? {
+                    imageRef: "homelab-agent-runtime:local",
+                    bootstrapVersion: "bootstrap-test",
+                    env: {},
+                    mutations: [],
+                    materializedAt: new Date().toISOString(),
+                  }
+                : null,
+            ),
+          listMaterializations: () =>
+            Effect.succeed([
+              {
+                imageRef: "homelab-agent-runtime:local",
+                bootstrapVersion: "bootstrap-test",
+                env: {},
+                mutations: [],
+                materializedAt: new Date().toISOString(),
+              },
+            ]),
+          getCatalog: () =>
+            Effect.succeed({
+              activeBlueprint: {
+                backend: "docker",
+                imageRef: "homelab-agent-runtime:local",
+                bootstrapVersion: "bootstrap-test",
+                mutations: [],
+                updatedAt: new Date().toISOString(),
+              },
+              materializations: [
+                {
+                  imageRef: "homelab-agent-runtime:local",
+                  bootstrapVersion: "bootstrap-test",
+                  env: {},
+                  mutations: [],
+                  materializedAt: new Date().toISOString(),
+                },
+              ],
+            }),
           ...options?.layers?.runtimeBootstrapRegistry,
         }),
       ),

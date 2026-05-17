@@ -23,7 +23,6 @@ import {
   type ProjectMemoryListResult,
   type ProjectMemorySearchResult,
   type ProjectMemorySearchResultList,
-  type RuntimeBlueprintDescriptor,
 } from "@t3tools/contracts";
 import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -35,6 +34,10 @@ import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.t
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
+import {
+  homelabRuntimeBootstrapView,
+  runtimeBootstrapCatalogView,
+} from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadRuntime } from "../runtime/Services/ThreadRuntime.ts";
 import { redactHomelabViewText, writeHomelabContextView } from "../runtime/HomelabContextView.ts";
@@ -257,7 +260,8 @@ const refreshActiveProjectContextViews = (projectId: ProjectId) =>
       return;
     }
 
-    const [memoryEntries, secrets] = yield* Effect.all([
+    const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
+    const [memoryEntries, secrets, bootstrap] = yield* Effect.all([
       projectMemory.list({ projectId, limit: 1_000 }).pipe(
         Effect.catchTag("ProjectMemoryError", (error) =>
           Effect.logWarning("failed to list project memory for view refresh", {
@@ -267,6 +271,17 @@ const refreshActiveProjectContextViews = (projectId: ProjectId) =>
         ),
       ),
       listHomelabSecretsForRedaction,
+      Option.isSome(runtimeBootstrapRegistry)
+        ? runtimeBootstrapRegistry.value.getCatalog().pipe(
+            Effect.map(homelabRuntimeBootstrapView),
+            Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
+              Effect.logWarning("failed to load runtime bootstrap catalog for view refresh", {
+                projectId,
+                detail: error.message,
+              }).pipe(Effect.as(undefined)),
+            ),
+          )
+        : Effect.void,
     ]);
 
     yield* Effect.forEach(
@@ -280,6 +295,7 @@ const refreshActiveProjectContextViews = (projectId: ProjectId) =>
             threads: projectThreads,
             memoryEntries,
             secrets,
+            ...(bootstrap !== undefined ? { bootstrap } : {}),
           });
         }).pipe(
           Effect.catchCause((cause) =>
@@ -397,8 +413,8 @@ export const homelabRuntimeBootstrapRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     yield* authenticateOwnerSession;
     const runtimeBootstrapRegistry = yield* RuntimeBootstrapRegistry;
-    const runtimeBootstrap = yield* runtimeBootstrapRegistry.getActiveBlueprint();
-    return HttpServerResponse.jsonUnsafe(runtimeBootstrap satisfies RuntimeBlueprintDescriptor, {
+    const runtimeBootstrapCatalog = yield* runtimeBootstrapRegistry.getCatalog();
+    return HttpServerResponse.jsonUnsafe(runtimeBootstrapCatalogView(runtimeBootstrapCatalog), {
       status: 200,
     });
   }).pipe(
@@ -429,11 +445,13 @@ export const homelabSetupStatusRouteLayer = HttpRouter.add(
       secretRegistry.listSecrets().pipe(Effect.map((secretList) => ({ secrets: secretList }))),
       runtimeBootstrapRegistry.getActiveBlueprint(),
     ]);
+    const runtimeBootstrapCatalog = yield* runtimeBootstrapRegistry.getCatalog();
     return HttpServerResponse.jsonUnsafe(
       {
         snapshot,
         secrets,
         runtimeBootstrap,
+        runtimeBootstrapCatalog: runtimeBootstrapCatalogView(runtimeBootstrapCatalog),
       } satisfies HomelabSetupStatus,
       { status: 200 },
     );

@@ -15,6 +15,22 @@ interface HomelabViewFile {
   readonly contents: string;
 }
 
+export interface HomelabBootstrapMaterializationView {
+  readonly bootstrapVersion: string;
+  readonly imageRef: string;
+  readonly materializedAt: string;
+  readonly envKeys: ReadonlyArray<string>;
+  readonly mutationCount: number;
+  readonly mutationKinds: ReadonlyArray<string>;
+}
+
+export interface HomelabRuntimeBootstrapView {
+  readonly activeBootstrapVersion: string;
+  readonly activeImageRef: string;
+  readonly activeUpdatedAt: string;
+  readonly materializations: ReadonlyArray<HomelabBootstrapMaterializationView>;
+}
+
 export interface HomelabContextViewInput {
   readonly hostWorkspacePath: string;
   readonly project: Pick<
@@ -24,6 +40,7 @@ export interface HomelabContextViewInput {
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
   readonly secrets?: ReadonlyArray<HomelabSecretDescriptor>;
+  readonly bootstrap?: HomelabRuntimeBootstrapView | undefined;
 }
 
 const SECRET_VALUE_PATTERNS = [
@@ -169,6 +186,40 @@ function renderMemoryMarkdown(input: {
   return lines.join("\n");
 }
 
+function renderBootstrapMarkdown(input: HomelabRuntimeBootstrapView): string {
+  const lines = [
+    "# Runtime Bootstrap",
+    "",
+    `- Active version: ${input.activeBootstrapVersion}`,
+    `- Active image: ${input.activeImageRef}`,
+    `- Active updated: ${input.activeUpdatedAt}`,
+    `- Historical materializations: ${input.materializations.length}`,
+    "",
+    "## Materializations",
+    "",
+  ];
+
+  if (input.materializations.length === 0) {
+    lines.push("No durable bootstrap materializations are available yet.", "");
+    return lines.join("\n");
+  }
+
+  for (const materialization of input.materializations) {
+    lines.push(
+      `- ${materialization.bootstrapVersion} (${materialization.imageRef})`,
+      `  - Materialized: ${materialization.materializedAt}`,
+      `  - Env keys: ${materialization.envKeys.length > 0 ? materialization.envKeys.join(", ") : "none"}`,
+      `  - Mutation count: ${materialization.mutationCount}`,
+      `  - Mutation kinds: ${
+        materialization.mutationKinds.length > 0 ? materialization.mutationKinds.join(", ") : "none"
+      }`,
+    );
+  }
+  lines.push("");
+
+  return lines.join("\n");
+}
+
 export function renderHomelabContextViewFiles(
   input: Omit<HomelabContextViewInput, "hostWorkspacePath">,
 ): HomelabViewFile[] {
@@ -198,6 +249,7 @@ export function renderHomelabContextViewFiles(
       "",
       "This directory is a generated view over durable Homelab Agent state.",
       "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and thread transcripts.",
+      "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server exposes it.",
       "Secret values are redacted; secret references appear as placeholders.",
       "",
     ].join("\n"),
@@ -320,6 +372,35 @@ export function renderHomelabContextViewFiles(
   });
   files.push({ relativePath: ".homelab/index/tools.jsonl", contents: "" });
   files.push({ relativePath: ".homelab/tools/README.md", contents: "# Runtime Tools\n\n" });
+
+  if (input.bootstrap) {
+    files.push({
+      relativePath: ".homelab/bootstrap/README.md",
+      contents: renderBootstrapMarkdown(input.bootstrap),
+    });
+    files.push({
+      relativePath: ".homelab/bootstrap/index.json",
+      contents: `${JSON.stringify(input.bootstrap, null, 2)}\n`,
+    });
+    files.push({
+      relativePath: ".homelab/bootstrap/materializations.jsonl",
+      contents: input.bootstrap.materializations.map((entry) => jsonLine(entry)).join(""),
+    });
+    files.push({
+      relativePath: ".homelab/index/bootstrap.jsonl",
+      contents: input.bootstrap.materializations
+        .map((entry) =>
+          jsonLine({
+            bootstrapVersion: entry.bootstrapVersion,
+            imageRef: entry.imageRef,
+            materializedAt: entry.materializedAt,
+            mutationCount: entry.mutationCount,
+            envKeys: entry.envKeys,
+          }),
+        )
+        .join(""),
+    });
+  }
 
   for (const entry of latestMemoryEntries) {
     files.push({

@@ -148,6 +148,7 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   homePath: Schema.String,
   cwd: Schema.String,
   shell: Schema.String,
+  bootstrapVersion: Schema.optional(Schema.String),
   env: RuntimeEnvSchema,
   managedOpenCodeServer: Schema.optional(
     Schema.Struct({
@@ -978,7 +979,8 @@ def build_parser():
     secret_request_parser.set_defaults(func=cmd_secret_request)
 
     bootstrap_parser = subparsers.add_parser(
-        "bootstrap", help="Inspect the Project Runtime bootstrap descriptor for future threads."
+        "bootstrap",
+        help="Inspect active and historical Project Runtime bootstrap materializations.",
     )
     bootstrap_parser.set_defaults(func=cmd_bootstrap)
 
@@ -1148,7 +1150,7 @@ homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
 homelab memory list     # See durable project-local memory
 homelab secrets         # See what credentials are available
-homelab bootstrap       # See inherited tools, packages, and runtime bootstrap data
+homelab bootstrap       # See active and historical runtime bootstrap data
 find .homelab -maxdepth 3 -type f | sort
 rg -n "query-or-host-or-service" .homelab || true
 pwd && ls -la           # See the runtime workspace you can use freely
@@ -1205,7 +1207,7 @@ source code or wrapper scripts before using it.
 | \`homelab entity <id>\` | Get one entity with all its details |
 | \`homelab relations <id>\` | Show all relations connected to an entity |
 | \`homelab secrets\` | List secret references and whether values exist |
-| \`homelab bootstrap\` | Show what tooling/packages future threads inherit |
+| \`homelab bootstrap\` | Show active bootstrap data and historical materializations |
 
 Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 \`network\`, \`domain\`, \`endpoint\`, \`secret_ref\`, \`tool\`, \`artifact\`,
@@ -2512,11 +2514,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly bootstrapVersion?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {
+    const requestedBootstrapVersion = input.bootstrapVersion ?? input.existing?.bootstrapVersion;
     const bootstrap = yield* bootstrapResolver
       .resolveForRuntime({
         threadId: input.threadId,
-        ...(input.bootstrapVersion !== undefined
-          ? { bootstrapVersion: input.bootstrapVersion }
+        ...(requestedBootstrapVersion !== undefined
+          ? { bootstrapVersion: requestedBootstrapVersion }
           : {}),
       })
       .pipe(
@@ -2529,14 +2532,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ),
       );
 
-    if (bootstrap.versionFallback) {
-      yield* Effect.logDebug("runtime bootstrap version fell back to active blueprint", {
-        threadId: input.threadId,
-        requestedBootstrapVersion: bootstrap.versionFallback.requestedBootstrapVersion,
-        resolvedBootstrapVersion: bootstrap.versionFallback.resolvedBootstrapVersion,
-      });
-    }
-
     return buildThreadRuntimeDescriptor({
       threadRuntimesDir,
       threadId: input.threadId,
@@ -2547,6 +2542,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
       ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
       bootstrapImageRef: bootstrap.materialization.imageRef,
+      bootstrapVersion: bootstrap.materialization.bootstrapVersion,
       bootstrapEnv: bootstrap.materialization.env,
       containerShellPath,
       now: new Date().toISOString(),
@@ -2576,6 +2572,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       runtimeMode: runtime.runtimeMode,
       imageRef: runtime.imageRef,
       requestedCwd: runtime.cwd,
+      ...(runtime.bootstrapVersion !== undefined
+        ? { bootstrapVersion: runtime.bootstrapVersion }
+        : {}),
       existing: runtime,
     });
 

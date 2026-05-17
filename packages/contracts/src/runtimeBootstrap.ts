@@ -32,3 +32,21 @@ export const RuntimeBlueprintDescriptor = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type RuntimeBlueprintDescriptor = typeof RuntimeBlueprintDescriptor.Type;
+
+export const RuntimeBootstrapMaterializationSummary = Schema.Struct({
+  imageRef: TrimmedNonEmptyString,
+  bootstrapVersion: TrimmedNonEmptyString,
+  envKeys: Schema.Array(TrimmedNonEmptyString),
+  mutationCount: Schema.Number,
+  mutationKinds: Schema.Array(RuntimeBootstrapMutationKind),
+  materializedAt: IsoDateTime,
+});
+export type RuntimeBootstrapMaterializationSummary =
+  typeof RuntimeBootstrapMaterializationSummary.Type;
+
+export const RuntimeBootstrapCatalogView = Schema.Struct({
+  activeBlueprint: RuntimeBlueprintDescriptor,
+  activeBootstrapVersion: TrimmedNonEmptyString,
+  availableMaterializations: Schema.Array(RuntimeBootstrapMaterializationSummary),
+});
+export type RuntimeBootstrapCatalogView = typeof RuntimeBootstrapCatalogView.Type;
