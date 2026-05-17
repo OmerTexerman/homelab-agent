@@ -1,10 +1,15 @@
 import {
   ApprovalRequestId,
+  CheckpointRef,
   isToolLifecycleItemType,
+  MessageId,
+  type OrchestrationCheckpointSummary,
   type OrchestrationSession,
   type OrchestrationThreadActivity,
+  type OrchestrationProposedPlanId,
   type ProviderRuntimeEvent,
   type RuntimeMode,
+  type ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
 } from "@t3tools/contracts";
@@ -202,12 +207,138 @@ export function projectRuntimeLifecycleSession(input: {
       threadId: input.event.threadId,
       status,
       providerName: input.event.provider,
+      ...(input.event.providerInstanceId !== undefined
+        ? { providerInstanceId: input.event.providerInstanceId }
+        : {}),
       runtimeMode: input.currentRuntimeMode,
       activeTurnId: nextActiveTurnId,
       lastError,
       updatedAt: input.event.createdAt,
     },
   };
+}
+
+export function projectRuntimeErrorSession(input: {
+  readonly event: Extract<ProviderRuntimeEvent, { type: "runtime.error" }>;
+  readonly activeTurnId: TurnId | null;
+  readonly currentRuntimeMode: RuntimeMode;
+  readonly strictLifecycleGuard: boolean;
+}): {
+  readonly eventTurnId: TurnId | undefined;
+  readonly shouldApply: boolean;
+  readonly session: OrchestrationSession;
+} {
+  const eventTurnId = toRuntimeProjectionTurnId(input.event.turnId);
+  const shouldApply =
+    !input.strictLifecycleGuard ||
+    input.activeTurnId === null ||
+    eventTurnId === undefined ||
+    sameRuntimeProjectionId(input.activeTurnId, eventTurnId);
+
+  return {
+    eventTurnId,
+    shouldApply,
+    session: {
+      threadId: input.event.threadId,
+      status: "error",
+      providerName: input.event.provider,
+      ...(input.event.providerInstanceId !== undefined
+        ? { providerInstanceId: input.event.providerInstanceId }
+        : {}),
+      runtimeMode: input.currentRuntimeMode,
+      activeTurnId: eventTurnId ?? null,
+      lastError: input.event.payload.message,
+      updatedAt: input.event.createdAt,
+    },
+  };
+}
+
+function hasCheckpointForTurn(
+  checkpoints: ReadonlyArray<Pick<OrchestrationCheckpointSummary, "turnId">>,
+  turnId: TurnId,
+): boolean {
+  for (let index = 0; index < checkpoints.length; index += 1) {
+    if (checkpoints[index]?.turnId === turnId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function maxCheckpointTurnCount(
+  checkpoints: ReadonlyArray<Pick<OrchestrationCheckpointSummary, "checkpointTurnCount">>,
+): number {
+  let maxTurnCount = 0;
+  for (let index = 0; index < checkpoints.length; index += 1) {
+    const checkpoint = checkpoints[index];
+    if (checkpoint && checkpoint.checkpointTurnCount > maxTurnCount) {
+      maxTurnCount = checkpoint.checkpointTurnCount;
+    }
+  }
+  return maxTurnCount;
+}
+
+export type RuntimeTurnDiffPlaceholderDecision =
+  | {
+      readonly action: "skip";
+      readonly reason: "not-turn-diff-event" | "missing-turn-id" | "checkpoint-already-tracked";
+    }
+  | {
+      readonly action: "dispatch";
+      readonly turnId: TurnId;
+      readonly checkpointRef: CheckpointRef;
+      readonly assistantMessageId: MessageId;
+      readonly checkpointTurnCount: number;
+    };
+
+export function providerTurnDiffPlaceholderDecision(input: {
+  readonly event: ProviderRuntimeEvent;
+  readonly checkpoints: ReadonlyArray<
+    Pick<OrchestrationCheckpointSummary, "turnId" | "checkpointTurnCount">
+  >;
+}): RuntimeTurnDiffPlaceholderDecision {
+  if (input.event.type !== "turn.diff.updated") {
+    return { action: "skip", reason: "not-turn-diff-event" };
+  }
+
+  const turnId = toRuntimeProjectionTurnId(input.event.turnId);
+  if (!turnId) {
+    return { action: "skip", reason: "missing-turn-id" };
+  }
+
+  if (hasCheckpointForTurn(input.checkpoints, turnId)) {
+    return { action: "skip", reason: "checkpoint-already-tracked" };
+  }
+
+  return {
+    action: "dispatch",
+    turnId,
+    checkpointRef: CheckpointRef.make(`provider-diff:${input.event.eventId}`),
+    assistantMessageId: MessageId.make(
+      `assistant:${input.event.itemId ?? input.event.turnId ?? input.event.eventId}`,
+    ),
+    checkpointTurnCount: maxCheckpointTurnCount(input.checkpoints) + 1,
+  };
+}
+
+export function shouldMarkSourceProposedPlanImplemented(input: {
+  readonly event: ProviderRuntimeEvent;
+  readonly shouldApplyLifecycle: boolean;
+  readonly eventTurnId: TurnId | undefined;
+  readonly expectedProviderTurnId: TurnId | undefined;
+  readonly sourceProposedPlan: {
+    readonly sourceThreadId: ThreadId;
+    readonly sourcePlanId: OrchestrationProposedPlanId;
+  } | null;
+}): boolean {
+  return (
+    input.event.type === "turn.started" &&
+    input.shouldApplyLifecycle &&
+    input.eventTurnId !== undefined &&
+    input.expectedProviderTurnId !== undefined &&
+    sameRuntimeProjectionId(input.expectedProviderTurnId, input.eventTurnId) &&
+    input.sourceProposedPlan !== null
+  );
 }
 
 function requestKindFromCanonicalRequestType(
@@ -534,6 +665,7 @@ export function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
           ...maybeSequence,

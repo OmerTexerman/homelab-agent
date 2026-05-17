@@ -86,6 +86,27 @@ async function waitFor(
   return poll();
 }
 
+async function waitForNoPendingUserTurn(
+  readModel: () => Promise<{
+    readonly threads: ReadonlyArray<{
+      readonly id: ThreadId;
+      readonly messages: ReadonlyArray<{
+        readonly role: string;
+        readonly turnId: TurnId | null;
+      }>;
+    }>;
+  }>,
+) {
+  await waitFor(async () => {
+    const snapshot = await readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    const latestMessage = thread?.messages.at(-1);
+    return (
+      latestMessage === undefined || latestMessage.role !== "user" || latestMessage.turnId !== null
+    );
+  });
+}
+
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
@@ -150,6 +171,14 @@ describe("ProviderCommandReactor", () => {
     createdStateDirs.add(stateDir);
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
+    let nextTurnIndex = 1;
+    let completeProviderTurn:
+      | ((input: {
+          readonly threadId: ThreadId;
+          readonly turnId: TurnId;
+          readonly createdAt: string;
+        }) => Effect.Effect<void>)
+      | undefined;
     const runtimeSessions: Array<ProviderSession> = [];
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
@@ -211,10 +240,27 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions.push(session);
       return Effect.succeed(session);
     });
-    const sendTurn = vi.fn((_: unknown) =>
-      Effect.succeed({
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
+    const sendTurn = vi.fn((input: unknown) =>
+      Effect.gen(function* () {
+        const threadId =
+          typeof input === "object" &&
+          input !== null &&
+          "threadId" in input &&
+          typeof input.threadId === "string"
+            ? ThreadId.make(input.threadId)
+            : ThreadId.make("thread-1");
+        const turnId = asTurnId(`turn-${nextTurnIndex++}`);
+        if (completeProviderTurn) {
+          yield* completeProviderTurn({
+            threadId,
+            turnId,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          });
+        }
+        return {
+          threadId,
+          turnId,
+        };
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
@@ -363,6 +409,20 @@ describe("ProviderCommandReactor", () => {
     runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    completeProviderTurn = ({ threadId, turnId, createdAt }) =>
+      engine
+        .dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.make(`cmd-provider-turn-complete-${turnId}`),
+          threadId,
+          messageId: MessageId.make(`assistant-${turnId}`),
+          turnId,
+          createdAt,
+        })
+        .pipe(
+          Effect.asVoid,
+          Effect.catch(() => Effect.void),
+        );
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     scope = await Effect.runPromise(Scope.make("sequential"));
@@ -851,6 +911,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -951,6 +1012,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1000,6 +1062,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1064,6 +1127,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       cwd: "/tmp/provider-project",
     });
@@ -1142,6 +1206,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1210,6 +1275,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1398,6 +1464,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitForNoPendingUserTurn(harness.readModel);
 
     await Effect.runPromise(
       harness.engine.dispatch({

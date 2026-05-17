@@ -1,4 +1,10 @@
-import type { OrchestrationSession } from "@t3tools/contracts";
+import type {
+  CommandId,
+  OrchestrationSession,
+  ProjectId,
+  RuntimeSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 const WORKTREE_BRANCH_PREFIX = "t3code";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
@@ -64,4 +70,55 @@ export function buildGeneratedWorktreeBranchName(raw: string): string {
 
   const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
+}
+
+export function turnStartKeyForEvent(event: {
+  readonly commandId: CommandId | null;
+  readonly eventId: string;
+}): string {
+  return event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+}
+
+export function hasActiveProviderSession(thread: {
+  readonly session: Pick<OrchestrationSession, "status"> | null;
+}): boolean {
+  return thread.session !== null && thread.session.status !== "stopped";
+}
+
+export type ProviderTurnDispatchPlan =
+  | {
+      readonly action: "direct";
+    }
+  | {
+      readonly action: "queue";
+      readonly options: {
+        readonly runtimeId: RuntimeSessionId;
+        readonly policy: "shared-single-writer" | "isolated-concurrent";
+        readonly projectId: ProjectId;
+        readonly threadId: ThreadId;
+        readonly label: "provider turn";
+      };
+    };
+
+export function planProviderTurnDispatch(input: {
+  readonly runtimeQueueAvailable: boolean;
+  readonly runtimeId: RuntimeSessionId;
+  readonly queuePolicy: "shared-single-writer" | "isolated-concurrent";
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+}): ProviderTurnDispatchPlan {
+  if (!input.runtimeQueueAvailable) {
+    return { action: "direct" };
+  }
+
+  return {
+    action: "queue",
+    options: {
+      runtimeId: input.runtimeId,
+      policy: input.queuePolicy,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      label: "provider turn",
+    },
+  };
 }

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  CheckpointRef,
   EventId,
+  MessageId,
   ProviderDriverKind,
+  RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
   ThreadId,
@@ -13,8 +16,11 @@ import {
   normalizeRuntimeTurnState,
   orchestrationSessionStatusFromRuntimeState,
   projectRuntimeLifecycleSession,
+  projectRuntimeErrorSession,
+  providerTurnDiffPlaceholderDecision,
   runtimeEventToActivities,
   sameRuntimeProjectionId,
+  shouldMarkSourceProposedPlanImplemented,
   toRuntimeProjectionTurnId,
 } from "./ProviderRuntimeProjectionPolicy.ts";
 
@@ -115,6 +121,67 @@ describe("ProviderRuntimeProjectionPolicy", () => {
     expect(projection?.shouldApply).toBe(false);
   });
 
+  it.each([
+    {
+      name: "stale turn start while another turn is active",
+      activeTurnId: TurnId.make("turn-active"),
+      event: {
+        ...eventBase,
+        type: "turn.started",
+        eventId: EventId.make("evt-turn-started-stale"),
+        turnId: TurnId.make("turn-stale"),
+        payload: {},
+      } satisfies ProviderRuntimeEvent,
+    },
+    {
+      name: "turn completion without id while a turn is active",
+      activeTurnId: TurnId.make("turn-active"),
+      event: {
+        ...eventBase,
+        type: "turn.completed",
+        eventId: EventId.make("evt-turn-completed-missing-id"),
+        payload: {
+          state: "completed",
+        },
+      } satisfies ProviderRuntimeEvent,
+    },
+  ])("ignores replayed lifecycle events: $name", ({ activeTurnId, event }) => {
+    const projection = projectRuntimeLifecycleSession({
+      activeTurnId,
+      currentLastError: null,
+      currentRuntimeMode: "full-access",
+      strictLifecycleGuard: true,
+      event: event as ProviderRuntimeEvent,
+    });
+
+    expect(projection?.shouldApply).toBe(false);
+  });
+
+  it("guards runtime errors from non-active turns", () => {
+    const projection = projectRuntimeErrorSession({
+      activeTurnId: TurnId.make("turn-active"),
+      currentRuntimeMode: "approval-required",
+      strictLifecycleGuard: true,
+      event: {
+        ...eventBase,
+        type: "runtime.error",
+        eventId: EventId.make("evt-runtime-error-stale"),
+        turnId: TurnId.make("turn-stale"),
+        payload: {
+          message: "stale failure",
+          class: "provider_error",
+        },
+      },
+    });
+
+    expect(projection.shouldApply).toBe(false);
+    expect(projection.session).toMatchObject({
+      status: "error",
+      activeTurnId: "turn-stale",
+      lastError: "stale failure",
+    });
+  });
+
   it("does not duplicate user-input requests as approval activities", () => {
     const activities = runtimeEventToActivities({
       ...eventBase,
@@ -148,5 +215,87 @@ describe("ProviderRuntimeProjectionPolicy", () => {
     const payload = activity?.payload as { detail?: string; lastToolName?: string } | undefined;
     expect(payload?.detail).toHaveLength(180);
     expect(payload?.lastToolName).toBe("Bash");
+  });
+
+  it.each([
+    {
+      name: "new provider diff",
+      checkpoints: [],
+      expected: {
+        action: "dispatch",
+        turnId: TurnId.make("turn-1"),
+        checkpointRef: CheckpointRef.make("provider-diff:evt-diff-1"),
+        assistantMessageId: MessageId.make("assistant:item-1"),
+        checkpointTurnCount: 1,
+      },
+    },
+    {
+      name: "replayed provider diff",
+      checkpoints: [
+        {
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+        },
+      ],
+      expected: {
+        action: "skip",
+        reason: "checkpoint-already-tracked",
+      },
+    },
+  ] as const)("decides provider diff placeholder writes for $name", ({ checkpoints, expected }) => {
+    const decision = providerTurnDiffPlaceholderDecision({
+      event: {
+        ...eventBase,
+        type: "turn.diff.updated",
+        eventId: EventId.make("evt-diff-1"),
+        turnId: TurnId.make("turn-1"),
+        itemId: RuntimeItemId.make("item-1"),
+        payload: {
+          unifiedDiff: "diff --git a/a b/a",
+        },
+      } satisfies ProviderRuntimeEvent,
+      checkpoints,
+    });
+
+    expect(decision).toEqual(expected);
+  });
+
+  it("marks source plans implemented only for the accepted provider turn start", () => {
+    const sourcePlan = {
+      sourceThreadId: ThreadId.make("thread-plan"),
+      sourcePlanId: "plan-1",
+    };
+
+    expect(
+      shouldMarkSourceProposedPlanImplemented({
+        event: {
+          ...eventBase,
+          type: "turn.started",
+          eventId: EventId.make("evt-turn-started-accepted"),
+          turnId: TurnId.make("turn-accepted"),
+          payload: {},
+        },
+        shouldApplyLifecycle: true,
+        eventTurnId: TurnId.make("turn-accepted"),
+        expectedProviderTurnId: TurnId.make("turn-accepted"),
+        sourceProposedPlan: sourcePlan,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldMarkSourceProposedPlanImplemented({
+        event: {
+          ...eventBase,
+          type: "turn.started",
+          eventId: EventId.make("evt-turn-started-replayed"),
+          turnId: TurnId.make("turn-replayed"),
+          payload: {},
+        },
+        shouldApplyLifecycle: true,
+        eventTurnId: TurnId.make("turn-replayed"),
+        expectedProviderTurnId: TurnId.make("turn-accepted"),
+        sourceProposedPlan: sourcePlan,
+      }),
+    ).toBe(false);
   });
 });

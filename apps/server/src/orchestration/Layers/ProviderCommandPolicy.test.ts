@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { CommandId, RuntimeSessionId, ThreadId, ProjectId } from "@t3tools/contracts";
 
 import {
   buildGeneratedWorktreeBranchName,
   canReplaceThreadTitle,
+  hasActiveProviderSession,
   isTemporaryWorktreeBranch,
   mapProviderSessionStatusToOrchestrationStatus,
+  planProviderTurnDispatch,
   toNonEmptyProviderInput,
+  turnStartKeyForEvent,
 } from "./ProviderCommandPolicy.ts";
 
 describe("ProviderCommandPolicy", () => {
@@ -42,4 +46,86 @@ describe("ProviderCommandPolicy", () => {
     );
     expect(buildGeneratedWorktreeBranchName(" ??? ")).toBe("t3code/update");
   });
+
+  it("keys turn start handling by command id when available", () => {
+    expect(
+      turnStartKeyForEvent({
+        commandId: CommandId.make("cmd-turn-start"),
+        eventId: "evt-turn-start",
+      }),
+    ).toBe("command:cmd-turn-start");
+    expect(
+      turnStartKeyForEvent({
+        commandId: null,
+        eventId: "evt-turn-start",
+      }),
+    ).toBe("event:evt-turn-start");
+  });
+
+  it.each([
+    ["running", true],
+    ["ready", true],
+    ["interrupted", true],
+    ["error", true],
+    ["stopped", false],
+    [null, false],
+  ] as const)("detects active provider session state %s", (status, expected) => {
+    expect(
+      hasActiveProviderSession({
+        session: status === null ? null : { status },
+      }),
+    ).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "queued shared runtime turn",
+      runtimeQueueAvailable: true,
+      queuePolicy: "shared-single-writer" as const,
+      expected: {
+        action: "queue",
+        options: {
+          runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
+          policy: "shared-single-writer",
+          projectId: ProjectId.make("project-1"),
+          threadId: ThreadId.make("thread-1"),
+          label: "provider turn",
+        },
+      },
+    },
+    {
+      name: "direct dispatch without queue service",
+      runtimeQueueAvailable: false,
+      queuePolicy: "shared-single-writer" as const,
+      expected: { action: "direct" },
+    },
+    {
+      name: "isolated runtime still goes through the queue boundary when available",
+      runtimeQueueAvailable: true,
+      queuePolicy: "isolated-concurrent" as const,
+      expected: {
+        action: "queue",
+        options: {
+          runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
+          policy: "isolated-concurrent",
+          projectId: ProjectId.make("project-1"),
+          threadId: ThreadId.make("thread-1"),
+          label: "provider turn",
+        },
+      },
+    },
+  ])(
+    "plans provider turn dispatch for $name",
+    ({ runtimeQueueAvailable, queuePolicy, expected }) => {
+      expect(
+        planProviderTurnDispatch({
+          runtimeQueueAvailable,
+          runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
+          queuePolicy,
+          projectId: ProjectId.make("project-1"),
+          threadId: ThreadId.make("thread-1"),
+        }),
+      ).toEqual(expected);
+    },
+  );
 });

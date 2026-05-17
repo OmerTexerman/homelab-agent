@@ -13,7 +13,6 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -46,6 +45,16 @@ import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
 import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
 import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
+import {
+  buildGeneratedWorktreeBranchName,
+  canReplaceThreadTitle,
+  hasActiveProviderSession,
+  isTemporaryWorktreeBranch,
+  mapProviderSessionStatusToOrchestrationStatus,
+  planProviderTurnDispatch,
+  toNonEmptyProviderInput,
+  turnStartKeyForEvent,
+} from "./ProviderCommandPolicy.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -62,39 +71,12 @@ type ProviderIntentEvent = Extract<
   }
 >;
 
-function toNonEmptyProviderInput(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function mapProviderSessionStatusToOrchestrationStatus(
-  status: "connecting" | "ready" | "running" | "error" | "closed",
-): OrchestrationSession["status"] {
-  switch (status) {
-    case "connecting":
-      return "starting";
-    case "running":
-      return "running";
-    case "error":
-      return "error";
-    case "closed":
-      return "stopped";
-    case "ready":
-    default:
-      return "ready";
-  }
-}
-
-const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
-  event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
-
 const serverCommandId = (tag: string): CommandId =>
   CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const DEFAULT_THREAD_TITLE = "New thread";
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -109,18 +91,6 @@ export function providerErrorLabelFromInstanceHint(input: {
   return providerErrorLabel(
     input.instanceId ?? input.modelSelectionInstanceId ?? input.sessionProvider,
   );
-}
-
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
-    return true;
-  }
-
-  const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
 }
 
 function findProviderAdapterRequestError(
@@ -159,29 +129,6 @@ function stalePendingRequestDetail(
   requestId: string,
 ): string {
   return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
-}
-
-function buildGeneratedWorktreeBranchName(raw: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/^refs\/heads\//, "")
-    .replace(/['"`]/g, "");
-
-  const withoutPrefix = normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
-    ? normalized.slice(`${WORKTREE_BRANCH_PREFIX}/`.length)
-    : normalized;
-
-  const branchFragment = withoutPrefix
-    .replace(/[^a-z0-9/_-]+/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/-+/g, "-")
-    .replace(/^[./_-]+|[./_-]+$/g, "")
-    .slice(0, 64)
-    .replace(/[./_-]+$/g, "");
-
-  const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
-  return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
 const make = Effect.gen(function* () {
@@ -323,9 +270,7 @@ const make = Effect.gen(function* () {
 
     const activeSession = yield* resolveActiveSession(threadId);
     const activeThreadSession =
-      thread.session !== null && thread.session.status !== "stopped" && activeSession
-        ? thread.session
-        : null;
+      hasActiveProviderSession(thread) && activeSession ? thread.session : null;
     if (
       activeThreadSession !== null &&
       activeSession !== undefined &&
@@ -456,7 +401,7 @@ const make = Effect.gen(function* () {
       });
 
     const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
+      hasActiveProviderSession(thread) && activeSession ? thread.id : null;
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
@@ -930,18 +875,17 @@ const make = Effect.gen(function* () {
     const sendTurnEffect = providerService
       .sendTurn(sendTurnRequest.value)
       .pipe(Effect.catchCause(recoverTurnStartFailure));
-    const queuedSendTurnEffect = Option.isSome(projectRuntimeQueue)
-      ? projectRuntimeQueue.value.run(
-          {
-            runtimeId: runtimeAssignment.runtimeId,
-            policy: runtimeAssignment.queuePolicy,
-            projectId: project.id,
-            threadId: event.payload.threadId,
-            label: "provider turn",
-          },
-          sendTurnEffect,
-        )
-      : sendTurnEffect;
+    const dispatchPlan = planProviderTurnDispatch({
+      runtimeQueueAvailable: Option.isSome(projectRuntimeQueue),
+      runtimeId: runtimeAssignment.runtimeId,
+      queuePolicy: runtimeAssignment.queuePolicy,
+      projectId: project.id,
+      threadId: event.payload.threadId,
+    });
+    const queuedSendTurnEffect =
+      dispatchPlan.action === "queue" && Option.isSome(projectRuntimeQueue)
+        ? projectRuntimeQueue.value.run(dispatchPlan.options, sendTurnEffect)
+        : sendTurnEffect;
     yield* queuedSendTurnEffect.pipe(Effect.forkScoped);
   });
 
@@ -952,8 +896,7 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
-    if (!hasSession) {
+    if (!hasActiveProviderSession(thread)) {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.interrupt.failed",
@@ -975,8 +918,7 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
-    if (!hasSession) {
+    if (!hasActiveProviderSession(thread)) {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
@@ -1019,8 +961,7 @@ const make = Effect.gen(function* () {
       if (!thread) {
         return;
       }
-      const hasSession = thread.session && thread.session.status !== "stopped";
-      if (!hasSession) {
+      if (!hasActiveProviderSession(thread)) {
         return yield* appendProviderFailureActivity({
           threadId: event.payload.threadId,
           kind: "provider.user-input.respond.failed",
@@ -1065,7 +1006,7 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
+    if (hasActiveProviderSession(thread)) {
       yield* providerService.stopSession({ threadId: thread.id });
     }
 
