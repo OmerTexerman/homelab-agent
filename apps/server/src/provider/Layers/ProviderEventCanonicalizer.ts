@@ -1,8 +1,11 @@
 import {
   type CanonicalItemType,
   type CanonicalRequestType,
+  EventId,
+  isToolLifecycleItemType,
   ProviderItemId,
   type ProviderEvent,
+  type ProviderRefs,
   type ProviderRuntimeEvent,
   RuntimeItemId,
   RuntimeRequestId,
@@ -214,7 +217,20 @@ export function summarizeToolRequest(toolName: string, input: Record<string, unk
     return `${toolName}: ${command.trim().slice(0, 400)}`;
   }
 
-  const serialized = JSON.stringify(input);
+  const itemType = classifyToolItemType(toolName);
+  if (itemType === "collab_agent_tool_call") {
+    const description =
+      typeof input.description === "string" ? input.description.trim() : undefined;
+    const prompt = typeof input.prompt === "string" ? input.prompt.trim() : undefined;
+    const subagentType =
+      typeof input.subagent_type === "string" ? input.subagent_type.trim() : undefined;
+    const label = description || (prompt ? prompt.slice(0, 200) : undefined);
+    if (label) {
+      return subagentType ? `${subagentType}: ${label}` : label;
+    }
+  }
+
+  const serialized = safeJsonStringify(input) ?? "[unserializable input]";
   if (serialized.length <= 400) {
     return `${toolName}: ${serialized}`;
   }
@@ -440,4 +456,282 @@ export function mapItemLifecycle(input: {
       ...(input.event.payload !== undefined ? { data: input.event.payload } : {}),
     },
   };
+}
+
+export type ProviderNativeRuntimeEvent = Omit<ProviderRuntimeEvent, "type"> & {
+  readonly kind: ProviderRuntimeEvent["type"];
+  readonly nativeEventKey?: string;
+};
+
+export type ProviderNativeEvent = ProviderNativeRuntimeEvent;
+
+export interface ProviderEventCanonicalizer {
+  readonly canonicalize: (
+    event: ProviderNativeEvent | ProviderRuntimeEvent,
+  ) => ReadonlyArray<ProviderRuntimeEvent>;
+}
+
+interface ItemState {
+  readonly itemId: RuntimeItemId;
+  readonly event: Extract<
+    ProviderRuntimeEvent,
+    { type: "item.started" | "item.updated" | "item.completed" }
+  >;
+}
+
+function safeJsonStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function itemStateKey(
+  event: Pick<ProviderRuntimeEvent, "threadId" | "turnId" | "itemId">,
+): string | undefined {
+  if (!event.itemId) {
+    return undefined;
+  }
+  return `${event.threadId}:${event.turnId ?? "no-turn"}:${event.itemId}`;
+}
+
+function turnStateKey(event: Pick<ProviderRuntimeEvent, "threadId" | "turnId">): string {
+  return `${event.threadId}:${event.turnId ?? "no-turn"}`;
+}
+
+function textStateKey(
+  event: Pick<ProviderRuntimeEvent, "threadId" | "turnId" | "itemId"> & {
+    readonly payload: { readonly streamKind?: string };
+  },
+): string | undefined {
+  if (!event.itemId) {
+    return undefined;
+  }
+  return `${event.threadId}:${event.turnId ?? "no-turn"}:${event.itemId}:${
+    event.payload.streamKind ?? "unknown"
+  }`;
+}
+
+function providerRuntimeEventFromNative(event: ProviderNativeEvent): ProviderRuntimeEvent {
+  const { kind, nativeEventKey: _nativeEventKey, ...runtimeEvent } = event;
+  return {
+    ...runtimeEvent,
+    type: kind,
+  } as ProviderRuntimeEvent;
+}
+
+export function providerNativeEventFromRuntimeEvent(
+  event: ProviderRuntimeEvent,
+): ProviderNativeEvent {
+  const { type, ...nativeEvent } = event;
+  return {
+    ...nativeEvent,
+    kind: type,
+  } as ProviderNativeEvent;
+}
+
+function providerRefsForSyntheticItem(event: ProviderRuntimeEvent): ProviderRefs | undefined {
+  const refs: Record<string, string> = {};
+  if (event.providerRefs?.providerTurnId !== undefined) {
+    refs.providerTurnId = event.providerRefs.providerTurnId;
+  }
+  if (event.providerRefs?.providerItemId !== undefined) {
+    refs.providerItemId = event.providerRefs.providerItemId;
+  }
+  if (event.providerRefs?.providerRequestId !== undefined) {
+    refs.providerRequestId = event.providerRefs.providerRequestId;
+  }
+  if (event.turnId && refs.providerTurnId === undefined) {
+    refs.providerTurnId = event.turnId;
+  }
+  if (event.itemId && refs.providerItemId === undefined) {
+    refs.providerItemId = ProviderItemId.make(String(event.itemId));
+  }
+  return Object.keys(refs).length > 0 ? (refs as ProviderRefs) : undefined;
+}
+
+function completeOpenToolItemsBeforeTurnEnd(
+  event: Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>,
+  openItems: Map<string, ItemState>,
+  completedItems: Set<string>,
+): ReadonlyArray<ProviderRuntimeEvent> {
+  const turnKey = turnStateKey(event);
+  const completed: Array<ProviderRuntimeEvent> = [];
+
+  for (const [key, state] of openItems.entries()) {
+    if (turnStateKey(state.event) !== turnKey) {
+      continue;
+    }
+    if (!isToolLifecycleItemType(state.event.payload.itemType)) {
+      continue;
+    }
+    if (completedItems.has(key)) {
+      openItems.delete(key);
+      continue;
+    }
+
+    const rawSource = state.event.raw?.source ?? event.raw?.source;
+    const providerRefs = providerRefsForSyntheticItem(state.event);
+    const syntheticEvent: Extract<ProviderRuntimeEvent, { type: "item.completed" }> = {
+      type: "item.completed",
+      eventId: EventId.make(`${event.eventId}:item-completed:${state.itemId}`),
+      provider: event.provider,
+      ...(event.providerInstanceId !== undefined
+        ? { providerInstanceId: event.providerInstanceId }
+        : {}),
+      threadId: event.threadId,
+      createdAt: event.createdAt,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      itemId: state.itemId,
+      payload: {
+        ...state.event.payload,
+        status:
+          event.type === "turn.completed" && event.payload.state === "completed"
+            ? "completed"
+            : "failed",
+      },
+      ...(providerRefs ? { providerRefs } : {}),
+      ...(rawSource
+        ? {
+            raw: {
+              source: rawSource,
+              method: "canonicalizer/open-item-completed",
+              payload: {
+                terminalEventId: event.eventId,
+                terminalEventType: event.type,
+              },
+            },
+          }
+        : {}),
+    };
+    completed.push(syntheticEvent);
+    completedItems.add(key);
+    openItems.delete(key);
+  }
+
+  return completed;
+}
+
+function applyTextAggregation(
+  event: ProviderRuntimeEvent,
+  textByItem: Map<string, string>,
+): ProviderRuntimeEvent | undefined {
+  if (event.type === "content.delta") {
+    if (event.payload.delta.length === 0) {
+      return undefined;
+    }
+    if (
+      event.payload.streamKind === "assistant_text" ||
+      event.payload.streamKind === "reasoning_text" ||
+      event.payload.streamKind === "reasoning_summary_text"
+    ) {
+      const key = textStateKey(event);
+      if (key) {
+        textByItem.set(key, `${textByItem.get(key) ?? ""}${event.payload.delta}`);
+      }
+    }
+    return event;
+  }
+
+  if (
+    event.type === "item.completed" &&
+    (event.payload.itemType === "assistant_message" || event.payload.itemType === "reasoning") &&
+    event.payload.detail === undefined
+  ) {
+    const streamKind = event.payload.itemType === "reasoning" ? "reasoning_text" : "assistant_text";
+    const key = textStateKey({
+      ...event,
+      payload: {
+        streamKind,
+      },
+    });
+    const detail = key ? textByItem.get(key)?.trim() : undefined;
+    if (detail && detail.length > 0) {
+      return {
+        ...event,
+        payload: {
+          ...event.payload,
+          detail,
+        },
+      };
+    }
+  }
+
+  return event;
+}
+
+function applyItemLifecycleState(
+  event: ProviderRuntimeEvent,
+  openItems: Map<string, ItemState>,
+  completedItems: Set<string>,
+): ReadonlyArray<ProviderRuntimeEvent> {
+  switch (event.type) {
+    case "item.started":
+    case "item.updated": {
+      const key = itemStateKey(event);
+      if (key) {
+        openItems.set(key, {
+          itemId: event.itemId ?? RuntimeItemId.make(key),
+          event,
+        });
+      }
+      return [event];
+    }
+
+    case "item.completed": {
+      const key = itemStateKey(event);
+      if (key && completedItems.has(key)) {
+        return [];
+      }
+      if (key) {
+        completedItems.add(key);
+        openItems.delete(key);
+      }
+      return [event];
+    }
+
+    case "turn.completed":
+    case "turn.aborted":
+      return [...completeOpenToolItemsBeforeTurnEnd(event, openItems, completedItems), event];
+
+    default:
+      return [event];
+  }
+}
+
+export function makeProviderEventCanonicalizer(): ProviderEventCanonicalizer {
+  const seenNativeEvents = new Set<string>();
+  const openItems = new Map<string, ItemState>();
+  const completedItems = new Set<string>();
+  const textByItem = new Map<string, string>();
+
+  return {
+    canonicalize: (input) => {
+      const nativeEvent = "kind" in input ? input : providerNativeEventFromRuntimeEvent(input);
+      const nativeEventKey =
+        nativeEvent.nativeEventKey ?? `${nativeEvent.eventId}:${nativeEvent.kind}`;
+      if (seenNativeEvents.has(nativeEventKey)) {
+        return [];
+      }
+      seenNativeEvents.add(nativeEventKey);
+
+      const runtimeEvent = applyTextAggregation(
+        providerRuntimeEventFromNative(nativeEvent),
+        textByItem,
+      );
+      if (!runtimeEvent) {
+        return [];
+      }
+
+      return applyItemLifecycleState(runtimeEvent, openItems, completedItems);
+    },
+  };
+}
+
+export function canonicalizeProviderRuntimeEvents(
+  canonicalizer: ProviderEventCanonicalizer,
+  events: Iterable<ProviderRuntimeEvent>,
+): ReadonlyArray<ProviderRuntimeEvent> {
+  return Array.from(events).flatMap((event) => canonicalizer.canonicalize(event));
 }

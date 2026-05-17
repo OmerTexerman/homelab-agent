@@ -4,6 +4,8 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderItemId,
+  RuntimeItemId,
+  RuntimeRequestId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -11,7 +13,9 @@ import {
 import {
   classifyToolItemType,
   classifyToolRequestType,
+  makeProviderEventCanonicalizer,
   mapItemLifecycle,
+  type ProviderNativeEvent,
   runtimeEventBase,
   summarizeToolRequest,
   toCanonicalUserInputAnswers,
@@ -20,6 +24,20 @@ import {
 } from "./ProviderEventCanonicalizer.ts";
 
 describe("ProviderEventCanonicalizer", () => {
+  const canonicalBase = {
+    provider: ProviderDriverKind.make("codex"),
+    threadId: ThreadId.make("thread-1"),
+    createdAt: "2026-02-23T00:00:00.000Z",
+  };
+
+  const nativeEvent = (
+    input: Omit<ProviderNativeEvent, "provider" | "threadId" | "createdAt">,
+  ): ProviderNativeEvent =>
+    ({
+      ...canonicalBase,
+      ...input,
+    }) as ProviderNativeEvent;
+
   it("normalizes resolved request payloads into canonical request types", () => {
     expect(
       toRequestTypeFromResolvedPayload({
@@ -166,5 +184,179 @@ describe("ProviderEventCanonicalizer", () => {
         detail: "bun lint",
       },
     });
+  });
+
+  it.each([
+    {
+      name: "assistant text partials are aggregated onto completion",
+      events: [
+        nativeEvent({
+          kind: "content.delta",
+          eventId: EventId.make("evt-text-1"),
+          turnId: TurnId.make("turn-1"),
+          itemId: RuntimeItemId.make("assistant-1"),
+          payload: {
+            streamKind: "assistant_text",
+            delta: "Hello ",
+          },
+        }),
+        nativeEvent({
+          kind: "content.delta",
+          eventId: EventId.make("evt-text-2"),
+          turnId: TurnId.make("turn-1"),
+          itemId: RuntimeItemId.make("assistant-1"),
+          payload: {
+            streamKind: "assistant_text",
+            delta: "world",
+          },
+        }),
+        nativeEvent({
+          kind: "item.completed",
+          eventId: EventId.make("evt-text-3"),
+          turnId: TurnId.make("turn-1"),
+          itemId: RuntimeItemId.make("assistant-1"),
+          payload: {
+            itemType: "assistant_message",
+            status: "completed",
+            title: "Assistant message",
+          },
+        }),
+      ],
+      expected: [
+        ["content.delta", { delta: "Hello " }],
+        ["content.delta", { delta: "world" }],
+        ["item.completed", { itemType: "assistant_message", detail: "Hello world" }],
+      ],
+    },
+    {
+      name: "approval request and result keep canonical request metadata",
+      events: [
+        nativeEvent({
+          kind: "request.opened",
+          eventId: EventId.make("evt-approval-1"),
+          turnId: TurnId.make("turn-1"),
+          requestId: RuntimeRequestId.make("request-1"),
+          payload: {
+            requestType: "command_execution_approval",
+            detail: "bun lint",
+            args: { command: "bun lint" },
+          },
+        }),
+        nativeEvent({
+          kind: "request.resolved",
+          eventId: EventId.make("evt-approval-2"),
+          turnId: TurnId.make("turn-1"),
+          requestId: RuntimeRequestId.make("request-1"),
+          payload: {
+            requestType: "command_execution_approval",
+            decision: "accept",
+          },
+        }),
+      ],
+      expected: [
+        ["request.opened", { requestType: "command_execution_approval", detail: "bun lint" }],
+        ["request.resolved", { requestType: "command_execution_approval", decision: "accept" }],
+      ],
+    },
+    {
+      name: "provider error variants preserve error class",
+      events: [
+        nativeEvent({
+          kind: "runtime.error",
+          eventId: EventId.make("evt-error-1"),
+          turnId: TurnId.make("turn-1"),
+          payload: {
+            message: "provider exploded",
+            class: "provider_error",
+            detail: { code: "boom" },
+          },
+        }),
+      ],
+      expected: [["runtime.error", { message: "provider exploded", class: "provider_error" }]],
+    },
+  ])("$name", ({ events, expected }) => {
+    const canonicalizer = makeProviderEventCanonicalizer();
+    const runtimeEvents = events.flatMap((event) => canonicalizer.canonicalize(event));
+
+    expect(runtimeEvents).toMatchObject(
+      expected.map(([type, payload]) => ({
+        type,
+        payload,
+      })),
+    );
+  });
+
+  it("normalizes tool lifecycle when turn end arrives before the tool result", () => {
+    const canonicalizer = makeProviderEventCanonicalizer();
+    const events = [
+      nativeEvent({
+        kind: "item.started",
+        eventId: EventId.make("evt-tool-started"),
+        turnId: TurnId.make("turn-1"),
+        itemId: RuntimeItemId.make("tool-1"),
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Command run",
+          detail: "bun lint",
+        },
+      }),
+      nativeEvent({
+        kind: "turn.completed",
+        eventId: EventId.make("evt-turn-completed"),
+        turnId: TurnId.make("turn-1"),
+        payload: {
+          state: "completed",
+        },
+      }),
+      nativeEvent({
+        kind: "item.completed",
+        eventId: EventId.make("evt-tool-completed-late"),
+        turnId: TurnId.make("turn-1"),
+        itemId: RuntimeItemId.make("tool-1"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Command run",
+          detail: "bun lint",
+        },
+      }),
+    ];
+
+    const runtimeEvents = events.flatMap((event) => canonicalizer.canonicalize(event));
+
+    expect(runtimeEvents.map((event) => event.type)).toEqual([
+      "item.started",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(runtimeEvents[1]).toMatchObject({
+      eventId: "evt-turn-completed:item-completed:tool-1",
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        detail: "bun lint",
+      },
+    });
+  });
+
+  it("normalizes duplicate replayed native events idempotently", () => {
+    const canonicalizer = makeProviderEventCanonicalizer();
+    const event = nativeEvent({
+      kind: "content.delta",
+      eventId: EventId.make("evt-replayed-delta"),
+      turnId: TurnId.make("turn-1"),
+      itemId: RuntimeItemId.make("assistant-1"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Only once",
+      },
+    });
+
+    const first = canonicalizer.canonicalize(event);
+    const second = canonicalizer.canonicalize(event);
+
+    expect(first).toHaveLength(1);
+    expect(second).toEqual([]);
   });
 });

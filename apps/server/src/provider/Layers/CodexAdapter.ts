@@ -8,14 +8,11 @@
  * @module CodexAdapterLive
  */
 import {
-  type CanonicalItemType,
-  type CanonicalRequestType,
   type CodexSettings,
   ProviderDriverKind,
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
-  type ProviderRequestKind,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -62,6 +59,14 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  canonicalizeProviderRuntimeEvents,
+  itemTitle,
+  makeProviderEventCanonicalizer,
+  toCanonicalItemType,
+  toRequestTypeFromKind,
+  toRequestTypeFromMethod,
+} from "./ProviderEventCanonicalizer.ts";
 import { resolveProviderRuntimeEnvironment } from "./runtimeLaunch.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
@@ -205,67 +210,6 @@ function toTurnStatus(
   }
 }
 
-function normalizeItemType(raw: string | undefined | null): string {
-  const type = trimText(raw);
-  if (!type) return "item";
-  return type
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[._/-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType {
-  const type = normalizeItemType(raw);
-  if (type.includes("user")) return "user_message";
-  if (type.includes("agent message") || type.includes("assistant")) return "assistant_message";
-  if (type.includes("reasoning") || type.includes("thought")) return "reasoning";
-  if (type.includes("plan") || type.includes("todo")) return "plan";
-  if (type.includes("command")) return "command_execution";
-  if (type.includes("file change") || type.includes("patch") || type.includes("edit"))
-    return "file_change";
-  if (type.includes("mcp")) return "mcp_tool_call";
-  if (type.includes("dynamic tool")) return "dynamic_tool_call";
-  if (type.includes("collab")) return "collab_agent_tool_call";
-  if (type.includes("web search")) return "web_search";
-  if (type.includes("image")) return "image_view";
-  if (type.includes("review entered")) return "review_entered";
-  if (type.includes("review exited")) return "review_exited";
-  if (type.includes("compact")) return "context_compaction";
-  if (type.includes("error")) return "error";
-  return "unknown";
-}
-
-function itemTitle(itemType: CanonicalItemType): string | undefined {
-  switch (itemType) {
-    case "assistant_message":
-      return "Assistant message";
-    case "user_message":
-      return "User message";
-    case "reasoning":
-      return "Reasoning";
-    case "plan":
-      return "Plan";
-    case "command_execution":
-      return "Ran command";
-    case "file_change":
-      return "File change";
-    case "mcp_tool_call":
-      return "MCP tool call";
-    case "dynamic_tool_call":
-      return "Tool call";
-    case "web_search":
-      return "Web search";
-    case "image_view":
-      return "Image view";
-    case "error":
-      return "Error";
-    default:
-      return undefined;
-  }
-}
-
 function itemDetail(item: CodexLifecycleItem): string | undefined {
   const candidates = [
     "command" in item ? item.command : undefined,
@@ -281,42 +225,6 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
     return trimmed;
   }
   return undefined;
-}
-
-function toRequestTypeFromMethod(method: string): CanonicalRequestType {
-  switch (method) {
-    case "item/commandExecution/requestApproval":
-      return "command_execution_approval";
-    case "item/fileRead/requestApproval":
-      return "file_read_approval";
-    case "item/fileChange/requestApproval":
-      return "file_change_approval";
-    case "applyPatchApproval":
-      return "apply_patch_approval";
-    case "execCommandApproval":
-      return "exec_command_approval";
-    case "item/tool/requestUserInput":
-      return "tool_user_input";
-    case "item/tool/call":
-      return "dynamic_tool_call";
-    case "account/chatgptAuthTokens/refresh":
-      return "auth_tokens_refresh";
-    default:
-      return "unknown";
-  }
-}
-
-function toRequestTypeFromKind(kind: ProviderRequestKind | undefined): CanonicalRequestType {
-  switch (kind) {
-    case "command":
-      return "command_execution_approval";
-    case "file-read":
-      return "file_read_approval";
-    case "file-change":
-      return "file_change_approval";
-    default:
-      return "unknown";
-  }
 }
 
 function toCanonicalUserInputAnswers(
@@ -1362,6 +1270,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const managedNativeEventLogger =
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+  const canonicalizer = makeProviderEventCanonicalizer();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
@@ -1431,7 +1340,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+            const runtimeEvents = canonicalizeProviderRuntimeEvents(
+              canonicalizer,
+              mapToRuntimeEvents(event, event.threadId),
+            );
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,

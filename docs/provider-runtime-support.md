@@ -27,3 +27,6 @@ provider instances that the server reports as ready.
   container-reachable URL/port strategy before the adapter can safely switch to the runtime wrapper.
   Until that is implemented, the built-in managed OpenCode path is reported as blocked. Configure
   an external OpenCode server URL to use OpenCode.
+- Remaining provider event work: once the managed runtime URL/port strategy is in place, route
+  OpenCode's SDK events through `ProviderEventCanonicalizer` with only an OpenCode-native
+  translation layer in `apps/server/src/provider/Layers/OpenCodeAdapter.ts`.
