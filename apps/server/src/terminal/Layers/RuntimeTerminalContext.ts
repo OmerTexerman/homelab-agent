@@ -1,5 +1,5 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectFailure:off missingEffectContext:off
-import { ThreadId } from "@t3tools/contracts";
+import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import {
@@ -18,6 +18,7 @@ export interface RuntimeTerminalContextInput {
 }
 
 export interface RuntimeTerminalStartContext {
+  readonly runtimeId: RuntimeSessionId;
   readonly cwd: string;
   readonly spawnCwd: string;
   readonly worktreePath: string | null;
@@ -66,6 +67,7 @@ export const resolveRuntimeTerminalStartContext = Effect.fn(
     const runtimeShell = launchContext.shellWrapperPath.trim();
 
     return {
+      runtimeId: executionContext.runtimeId,
       cwd: executionContext.cwd,
       spawnCwd: launchContext.hostWorkspacePath,
       worktreePath: input.worktreePath ?? executionContext.workspacePath,

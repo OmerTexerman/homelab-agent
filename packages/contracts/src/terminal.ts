@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { RuntimeSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DEFAULT_TERMINAL_ID = "default";
 
@@ -83,6 +83,7 @@ export type TerminalSessionStatus = typeof TerminalSessionStatus.Type;
 
 export const TerminalSessionSnapshot = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   cwd: Schema.String.check(Schema.isNonEmpty()),
   worktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -97,6 +98,7 @@ export type TerminalSessionSnapshot = typeof TerminalSessionSnapshot.Type;
 
 const TerminalEventBaseSchema = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   createdAt: Schema.String,
 });

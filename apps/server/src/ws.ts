@@ -59,6 +59,7 @@ import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
+import { ProjectRuntimeLifecycle } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
@@ -193,6 +194,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const serverSettings = yield* ServerSettingsService;
       const startup = yield* ServerRuntimeStartup;
       const threadRuntime = yield* ThreadRuntime;
+      const projectRuntimeLifecycle = yield* ProjectRuntimeLifecycle;
       const threadWorkspace = yield* ThreadWorkspace;
       const homelabSecretRegistry = yield* HomelabSecretRegistry;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -1371,6 +1373,42 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               ),
             ),
             { "rpc.aggregate": "threadWorkspace" },
+          ),
+        [WS_METHODS.projectRuntimeGet]: (input) =>
+          observeRpcEffect(WS_METHODS.projectRuntimeGet, projectRuntimeLifecycle.get(input), {
+            "rpc.aggregate": "projectRuntime",
+          }),
+        [WS_METHODS.projectRuntimeWake]: (input) =>
+          observeRpcEffect(WS_METHODS.projectRuntimeWake, projectRuntimeLifecycle.wake(input), {
+            "rpc.aggregate": "projectRuntime",
+          }),
+        [WS_METHODS.projectRuntimeArchive]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectRuntimeArchive,
+            projectRuntimeLifecycle.archive(input),
+            {
+              "rpc.aggregate": "projectRuntime",
+            },
+          ),
+        [WS_METHODS.projectRuntimeReset]: (input) =>
+          observeRpcEffect(WS_METHODS.projectRuntimeReset, projectRuntimeLifecycle.reset(input), {
+            "rpc.aggregate": "projectRuntime",
+          }),
+        [WS_METHODS.projectRuntimeCleanupScratch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectRuntimeCleanupScratch,
+            projectRuntimeLifecycle.cleanupScratch(input),
+            {
+              "rpc.aggregate": "projectRuntime",
+            },
+          ),
+        [WS_METHODS.projectRuntimeSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectRuntimeSnapshot,
+            projectRuntimeLifecycle.createSnapshot(input),
+            {
+              "rpc.aggregate": "projectRuntime",
+            },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {

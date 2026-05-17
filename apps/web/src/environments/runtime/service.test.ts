@@ -4,6 +4,7 @@ import {
   shouldApplyProjectionEvent,
   shouldApplyProjectionSnapshot,
   shouldApplyTerminalEvent,
+  selectTerminalEventTargetThreadIds,
 } from "./service";
 
 describe("shouldApplyTerminalEvent", () => {
@@ -41,6 +42,35 @@ describe("shouldApplyTerminalEvent", () => {
         hasDraftThread: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("selectTerminalEventTargetThreadIds", () => {
+  it("fans runtime terminal events out to active threads sharing the runtime", () => {
+    expect(
+      selectTerminalEventTargetThreadIds({
+        eventThreadId: "runtime-1",
+        runtimeId: "runtime-1",
+        threads: [
+          { id: "thread-1", runtimeId: "runtime-1", archivedAt: null },
+          { id: "thread-2", runtimeId: "runtime-1", archivedAt: null },
+          { id: "thread-3", runtimeId: "runtime-2", archivedAt: null },
+          { id: "thread-4", runtimeId: "runtime-1", archivedAt: "2026-04-09T00:00:00.000Z" },
+        ],
+        hasDraftThread: () => false,
+      }),
+    ).toEqual(["thread-1", "thread-2"]);
+  });
+
+  it("falls back to the event thread when there is no runtime match", () => {
+    expect(
+      selectTerminalEventTargetThreadIds({
+        eventThreadId: "draft-thread",
+        runtimeId: "runtime-1",
+        threads: [],
+        hasDraftThread: (threadId) => threadId === "draft-thread",
+      }),
+    ).toEqual(["draft-thread"]);
   });
 });
 

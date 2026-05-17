@@ -150,6 +150,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
+import { ProjectRuntimePanel } from "./ProjectRuntimePanel";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -3595,6 +3596,14 @@ export default function ChatView(props: ChatViewProps) {
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
+      {isServerThread && activeProject ? (
+        <ProjectRuntimePanel
+          environmentId={activeThread.environmentId}
+          projectId={activeProject.id}
+          threadId={activeThread.id}
+          runtimeId={activeThread.runtimeId ?? activeProject.defaultRuntimeId ?? null}
+        />
+      ) : null}
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}

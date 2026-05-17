@@ -57,6 +57,7 @@ import { ProjectMemoryLive } from "./homelab/Layers/ProjectMemory.ts";
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
 import { RuntimeWorkspaceLive } from "./runtime/Layers/RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./runtime/Layers/ThreadWorkspace.ts";
+import { ProjectRuntimeLifecycleLive } from "./runtime/Layers/ProjectRuntimeLifecycle.ts";
 import { ProjectRuntimeQueueLive } from "./runtime/ProjectRuntimeQueue.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -238,6 +239,18 @@ const CheckpointingLayerLive = Layer.empty.pipe(
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
+const ProjectRuntimeLifecycleLayerLive = ProjectRuntimeLifecycleLive.pipe(
+  Layer.provide(ProjectRuntimeQueueLive),
+  Layer.provide(ThreadRuntimeLive),
+  Layer.provide(TerminalLayerLive),
+  Layer.provide(
+    OrchestrationLayerLive.pipe(
+      Layer.provideMerge(RepositoryIdentityResolverLive),
+      Layer.provideMerge(PersistenceLayerLive),
+    ),
+  ),
+);
+
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
   Layer.provide(WorkspacePathsLive),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -306,6 +319,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
   Layer.provideMerge(ProjectMemoryLive),
   Layer.provideMerge(ThreadRuntimeLive),
   Layer.provideMerge(ProjectRuntimeQueueLive),
+  Layer.provideMerge(ProjectRuntimeLifecycleLayerLive),
   Layer.provideMerge(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeLive))),
   Layer.provideMerge(
     ThreadWorkspaceLive.pipe(
@@ -426,4 +440,4 @@ export const makeServerLayer = Layer.unwrap(
 );
 
 // Important: Only `ServerConfig` should be provided by the CLI layer!!! Don't let other requirements leak into the launch layer.
-export const runServer = Layer.launch(makeServerLayer);
+export const runServer = Layer.launch(makeServerLayer) as Effect.Effect<never, never, ServerConfig>;

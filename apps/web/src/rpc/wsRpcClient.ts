@@ -83,6 +83,14 @@ export interface WsRpcClient {
     readonly readFile: RpcUnaryMethod<typeof WS_METHODS.threadWorkspaceReadFile>;
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.threadWorkspaceWriteFile>;
   };
+  readonly projectRuntime: {
+    readonly get: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeGet>;
+    readonly wake: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeWake>;
+    readonly archive: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeArchive>;
+    readonly reset: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeReset>;
+    readonly cleanupScratch: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeCleanupScratch>;
+    readonly snapshot: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeSnapshot>;
+  };
   readonly shell: {
     readonly openInEditor: (input: {
       readonly cwd: Parameters<LocalApi["shell"]["openInEditor"]>[0];
@@ -208,6 +216,18 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.threadWorkspaceReadFile](input)),
       writeFile: (input) =>
         transport.request((client) => client[WS_METHODS.threadWorkspaceWriteFile](input)),
+    },
+    projectRuntime: {
+      get: (input) => transport.request((client) => client[WS_METHODS.projectRuntimeGet](input)),
+      wake: (input) => transport.request((client) => client[WS_METHODS.projectRuntimeWake](input)),
+      archive: (input) =>
+        transport.request((client) => client[WS_METHODS.projectRuntimeArchive](input)),
+      reset: (input) =>
+        transport.request((client) => client[WS_METHODS.projectRuntimeReset](input)),
+      cleanupScratch: (input) =>
+        transport.request((client) => client[WS_METHODS.projectRuntimeCleanupScratch](input)),
+      snapshot: (input) =>
+        transport.request((client) => client[WS_METHODS.projectRuntimeSnapshot](input)),
     },
     shell: {
       openInEditor: (input) =>

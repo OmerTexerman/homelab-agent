@@ -59,6 +59,7 @@ import {
   selectProjectsAcrossEnvironments,
   selectSidebarThreadSummaryByRef,
   selectThreadByRef,
+  selectThreadsForEnvironment,
   selectThreadsAcrossEnvironments,
 } from "~/store";
 import { useTerminalStateStore } from "~/terminalStateStore";
@@ -954,6 +955,44 @@ export function shouldApplyTerminalEvent(input: {
   return input.hasDraftThread;
 }
 
+export function selectTerminalEventTargetThreadIds(input: {
+  eventThreadId: string;
+  runtimeId?: string | null | undefined;
+  threads: ReadonlyArray<{
+    readonly id: string;
+    readonly runtimeId?: string | null | undefined;
+    readonly archivedAt?: string | null | undefined;
+  }>;
+  hasDraftThread: (threadId: string) => boolean;
+}): string[] {
+  if (input.runtimeId) {
+    const runtimeThreadIds = input.threads
+      .filter(
+        (thread) =>
+          thread.runtimeId === input.runtimeId &&
+          shouldApplyTerminalEvent({
+            serverThreadArchivedAt: thread.archivedAt,
+            hasDraftThread: input.hasDraftThread(thread.id),
+          }),
+      )
+      .map((thread) => thread.id);
+    if (runtimeThreadIds.length > 0) {
+      return runtimeThreadIds;
+    }
+  }
+
+  const serverThread = input.threads.find((thread) => thread.id === input.eventThreadId);
+  if (
+    !shouldApplyTerminalEvent({
+      serverThreadArchivedAt: serverThread?.archivedAt,
+      hasDraftThread: input.hasDraftThread(input.eventThreadId),
+    })
+  ) {
+    return [];
+  }
+  return [input.eventThreadId];
+}
+
 function applyRecoveredEventBatch(
   events: ReadonlyArray<OrchestrationEvent>,
   environmentId: EnvironmentId,
@@ -1104,19 +1143,21 @@ function createEnvironmentConnectionHandlers() {
       reconcileSnapshotDerivedState();
     },
     applyTerminalEvent: (event: TerminalEvent, environmentId: EnvironmentId) => {
-      const threadRef = scopeThreadRef(environmentId, ThreadId.make(event.threadId));
-      const serverThread = selectThreadByRef(useStore.getState(), threadRef);
-      const hasDraftThread =
-        useComposerDraftStore.getState().getDraftThreadByRef(threadRef) !== null;
-      if (
-        !shouldApplyTerminalEvent({
-          serverThreadArchivedAt: serverThread?.archivedAt,
-          hasDraftThread,
-        })
-      ) {
-        return;
+      const appState = useStore.getState();
+      const draftStore = useComposerDraftStore.getState();
+      const targetThreadIds = selectTerminalEventTargetThreadIds({
+        eventThreadId: event.threadId,
+        runtimeId: event.runtimeId ?? null,
+        threads: selectThreadsForEnvironment(appState, environmentId),
+        hasDraftThread: (threadId) =>
+          draftStore.getDraftThreadByRef(scopeThreadRef(environmentId, ThreadId.make(threadId))) !==
+          null,
+      });
+      for (const threadId of targetThreadIds) {
+        useTerminalStateStore
+          .getState()
+          .applyTerminalEvent(scopeThreadRef(environmentId, ThreadId.make(threadId)), event);
       }
-      useTerminalStateStore.getState().applyTerminalEvent(threadRef, event);
     },
   };
 }

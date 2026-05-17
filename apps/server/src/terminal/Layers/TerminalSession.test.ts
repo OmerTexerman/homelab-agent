@@ -63,6 +63,7 @@ describe("snapshotTerminalSession", () => {
   it("projects the stable UI snapshot shape", () => {
     const session: TerminalSnapshotState = {
       threadId: "thread-1",
+      runtimeId: null,
       terminalId: "terminal-1",
       cwd: "/workspace",
       worktreePath: "/workspace",
@@ -76,6 +77,7 @@ describe("snapshotTerminalSession", () => {
 
     expect(snapshotTerminalSession(session)).toEqual({
       threadId: "thread-1",
+      runtimeId: null,
       terminalId: "terminal-1",
       cwd: "/workspace",
       worktreePath: "/workspace",

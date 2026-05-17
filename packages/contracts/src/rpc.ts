@@ -114,6 +114,12 @@ import {
   ThreadWorkspaceWriteFileInput,
   ThreadWorkspaceWriteFileResult,
 } from "./threadWorkspace.ts";
+import {
+  ProjectRuntimeCreateSnapshotInput,
+  ProjectRuntimeError,
+  ProjectRuntimeOperationInput,
+  ProjectRuntimeOperationResult,
+} from "./runtimeWorkspace.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -125,6 +131,12 @@ export const WS_METHODS = {
   threadWorkspaceListEntries: "threadWorkspace.listEntries",
   threadWorkspaceReadFile: "threadWorkspace.readFile",
   threadWorkspaceWriteFile: "threadWorkspace.writeFile",
+  projectRuntimeGet: "projectRuntime.get",
+  projectRuntimeWake: "projectRuntime.wake",
+  projectRuntimeArchive: "projectRuntime.archive",
+  projectRuntimeReset: "projectRuntime.reset",
+  projectRuntimeCleanupScratch: "projectRuntime.cleanupScratch",
+  projectRuntimeSnapshot: "projectRuntime.snapshot",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -332,6 +344,42 @@ export const WsThreadWorkspaceWriteFileRpc = Rpc.make(WS_METHODS.threadWorkspace
   payload: ThreadWorkspaceWriteFileInput,
   success: ThreadWorkspaceWriteFileResult,
   error: ThreadWorkspaceError,
+});
+
+export const WsProjectRuntimeGetRpc = Rpc.make(WS_METHODS.projectRuntimeGet, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
+export const WsProjectRuntimeWakeRpc = Rpc.make(WS_METHODS.projectRuntimeWake, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
+export const WsProjectRuntimeArchiveRpc = Rpc.make(WS_METHODS.projectRuntimeArchive, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
+export const WsProjectRuntimeResetRpc = Rpc.make(WS_METHODS.projectRuntimeReset, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
+export const WsProjectRuntimeCleanupScratchRpc = Rpc.make(WS_METHODS.projectRuntimeCleanupScratch, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
+export const WsProjectRuntimeSnapshotRpc = Rpc.make(WS_METHODS.projectRuntimeSnapshot, {
+  payload: ProjectRuntimeCreateSnapshotInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -554,6 +602,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadWorkspaceListEntriesRpc,
   WsThreadWorkspaceReadFileRpc,
   WsThreadWorkspaceWriteFileRpc,
+  WsProjectRuntimeGetRpc,
+  WsProjectRuntimeWakeRpc,
+  WsProjectRuntimeArchiveRpc,
+  WsProjectRuntimeResetRpc,
+  WsProjectRuntimeCleanupScratchRpc,
+  WsProjectRuntimeSnapshotRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsSubscribeVcsStatusRpc,

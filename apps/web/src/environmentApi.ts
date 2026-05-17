@@ -33,6 +33,14 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       readFile: rpcClient.threadWorkspace.readFile,
       writeFile: rpcClient.threadWorkspace.writeFile,
     },
+    projectRuntime: {
+      get: rpcClient.projectRuntime.get,
+      wake: rpcClient.projectRuntime.wake,
+      archive: rpcClient.projectRuntime.archive,
+      reset: rpcClient.projectRuntime.reset,
+      cleanupScratch: rpcClient.projectRuntime.cleanupScratch,
+      snapshot: rpcClient.projectRuntime.snapshot,
+    },
     vcs: {
       pull: rpcClient.vcs.pull,
       refreshStatus: rpcClient.vcs.refreshStatus,

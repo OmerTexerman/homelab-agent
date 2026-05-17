@@ -34,6 +34,11 @@ import type {
   ThreadWorkspaceWriteFileResult,
 } from "./threadWorkspace.ts";
 import type {
+  ProjectRuntimeCreateSnapshotInput,
+  ProjectRuntimeOperationInput,
+  ProjectRuntimeOperationResult,
+} from "./runtimeWorkspace.ts";
+import type {
   HomelabSecretDeleteInput,
   HomelabSecretDescriptor,
   HomelabSecretsListResult,
@@ -551,6 +556,14 @@ export interface EnvironmentApi {
     listEntries: (input: ThreadWorkspaceEntriesInput) => Promise<ThreadWorkspaceEntriesResult>;
     readFile: (input: ThreadWorkspaceReadFileInput) => Promise<ThreadWorkspaceReadFileResult>;
     writeFile: (input: ThreadWorkspaceWriteFileInput) => Promise<ThreadWorkspaceWriteFileResult>;
+  };
+  projectRuntime: {
+    get: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
+    wake: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
+    archive: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
+    reset: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
+    cleanupScratch: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
+    snapshot: (input: ProjectRuntimeCreateSnapshotInput) => Promise<ProjectRuntimeOperationResult>;
   };
   vcs: {
     listRefs: (input: VcsListRefsInput) => Promise<VcsListRefsResult>;

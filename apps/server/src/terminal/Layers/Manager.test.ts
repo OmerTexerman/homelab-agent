@@ -235,7 +235,10 @@ function toPassthroughLaunchContext(runtime: ThreadRuntimeDescriptor): ThreadRun
   };
 }
 
-function makePassthroughThreadRuntime(options?: { readonly shell?: string }): ThreadRuntimeShape {
+function makePassthroughThreadRuntime(options?: {
+  readonly shell?: string;
+  readonly runtimeId?: RuntimeSessionId;
+}): ThreadRuntimeShape {
   const runtimes = new Map<string, ThreadRuntimeDescriptor>();
 
   const makeDescriptor = (
@@ -243,8 +246,13 @@ function makePassthroughThreadRuntime(options?: { readonly shell?: string }): Th
     status: ThreadRuntimeDescriptor["status"] = "ready",
   ): ThreadRuntimeDescriptor => {
     const cwd = input.requestedCwd ?? process.cwd();
-    const runtimeId = RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
-    const homePath = path.join(os.tmpdir(), "homelab-agent-terminal-home", String(input.threadId));
+    const runtimeId =
+      options?.runtimeId ?? RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
+    const homePath = path.join(
+      os.tmpdir(),
+      "homelab-agent-terminal-home",
+      String(options?.runtimeId ?? input.threadId),
+    );
     const now = new Date().toISOString();
 
     return {
@@ -449,6 +457,35 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       assert.equal(second.threadId, "thread-1");
       assert.equal(third.threadId, "thread-1");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
+  it.effect("shares visible terminal state across threads bound to the same runtime", () =>
+    Effect.gen(function* () {
+      const sharedRuntimeId = RuntimeSessionId.make("project-runtime:project-1");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        threadRuntime: makePassthroughThreadRuntime({ runtimeId: sharedRuntimeId }),
+      });
+
+      const first = yield* manager.open(openInput({ threadId: "thread-1" }));
+      const second = yield* manager.open(openInput({ threadId: "thread-2" }));
+      const process = ptyAdapter.processes[0];
+
+      assert.equal(first.threadId, String(sharedRuntimeId));
+      assert.equal(second.threadId, String(sharedRuntimeId));
+      assert.equal(first.runtimeId, sharedRuntimeId);
+      assert.equal(second.runtimeId, sharedRuntimeId);
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* manager.write({
+        threadId: "thread-2",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "pwd\n",
+      });
+
+      expect(process.writes).toEqual(["pwd\n"]);
     }),
   );
 

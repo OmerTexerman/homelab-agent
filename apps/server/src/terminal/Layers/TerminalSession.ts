@@ -1,7 +1,12 @@
-import type { TerminalSessionSnapshot, TerminalSessionStatus } from "@t3tools/contracts";
+import type {
+  RuntimeSessionId,
+  TerminalSessionSnapshot,
+  TerminalSessionStatus,
+} from "@t3tools/contracts";
 
 export interface TerminalSnapshotState {
   threadId: string;
+  runtimeId: RuntimeSessionId | null;
   terminalId: string;
   cwd: string;
   worktreePath: string | null;
@@ -26,6 +31,7 @@ export interface TerminalOutputAppendResult {
 export function snapshotTerminalSession(session: TerminalSnapshotState): TerminalSessionSnapshot {
   return {
     threadId: session.threadId,
+    runtimeId: session.runtimeId,
     terminalId: session.terminalId,
     cwd: session.cwd,
     worktreePath: session.worktreePath,

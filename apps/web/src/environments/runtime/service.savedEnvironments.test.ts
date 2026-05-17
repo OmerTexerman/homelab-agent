@@ -128,6 +128,7 @@ vi.mock("~/store", () => ({
   selectProjectsAcrossEnvironments: vi.fn(() => []),
   selectSidebarThreadSummaryByRef: vi.fn(() => null),
   selectThreadByRef: vi.fn(() => null),
+  selectThreadsForEnvironment: vi.fn(() => []),
   selectThreadsAcrossEnvironments: vi.fn(() => []),
 }));
 

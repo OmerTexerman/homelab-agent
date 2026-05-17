@@ -625,6 +625,7 @@ const make = Effect.gen(function* () {
       runtimeMode: input.runtimeMode,
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
     });
+    yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
     const secrets = Option.isSome(homelabSecretRegistry)
       ? yield* homelabSecretRegistry.value.listSecrets().pipe(
@@ -934,6 +935,9 @@ const make = Effect.gen(function* () {
           {
             runtimeId: runtimeAssignment.runtimeId,
             policy: runtimeAssignment.queuePolicy,
+            projectId: project.id,
+            threadId: event.payload.threadId,
+            label: "provider turn",
           },
           sendTurnEffect,
         )

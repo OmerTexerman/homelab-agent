@@ -1,0 +1,295 @@
+import type { EnvironmentId, ProjectId, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArchiveIcon,
+  CameraIcon,
+  EraserIcon,
+  Loader2Icon,
+  PowerIcon,
+  RotateCcwIcon,
+} from "lucide-react";
+import { useCallback, useMemo } from "react";
+
+import { readEnvironmentApi } from "~/environmentApi";
+import { readLocalApi } from "~/localApi";
+import { cn } from "~/lib/utils";
+import { Button } from "./ui/button";
+import { stackedThreadToast, toastManager } from "./ui/toast";
+import {
+  isThreadWaitingOnProjectRuntime,
+  projectRuntimeIsOperationBusy,
+  projectRuntimeQueueSummary,
+  projectRuntimeStatusLabel,
+} from "./ProjectRuntimePanel.logic";
+
+type ProjectRuntimePanelOperation =
+  | { type: "wake" }
+  | { type: "archive" }
+  | { type: "reset" }
+  | { type: "cleanupScratch" }
+  | { type: "snapshot"; name: string };
+
+interface ProjectRuntimePanelProps {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  threadId: ThreadId;
+  runtimeId?: RuntimeSessionId | null;
+}
+
+async function confirmProjectRuntimeAction(message: string): Promise<boolean> {
+  const localApi = readLocalApi();
+  if (localApi) {
+    return localApi.dialogs.confirm(message);
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.confirm(message);
+}
+
+function defaultSnapshotName(): string {
+  return `snapshot-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+function runtimeStatusDotClassName(state: string | undefined): string {
+  switch (state) {
+    case "running":
+    case "ready":
+      return "bg-success";
+    case "stopped":
+    case "archived":
+      return "bg-muted-foreground";
+    case "failed":
+      return "bg-destructive";
+    case "reset-pending":
+    case "resetting":
+    case "provisioning":
+    case "stopping":
+      return "bg-warning";
+    default:
+      return "bg-muted-foreground/60";
+  }
+}
+
+export function ProjectRuntimePanel({
+  environmentId,
+  projectId,
+  threadId,
+  runtimeId,
+}: ProjectRuntimePanelProps) {
+  const queryClient = useQueryClient();
+  const operationInput = useMemo(
+    () => ({
+      projectId,
+      threadId,
+      ...(runtimeId ? { runtimeId } : {}),
+    }),
+    [projectId, runtimeId, threadId],
+  );
+  const queryKey = useMemo(
+    () => ["project-runtime", environmentId, projectId, runtimeId ?? null, threadId] as const,
+    [environmentId, projectId, runtimeId, threadId],
+  );
+
+  const runtimeQuery = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        throw new Error("Project Runtime API is not available.");
+      }
+      const result = await api.projectRuntime.get(operationInput);
+      return result.runtime;
+    },
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const operationMutation = useMutation({
+    mutationFn: async (operation: ProjectRuntimePanelOperation) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        throw new Error("Project Runtime API is not available.");
+      }
+      switch (operation.type) {
+        case "wake":
+          return api.projectRuntime.wake(operationInput);
+        case "archive":
+          return api.projectRuntime.archive(operationInput);
+        case "reset":
+          return api.projectRuntime.reset(operationInput);
+        case "cleanupScratch":
+          return api.projectRuntime.cleanupScratch(operationInput);
+        case "snapshot":
+          return api.projectRuntime.snapshot({ ...operationInput, name: operation.name });
+      }
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKey, result.runtime);
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Project Runtime action failed",
+          description: error instanceof Error ? error.message : "Unknown error.",
+        }),
+      );
+    },
+  });
+
+  const detail = runtimeQuery.data ?? null;
+  const busy = operationMutation.isPending || projectRuntimeIsOperationBusy(detail);
+  const lifecycleState = detail?.runtime.lifecycleState;
+  const queueSummary = detail ? projectRuntimeQueueSummary(detail.queue) : "Loading";
+  const waitingForRuntime = detail
+    ? isThreadWaitingOnProjectRuntime(detail.queue, threadId)
+    : false;
+  const queuedCount = detail?.queue.queued.length ?? 0;
+
+  const runOperation = useCallback(
+    (operation: ProjectRuntimePanelOperation) => {
+      void operationMutation.mutateAsync(operation);
+    },
+    [operationMutation],
+  );
+
+  const wakeRuntime = useCallback(() => {
+    runOperation({ type: "wake" });
+  }, [runOperation]);
+
+  const archiveRuntime = useCallback(() => {
+    void (async () => {
+      const confirmed = await confirmProjectRuntimeAction(
+        [
+          "Archive this Project Runtime?",
+          "This stops and hides the active runtime while preserving memory and transcripts.",
+        ].join("\n"),
+      );
+      if (confirmed) {
+        runOperation({ type: "archive" });
+      }
+    })();
+  }, [runOperation]);
+
+  const resetRuntime = useCallback(() => {
+    void (async () => {
+      const confirmed = await confirmProjectRuntimeAction(
+        [
+          "Reset this Project Runtime?",
+          "This replaces filesystem/runtime state while preserving project memory and transcripts.",
+        ].join("\n"),
+      );
+      if (confirmed) {
+        runOperation({ type: "reset" });
+      }
+    })();
+  }, [runOperation]);
+
+  const cleanupScratch = useCallback(() => {
+    void (async () => {
+      const confirmed = await confirmProjectRuntimeAction(
+        [
+          "Clean scratch files from this Project Runtime?",
+          "This removes temporary, cache, and build outputs while preserving .homelab, memory, and durable files.",
+        ].join("\n"),
+      );
+      if (confirmed) {
+        runOperation({ type: "cleanupScratch" });
+      }
+    })();
+  }, [runOperation]);
+
+  const snapshotRuntime = useCallback(() => {
+    void (async () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      const name = window.prompt("Project Runtime snapshot name", defaultSnapshotName());
+      const trimmedName = name?.trim();
+      if (!trimmedName) {
+        return;
+      }
+      const confirmed = await confirmProjectRuntimeAction(
+        [
+          `Create Project Runtime snapshot "${trimmedName}"?`,
+          "This records a named restore point. Filesystem restore support may be unavailable.",
+        ].join("\n"),
+      );
+      if (confirmed) {
+        runOperation({ type: "snapshot", name: trimmedName });
+      }
+    })();
+  }, [runOperation]);
+
+  return (
+    <section
+      aria-label="Project Runtime"
+      className="border-b border-border/80 bg-muted/20 px-3 py-2 sm:px-5"
+    >
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-2 rounded-full",
+                runtimeStatusDotClassName(lifecycleState),
+                runtimeQuery.isFetching && "animate-pulse",
+              )}
+            />
+            <span className="text-xs font-semibold text-foreground">Project Runtime</span>
+            <span className="text-xs text-muted-foreground">
+              {lifecycleState ? projectRuntimeStatusLabel(lifecycleState) : "Loading"}
+            </span>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {waitingForRuntime
+              ? "This thread is waiting on the shared Project Runtime"
+              : queueSummary}
+          </span>
+          {detail?.queue.active ? (
+            <span className="text-xs text-muted-foreground">
+              Active: {detail.queue.active.label ?? detail.queue.active.threadId ?? "work"}
+            </span>
+          ) : null}
+          {queuedCount > 0 ? (
+            <span className="text-xs text-muted-foreground">Queued: {queuedCount}</span>
+          ) : null}
+          {detail?.warnings[0] ? (
+            <span className="text-xs text-warning">{detail.warnings[0]}</span>
+          ) : null}
+          {runtimeQuery.isError ? (
+            <span className="text-xs text-destructive">Unable to load runtime status</span>
+          ) : null}
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <Button size="xs" variant="outline" onClick={wakeRuntime} disabled={busy}>
+            {operationMutation.isPending ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              <PowerIcon className="size-3.5" />
+            )}
+            Wake
+          </Button>
+          <Button size="xs" variant="outline" onClick={archiveRuntime} disabled={busy}>
+            <ArchiveIcon className="size-3.5" />
+            Archive
+          </Button>
+          <Button size="xs" variant="destructive-outline" onClick={resetRuntime} disabled={busy}>
+            <RotateCcwIcon className="size-3.5" />
+            Reset
+          </Button>
+          <Button size="xs" variant="outline" onClick={cleanupScratch} disabled={busy}>
+            <EraserIcon className="size-3.5" />
+            Cleanup
+          </Button>
+          <Button size="xs" variant="outline" onClick={snapshotRuntime} disabled={busy}>
+            <CameraIcon className="size-3.5" />
+            Snapshot
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}

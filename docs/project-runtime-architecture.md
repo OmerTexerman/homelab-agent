@@ -112,6 +112,12 @@ runtimes now use runtime-id-derived host storage paths and container names. The
 legacy per-thread runtime id path is preserved for existing descriptors so
 upstream-derived behavior does not lose old runtime state.
 
+The lifecycle control slice adds a metadata-backed `ProjectRuntimeLifecycle`
+service over that compatibility layer. It records project runtime state such as
+running, stopped/sleeping, archived, reset-pending/resetting, and failed without
+moving that state back into thread state. Waking a stopped runtime starts the
+runtime and regenerates `.homelab` before provider execution continues.
+
 ## Concurrency
 
 The default project runtime has a single active writer.
@@ -131,6 +137,11 @@ shared semaphore. Provider sessions remain per-thread; the runtime lock is a
 runtime policy layer around provider execution, not a separate provider binary
 or provider home per thread.
 
+The queue now exposes active and queued work snapshots for the UI. A thread that
+is queued behind another turn on the same shared project runtime should show
+that it is waiting on the Project Runtime, while isolated/concurrent execution
+remains an explicit override.
+
 When isolated work finishes:
 
 - Files, tools, and scripts merge back only through an explicit user action.
@@ -146,6 +157,13 @@ container/runtime.
 Terminals follow the runtime, not the thread. Switching between threads in the
 same project shows the same project runtime terminal sessions and history.
 Isolated runtime terminals stay attached to that isolated runtime.
+
+The current compatibility layer keys visible terminal sessions by
+`project-runtime:<project-id>` for shared project runtimes while keeping the
+legacy thread-keyed path for older and isolated runtime ids. Terminal events
+carry both the legacy thread field and `runtimeId`; the web client fans
+runtime-keyed events out to active threads sharing that runtime. A fuller
+terminal API migration can remove the remaining thread-shaped terminal inputs.
 
 The sidebar project panel should use its available vertical space until settings
 and scroll internally. "Show more" remains only when there are more threads to
@@ -264,7 +282,10 @@ Project runtimes need first-class lifecycle operations:
   and transcripts unless the user explicitly deletes them too.
 - Cleanup Scratch: remove cache/temp/build outputs while preserving remembered
   files/tools and durable project memory.
-- Snapshot: create a named restore point for the runtime filesystem/state.
+- Snapshot: create a named restore point for the runtime filesystem/state. The
+  current slice records metadata-only snapshot records with
+  `restoreAvailable: false`; the filesystem/container restore layer is still
+  missing.
 - Delete Project: delete project runtime files plus project-local memory and
   transcripts after confirmation. Do not delete global homelab knowledge.
 
@@ -310,8 +331,9 @@ embedding product policy inline.
     sharing, project-local memory search, and global promotion boundaries.
 12. Keep upstream sync documentation current as files move behind adapters.
 
-Items 1, 3, 4, 5, 7, 8, 9, and 11 now have an initial vertical slice. Item 6
-and the richer lifecycle operations remain future work.
+Items 1, 3, 4, 5, 6, 7, 8, 9, 10, and 11 now have an initial vertical slice.
+Lifecycle snapshot restore and a fully runtime-native terminal API remain
+future work.
 
 ## Validation
 
