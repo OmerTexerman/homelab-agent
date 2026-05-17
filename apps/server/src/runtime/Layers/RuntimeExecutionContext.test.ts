@@ -15,6 +15,7 @@ import {
   renderSecretEnvFile,
   renderShellInitFile,
   runtimeCodexAuthPath,
+  runtimeOpenCodeDataPath,
   runtimeSecretEnvPath,
   toLaunchContext,
 } from "./RuntimeExecutionContext.ts";
@@ -103,6 +104,7 @@ describe("buildRuntimeAuthSyncEntries", () => {
         codexHostAuthPath: "/host/.codex",
         claudeHostAuthPath: "/host/.claude",
         claudeHostAuthJsonPath: "/host/.claude.json",
+        openCodeHostDataPath: "/host/.local/share/opencode",
       },
       runtimeHomePath: "/runtime/home",
     });
@@ -120,6 +122,16 @@ describe("buildRuntimeAuthSyncEntries", () => {
     expect(entries).toContainEqual({
       sourcePath: "/host/.claude.json",
       targetPath: "/runtime/home/.claude.json",
+      mode: "overwrite",
+    });
+    expect(entries).toContainEqual({
+      sourcePath: "/host/.local/share/opencode/auth.json",
+      targetPath: `${runtimeOpenCodeDataPath("/runtime/home")}/auth.json`,
+      mode: "overwrite",
+    });
+    expect(entries).toContainEqual({
+      sourcePath: "/host/.local/share/opencode/opencode.db",
+      targetPath: `${runtimeOpenCodeDataPath("/runtime/home")}/opencode.db`,
       mode: "overwrite",
     });
   });

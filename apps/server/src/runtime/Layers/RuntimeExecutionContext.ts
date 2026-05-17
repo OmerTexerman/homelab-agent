@@ -52,6 +52,8 @@ const CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS = [
   "plugins/installed_plugins.json",
   "plugins/known_marketplaces.json",
 ];
+const OPENCODE_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "opencode.db"];
+const OPENCODE_AUTH_IF_MISSING_RELATIVE_PATHS: ReadonlyArray<string> = [];
 const FORWARDED_ENV_DENYLIST = new Set([
   "_",
   "BASH_ENV",
@@ -89,6 +91,7 @@ export interface RuntimeAuthBindings {
   readonly codexHostAuthPath?: string;
   readonly claudeHostAuthPath?: string;
   readonly claudeHostAuthJsonPath?: string;
+  readonly openCodeHostDataPath?: string;
   readonly sshAuthSockPath?: string;
   readonly dockerSocketPath?: string;
 }
@@ -311,6 +314,10 @@ export function runtimeClaudeAuthJsonPath(homePath: string): string {
   return nodePath.join(homePath, ".claude.json");
 }
 
+export function runtimeOpenCodeDataPath(homePath: string): string {
+  return nodePath.join(homePath, ".local", "share", "opencode");
+}
+
 export function runtimeSecretEnvPath(homePath: string): string {
   return nodePath.join(homePath, RUNTIME_SECRET_ENV_BASENAME);
 }
@@ -405,6 +412,15 @@ export function buildRuntimeAuthSyncEntries(input: {
       sourcePath: input.hostBindings.claudeHostAuthJsonPath,
       targetPath: runtimeClaudeAuthJsonPath(input.runtimeHomePath),
       mode: "overwrite",
+    });
+  }
+
+  if (input.hostBindings.openCodeHostDataPath) {
+    addRuntimeAuthSyncEntries(entries, {
+      sourceRoot: input.hostBindings.openCodeHostDataPath,
+      targetRoot: runtimeOpenCodeDataPath(input.runtimeHomePath),
+      overwriteRelativePaths: OPENCODE_AUTH_OVERWRITE_RELATIVE_PATHS,
+      ifMissingRelativePaths: OPENCODE_AUTH_IF_MISSING_RELATIVE_PATHS,
     });
   }
 

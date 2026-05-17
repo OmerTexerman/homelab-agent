@@ -362,11 +362,34 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const runtime = yield* ThreadRuntime;
       const settings = yield* ServerSettingsService;
       const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
+      const previousXdgDataHome = process.env.XDG_DATA_HOME;
+      const hostXdgDataHome = path.join(
+        os.tmpdir(),
+        "homelab-agent-opencode-auth",
+        crypto.randomUUID(),
+      );
+      process.env.XDG_DATA_HOME = hostXdgDataHome;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousXdgDataHome === undefined) {
+            delete process.env.XDG_DATA_HOME;
+          } else {
+            process.env.XDG_DATA_HOME = previousXdgDataHome;
+          }
+        }),
+      );
+
       yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
       yield* fileSystem.writeFileString(path.join(codexAuthPath, "auth.json"), '{"token":"host"}');
       yield* fileSystem.writeFileString(
         path.join(codexAuthPath, "config.toml"),
         'model = "gpt-5"\n',
+      );
+      const openCodeDataPath = path.join(hostXdgDataHome, "opencode");
+      yield* fileSystem.makeDirectory(openCodeDataPath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(openCodeDataPath, "auth.json"),
+        '{"provider":"host"}',
       );
 
       const descriptor = yield* runtime.ensureRuntime({
@@ -553,6 +576,12 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         yield* fileSystem.readFileString(path.join(runtimeCodexHome, "config.toml")),
         'model = "gpt-5"\n',
       );
+      assert.equal(
+        yield* fileSystem.readFileString(
+          path.join(runtimeHome, ".local", "share", "opencode", "auth.json"),
+        ),
+        '{"provider":"host"}',
+      );
       const authMount = `${codexAuthPath}:${runtimeCodexHome}:ro`;
       assert.equal(runCall.includes(authMount), false);
       assert.equal(
@@ -567,7 +596,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         docker.calls.some((call) => call[0] === "build"),
         true,
       );
-    }),
+    }).pipe(Effect.scoped),
   );
 
   it.effect("maps logical project roots back to /workspace for runtime cwd", () =>

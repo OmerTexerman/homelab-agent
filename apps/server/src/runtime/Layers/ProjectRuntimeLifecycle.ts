@@ -85,6 +85,7 @@ const SNAPSHOT_EXCLUDED_RELATIVE_PATHS = [
   "home/.codex",
   "home/.claude",
   "home/.claude.json",
+  "home/.local/share/opencode",
 ];
 
 const SCRATCH_RELATIVE_PATHS = [

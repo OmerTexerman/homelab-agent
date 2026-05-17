@@ -22,6 +22,9 @@ provider instances that the server reports as ready.
   provider contracts/settings, model selection metadata, and provider status UI.
 - The devcontainer and runtime image install `opencode-ai@1.15.1`.
 - Thread runtimes now generate an `opencode` wrapper in the runtime bin directory.
+- Managed OpenCode syncs host credentials from `~/.local/share/opencode/auth.json` into the
+  Project Runtime home before launch. A legacy `opencode.db` file is also synced when present for
+  older host CLI installs.
 - Managed OpenCode starts `opencode serve` through the Project Runtime wrapper. Runtime containers
   publish the managed OpenCode container port (`4096/tcp`) to a Docker-assigned localhost host port,
   and `RuntimeExecutionContext` carries that published endpoint into the provider launch context.

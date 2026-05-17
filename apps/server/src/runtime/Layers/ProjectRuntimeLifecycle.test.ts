@@ -412,9 +412,16 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-before");
         nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-before");
         nodeFs.mkdirSync(nodePath.join(hostHomePath, ".codex"), { recursive: true });
+        nodeFs.mkdirSync(nodePath.join(hostHomePath, ".local", "share", "opencode"), {
+          recursive: true,
+        });
         nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime.env"), "excluded");
         nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime-token"), "excluded");
         nodeFs.writeFileSync(nodePath.join(hostHomePath, ".codex", "auth.json"), "excluded");
+        nodeFs.writeFileSync(
+          nodePath.join(hostHomePath, ".local", "share", "opencode", "auth.json"),
+          "excluded",
+        );
 
         const result = yield* lifecycle.createSnapshot({
           projectId,
@@ -437,6 +444,9 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           nodeFs.existsSync(nodePath.join(archivePath, "home", ".homelab-runtime-token")),
         );
         assert.isFalse(nodeFs.existsSync(nodePath.join(archivePath, "home", ".codex")));
+        assert.isFalse(
+          nodeFs.existsSync(nodePath.join(archivePath, "home", ".local", "share", "opencode")),
+        );
         assert.isTrue(
           nodeFs.existsSync(nodePath.join(nodePath.dirname(archivePath), "manifest.json")),
         );

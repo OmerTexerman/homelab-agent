@@ -1783,6 +1783,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         nodePath.join(nodeOs.homedir(), ".codex");
       const hostClaudeAuthPath = nodePath.join(nodeOs.homedir(), ".claude");
       const hostClaudeAuthJsonPath = nodePath.join(nodeOs.homedir(), ".claude.json");
+      const hostOpenCodeDataPath = nodePath.join(
+        trimToUndefined(process.env.XDG_DATA_HOME) ??
+          nodePath.join(nodeOs.homedir(), ".local", "share"),
+        "opencode",
+      );
       const sshAuthSockPath = trimToUndefined(process.env.SSH_AUTH_SOCK);
       const dockerSocketPath = "/var/run/docker.sock";
       const codexExists = yield* fileSystem
@@ -1793,6 +1798,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         .pipe(Effect.orElseSucceed(() => false));
       const claudeJsonExists = yield* fileSystem
         .exists(hostClaudeAuthJsonPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      const openCodeDataExists = yield* fileSystem
+        .exists(hostOpenCodeDataPath)
         .pipe(Effect.orElseSucceed(() => false));
       const sshAuthSockExists = sshAuthSockPath
         ? yield* fileSystem.exists(sshAuthSockPath).pipe(Effect.orElseSucceed(() => false))
@@ -1805,6 +1813,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ...(codexExists ? { codexHostAuthPath: configuredCodexAuthPath } : {}),
         ...(claudeExists ? { claudeHostAuthPath: hostClaudeAuthPath } : {}),
         ...(claudeJsonExists ? { claudeHostAuthJsonPath: hostClaudeAuthJsonPath } : {}),
+        ...(openCodeDataExists ? { openCodeHostDataPath: hostOpenCodeDataPath } : {}),
         ...(sshAuthSockExists && sshAuthSockPath ? { sshAuthSockPath } : {}),
         ...(dockerSocketExists ? { dockerSocketPath } : {}),
       };

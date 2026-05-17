@@ -332,6 +332,7 @@ The excluded known-sensitive paths are:
 - `home/.codex`
 - `home/.claude`
 - `home/.claude.json`
+- `home/.local/share/opencode`
 
 Those files are regenerated or resynced when the runtime wakes. Snapshot
 metadata, logs, docs, and tests must never include raw secret values. V1 cannot
