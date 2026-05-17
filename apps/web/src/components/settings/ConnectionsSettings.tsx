@@ -298,7 +298,7 @@ function parseRemotePairingFields(input: { readonly host: string; readonly pairi
   const host = input.host.trim();
   const pairingCode = input.pairingCode.trim();
   if (!host) {
-    throw new Error("Enter a backend host.");
+    throw new Error("Enter a server host.");
   }
   if (!pairingCode) {
     throw new Error("Enter a pairing code.");
@@ -545,7 +545,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             key: endpointDefaultPreferenceKey(endpoint),
             label: endpoint.label,
             url,
-            detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Backend pairing URL",
+            detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Server pairing URL",
           };
         }),
     [endpoints, pairingLink.credential],
@@ -579,7 +579,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           kind === "hosted-link"
             ? "Open it in the browser on the device you want to connect."
             : kind === "link"
-              ? "Open it in the client you want to pair to this environment."
+              ? "Open it in the client you want to pair to this server."
               : "Paste it into another client to finish pairing.",
       });
     },
@@ -758,7 +758,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           </p>
           {shareablePairingUrl === null ? (
             <p className="text-[11px] text-muted-foreground/70">
-              Copy the token and pair from another client using this backend&apos;s reachable host.
+              Copy the token and pair from another client using this server&apos;s reachable host.
             </p>
           ) : null}
         </div>
@@ -1015,7 +1015,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           <DialogHeader>
             <DialogTitle>Create pairing link</DialogTitle>
             <DialogDescription>
-              Generate a one-time link that another device can use to pair with this backend as an
+              Generate a one-time link that another device can use to pair with this server as an
               authorized client.
             </DialogDescription>
           </DialogHeader>
@@ -1367,7 +1367,7 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
 }: DesktopSshHostRowProps) {
   const address = formatDesktopSshTarget(target);
   const showAddress = address !== target.alias;
-  const buttonLabel = connectingHostAlias === target.alias ? "Adding…" : "Add environment";
+  const buttonLabel = connectingHostAlias === target.alias ? "Adding…" : "Add server";
 
   return (
     <div className="border-t border-border/60 px-4 py-3 first:border-t-0 sm:px-5">
@@ -1730,7 +1730,7 @@ export function ConnectionsSettings() {
         setAddBackendDialogOpen(false);
         toastManager.add({
           type: "success",
-          title: "Environment connected",
+          title: "Server connected",
           description: `${record.label} is ready over an SSH-managed tunnel.`,
         });
       } catch (error) {
@@ -1761,16 +1761,16 @@ export function ConnectionsSettings() {
       setAddBackendDialogOpen(false);
       toastManager.add({
         type: "success",
-        title: "Backend added",
+        title: "Server added",
         description: `${record.label} is now saved and will reconnect on app startup.`,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to add backend.";
+      const message = error instanceof Error ? error.message : "Failed to add server.";
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not add backend",
+          title: "Could not add server",
           description: message,
         }),
       );
@@ -1792,12 +1792,12 @@ export function ConnectionsSettings() {
     try {
       await reconnectSavedEnvironment(environmentId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to connect backend.";
+      const message = error instanceof Error ? error.message : "Failed to connect server.";
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not connect backend",
+          title: "Could not connect server",
           description: message,
         }),
       );
@@ -1812,12 +1812,12 @@ export function ConnectionsSettings() {
     try {
       await disconnectSavedEnvironment(environmentId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to disconnect backend.";
+      const message = error instanceof Error ? error.message : "Failed to disconnect server.";
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not disconnect backend",
+          title: "Could not disconnect server",
           description: message,
         }),
       );
@@ -1832,12 +1832,12 @@ export function ConnectionsSettings() {
     try {
       await removeSavedEnvironment(environmentId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
+      const message = error instanceof Error ? error.message : "Failed to remove server.";
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not remove backend",
+          title: "Could not remove server",
           description: message,
         }),
       );
@@ -1889,8 +1889,8 @@ export function ConnectionsSettings() {
         toastManager.add({
           type: "success",
           title: savedDesktopSshEnvironmentsByAlias[target.alias]
-            ? "Environment reconnected"
-            : "Environment connected",
+            ? "Server reconnected"
+            : "Server connected",
           description: `${record.label} is ready over an SSH-managed tunnel.`,
         });
       } catch (error) {
@@ -2167,7 +2167,7 @@ export function ConnectionsSettings() {
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
-            placeholder="backend.example.com"
+            placeholder="server.example.com"
             disabled={isAddingSavedBackend}
             spellCheck={false}
           />
@@ -2201,7 +2201,7 @@ export function ConnectionsSettings() {
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
-        {isAddingSavedBackend ? "Adding…" : "Add environment"}
+        {isAddingSavedBackend ? "Adding…" : "Add server"}
       </Button>
     </div>
   );
@@ -2255,7 +2255,7 @@ export function ConnectionsSettings() {
           onClick={() => void handleAddSavedBackend()}
         >
           <PlusIcon className="size-3.5" />
-          {isAddingSavedBackend ? "Adding…" : "Add environment"}
+          {isAddingSavedBackend ? "Adding…" : "Add server"}
         </Button>
       </div>
       <div className="overflow-hidden rounded-lg border border-border/60">
@@ -2336,7 +2336,7 @@ export function ConnectionsSettings() {
         tailscaleHttpsEndpoint
           ? tailscaleHttpsEndpoint.status === "available"
             ? tailscaleHttpsEndpoint.httpBaseUrl
-            : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
+            : "Use Tailscale Serve to expose this server through a MagicDNS HTTPS URL."
           : "Start Tailscale to set up HTTPS access through MagicDNS."
       }
       control={
@@ -2416,8 +2416,8 @@ export function ConnectionsSettings() {
       title="Network access"
       description={
         currentAuthPolicy === "remote-reachable"
-          ? "This backend is already configured for remote access. Network exposure changes must be made where the server is launched."
-          : "This backend is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing."
+          ? "This server is already configured for remote access. Network exposure changes must be made where the server is launched."
+          : "This server is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing."
       }
       control={
         <Tooltip>
@@ -2433,7 +2433,7 @@ export function ConnectionsSettings() {
             }
           />
           <TooltipPopup side="top">
-            Network exposure changes restart the backend and must be controlled where the server
+            Network exposure changes restart the server and must be controlled where the server
             process is launched.
           </TooltipPopup>
         </Tooltip>
@@ -2445,7 +2445,7 @@ export function ConnectionsSettings() {
     <SettingsPageContainer>
       {canManageLocalBackend ? (
         <>
-          <SettingsSection title="Manage local backend">
+          <SettingsSection title="Devices & Sessions">
             {primaryVersionMismatch ? (
               <SettingsRow
                 title="Version drift"
@@ -2503,8 +2503,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? `${APP_BASE_NAME} will restart to expose this environment over the network.`
-                    : `${APP_BASE_NAME} will restart and limit this environment back to this machine.`}
+                    ? `${APP_BASE_NAME} will restart to expose this server over the network.`
+                    : `${APP_BASE_NAME} will restart and limit this server back to this machine.`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -2548,7 +2548,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  {APP_BASE_NAME} will restart the local backend without Tailscale Serve.
+                  {APP_BASE_NAME} will restart the local server without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -2586,8 +2586,8 @@ export function ConnectionsSettings() {
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  {APP_BASE_NAME} will restart the local backend with Tailscale Serve enabled and
-                  ask Tailscale to proxy HTTPS traffic to this backend.
+                  {APP_BASE_NAME} will restart the local server with Tailscale Serve enabled and ask
+                  Tailscale to proxy HTTPS traffic to this server.
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel className="space-y-4">
@@ -2643,16 +2643,16 @@ export function ConnectionsSettings() {
           </Dialog>
         </>
       ) : (
-        <SettingsSection title="Local backend access">
+        <SettingsSection title="Devices & Sessions">
           <SettingsRow
             title="Owner tools"
-            description="Pairing links and client-session management are only available to owner sessions for this backend."
+            description="Pairing links and client-session management are only available to owner sessions for this server."
           />
         </SettingsSection>
       )}
 
       <SettingsSection
-        title="Remote environments"
+        title="Connected servers"
         headerAction={
           <Dialog
             open={addBackendDialogOpen}
@@ -2672,21 +2672,23 @@ export function ConnectionsSettings() {
                         size="xs"
                         variant="ghost"
                         className="h-5 gap-1 rounded-sm px-1 text-[11px] font-normal text-muted-foreground/60 hover:text-muted-foreground"
-                        aria-label="Add environment"
+                        aria-label="Add server"
                       >
                         <PlusIcon className="size-3" />
-                        <span>Add environment</span>
+                        <span>Add server</span>
                       </Button>
                     }
                   />
                 }
               />
-              <TooltipPopup side="top">Add environment</TooltipPopup>
+              <TooltipPopup side="top">Add server</TooltipPopup>
             </Tooltip>
             <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
               <DialogHeader>
-                <DialogTitle>Add Environment</DialogTitle>
-                <DialogDescription>Pair another environment to this client.</DialogDescription>
+                <DialogTitle>Add server</DialogTitle>
+                <DialogDescription>
+                  Pair another Homelab Agent server to this client.
+                </DialogDescription>
               </DialogHeader>
               <DialogPanel>
                 <div className="space-y-4">
@@ -2694,14 +2696,14 @@ export function ConnectionsSettings() {
                     {renderConnectionModeCard({
                       mode: "remote",
                       title: "Remote link",
-                      description: "Enter a backend host and pairing code.",
+                      description: "Enter a server host and pairing code.",
                       icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
                     })}
                     {desktopBridge
                       ? renderConnectionModeCard({
                           mode: "ssh",
                           title: "SSH",
-                          description: "Use local SSH config, agent, and tunnels for the backend.",
+                          description: "Use local SSH config, agent, and tunnels for the server.",
                           icon: <TerminalIcon aria-hidden className="size-4" />,
                         })
                       : null}
@@ -2731,8 +2733,8 @@ export function ConnectionsSettings() {
         {savedEnvironmentIds.length === 0 ? (
           <div className={ITEM_ROW_CLASSNAME}>
             <p className="text-xs text-muted-foreground">
-              No remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
-              environment.
+              No connected servers yet. Click &ldquo;Add server&rdquo; to pair another Homelab Agent
+              server.
             </p>
           </div>
         ) : null}

@@ -1,7 +1,11 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+
+import { ArchivedThreadsPanel } from "../components/settings/SettingsPanels";
+
+function SettingsArchivedRoute() {
+  return <ArchivedThreadsPanel />;
+}
 
 export const Route = createFileRoute("/settings/archived")({
-  beforeLoad: () => {
-    throw redirect({ to: "/settings/general", replace: true });
-  },
+  component: SettingsArchivedRoute,
 });

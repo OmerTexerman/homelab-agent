@@ -1,5 +1,5 @@
 import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -83,7 +83,11 @@ import {
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useServerObservability, useServerProviders } from "../../rpc/serverState";
+import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { homelabSetupStatusQueryOptions } from "../../lib/homelabReactQuery";
 import {
+  HOMELAB_PRODUCT_COPY,
+  shouldShowCompatibilityHostPathProjectUi,
   shouldShowPrimarySourceControlUi,
   shouldShowThreadRuntimeIsolationControls,
 } from "../../productCapabilities";
@@ -392,6 +396,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const showThreadRuntimeIsolationSettings = shouldShowThreadRuntimeIsolationControls();
 
   const isGitWritingModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -425,12 +430,12 @@ export function useSettingsRestore(onRestored?: () => void) {
         Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
         ? ["Automatic Git fetch interval"]
         : []),
-      ...(showSourceControlUi &&
+      ...(showThreadRuntimeIsolationSettings &&
       settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
-        ? ["New thread mode"]
+        ? [HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle]
         : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
-        ? ["Add project base directory"]
+        ? ["Compatibility bootstrap path"]
         : []),
       ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
         ? ["Archive confirmation"]
@@ -443,6 +448,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     [
       isGitWritingModelDirty,
       showSourceControlUi,
+      showThreadRuntimeIsolationSettings,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -497,16 +503,7 @@ export function GeneralSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const showThreadRuntimeIsolationControls = shouldShowThreadRuntimeIsolationControls();
-  const observability = useServerObservability();
   const serverProviders = useServerProviders();
-  const diagnosticsDescription = formatDiagnosticsDescription({
-    localTracingEnabled: observability?.localTracingEnabled ?? false,
-    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
-    otlpTracesUrl: observability?.otlpTracesUrl,
-    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
-    otlpMetricsUrl: observability?.otlpMetricsUrl,
-  });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
@@ -530,14 +527,6 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
-
-  useEffect(() => {
-    if (showThreadRuntimeIsolationControls || settings.defaultThreadEnvMode === "local") {
-      return;
-    }
-
-    updateSettings({ defaultThreadEnvMode: "local" });
-  }, [settings.defaultThreadEnvMode, showThreadRuntimeIsolationControls, updateSettings]);
 
   return (
     <SettingsPageContainer>
@@ -725,88 +714,6 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="New threads"
-          description={
-            showThreadRuntimeIsolationControls
-              ? "Pick the default runtime workspace mode for newly created draft threads."
-              : "New threads start in the shared project runtime."
-          }
-          resetAction={
-            showThreadRuntimeIsolationControls &&
-            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
-              <SettingResetButton
-                label="new threads"
-                onClick={() =>
-                  updateSettings({
-                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            showThreadRuntimeIsolationControls ? (
-              <Select
-                value={settings.defaultThreadEnvMode}
-                onValueChange={(value) => {
-                  if (value === "local" || value === "worktree") {
-                    updateSettings({ defaultThreadEnvMode: value });
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
-                  <SelectValue>
-                    {settings.defaultThreadEnvMode === "worktree"
-                      ? "Isolated runtime"
-                      : "Shared runtime"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="local">
-                    Shared runtime
-                  </SelectItem>
-                  <SelectItem hideIndicator value="worktree">
-                    Isolated runtime
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            ) : (
-              <span className="inline-flex h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-                Shared runtime
-              </span>
-            )
-          }
-        />
-
-        <SettingsRow
-          title="Add project starts in"
-          description='Leave empty to start at "~/" in the selected environment.'
-          resetAction={
-            settings.addProjectBaseDirectory !==
-            DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
-              <SettingResetButton
-                label="add project base directory"
-                onClick={() =>
-                  updateSettings({
-                    addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <DraftInput
-              className="w-full sm:w-72"
-              value={settings.addProjectBaseDirectory}
-              onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
-              placeholder="~/"
-              spellCheck={false}
-              aria-label="Add project base directory"
-            />
-          }
-        />
-
-        <SettingsRow
           title="Archive confirmation"
           description="Require a second click on the inline archive action before a thread is archived."
           resetAction={
@@ -934,8 +841,233 @@ export function GeneralSettingsPanel() {
           />
         ) : null}
       </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
 
+export function SecretsSettingsPanel() {
+  return (
+    <SettingsPageContainer>
       <HomelabSecretsSection />
+    </SettingsPageContainer>
+  );
+}
+
+export function ProjectRuntimeSettingsPanel() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const showThreadRuntimeIsolationControls = shouldShowThreadRuntimeIsolationControls();
+
+  useEffect(() => {
+    if (showThreadRuntimeIsolationControls || settings.defaultThreadEnvMode === "local") {
+      return;
+    }
+
+    updateSettings({ defaultThreadEnvMode: "local" });
+  }, [settings.defaultThreadEnvMode, showThreadRuntimeIsolationControls, updateSettings]);
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.projectRuntime.title}>
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
+          description={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeDescription}
+          resetAction={
+            showThreadRuntimeIsolationControls &&
+            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
+              <SettingResetButton
+                label={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
+                onClick={() =>
+                  updateSettings({
+                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            showThreadRuntimeIsolationControls ? (
+              <Select
+                value={settings.defaultThreadEnvMode}
+                onValueChange={(value) => {
+                  if (value === "local" || value === "worktree") {
+                    updateSettings({ defaultThreadEnvMode: value });
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-64" aria-label="Default thread runtime">
+                  <SelectValue>
+                    {settings.defaultThreadEnvMode === "worktree"
+                      ? HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue
+                      : HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="local">
+                    {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="worktree">
+                    {HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            ) : (
+              <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+              </span>
+            )
+          }
+        />
+        <SettingsRow
+          title="Runtime ownership"
+          description="Each project owns its shared runtime/container. Threads inside that project use it unless isolation is explicitly selected."
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              Per project
+            </span>
+          }
+        />
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
+
+export function MemoryKnowledgeSettingsPanel() {
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const homelabSetupStatusQuery = useQuery(
+    homelabSetupStatusQueryOptions({
+      environmentId: primaryEnvironmentId,
+      enabled: primaryEnvironmentId !== null,
+    }),
+  );
+  const homelabSetupStatus = homelabSetupStatusQuery.data;
+  const entityCount = homelabSetupStatus?.snapshot.entities.length ?? 0;
+  const relationCount = homelabSetupStatus?.snapshot.relations.length ?? 0;
+  const bootstrapMutationCount = homelabSetupStatus?.runtimeBootstrap.mutations.length ?? 0;
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge}>
+        <SettingsRow
+          title="Shared knowledge graph"
+          description="Durable homelab entities and relations promoted from project work."
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {homelabSetupStatusQuery.isLoading
+                ? "Loading"
+                : `${entityCount} entities · ${relationCount} relations`}
+            </span>
+          }
+        />
+        <SettingsRow
+          title="Runtime bootstrap state"
+          description="Bootstrap mutations available to thread runtimes through homelab tools."
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {homelabSetupStatusQuery.isLoading ? "Loading" : `${bootstrapMutationCount} entries`}
+            </span>
+          }
+        />
+        {homelabSetupStatusQuery.isError ? (
+          <SettingsRow
+            title="Status"
+            description={
+              homelabSetupStatusQuery.error instanceof Error
+                ? homelabSetupStatusQuery.error.message
+                : "Unable to load memory and knowledge status."
+            }
+          />
+        ) : null}
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
+
+export function AdvancedSettingsPanel() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const observability = useServerObservability();
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const showCompatibilityHostPathProjectUi = shouldShowCompatibilityHostPathProjectUi();
+  const diagnosticsDescription = formatDiagnosticsDescription({
+    localTracingEnabled: observability?.localTracingEnabled ?? false,
+    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
+    otlpTracesUrl: observability?.otlpTracesUrl,
+    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
+    otlpMetricsUrl: observability?.otlpMetricsUrl,
+  });
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.advanced}>
+        {showCompatibilityHostPathProjectUi ? (
+          <SettingsRow
+            title="Compatibility bootstrap path"
+            description="Used only by advanced host-path project imports."
+            resetAction={
+              settings.addProjectBaseDirectory !==
+              DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
+                <SettingResetButton
+                  label="compatibility bootstrap path"
+                  onClick={() =>
+                    updateSettings({
+                      addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <DraftInput
+                className="w-full sm:w-72"
+                value={settings.addProjectBaseDirectory}
+                onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
+                placeholder="~/"
+                spellCheck={false}
+                aria-label="Compatibility bootstrap path"
+              />
+            }
+          />
+        ) : null}
+        <SettingsRow
+          title="Diagnostics"
+          description={diagnosticsDescription}
+          control={
+            <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
+              View diagnostics
+            </Button>
+          }
+        />
+        <SettingsRow
+          title="Archived threads"
+          description="Review and restore archived project threads."
+          control={
+            <Button render={<Link to="/settings/archived" />} size="xs" variant="outline">
+              Open
+            </Button>
+          }
+        />
+        <SettingsRow
+          title="Keybindings"
+          description="Keyboard shortcuts for navigation and thread actions."
+          control={
+            <Button render={<Link to="/settings/keybindings" />} size="xs" variant="outline">
+              Open
+            </Button>
+          }
+        />
+        {showSourceControlUi ? (
+          <SettingsRow
+            title="Source control"
+            description="Advanced upstream source-control integration settings."
+            control={
+              <Button render={<Link to="/settings/source-control" />} size="xs" variant="outline">
+                Open
+              </Button>
+            }
+          />
+        ) : null}
+      </SettingsSection>
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
@@ -946,15 +1078,6 @@ export function GeneralSettingsPanel() {
             description="Current version of the application."
           />
         )}
-        <SettingsRow
-          title="Diagnostics"
-          description={diagnosticsDescription}
-          control={
-            <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
-              View diagnostics
-            </Button>
-          }
-        />
       </SettingsSection>
     </SettingsPageContainer>
   );
@@ -980,14 +1103,7 @@ export function ProviderSettingsPanel() {
     () => new Map(providerUpdateCandidates.map((candidate) => [candidate.instanceId, candidate])),
     [providerUpdateCandidates],
   );
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
+  const visibleProviderSettings = PROVIDER_SETTINGS;
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const lastCheckedAt =

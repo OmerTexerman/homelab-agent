@@ -23,6 +23,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
 } from "lucide-react";
@@ -119,9 +120,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import {
+  HOMELAB_PRODUCT_COPY,
+  shouldShowCompatibilityHostPathProjectUi,
   shouldShowEditorOpenInControls,
   shouldShowRemoteProjectCloneUi,
 } from "../productCapabilities";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const BROWSE_STALE_TIME_MS = 30_000;
@@ -417,6 +421,9 @@ function OpenCommandPaletteDialog() {
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  const [newProjectEnvironmentId, setNewProjectEnvironmentId] = useState<EnvironmentId | null>(
+    null,
+  );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
@@ -427,6 +434,7 @@ function OpenCommandPaletteDialog() {
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
   const showRemoteProjectCloneUi = shouldShowRemoteProjectCloneUi();
   const showEditorOpenInControls = shouldShowEditorOpenInControls();
+  const showCompatibilityHostPathProjectUi = shouldShowCompatibilityHostPathProjectUi();
 
   const addProjectEnvironmentOptions = useMemo(() => {
     const options: AddProjectEnvironmentOption[] = [];
@@ -493,8 +501,14 @@ function OpenCommandPaletteDialog() {
   }, [browseEnvironmentId, primaryEnvironmentId, savedEnvironmentRuntimeById]);
   const isRemoteProjectCloneFlow = addProjectCloneFlow !== null;
   const isRemoteProjectRepositoryStep = addProjectCloneFlow?.step === "repository";
+  const isNewProjectFlow = newProjectEnvironmentId !== null;
+  const isCompatibilityBrowseAllowed =
+    showCompatibilityHostPathProjectUi || addProjectCloneFlow?.step === "confirm";
   const isBrowsing =
-    !isRemoteProjectRepositoryStep && isFilesystemBrowseQuery(query, browseEnvironmentPlatform);
+    !isNewProjectFlow &&
+    !isRemoteProjectRepositoryStep &&
+    isCompatibilityBrowseAllowed &&
+    isFilesystemBrowseQuery(query, browseEnvironmentPlatform);
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = useCallback(
     (environmentId: EnvironmentId | null): string => {
@@ -741,6 +755,7 @@ function OpenCommandPaletteDialog() {
 
   function popView(): void {
     setAddProjectCloneFlow(null);
+    setNewProjectEnvironmentId(null);
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
     }
@@ -760,6 +775,7 @@ function OpenCommandPaletteDialog() {
   const startAddProjectBrowse = useCallback(
     (environmentId: EnvironmentId): void => {
       setAddProjectEnvironmentId(environmentId);
+      setNewProjectEnvironmentId(null);
       setAddProjectCloneFlow(null);
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
@@ -770,9 +786,21 @@ function OpenCommandPaletteDialog() {
     [getAddProjectInitialQueryForEnvironment],
   );
 
+  const startNewProject = useCallback((environmentId: EnvironmentId): void => {
+    setAddProjectEnvironmentId(environmentId);
+    setNewProjectEnvironmentId(environmentId);
+    setAddProjectCloneFlow(null);
+    pushPaletteView({
+      addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
+      groups: [],
+      initialQuery: "",
+    });
+  }, []);
+
   const startAddProjectClone = useCallback(
     (environmentId: EnvironmentId, source: AddProjectRemoteSource): void => {
       setAddProjectEnvironmentId(environmentId);
+      setNewProjectEnvironmentId(null);
       setAddProjectCloneFlow({ step: "repository", environmentId, source });
       pushPaletteView({
         addonIcon: remoteProjectSourceIcon(source, ADDON_ICON_CLASS),
@@ -796,17 +824,32 @@ function OpenCommandPaletteDialog() {
       const sourceItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
         {
           kind: "action",
-          value: `action:add-project:${environmentId}:local`,
-          searchTerms: ["project", "path", "folder", "directory", "browse", "environment"],
-          title: "Project path",
-          description: "Browse a path in this environment",
+          value: `action:add-project:${environmentId}:new`,
+          searchTerms: ["new project", "project", "shared runtime", "runtime"],
+          title: HOMELAB_PRODUCT_COPY.project.newAction,
+          description: HOMELAB_PRODUCT_COPY.project.searchDescription,
+          icon: <ServerIcon className={ITEM_ICON_CLASS} />,
+          keepOpen: true,
+          run: async () => {
+            startNewProject(environmentId);
+          },
+        },
+      ];
+
+      if (showCompatibilityHostPathProjectUi) {
+        sourceItems.push({
+          kind: "action",
+          value: `action:add-project:${environmentId}:compatibility-path`,
+          searchTerms: ["advanced", "compatibility", "host path", "bootstrap", "workspace"],
+          title: "Advanced: bootstrap from host path",
+          description: "Use an existing server path as compatibility workspace",
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           keepOpen: true,
           run: async () => {
             startAddProjectBrowse(environmentId);
           },
-        },
-      ];
+        });
+      }
 
       if (!showRemoteProjectCloneUi) {
         return [{ value: `sources:${environmentId}`, label: "Projects", items: sourceItems }];
@@ -885,9 +928,11 @@ function OpenCommandPaletteDialog() {
     },
     [
       openSourceControlSettings,
+      showCompatibilityHostPathProjectUi,
       showRemoteProjectCloneUi,
       startAddProjectBrowse,
       startAddProjectClone,
+      startNewProject,
     ],
   );
 
@@ -937,12 +982,21 @@ function OpenCommandPaletteDialog() {
     (option) => ({
       kind: "action",
       value: `action:add-project:environment:${option.environmentId}`,
-      searchTerms: [option.label, option.environmentId, option.isPrimary ? "this device" : ""],
+      searchTerms: [
+        option.label,
+        option.environmentId,
+        HOMELAB_PRODUCT_COPY.project.singular,
+        option.isPrimary ? "this device" : "",
+      ],
       title: option.label,
-      description: option.isPrimary ? "This device" : option.environmentId,
-      icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+      description: option.isPrimary ? "This server" : option.environmentId,
+      icon: <ServerIcon className={ITEM_ICON_CLASS} />,
       keepOpen: true,
       run: async () => {
+        if (!showRemoteProjectCloneUi && !showCompatibilityHostPathProjectUi) {
+          startNewProject(option.environmentId);
+          return;
+        }
         startAddProjectSourceSelection(option.environmentId);
       },
     }),
@@ -973,10 +1027,15 @@ function OpenCommandPaletteDialog() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to browse projects",
+          title: "Unable to create project",
           description: "No environment is available.",
         }),
       );
+      return;
+    }
+
+    if (!showRemoteProjectCloneUi && !showCompatibilityHostPathProjectUi) {
+      startNewProject(environmentId);
       return;
     }
 
@@ -985,6 +1044,9 @@ function OpenCommandPaletteDialog() {
     addProjectEnvironmentGroups,
     addProjectEnvironmentOptions.length,
     defaultAddProjectEnvironmentId,
+    showCompatibilityHostPathProjectUi,
+    showRemoteProjectCloneUi,
+    startNewProject,
     startAddProjectSourceSelection,
   ]);
 
@@ -1042,27 +1104,11 @@ function OpenCommandPaletteDialog() {
     kind: "action",
     value: "action:add-project",
     searchTerms: showRemoteProjectCloneUi
-      ? [
-          "add project",
-          "folder",
-          "directory",
-          "browse",
-          "clone",
-          "remote",
-          "repository",
-          "repo",
-          "git",
-          "github",
-          "gitlab",
-          "bitbucket",
-          "azure",
-          "devops",
-          "url",
-          "environment",
-        ]
-      : ["add project", "folder", "directory", "browse", "environment"],
-    title: "Add project",
-    icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+      ? ["new project", "project", "runtime", "shared runtime", "import", "environment"]
+      : ["new project", "project", "runtime", "shared runtime", "environment"],
+    title: HOMELAB_PRODUCT_COPY.project.newAction,
+    description: HOMELAB_PRODUCT_COPY.project.searchDescription,
+    icon: <ServerIcon className={ITEM_ICON_CLASS} />,
     keepOpen: true,
     run: async () => {
       openAddProjectFlow();
@@ -1090,6 +1136,46 @@ function OpenCommandPaletteDialog() {
     projectSearchItems: projectSearchItems,
     threadSearchItems: allThreadItems,
   });
+
+  const handleCreateLogicalProject = useCallback(async () => {
+    const environmentId = newProjectEnvironmentId;
+    if (!environmentId) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) return;
+
+    const title = query.trim().replace(/\s+/g, " ");
+    if (title.length === 0) {
+      return;
+    }
+
+    try {
+      const projectId = newProjectId();
+      await api.orchestration.dispatchCommand({
+        type: "project.create",
+        commandId: newCommandId(),
+        projectId,
+        title,
+        workspaceRoot: createLogicalProjectWorkspaceRoot(projectId),
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        createdAt: new Date().toISOString(),
+      });
+      await handleNewThread(scopeProjectRef(environmentId, projectId), {
+        envMode: settings.defaultThreadEnvMode,
+      }).catch(() => undefined);
+      setOpen(false);
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to create project",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [handleNewThread, newProjectEnvironmentId, query, setOpen, settings.defaultThreadEnvMode]);
 
   const handleAddProject = useCallback(
     async (rawCwd: string) => {
@@ -1381,7 +1467,9 @@ function OpenCommandPaletteDialog() {
   }, [addProjectCloneFlow]);
 
   let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
-  if (addProjectCloneFlow?.step === "repository") {
+  if (isNewProjectFlow) {
+    displayedGroups = [];
+  } else if (addProjectCloneFlow?.step === "repository") {
     displayedGroups = [];
   } else if (addProjectCloneFlow?.step === "confirm") {
     displayedGroups = relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups;
@@ -1390,6 +1478,7 @@ function OpenCommandPaletteDialog() {
   }
 
   const inputPlaceholder =
+    (isNewProjectFlow ? HOMELAB_PRODUCT_COPY.project.createPlaceholder : null) ??
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
@@ -1404,6 +1493,7 @@ function OpenCommandPaletteDialog() {
   const useMetaForMod = isMacPlatform(navigator.platform);
   const submitModifierLabel = useMetaForMod ? "\u2318" : "Ctrl";
   const isCloneDestinationStep = addProjectCloneFlow?.step === "confirm";
+  const canCreateLogicalProject = isNewProjectFlow && query.trim().length > 0;
   const submitActionLabel = isCloneDestinationStep
     ? willCreateProjectPath
       ? "Create & Clone"
@@ -1460,6 +1550,14 @@ function OpenCommandPaletteDialog() {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (isNewProjectFlow && event.key === "Enter") {
+      event.preventDefault();
+      if (canCreateLogicalProject) {
+        void handleCreateLogicalProject();
+      }
+      return;
+    }
+
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
       event.preventDefault();
       void submitAddProjectCloneFlow();
@@ -1558,7 +1656,7 @@ function OpenCommandPaletteDialog() {
       }}
     >
       <Command
-        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
+        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${isNewProjectFlow}-${addProjectCloneFlow?.step ?? "none"}`}
         aria-label="Command palette"
         autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
         mode="none"
@@ -1571,13 +1669,15 @@ function OpenCommandPaletteDialog() {
         <div className="relative">
           <CommandInput
             className={
-              addProjectCloneFlow?.step === "repository"
+              isNewProjectFlow
                 ? "pe-32"
-                : isBrowsing
-                  ? willCreateProjectPath
-                    ? "pe-36"
-                    : "pe-16"
-                  : undefined
+                : addProjectCloneFlow?.step === "repository"
+                  ? "pe-32"
+                  : isBrowsing
+                    ? willCreateProjectPath
+                      ? "pe-36"
+                      : "pe-16"
+                    : undefined
             }
             placeholder={inputPlaceholder}
             wrapperClassName={
@@ -1600,10 +1700,35 @@ function OpenCommandPaletteDialog() {
                 ? {
                     startAddon: <FolderPlusIcon />,
                   }
-                : {})}
+                : isNewProjectFlow
+                  ? {
+                      startAddon: <ServerIcon />,
+                    }
+                  : {})}
             onKeyDown={handleKeyDown}
           />
-          {addProjectCloneFlow?.step === "repository" ? (
+          {isNewProjectFlow ? (
+            <Button
+              variant="outline"
+              size="xs"
+              tabIndex={-1}
+              className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
+              aria-label={`${HOMELAB_PRODUCT_COPY.project.createAction} (Enter)`}
+              disabled={!canCreateLogicalProject}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                void handleCreateLogicalProject();
+              }}
+              title={`${HOMELAB_PRODUCT_COPY.project.createAction} (Enter)`}
+            >
+              <span>Create</span>
+              <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+                <Kbd>Enter</Kbd>
+              </KbdGroup>
+            </Button>
+          ) : addProjectCloneFlow?.step === "repository" ? (
             <Button
               variant="outline"
               size="xs"
@@ -1686,23 +1811,30 @@ function OpenCommandPaletteDialog() {
             isActionsOnly={isActionsOnly}
             keybindings={keybindings}
             onExecuteItem={executeItem}
-            {...(addProjectCloneFlow?.step === "repository"
+            {...(isNewProjectFlow
               ? {
                   emptyStateMessage:
-                    addProjectCloneFlow.source === "url"
-                      ? "Enter a Git clone URL and press Enter to continue."
-                      : "Enter a repository path and press Enter to look it up.",
+                    query.trim().length === 0
+                      ? "Enter a project name. The project gets its own shared runtime."
+                      : "Press Enter to create this project with its own shared runtime.",
                 }
-              : addProjectCloneFlow?.step === "confirm"
-                ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-                : relativePathNeedsActiveProject
-                  ? { emptyStateMessage: "Relative paths require an active project." }
-                  : willCreateProjectPath
-                    ? {
-                        emptyStateMessage:
-                          "Press Enter to create this directory and add it as a project.",
-                      }
-                    : {})}
+              : addProjectCloneFlow?.step === "repository"
+                ? {
+                    emptyStateMessage:
+                      addProjectCloneFlow.source === "url"
+                        ? "Enter a Git clone URL and press Enter to continue."
+                        : "Enter a repository path and press Enter to look it up.",
+                  }
+                : addProjectCloneFlow?.step === "confirm"
+                  ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+                  : relativePathNeedsActiveProject
+                    ? { emptyStateMessage: "Relative paths require an active project." }
+                    : willCreateProjectPath
+                      ? {
+                          emptyStateMessage:
+                            "Press Enter to create this compatibility workspace and add it as a project.",
+                        }
+                      : {})}
           />
         </CommandPanel>
         <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">
@@ -1716,7 +1848,12 @@ function OpenCommandPaletteDialog() {
               </Kbd>
               <span className={cn("text-muted-foreground/80")}>Navigate</span>
             </KbdGroup>
-            {addProjectCloneFlow?.step === "repository" ? (
+            {isNewProjectFlow ? (
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>Enter</Kbd>
+                <span className={cn("text-muted-foreground/80")}>Create project</span>
+              </KbdGroup>
+            ) : addProjectCloneFlow?.step === "repository" ? (
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Enter</Kbd>
                 <span className={cn("text-muted-foreground/80")}>

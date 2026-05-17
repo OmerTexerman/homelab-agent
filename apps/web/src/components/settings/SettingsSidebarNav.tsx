@@ -1,5 +1,14 @@
 import type { ComponentType } from "react";
-import { ArrowLeftIcon, Settings2Icon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  BotIcon,
+  BrainIcon,
+  KeyRoundIcon,
+  MonitorSmartphoneIcon,
+  ServerIcon,
+  Settings2Icon,
+  WrenchIcon,
+} from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
@@ -11,14 +20,42 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "../ui/sidebar";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
-export type SettingsSectionPath = "/settings/general";
+export type SettingsSectionPath =
+  | "/settings/general"
+  | "/settings/providers"
+  | "/settings/secrets"
+  | "/settings/devices"
+  | "/settings/project-runtime"
+  | "/settings/memory"
+  | "/settings/advanced";
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsSectionPath;
   icon: ComponentType<{ className?: string }>;
-}> = [{ label: "General", to: "/settings/general", icon: Settings2Icon }];
+}> = [
+  { label: "General", to: "/settings/general", icon: Settings2Icon },
+  { label: "Providers", to: "/settings/providers", icon: BotIcon },
+  { label: "Secrets", to: "/settings/secrets", icon: KeyRoundIcon },
+  {
+    label: HOMELAB_PRODUCT_COPY.settings.devicesAndSessions,
+    to: "/settings/devices",
+    icon: MonitorSmartphoneIcon,
+  },
+  {
+    label: HOMELAB_PRODUCT_COPY.projectRuntime.title,
+    to: "/settings/project-runtime",
+    icon: ServerIcon,
+  },
+  {
+    label: HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge,
+    to: "/settings/memory",
+    icon: BrainIcon,
+  },
+  { label: HOMELAB_PRODUCT_COPY.settings.advanced, to: "/settings/advanced", icon: WrenchIcon },
+];
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();

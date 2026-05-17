@@ -2,6 +2,7 @@ import { type KeybindingCommand, type FilesystemBrowseEntry } from "@t3tools/con
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import { type ReactNode } from "react";
 import { sortThreads } from "../lib/threadSort";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -99,7 +100,7 @@ export function buildProjectActionItems(input: {
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
     searchTerms: [project.name, project.cwd],
     title: project.name,
-    description: project.cwd,
+    description: HOMELAB_PRODUCT_COPY.project.searchDescription,
     icon: input.icon(project),
     run: async () => {
       await input.runProject(project);
@@ -355,10 +356,10 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
     case "root":
       return "Search commands, projects, and threads...";
     case "root-browse":
-      return "Enter project path (e.g. ~/projects/my-app)";
+      return "Enter compatibility workspace path";
     case "submenu":
       return "Search...";
     case "submenu-browse":
-      return "Enter path (e.g. ~/projects/my-app)";
+      return "Enter compatibility workspace path";
   }
 }

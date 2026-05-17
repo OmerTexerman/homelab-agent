@@ -32,12 +32,13 @@ import {
 } from "@tanstack/react-router";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import { resetSourceControlDiscoveryStateForTests } from "../../lib/sourceControlDiscoveryState";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
-import { GeneralSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
+import { AdvancedSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
 
 function renderWithTestRouter(children: ReactNode) {
@@ -552,19 +553,19 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await expect.element(page.getByText("Manage local backend")).toBeInTheDocument();
+    await expect.element(page.getByText("Devices & Sessions")).toBeInTheDocument();
     await expect.element(page.getByLabelText("Enable network access")).toBeDisabled();
     await expect
       .element(
         page.getByText(
-          "This backend is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing.",
+          "This server is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing.",
         ),
       )
       .toBeInTheDocument();
     await expect.element(page.getByText("Authorized clients")).not.toBeInTheDocument();
     await expect.element(page.getByText("Chrome on Mac")).not.toBeInTheDocument();
     await expect
-      .element(page.getByRole("heading", { name: "Remote environments", exact: true }))
+      .element(page.getByRole("heading", { name: "Connected servers", exact: true }))
       .toBeInTheDocument();
   });
 
@@ -738,16 +739,16 @@ describe("GeneralSettingsPanel observability", () => {
     await expect.element(page.getByText("http://127.0.0.1:3773/").first()).toBeInTheDocument();
   });
 
-  it("shows diagnostics inside About with a diagnostics link", async () => {
+  it("shows diagnostics inside Advanced with a diagnostics link", async () => {
     setServerConfigSnapshot(createBaseServerConfig());
 
     mounted = await renderWithTestRouter(
       <AppAtomRegistryProvider>
-        <GeneralSettingsPanel />
+        <AdvancedSettingsPanel />
       </AppAtomRegistryProvider>,
     );
 
-    await expect.element(page.getByText("About")).toBeInTheDocument();
+    await expect.element(page.getByText("Advanced")).toBeInTheDocument();
     await expect
       .element(page.getByRole("heading", { name: "Diagnostics", exact: true }))
       .toBeInTheDocument();
@@ -981,7 +982,7 @@ describe("GeneralSettingsPanel observability", () => {
     await networkAccessToggle.click();
     await expect.element(page.getByText("Enable network access?")).toBeInTheDocument();
     await expect
-      .element(page.getByText("T3 Code will restart to expose this environment over the network."))
+      .element(page.getByText("Homelab Agent will restart to expose this server over the network."))
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and enable", exact: true }).click();
     await vi.waitFor(() => {
@@ -1026,10 +1027,10 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await page.getByRole("button", { name: "Add environment", exact: true }).click();
-    const addEnvironmentDialog = page.getByRole("dialog", { name: "Add Environment" });
+    await page.getByRole("button", { name: "Add server", exact: true }).click();
+    const addEnvironmentDialog = page.getByRole("dialog", { name: "Add server" });
     await expect
-      .element(addEnvironmentDialog.getByRole("heading", { name: "Add Environment", exact: true }))
+      .element(addEnvironmentDialog.getByRole("heading", { name: "Add server", exact: true }))
       .toBeInTheDocument();
     await addEnvironmentDialog.getByRole("button", { name: /^SSH\b/ }).click();
     await vi.waitFor(() => {
@@ -1043,7 +1044,7 @@ describe("GeneralSettingsPanel observability", () => {
     await addEnvironmentDialog.getByLabelText("Username").fill("julius");
     await addEnvironmentDialog.getByLabelText("Port").fill("2222");
     await addEnvironmentDialog
-      .getByRole("button", { name: "Add environment", exact: true })
+      .getByRole("button", { name: "Add server", exact: true })
       .first()
       .click();
 
@@ -1228,6 +1229,7 @@ describe("SourceControlSettingsPanel discovery states", () => {
     | null = null;
 
   beforeEach(async () => {
+    resetSourceControlDiscoveryStateForTests();
     resetAppAtomRegistryForTests();
     await __resetLocalApiForTests();
     document.body.innerHTML = "";
@@ -1242,6 +1244,7 @@ describe("SourceControlSettingsPanel discovery states", () => {
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
     await __resetLocalApiForTests();
+    resetSourceControlDiscoveryStateForTests();
     resetAppAtomRegistryForTests();
   });
 

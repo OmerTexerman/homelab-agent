@@ -45,16 +45,16 @@ function HostedStaticOnboardingState() {
                 <LinkIcon className="size-5" />
               </div>
               <EmptyTitle className="text-foreground text-xl">
-                Connect an environment to get started
+                Connect a server to get started
               </EmptyTitle>
               <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
-                Open a pairing link from another Homelab Agent client or add a reachable backend
-                manually. Saved environments stay in this browser.
+                Open a pairing link from another Homelab Agent client or add a reachable server
+                manually. Saved servers stay in this browser.
               </EmptyDescription>
               <div className="mt-6 flex justify-center">
-                <Button render={<a href="/settings/connections" />} size="sm">
+                <Button render={<a href="/settings/devices" />} size="sm">
                   <PlusIcon className="size-4" />
-                  Add environment
+                  Add server
                 </Button>
               </div>
             </EmptyHeader>

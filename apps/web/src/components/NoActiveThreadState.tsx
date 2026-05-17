@@ -99,9 +99,9 @@ export function NoActiveThreadState() {
                   Thread runtimes stay thin. Homelab context comes from tools.
                 </h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  New threads start with lightweight operating instructions, then pull the current
-                  architecture, services, secrets, and runtime bootstrap state from the shared
-                  homelab system as they work.
+                  Threads start inside a project with lightweight operating instructions, then pull
+                  current architecture, services, secrets, and runtime bootstrap state from Homelab
+                  Agent as they work.
                 </p>
                 <div className="mt-5 flex flex-wrap gap-2">
                   <Button
@@ -160,7 +160,7 @@ export function NoActiveThreadState() {
                   icon={<WrenchIcon className="size-4" />}
                   label="Bootstrap"
                   value={String(bootstrapMutationCount)}
-                  detail="Shared runtime mutations future threads inherit."
+                  detail="Project runtime mutations future threads inherit."
                 />
               </div>
             </section>

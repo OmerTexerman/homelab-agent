@@ -3,8 +3,8 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
-  FolderPlusIcon,
   SearchIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -198,6 +198,8 @@ import {
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 import {
+  HOMELAB_PRODUCT_COPY,
+  shouldShowCompatibilityHostPathProjectUi,
   shouldShowPrimarySourceControlUi,
   shouldShowSidebarProjectGroupingControls,
 } from "../productCapabilities";
@@ -949,6 +951,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     (settings) => settings.defaultThreadEnvMode,
   );
   const showProjectGroupingControls = shouldShowSidebarProjectGroupingControls();
+  const showCompatibilityWorkspaceControls = shouldShowCompatibilityHostPathProjectUi();
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const { updateSettings } = useUpdateSettings();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
@@ -989,7 +992,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "Path copied",
+        title: "Compatibility workspace copied",
         description: ctx.path,
       });
     },
@@ -997,7 +1000,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
+          title: "Failed to copy compatibility workspace",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -1348,13 +1351,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                     useStore.getState(),
                     [memberProjectRef],
                   );
+                  const compatibilityWorkspaceLine = showCompatibilityWorkspaceControls
+                    ? [`Compatibility workspace: ${member.cwd}`]
+                    : [];
                   const confirmed = await api.dialogs.confirm(
                     latestProjectThreads.length > 0
                       ? [
                           `Remove project "${member.name}" and delete its ${latestProjectThreads.length} thread${
                             latestProjectThreads.length === 1 ? "" : "s"
                           }?`,
-                          `Path: ${member.cwd}`,
+                          ...compatibilityWorkspaceLine,
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
@@ -1364,7 +1370,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                         ].join("\n")
                       : [
                           `Remove project "${member.name}"?`,
-                          `Path: ${member.cwd}`,
+                          ...compatibilityWorkspaceLine,
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
@@ -1401,7 +1407,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       const message = [
         `Remove project "${member.name}"?`,
-        `Path: ${member.cwd}`,
+        ...(showCompatibilityWorkspaceControls ? [`Compatibility workspace: ${member.cwd}`] : []),
         ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
         "This removes only this project entry.",
       ].join("\n");
@@ -1428,7 +1434,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         );
       }
     },
-    [memberThreadCountByPhysicalKey, removeProject],
+    [memberThreadCountByPhysicalKey, removeProject, showCompatibilityWorkspaceControls],
   );
 
   const handleProjectButtonContextMenu = useCallback(
@@ -1510,7 +1516,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             ...(showProjectGroupingControls
               ? [buildTargetedItem("grouping", "Project grouping...")]
               : []),
-            buildTargetedItem("copy-path", "Copy Project Path"),
+            ...(showCompatibilityWorkspaceControls
+              ? [buildTargetedItem("copy-path", "Copy compatibility workspace root")]
+              : []),
             buildTargetedItem("delete", "Remove project", {
               destructive: true,
             }),
@@ -1535,6 +1543,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       openProjectRenameDialog,
       project.groupedProjectCount,
       project.memberProjects,
+      showCompatibilityWorkspaceControls,
       showProjectGroupingControls,
       suppressProjectClickForContextMenuRef,
     ],
@@ -1926,7 +1935,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
-          { id: "copy-path", label: "Copy Path" },
+          ...(showCompatibilityWorkspaceControls
+            ? [{ id: "copy-path", label: "Copy compatibility workspace root" }]
+            : []),
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true },
         ],
@@ -1949,8 +1960,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Path unavailable",
-              description: "This thread does not have a workspace path to copy.",
+              title: "Compatibility workspace unavailable",
+              description: "This thread does not have a compatibility workspace root to copy.",
             }),
           );
           return;
@@ -1984,6 +1995,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.cwd,
+      showCompatibilityWorkspaceControls,
     ],
   );
 
@@ -2002,6 +2014,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onClick={handleProjectButtonClick}
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
+          aria-label={`Project ${project.displayName}`}
         >
           {!projectExpanded && projectStatus ? (
             <span
@@ -2029,6 +2042,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate text-xs font-medium text-foreground/90">
               {project.displayName}
+            </span>
+            <span className="shrink-0 rounded border border-border/60 px-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/55 max-sm:hidden">
+              Project
             </span>
             {project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-[10px] text-muted-foreground/60">
@@ -2132,7 +2148,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             <DialogTitle>Rename project</DialogTitle>
             <DialogDescription>
               {projectRenameTarget
-                ? `Update the title for ${projectRenameTarget.cwd}.`
+                ? `Update the title for project "${projectRenameTarget.name}".`
                 : "Update the project title."}
             </DialogDescription>
           </DialogHeader>
@@ -2709,16 +2725,16 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 render={
                   <button
                     type="button"
-                    aria-label="Add project"
+                    aria-label={HOMELAB_PRODUCT_COPY.project.newAction}
                     data-testid="sidebar-add-project-trigger"
                     className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
                     onClick={openAddProject}
                   />
                 }
               >
-                <FolderPlusIcon className="size-3.5" />
+                <ServerIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
+              <TooltipPopup side="right">{HOMELAB_PRODUCT_COPY.project.newAction}</TooltipPopup>
             </Tooltip>
           </div>
         </div>
@@ -2800,8 +2816,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           )}
 
           {projectsLength === 0 && (
-            <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
-              No projects yet
+            <div className="space-y-1 px-3 pt-4 text-center">
+              <div className="text-xs font-medium text-foreground/75">
+                {HOMELAB_PRODUCT_COPY.project.emptySidebarTitle}
+              </div>
+              <div className="text-[11px] leading-4 text-muted-foreground/65">
+                {HOMELAB_PRODUCT_COPY.project.emptySidebarDescription}
+              </div>
             </div>
           )}
         </div>
