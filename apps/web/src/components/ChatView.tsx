@@ -15,7 +15,6 @@ import {
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
-  OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
@@ -49,21 +48,9 @@ import {
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
-  deriveCompletionDividerBeforeEntryId,
-  derivePendingApprovals,
-  derivePendingUserInputs,
-  derivePhase,
-  deriveTimelineEntries,
-  deriveActiveWorkStartedAt,
-  deriveActivePlanState,
-  findSidebarProposedPlan,
-  findLatestProposedPlan,
-  deriveWorkLogEntries,
-  hasActionableProposedPlan,
-  hasToolActivityForTurn,
-  isLatestTurnSettled,
-  formatElapsed,
-} from "../session-logic";
+  deriveThreadTimelineControlState,
+  deriveThreadTimelineReadModel,
+} from "../threadTimelineReadModel";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   buildPendingUserInputAnswers,
@@ -205,7 +192,6 @@ import {
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
-const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
@@ -865,7 +851,11 @@ export default function ChatView(props: ChatViewProps) {
         : nextThreadIds;
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalState.terminalOpen]);
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const timelineControl = useMemo(
+    () => deriveThreadTimelineControlState({ thread: activeThread ?? null }),
+    [activeThread],
+  );
+  const latestTurnSettled = timelineControl.latestTurnSettled;
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
@@ -1299,25 +1289,11 @@ export default function ChatView(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
-  const phase = derivePhase(activeThread?.session ?? null);
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const workLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const latestTurnHasToolActivity = useMemo(
-    () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities),
-    [threadActivities],
-  );
-  const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
-  );
-  const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const phase = timelineControl.phase;
+  const pendingApprovals = timelineControl.pendingApprovals;
+  const pendingUserInputs = timelineControl.pendingUserInputs;
+  const activePendingApproval = timelineControl.activePendingApproval;
+  const activePendingUserInput = timelineControl.activePendingUserInput;
   const activePendingDraftAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -1350,36 +1326,6 @@ export default function ChatView(props: ChatViewProps) {
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
-  const sidebarProposedPlan = useMemo(
-    () =>
-      findSidebarProposedPlan({
-        threads: threadPlanCatalog,
-        latestTurn: activeLatestTurn,
-        latestTurnSettled,
-        threadId: activeThread?.id ?? null,
-      }),
-    [activeLatestTurn, activeThread?.id, latestTurnSettled, threadPlanCatalog],
-  );
-  const activePlan = useMemo(
-    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
-  const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
-    latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
-  const activePendingApproval = pendingApprovals[0] ?? null;
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -1394,12 +1340,6 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError: activeThread?.error,
   });
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
-  const activeWorkStartedAt = deriveActiveWorkStartedAt(
-    activeLatestTurn,
-    activeThread?.session ?? null,
-    localDispatchStartedAt,
-  );
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -1541,64 +1481,43 @@ export default function ChatView(props: ChatViewProps) {
       }
     };
   }, [attachmentPreviewHandoffByMessageId, clearAttachmentPreviewHandoff, serverMessages]);
-  const timelineMessages = useMemo(() => {
-    const messages = serverMessages ?? [];
-    const serverMessagesWithPreviewHandoff =
-      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
-        ? messages
-        : // Spread only fires for the few messages that actually changed;
-          // unchanged ones early-return their original reference.
-          // In-place mutation would break React's immutable state contract.
-          // oxlint-disable-next-line no-map-spread
-          messages.map((message) => {
-            if (
-              message.role !== "user" ||
-              !message.attachments ||
-              message.attachments.length === 0
-            ) {
-              return message;
-            }
-            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
-            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
-              return message;
-            }
-
-            let changed = false;
-            let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
-
-            return changed ? { ...message, attachments } : message;
-          });
-
-    if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
-    if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [serverMessages, attachmentPreviewHandoffByMessageId, optimisticUserMessages]);
-  const timelineEntries = useMemo(
+  const threadTimeline = useMemo(
     () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+      deriveThreadTimelineReadModel({
+        thread: activeThread ?? null,
+        threadPlanCatalog,
+        interactionMode,
+        optimisticUserMessages,
+        attachmentPreviewHandoffByMessageId,
+        localDispatchStartedAt,
+        isSendBusy,
+        isConnecting,
+        isRevertingCheckpoint,
+        controlState: timelineControl,
+      }),
+    [
+      activeThread,
+      attachmentPreviewHandoffByMessageId,
+      interactionMode,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      localDispatchStartedAt,
+      optimisticUserMessages,
+      threadPlanCatalog,
+      timelineControl,
+    ],
   );
+  const timelineEntries = threadTimeline.entries;
+  const isWorking = threadTimeline.ui.isWorking;
+  const activeWorkStartedAt = threadTimeline.activeTurn.startedAt;
+  const completionSummary = threadTimeline.completion.summary;
+  const completionDividerBeforeEntryId = threadTimeline.completion.dividerBeforeEntryId;
+  const activeProposedPlan = threadTimeline.activeProposedPlan;
+  const sidebarProposedPlan = threadTimeline.sidebarProposedPlan;
+  const activePlan = threadTimeline.activePlan;
+  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const showPlanFollowUpPrompt = threadTimeline.showPlanFollowUpPrompt;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -1649,25 +1568,6 @@ export default function ChatView(props: ChatViewProps) {
     visibleTurnDiffSummaryByAssistantMessageId,
   ]);
 
-  const completionSummary = useMemo(() => {
-    if (!latestTurnSettled) return null;
-    if (!activeLatestTurn?.startedAt) return null;
-    if (!activeLatestTurn.completedAt) return null;
-    if (!latestTurnHasToolActivity) return null;
-
-    const elapsed = formatElapsed(activeLatestTurn.startedAt, activeLatestTurn.completedAt);
-    return elapsed ? `Worked for ${elapsed}` : null;
-  }, [
-    activeLatestTurn?.completedAt,
-    activeLatestTurn?.startedAt,
-    latestTurnHasToolActivity,
-    latestTurnSettled,
-  ]);
-  const completionDividerBeforeEntryId = useMemo(() => {
-    if (!latestTurnSettled) return null;
-    if (!completionSummary) return null;
-    return deriveCompletionDividerBeforeEntryId(timelineEntries, activeLatestTurn);
-  }, [activeLatestTurn, completionSummary, latestTurnSettled, timelineEntries]);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.cwd },
@@ -3614,8 +3514,8 @@ export default function ChatView(props: ChatViewProps) {
             <MessagesTimeline
               key={activeThread.id}
               isWorking={isWorking}
-              activeTurnInProgress={isWorking || !latestTurnSettled}
-              activeTurnId={activeLatestTurn?.turnId ?? null}
+              activeTurnInProgress={threadTimeline.activeTurn.inProgress}
+              activeTurnId={threadTimeline.activeTurn.id}
               activeTurnStartedAt={activeWorkStartedAt}
               listRef={legendListRef}
               timelineEntries={timelineEntries}

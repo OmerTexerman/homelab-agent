@@ -53,6 +53,9 @@ export function deriveActiveWorkStartedAt(
   sendStartedAt: string | null,
 ): string | null {
   if (!isLatestTurnSettled(latestTurn, session)) {
+    if (latestTurn?.turnId && session?.activeTurnId && session.activeTurnId !== latestTurn.turnId) {
+      return sendStartedAt;
+    }
     return latestTurn?.startedAt ?? sendStartedAt;
   }
   return sendStartedAt;
