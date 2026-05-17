@@ -237,7 +237,10 @@ const CheckpointingLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
 );
 
-const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
+const TerminalLayerLive = TerminalManagerLive.pipe(
+  Layer.provide(PtyAdapterLive),
+  Layer.provide(ThreadRuntimeLive),
+);
 
 const ProjectRuntimeLifecycleLayerLive = ProjectRuntimeLifecycleLive.pipe(
   Layer.provide(ProjectRuntimeQueueLive),
