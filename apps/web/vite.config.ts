@@ -7,6 +7,7 @@ import pkg from "./package.json" with { type: "json" };
 
 const port = Number(process.env.PORT ?? 5733);
 const host = process.env.HOST?.trim() || "localhost";
+const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 const configuredWsUrl = process.env.VITE_WS_URL?.trim();
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
@@ -54,6 +55,30 @@ function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
 }
 
 const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
+
+export function resolveDevHmrHost(input: {
+  readonly bindHost: string;
+  readonly devServerUrl: string | undefined;
+}): string {
+  const configuredDevServerUrl = input.devServerUrl?.trim();
+  if (configuredDevServerUrl) {
+    try {
+      const url = new URL(configuredDevServerUrl);
+      if (url.hostname) {
+        return url.hostname;
+      }
+    } catch {
+      // Fall back to the bind host when the optional display URL is malformed.
+    }
+  }
+
+  const bindHost = input.bindHost.trim();
+  return bindHost === "0.0.0.0" || bindHost === "::" || bindHost === "[::]"
+    ? "localhost"
+    : bindHost || "localhost";
+}
+
+const hmrHost = resolveDevHmrHost({ bindHost: host, devServerUrl: configuredDevServerUrl });
 
 export default defineConfig({
   plugins: [
@@ -115,7 +140,7 @@ export default defineConfig({
       // inside Electron's BrowserWindow. Vite 8 uses console.debug for
       // connection logs — enable "Verbose" in DevTools to see them.
       protocol: "ws",
-      host,
+      host: hmrHost,
     },
   },
   build: {

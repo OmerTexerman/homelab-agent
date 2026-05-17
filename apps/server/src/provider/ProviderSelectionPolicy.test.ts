@@ -155,7 +155,7 @@ describe("ProviderSelectionPolicy", () => {
         status: "disabled",
         installed: false,
         auth: { status: "unknown" },
-        message: "Cursor is disabled in Homelab Agent settings.",
+        message: "Cursor is disabled in Providers settings.",
       }),
     );
     expect(disabled.status).toBe("disabled");

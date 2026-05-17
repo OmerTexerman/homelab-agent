@@ -285,8 +285,8 @@ export const makePendingOpenCodeProvider = (
           auth: { status: "unknown" },
           message:
             openCodeSettings.serverUrl.trim().length > 0
-              ? "OpenCode is disabled in Homelab Agent settings. A server URL is configured."
-              : "OpenCode is disabled in Homelab Agent settings.",
+              ? "OpenCode is disabled in Providers settings. A server URL is configured."
+              : "OpenCode is disabled in Providers settings.",
         },
       });
     }
@@ -359,8 +359,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         status: "warning",
         auth: { status: "unknown" },
         message: isExternalServer
-          ? "OpenCode is disabled in Homelab Agent settings. A server URL is configured."
-          : "OpenCode is disabled in Homelab Agent settings.",
+          ? "OpenCode is disabled in Providers settings. A server URL is configured."
+          : "OpenCode is disabled in Providers settings.",
       },
     });
   }

@@ -192,7 +192,7 @@ export function interpretProviderReadiness(
   if (!provider.enabled) {
     return {
       usable: false,
-      reason: `Provider instance '${provider.instanceId}' is disabled in Homelab Agent settings.`,
+      reason: `Provider instance '${provider.instanceId}' is disabled in Providers settings.`,
       provider,
       runtimeSupport,
     };

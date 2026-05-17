@@ -349,7 +349,7 @@ const makePendingCodexProvider = (
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Codex is disabled in Homelab Agent settings.",
+          message: "Codex is disabled in Providers settings.",
         },
       });
     }
@@ -433,7 +433,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in Homelab Agent settings.",
+        message: "Codex is disabled in Providers settings.",
       },
     });
   }
