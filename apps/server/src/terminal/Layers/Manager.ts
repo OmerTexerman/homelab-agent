@@ -5,7 +5,6 @@ import {
   DEFAULT_TERMINAL_ID,
   ThreadId,
   type TerminalEvent,
-  type TerminalSessionStatus,
   type RuntimeSessionId as RuntimeSessionIdModel,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
@@ -42,7 +41,19 @@ import { resolveRuntimeTerminalStartContext } from "./RuntimeTerminalContext.ts"
 import {
   appendTerminalSessionOutput,
   capTerminalHistory,
+  clearTerminalSessionHistory,
+  createTerminalSession,
+  markTerminalSessionClosed,
+  markTerminalSessionError,
+  markTerminalSessionExited,
+  markTerminalSessionRunning,
+  markTerminalSessionStarting,
+  resizeTerminalSession,
+  setTerminalSessionSubprocessActivity,
   snapshotTerminalSession,
+  terminalSessionOwnerId,
+  updateTerminalSessionContext,
+  type TerminalSessionState as TerminalSessionData,
 } from "./TerminalSession.ts";
 import {
   PtyAdapter,
@@ -101,31 +112,13 @@ interface TerminalStartInput {
   env?: Record<string, string>;
 }
 
-interface TerminalSessionState {
-  threadId: string;
-  runtimeId: RuntimeSessionIdModel | null;
-  terminalId: string;
-  cwd: string;
-  spawnCwd: string;
-  worktreePath: string | null;
-  runtimeShell: string | null;
-  status: TerminalSessionStatus;
-  pid: number | null;
-  history: string;
-  pendingHistoryControlSequence: string;
+interface TerminalSessionState extends TerminalSessionData {
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
-  exitCode: number | null;
-  exitSignal: number | null;
-  updatedAt: string;
-  cols: number;
-  rows: number;
   process: PtyProcess | null;
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
-  hasRunningSubprocess: boolean;
-  runtimeEnv: Record<string, string> | null;
 }
 
 interface PersistHistoryRequest {
@@ -419,15 +412,6 @@ function toSafeTerminalId(terminalId: string): string {
 
 function toSessionKey(threadId: string, terminalId: string): string {
   return `${threadId}\u0000${terminalId}`;
-}
-
-function terminalOwnerId(input: {
-  readonly threadId: string;
-  readonly runtimeId?: RuntimeSessionIdModel | null;
-}): string {
-  return input.runtimeId && String(input.runtimeId).startsWith("project-runtime:")
-    ? String(input.runtimeId)
-    : input.threadId;
 }
 
 function shouldExcludeTerminalEnvKey(key: string): boolean {
@@ -888,7 +872,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       const runtime = yield* threadRuntime
         .getRuntime(ThreadId.make(threadId))
         .pipe(Effect.catch(() => Effect.void.pipe(Effect.as(undefined))));
-      return terminalOwnerId({
+      return terminalSessionOwnerId({
         threadId,
         runtimeId: runtime?.runtimeId ?? null,
       });
@@ -991,8 +975,12 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               session,
               nextEvent.data,
               historyLineLimit,
+              new Date().toISOString(),
             );
-            session.updatedAt = new Date().toISOString();
+
+            if (!appendResult.accepted) {
+              return { type: "idle" } as const;
+            }
 
             return {
               type: "output",
@@ -1007,20 +995,14 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           const process = session.process;
           cleanupProcessHandles(session);
           session.process = null;
-          session.pid = null;
-          session.hasRunningSubprocess = false;
-          session.status = "exited";
-          session.pendingHistoryControlSequence = "";
+          markTerminalSessionExited(session, {
+            exitCode: nextEvent.event.exitCode,
+            exitSignal: nextEvent.event.signal,
+            updatedAt: new Date().toISOString(),
+          });
           session.pendingProcessEvents = [];
           session.pendingProcessEventIndex = 0;
           session.processEventDrainRunning = false;
-          session.exitCode = Number.isInteger(nextEvent.event.exitCode)
-            ? nextEvent.event.exitCode
-            : null;
-          session.exitSignal = Number.isInteger(nextEvent.event.signal)
-            ? nextEvent.event.signal
-            : null;
-          session.updatedAt = new Date().toISOString();
 
           return {
             type: "exit",
@@ -1083,14 +1065,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       yield* modifyManagerState((state) => {
         cleanupProcessHandles(session);
         session.process = null;
-        session.pid = null;
-        session.hasRunningSubprocess = false;
-        session.status = "exited";
-        session.pendingHistoryControlSequence = "";
+        markTerminalSessionClosed(session, { updatedAt: new Date().toISOString() });
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
-        session.updatedAt = new Date().toISOString();
         return [undefined, state] as const;
       });
 
@@ -1170,20 +1148,18 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       });
 
       yield* modifyManagerState((state) => {
-        session.status = "starting";
-        session.runtimeId = input.runtimeId;
-        session.cwd = input.cwd;
-        session.spawnCwd = input.spawnCwd;
-        session.worktreePath = input.worktreePath ?? null;
-        session.cols = input.cols;
-        session.rows = input.rows;
-        session.exitCode = null;
-        session.exitSignal = null;
-        session.hasRunningSubprocess = false;
+        markTerminalSessionStarting(session, {
+          runtimeId: input.runtimeId,
+          cwd: input.cwd,
+          spawnCwd: input.spawnCwd,
+          worktreePath: input.worktreePath ?? null,
+          cols: input.cols,
+          rows: input.rows,
+          updatedAt: new Date().toISOString(),
+        });
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
-        session.updatedAt = new Date().toISOString();
         return [undefined, state] as const;
       });
 
@@ -1219,9 +1195,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
 
               yield* modifyManagerState((state) => {
                 session.process = ptyProcess;
-                session.pid = processPid;
-                session.status = "running";
-                session.updatedAt = new Date().toISOString();
+                markTerminalSessionRunning(session, {
+                  pid: processPid,
+                  updatedAt: new Date().toISOString(),
+                });
                 session.unsubscribeData = unsubscribeData;
                 session.unsubscribeExit = unsubscribeExit;
                 return [undefined, state] as const;
@@ -1251,16 +1228,13 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         }
 
         yield* modifyManagerState((state) => {
-          session.status = "error";
-          session.pid = null;
+          markTerminalSessionError(session, { updatedAt: new Date().toISOString() });
           session.process = null;
           session.unsubscribeData = null;
           session.unsubscribeExit = null;
-          session.hasRunningSubprocess = false;
           session.pendingProcessEvents = [];
           session.pendingProcessEventIndex = 0;
           session.processEventDrainRunning = false;
-          session.updatedAt = new Date().toISOString();
           return [undefined, state] as const;
         });
 
@@ -1352,13 +1326,14 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             Option.isNone(liveSession) ||
             liveSession.value.status !== "running" ||
             liveSession.value.pid !== terminalPid ||
-            liveSession.value.hasRunningSubprocess === hasRunningSubprocess.value
+            !setTerminalSessionSubprocessActivity(
+              liveSession.value,
+              hasRunningSubprocess.value,
+              new Date().toISOString(),
+            )
           ) {
             return [Option.none(), state] as const;
           }
-
-          liveSession.value.hasRunningSubprocess = hasRunningSubprocess.value;
-          liveSession.value.updatedAt = new Date().toISOString();
 
           return [
             Option.some({
@@ -1440,7 +1415,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
           ...(input.env ? { env: input.env } : {}),
         });
-        const ownerThreadId = terminalOwnerId({
+        const ownerThreadId = terminalSessionOwnerId({
           threadId: input.threadId,
           runtimeId: resolvedContext.runtimeId,
         });
@@ -1458,30 +1433,27 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               const cols = input.cols ?? DEFAULT_OPEN_COLS;
               const rows = input.rows ?? DEFAULT_OPEN_ROWS;
               const session: TerminalSessionState = {
-                threadId: ownerThreadId,
-                runtimeId: resolvedContext.runtimeId,
-                terminalId,
-                cwd: resolvedContext.cwd,
-                spawnCwd: resolvedContext.spawnCwd,
-                worktreePath: resolvedContext.worktreePath,
-                runtimeShell: resolvedContext.runtimeShell,
-                status: "starting",
-                pid: null,
-                history,
-                pendingHistoryControlSequence: "",
+                ...createTerminalSession({
+                  threadId: ownerThreadId,
+                  runtimeId: resolvedContext.runtimeId,
+                  terminalId,
+                  cwd: resolvedContext.cwd,
+                  spawnCwd: resolvedContext.spawnCwd,
+                  worktreePath: resolvedContext.worktreePath,
+                  runtimeShell: resolvedContext.runtimeShell,
+                  runtimeEnv: resolvedContext.runtimeEnv,
+                  history,
+                  historyLineLimit,
+                  cols,
+                  rows,
+                  updatedAt: new Date().toISOString(),
+                }),
                 pendingProcessEvents: [],
                 pendingProcessEventIndex: 0,
                 processEventDrainRunning: false,
-                exitCode: null,
-                exitSignal: null,
-                updatedAt: new Date().toISOString(),
-                cols,
-                rows,
                 process: null,
                 unsubscribeData: null,
                 unsubscribeExit: null,
-                hasRunningSubprocess: false,
-                runtimeEnv: resolvedContext.runtimeEnv,
               };
 
               const createdSession = session;
@@ -1531,13 +1503,16 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               runtimeShellChanged
             ) {
               yield* stopProcess(liveSession);
-              liveSession.cwd = resolvedContext.cwd;
-              liveSession.spawnCwd = resolvedContext.spawnCwd;
-              liveSession.worktreePath = resolvedContext.worktreePath;
-              liveSession.runtimeEnv = nextRuntimeEnv;
-              liveSession.runtimeShell = resolvedContext.runtimeShell;
-              liveSession.history = "";
-              liveSession.pendingHistoryControlSequence = "";
+              updateTerminalSessionContext(liveSession, {
+                runtimeId: resolvedContext.runtimeId,
+                cwd: resolvedContext.cwd,
+                spawnCwd: resolvedContext.spawnCwd,
+                worktreePath: resolvedContext.worktreePath,
+                runtimeShell: resolvedContext.runtimeShell,
+                runtimeEnv: nextRuntimeEnv,
+                updatedAt: new Date().toISOString(),
+              });
+              clearTerminalSessionHistory(liveSession, { updatedAt: new Date().toISOString() });
               liveSession.pendingProcessEvents = [];
               liveSession.pendingProcessEventIndex = 0;
               liveSession.processEventDrainRunning = false;
@@ -1547,12 +1522,16 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
                 liveSession.history,
               );
             } else if (liveSession.status === "exited" || liveSession.status === "error") {
-              liveSession.runtimeEnv = nextRuntimeEnv;
-              liveSession.spawnCwd = resolvedContext.spawnCwd;
-              liveSession.worktreePath = resolvedContext.worktreePath;
-              liveSession.runtimeShell = resolvedContext.runtimeShell;
-              liveSession.history = "";
-              liveSession.pendingHistoryControlSequence = "";
+              updateTerminalSessionContext(liveSession, {
+                runtimeId: resolvedContext.runtimeId,
+                cwd: resolvedContext.cwd,
+                spawnCwd: resolvedContext.spawnCwd,
+                worktreePath: resolvedContext.worktreePath,
+                runtimeShell: resolvedContext.runtimeShell,
+                runtimeEnv: nextRuntimeEnv,
+                updatedAt: new Date().toISOString(),
+              });
+              clearTerminalSessionHistory(liveSession, { updatedAt: new Date().toISOString() });
               liveSession.pendingProcessEvents = [];
               liveSession.pendingProcessEventIndex = 0;
               liveSession.processEventDrainRunning = false;
@@ -1583,9 +1562,11 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             }
 
             if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
-              liveSession.cols = targetCols;
-              liveSession.rows = targetRows;
-              liveSession.updatedAt = new Date().toISOString();
+              resizeTerminalSession(liveSession, {
+                cols: targetCols,
+                rows: targetRows,
+                updatedAt: new Date().toISOString(),
+              });
               liveSession.process.resize(targetCols, targetRows);
             }
 
@@ -1626,9 +1607,11 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           terminalId,
         });
       }
-      session.cols = input.cols;
-      session.rows = input.rows;
-      session.updatedAt = new Date().toISOString();
+      resizeTerminalSession(session, {
+        cols: input.cols,
+        rows: input.rows,
+        updatedAt: new Date().toISOString(),
+      });
       yield* threadRuntime.touchRuntime(ThreadId.make(input.threadId)).pipe(
         Effect.catchTags({
           ThreadRuntimeError: () => Effect.void,
@@ -1646,12 +1629,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           Effect.gen(function* () {
             const terminalId = input.terminalId ?? DEFAULT_TERMINAL_ID;
             const session = yield* requireSession(ownerThreadId, terminalId);
-            session.history = "";
-            session.pendingHistoryControlSequence = "";
+            clearTerminalSessionHistory(session, { updatedAt: new Date().toISOString() });
             session.pendingProcessEvents = [];
             session.pendingProcessEventIndex = 0;
             session.processEventDrainRunning = false;
-            session.updatedAt = new Date().toISOString();
             yield* persistHistory(ownerThreadId, terminalId, session.history);
             yield* publishEvent({
               type: "cleared",
@@ -1674,7 +1655,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
           ...(input.env ? { env: input.env } : {}),
         });
-        const ownerThreadId = terminalOwnerId({
+        const ownerThreadId = terminalSessionOwnerId({
           threadId: input.threadId,
           runtimeId: resolvedContext.runtimeId,
         });
@@ -1691,30 +1672,27 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               const cols = input.cols ?? DEFAULT_OPEN_COLS;
               const rows = input.rows ?? DEFAULT_OPEN_ROWS;
               session = {
-                threadId: ownerThreadId,
-                runtimeId: resolvedContext.runtimeId,
-                terminalId,
-                cwd: resolvedContext.cwd,
-                spawnCwd: resolvedContext.spawnCwd,
-                worktreePath: resolvedContext.worktreePath,
-                runtimeShell: resolvedContext.runtimeShell,
-                status: "starting",
-                pid: null,
-                history: "",
-                pendingHistoryControlSequence: "",
+                ...createTerminalSession({
+                  threadId: ownerThreadId,
+                  runtimeId: resolvedContext.runtimeId,
+                  terminalId,
+                  cwd: resolvedContext.cwd,
+                  spawnCwd: resolvedContext.spawnCwd,
+                  worktreePath: resolvedContext.worktreePath,
+                  runtimeShell: resolvedContext.runtimeShell,
+                  runtimeEnv: resolvedContext.runtimeEnv,
+                  history: "",
+                  historyLineLimit,
+                  cols,
+                  rows,
+                  updatedAt: new Date().toISOString(),
+                }),
                 pendingProcessEvents: [],
                 pendingProcessEventIndex: 0,
                 processEventDrainRunning: false,
-                exitCode: null,
-                exitSignal: null,
-                updatedAt: new Date().toISOString(),
-                cols,
-                rows,
                 process: null,
                 unsubscribeData: null,
                 unsubscribeExit: null,
-                hasRunningSubprocess: false,
-                runtimeEnv: resolvedContext.runtimeEnv,
               };
               const createdSession = session;
               yield* modifyManagerState((state) => {
@@ -1726,19 +1704,21 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             } else {
               session = existingSession.value;
               yield* stopProcess(session);
-              session.cwd = resolvedContext.cwd;
-              session.spawnCwd = resolvedContext.spawnCwd;
-              session.worktreePath = resolvedContext.worktreePath;
-              session.runtimeEnv = resolvedContext.runtimeEnv;
-              session.runtimeShell = resolvedContext.runtimeShell;
-              session.runtimeId = resolvedContext.runtimeId;
+              updateTerminalSessionContext(session, {
+                runtimeId: resolvedContext.runtimeId,
+                cwd: resolvedContext.cwd,
+                spawnCwd: resolvedContext.spawnCwd,
+                worktreePath: resolvedContext.worktreePath,
+                runtimeShell: resolvedContext.runtimeShell,
+                runtimeEnv: resolvedContext.runtimeEnv,
+                updatedAt: new Date().toISOString(),
+              });
             }
 
             const cols = input.cols ?? session.cols;
             const rows = input.rows ?? session.rows;
 
-            session.history = "";
-            session.pendingHistoryControlSequence = "";
+            clearTerminalSessionHistory(session, { updatedAt: new Date().toISOString() });
             session.pendingProcessEvents = [];
             session.pendingProcessEventIndex = 0;
             session.processEventDrainRunning = false;

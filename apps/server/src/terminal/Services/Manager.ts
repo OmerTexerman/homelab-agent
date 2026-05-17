@@ -1,8 +1,8 @@
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
- * Owns terminal lifecycle operations, output fanout, and session state
- * transitions for thread-scoped terminals.
+ * Owns terminal lifecycle operations and output fanout for runtime-scoped
+ * terminals while preserving legacy thread-shaped inputs.
  *
  * @module TerminalManager
  */

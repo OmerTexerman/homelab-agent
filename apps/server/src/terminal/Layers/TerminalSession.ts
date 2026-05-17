@@ -4,6 +4,43 @@ import type {
   TerminalSessionStatus,
 } from "@t3tools/contracts";
 
+export interface TerminalSessionState {
+  threadId: string;
+  runtimeId: RuntimeSessionId | null;
+  terminalId: string;
+  cwd: string;
+  spawnCwd: string;
+  worktreePath: string | null;
+  runtimeShell: string | null;
+  runtimeEnv: Record<string, string> | null;
+  status: TerminalSessionStatus;
+  pid: number | null;
+  history: string;
+  pendingHistoryControlSequence: string;
+  exitCode: number | null;
+  exitSignal: number | null;
+  updatedAt: string;
+  cols: number;
+  rows: number;
+  hasRunningSubprocess: boolean;
+}
+
+export interface CreateTerminalSessionInput {
+  threadId: string;
+  runtimeId: RuntimeSessionId | null;
+  terminalId: string;
+  cwd: string;
+  spawnCwd: string;
+  worktreePath?: string | null;
+  runtimeShell: string | null;
+  runtimeEnv: Record<string, string> | null;
+  history: string;
+  historyLineLimit: number;
+  cols: number;
+  rows: number;
+  updatedAt: string;
+}
+
 export interface TerminalSnapshotState {
   threadId: string;
   runtimeId: RuntimeSessionId | null;
@@ -12,6 +49,8 @@ export interface TerminalSnapshotState {
   worktreePath: string | null;
   status: TerminalSessionStatus;
   pid: number | null;
+  cols: number;
+  rows: number;
   history: string;
   exitCode: number | null;
   exitSignal: number | null;
@@ -19,13 +58,68 @@ export interface TerminalSnapshotState {
 }
 
 export interface TerminalHistoryState {
+  status: TerminalSessionStatus;
   history: string;
   pendingHistoryControlSequence: string;
+  updatedAt: string;
 }
 
 export interface TerminalOutputAppendResult {
+  accepted: boolean;
   visibleText: string;
   historyForPersist: string | null;
+}
+
+export interface TerminalSessionStartInput {
+  runtimeId: RuntimeSessionId | null;
+  cwd: string;
+  spawnCwd: string;
+  worktreePath?: string | null;
+  cols: number;
+  rows: number;
+  updatedAt: string;
+}
+
+export interface TerminalSessionContextInput {
+  runtimeId: RuntimeSessionId | null;
+  cwd: string;
+  spawnCwd: string;
+  worktreePath?: string | null;
+  runtimeShell: string | null;
+  runtimeEnv: Record<string, string> | null;
+  updatedAt: string;
+}
+
+export function terminalSessionOwnerId(input: {
+  readonly threadId: string;
+  readonly runtimeId?: RuntimeSessionId | null;
+}): string {
+  return input.runtimeId && String(input.runtimeId).startsWith("project-runtime:")
+    ? String(input.runtimeId)
+    : input.threadId;
+}
+
+export function createTerminalSession(input: CreateTerminalSessionInput): TerminalSessionState {
+  return {
+    threadId: input.threadId,
+    runtimeId: input.runtimeId,
+    terminalId: input.terminalId,
+    cwd: input.cwd,
+    spawnCwd: input.spawnCwd,
+    worktreePath: input.worktreePath ?? null,
+    runtimeShell: input.runtimeShell,
+    runtimeEnv: input.runtimeEnv,
+    status: "starting",
+    pid: null,
+    history: capTerminalHistory(input.history, input.historyLineLimit),
+    pendingHistoryControlSequence: "",
+    exitCode: null,
+    exitSignal: null,
+    updatedAt: input.updatedAt,
+    cols: input.cols,
+    rows: input.rows,
+    hasRunningSubprocess: false,
+  };
 }
 
 export function snapshotTerminalSession(session: TerminalSnapshotState): TerminalSessionSnapshot {
@@ -37,6 +131,8 @@ export function snapshotTerminalSession(session: TerminalSnapshotState): Termina
     worktreePath: session.worktreePath,
     status: session.status,
     pid: session.pid,
+    cols: session.cols,
+    rows: session.rows,
     history: session.history,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
@@ -48,19 +144,141 @@ export function appendTerminalSessionOutput(
   session: TerminalHistoryState,
   data: string,
   historyLineLimit: number,
+  updatedAt: string,
 ): TerminalOutputAppendResult {
+  if (session.status !== "running") {
+    return { accepted: false, visibleText: "", historyForPersist: null };
+  }
+
   const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
   session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+  session.updatedAt = updatedAt;
 
   if (sanitized.visibleText.length === 0) {
-    return { visibleText: "", historyForPersist: null };
+    return { accepted: true, visibleText: "", historyForPersist: null };
   }
 
   session.history = capTerminalHistory(
     `${session.history}${sanitized.visibleText}`,
     historyLineLimit,
   );
-  return { visibleText: sanitized.visibleText, historyForPersist: session.history };
+  return {
+    accepted: true,
+    visibleText: sanitized.visibleText,
+    historyForPersist: session.history,
+  };
+}
+
+export function updateTerminalSessionContext(
+  session: TerminalSessionState,
+  input: TerminalSessionContextInput,
+): void {
+  session.runtimeId = input.runtimeId;
+  session.cwd = input.cwd;
+  session.spawnCwd = input.spawnCwd;
+  session.worktreePath = input.worktreePath ?? null;
+  session.runtimeShell = input.runtimeShell;
+  session.runtimeEnv = input.runtimeEnv;
+  session.updatedAt = input.updatedAt;
+}
+
+export function markTerminalSessionStarting(
+  session: TerminalSessionState,
+  input: TerminalSessionStartInput,
+): void {
+  session.status = "starting";
+  session.runtimeId = input.runtimeId;
+  session.cwd = input.cwd;
+  session.spawnCwd = input.spawnCwd;
+  session.worktreePath = input.worktreePath ?? null;
+  session.cols = input.cols;
+  session.rows = input.rows;
+  session.pid = null;
+  session.exitCode = null;
+  session.exitSignal = null;
+  session.hasRunningSubprocess = false;
+  session.pendingHistoryControlSequence = "";
+  session.updatedAt = input.updatedAt;
+}
+
+export function markTerminalSessionRunning(
+  session: TerminalSessionState,
+  input: { pid: number; updatedAt: string },
+): void {
+  session.status = "running";
+  session.pid = input.pid;
+  session.exitCode = null;
+  session.exitSignal = null;
+  session.updatedAt = input.updatedAt;
+}
+
+export function markTerminalSessionExited(
+  session: TerminalSessionState,
+  input: { exitCode: unknown; exitSignal: unknown; updatedAt: string },
+): void {
+  session.status = "exited";
+  session.pid = null;
+  session.hasRunningSubprocess = false;
+  session.pendingHistoryControlSequence = "";
+  session.exitCode = normalizeExitValue(input.exitCode);
+  session.exitSignal = normalizeExitValue(input.exitSignal);
+  session.updatedAt = input.updatedAt;
+}
+
+export function markTerminalSessionClosed(
+  session: TerminalSessionState,
+  input: { updatedAt: string },
+): void {
+  markTerminalSessionExited(session, {
+    exitCode: null,
+    exitSignal: null,
+    updatedAt: input.updatedAt,
+  });
+}
+
+export function markTerminalSessionError(
+  session: TerminalSessionState,
+  input: { updatedAt: string },
+): void {
+  session.status = "error";
+  session.pid = null;
+  session.hasRunningSubprocess = false;
+  session.pendingHistoryControlSequence = "";
+  session.exitCode = null;
+  session.exitSignal = null;
+  session.updatedAt = input.updatedAt;
+}
+
+export function clearTerminalSessionHistory(
+  session: TerminalSessionState,
+  input: { updatedAt: string },
+): string {
+  session.history = "";
+  session.pendingHistoryControlSequence = "";
+  session.updatedAt = input.updatedAt;
+  return session.history;
+}
+
+export function resizeTerminalSession(
+  session: TerminalSessionState,
+  input: { cols: number; rows: number; updatedAt: string },
+): void {
+  session.cols = input.cols;
+  session.rows = input.rows;
+  session.updatedAt = input.updatedAt;
+}
+
+export function setTerminalSessionSubprocessActivity(
+  session: TerminalSessionState,
+  hasRunningSubprocess: boolean,
+  updatedAt: string,
+): boolean {
+  if (session.status !== "running" || session.hasRunningSubprocess === hasRunningSubprocess) {
+    return false;
+  }
+  session.hasRunningSubprocess = hasRunningSubprocess;
+  session.updatedAt = updatedAt;
+  return true;
 }
 
 export function capTerminalHistory(history: string, maxLines: number): string {
@@ -200,6 +418,10 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
     return true;
   }
   return false;
+}
+
+function normalizeExitValue(value: unknown): number | null {
+  return Number.isInteger(value) ? (value as number) : null;
 }
 
 function shouldStripOscSequence(content: string): boolean {

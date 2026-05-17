@@ -578,6 +578,8 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       const reopened = yield* manager.open(openInput({ cols: 120, rows: 30 }));
 
       assert.equal(reopened.status, "running");
+      assert.equal(reopened.cols, 120);
+      assert.equal(reopened.rows, 30);
       expect(process.resizeCalls).toEqual([{ cols: 120, rows: 30 }]);
     }),
   );
