@@ -282,12 +282,73 @@ Project runtimes need first-class lifecycle operations:
   and transcripts unless the user explicitly deletes them too.
 - Cleanup Scratch: remove cache/temp/build outputs while preserving remembered
   files/tools and durable project memory.
-- Snapshot: create a named restore point for the runtime filesystem/state. The
-  current slice records metadata-only snapshot records with
-  `restoreAvailable: false`; the filesystem/container restore layer is still
-  missing.
+- Snapshot: create a named restore point for the runtime filesystem/state.
+  Filesystem snapshots are restorable when their managed archive exists.
 - Delete Project: delete project runtime files plus project-local memory and
   transcripts after confirmation. Do not delete global homelab knowledge.
+
+### Snapshot Restore V1
+
+Project Runtime snapshots now have a concrete filesystem archive in managed
+server state:
+
+```text
+<stateDir>/project-runtime-snapshots/
+  <encoded-runtime-id>/
+    <encoded-snapshot-id>/
+      manifest.json
+      runtime-state/
+        workspace/
+        home/
+        bin/
+```
+
+Snapshot records expose the user-facing id, name, timestamp, kind, note, and
+`restoreAvailable`. The archive path stays an implementation detail under
+server-managed state. `restoreAvailable` is true only for filesystem snapshots
+whose `runtime-state/` archive is still present. Older metadata-only snapshot
+records remain visible but non-restorable.
+
+V1 captures the managed runtime roots that are needed to restore normal
+workspace state:
+
+- `workspace/`: the Project Runtime workspace, including generated `.homelab`
+  views and user scratch/artifact files.
+- `home/`: runtime home files, excluding brokered runtime env, runtime bearer
+  token state, and synced provider auth files.
+- `bin/`: runtime wrapper/tooling files and any durable managed binaries.
+
+The excluded known-sensitive paths are:
+
+- `home/.homelab-runtime.env`
+- `home/.homelab-runtime-token`
+- `home/.codex`
+- `home/.claude`
+- `home/.claude.json`
+
+Those files are regenerated or resynced when the runtime wakes. Snapshot
+metadata, logs, docs, and tests must never include raw secret values. V1 cannot
+prove that a user-created file elsewhere in `workspace/` or `home/` is not
+sensitive, so users should avoid intentionally writing raw credentials into
+ordinary workspace files.
+
+Creating a filesystem snapshot closes runtime terminals, stops a running
+container if needed, copies the managed runtime roots into the archive, and
+leaves the runtime sleeping. Restore is explicit and confirmed in the UI.
+Restore stops active runtime work, destroys/invalidates the active container
+descriptor, replaces the managed runtime root from the selected snapshot, and
+leaves the runtime stopped/ready to wake. It preserves project records, thread
+history, project memory, promoted homelab knowledge, secret metadata, and
+snapshot records.
+
+Remaining V1 limitations:
+
+- archives are directory copies, not compressed or deduplicated bundles
+- restore replaces the whole managed runtime root instead of partially merging
+  paths
+- brokered/provider auth state is intentionally excluded and must be available
+  for resync on the next wake
+- isolated runtime clone merge/discard behavior is still a future slice
 
 ## Upstream Boundary
 

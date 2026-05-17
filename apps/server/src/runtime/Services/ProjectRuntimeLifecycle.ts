@@ -3,6 +3,7 @@ import type {
   ProjectRuntimeCreateSnapshotInput,
   ProjectRuntimeOperationInput,
   ProjectRuntimeOperationResult,
+  ProjectRuntimeRestoreSnapshotInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -25,6 +26,9 @@ export interface ProjectRuntimeLifecycleShape {
   ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;
   readonly createSnapshot: (
     input: ProjectRuntimeCreateSnapshotInput,
+  ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;
+  readonly restore: (
+    input: ProjectRuntimeRestoreSnapshotInput,
   ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;
 }
 

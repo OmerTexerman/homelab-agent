@@ -40,6 +40,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       reset: rpcClient.projectRuntime.reset,
       cleanupScratch: rpcClient.projectRuntime.cleanupScratch,
       snapshot: rpcClient.projectRuntime.snapshot,
+      restore: rpcClient.projectRuntime.restore,
     },
     vcs: {
       pull: rpcClient.vcs.pull,

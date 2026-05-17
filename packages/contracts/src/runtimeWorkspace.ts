@@ -107,7 +107,7 @@ export const ProjectRuntimeSnapshotRecord = Schema.Struct({
   projectId: ProjectId,
   name: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
-  kind: Schema.Literal("metadata"),
+  kind: Schema.Literals(["metadata", "filesystem"]),
   restoreAvailable: Schema.Boolean,
   note: TrimmedNonEmptyString,
 });
@@ -134,6 +134,12 @@ export const ProjectRuntimeCreateSnapshotInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
 });
 export type ProjectRuntimeCreateSnapshotInput = typeof ProjectRuntimeCreateSnapshotInput.Type;
+
+export const ProjectRuntimeRestoreSnapshotInput = Schema.Struct({
+  ...ProjectRuntimeOperationInput.fields,
+  snapshotId: TrimmedNonEmptyString,
+});
+export type ProjectRuntimeRestoreSnapshotInput = typeof ProjectRuntimeRestoreSnapshotInput.Type;
 
 export const ProjectRuntimeOperationResult = Schema.Struct({
   runtime: ProjectRuntimeDetail,

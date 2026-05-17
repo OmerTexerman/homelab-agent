@@ -824,6 +824,7 @@ const buildAppUnderTest = (options?: {
           reset: makeMockProjectRuntimeLifecycleOperation,
           cleanupScratch: makeMockProjectRuntimeLifecycleOperation,
           createSnapshot: makeMockProjectRuntimeLifecycleOperation,
+          restore: makeMockProjectRuntimeLifecycleOperation,
           ...options?.layers?.projectRuntimeLifecycle,
         }),
       ),

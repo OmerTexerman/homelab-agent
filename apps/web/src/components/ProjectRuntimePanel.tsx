@@ -1,9 +1,16 @@
-import type { EnvironmentId, ProjectId, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ProjectRuntimeSnapshotRecord,
+  RuntimeSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArchiveIcon,
   CameraIcon,
   EraserIcon,
+  HistoryIcon,
   Loader2Icon,
   PowerIcon,
   RotateCcwIcon,
@@ -28,7 +35,8 @@ type ProjectRuntimePanelOperation =
   | { type: "archive" }
   | { type: "reset" }
   | { type: "cleanupScratch" }
-  | { type: "snapshot"; name: string };
+  | { type: "snapshot"; name: string }
+  | { type: "restore"; snapshotId: string };
 
 interface ProjectRuntimePanelProps {
   environmentId: EnvironmentId;
@@ -50,6 +58,13 @@ async function confirmProjectRuntimeAction(message: string): Promise<boolean> {
 
 function defaultSnapshotName(): string {
   return `snapshot-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+function snapshotCreatedAtLabel(snapshot: ProjectRuntimeSnapshotRecord): string {
+  return new Date(snapshot.createdAt).toLocaleString(undefined, {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
 }
 
 function runtimeStatusDotClassName(state: string | undefined): string {
@@ -123,6 +138,11 @@ export function ProjectRuntimePanel({
           return api.projectRuntime.cleanupScratch(operationInput);
         case "snapshot":
           return api.projectRuntime.snapshot({ ...operationInput, name: operation.name });
+        case "restore":
+          return api.projectRuntime.restore({
+            ...operationInput,
+            snapshotId: operation.snapshotId,
+          });
       }
     },
     onSuccess: (result) => {
@@ -214,7 +234,7 @@ export function ProjectRuntimePanel({
       const confirmed = await confirmProjectRuntimeAction(
         [
           `Create Project Runtime snapshot "${trimmedName}"?`,
-          "This records a named restore point. Filesystem restore support may be unavailable.",
+          "This pauses active runtime work, archives managed workspace/home/bin state, and leaves the runtime sleeping.",
         ].join("\n"),
       );
       if (confirmed) {
@@ -222,6 +242,23 @@ export function ProjectRuntimePanel({
       }
     })();
   }, [runOperation]);
+
+  const restoreSnapshot = useCallback(
+    (snapshot: ProjectRuntimeSnapshotRecord) => {
+      void (async () => {
+        const confirmed = await confirmProjectRuntimeAction(
+          [
+            `Restore Project Runtime snapshot "${snapshot.name}"?`,
+            "This stops the active runtime, replaces managed workspace/home/bin files from the snapshot, and keeps project threads, memory, promoted knowledge, and secret metadata.",
+          ].join("\n"),
+        );
+        if (confirmed) {
+          runOperation({ type: "restore", snapshotId: snapshot.id });
+        }
+      })();
+    },
+    [runOperation],
+  );
 
   return (
     <section
@@ -291,6 +328,37 @@ export function ProjectRuntimePanel({
           </Button>
         </div>
       </div>
+      {detail?.snapshots.length ? (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border/60 pt-2">
+          <span className="text-xs font-medium text-muted-foreground">Snapshots</span>
+          {detail.snapshots.map((snapshot) => (
+            <div
+              key={snapshot.id}
+              className="flex min-w-0 items-center gap-1.5 rounded border border-border/70 bg-background/60 px-1.5 py-1"
+            >
+              <span className="max-w-40 truncate text-xs text-foreground" title={snapshot.name}>
+                {snapshot.name}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {snapshotCreatedAtLabel(snapshot)}
+              </span>
+              {snapshot.restoreAvailable ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => restoreSnapshot(snapshot)}
+                  disabled={busy}
+                >
+                  <HistoryIcon className="size-3.5" />
+                  Restore
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground">Metadata only</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

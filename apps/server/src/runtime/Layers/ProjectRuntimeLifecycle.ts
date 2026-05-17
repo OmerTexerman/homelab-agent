@@ -37,6 +37,7 @@ import { writeHomelabContextView } from "../HomelabContextView.ts";
 import { defaultProjectRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import { ThreadRuntime, type ThreadRuntimeDescriptor } from "../Services/ThreadRuntime.ts";
+import { encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
 import {
   ProjectRuntimeLifecycle,
   type ProjectRuntimeLifecycleShape,
@@ -69,8 +70,22 @@ const decodePersistedProjectRuntimeMetadataState = Schema.decodeUnknownEffect(
   PersistedProjectRuntimeMetadataState,
 );
 
-const METADATA_SNAPSHOT_NOTE =
-  "Metadata-only restore point. Filesystem/container restore is not implemented in this slice.";
+const FILESYSTEM_SNAPSHOT_NOTE =
+  "Filesystem restore point for managed workspace, home, and bin state. Brokered secret env, runtime tokens, and synced provider auth files are excluded and regenerated on wake.";
+const MISSING_ARCHIVE_SNAPSHOT_NOTE =
+  "Filesystem snapshot archive is missing from managed runtime state; restore is unavailable.";
+const SNAPSHOT_STATE_DIRNAME = "project-runtime-snapshots";
+const SNAPSHOT_ARCHIVE_DIRNAME = "runtime-state";
+const SNAPSHOT_MANIFEST_FILENAME = "manifest.json";
+const SNAPSHOT_MANIFEST_VERSION = 1;
+const SNAPSHOT_ROOT_NAMES = ["workspace", "home", "bin"] as const;
+const SNAPSHOT_EXCLUDED_RELATIVE_PATHS = [
+  "home/.homelab-runtime.env",
+  "home/.homelab-runtime-token",
+  "home/.codex",
+  "home/.claude",
+  "home/.claude.json",
+];
 
 const SCRATCH_RELATIVE_PATHS = [
   ".cache",
@@ -86,6 +101,17 @@ const SCRATCH_RELATIVE_PATHS = [
   "tmp",
 ];
 
+interface ProjectRuntimeSnapshotManifest {
+  readonly version: typeof SNAPSHOT_MANIFEST_VERSION;
+  readonly snapshotId: string;
+  readonly runtimeId: string;
+  readonly projectId: string;
+  readonly createdAt: string;
+  readonly archiveKind: "runtime-root-v1";
+  readonly includedRoots: ReadonlyArray<(typeof SNAPSHOT_ROOT_NAMES)[number]>;
+  readonly excludedRelativePaths: ReadonlyArray<string>;
+}
+
 function toProjectRuntimeError(input: {
   readonly message: string;
   readonly projectId?: ProjectId;
@@ -98,6 +124,157 @@ function toProjectRuntimeError(input: {
 
 function isProjectRuntimeId(runtimeId: RuntimeSessionIdModel): boolean {
   return String(runtimeId).startsWith("project-runtime:");
+}
+
+function snapshotRootForRuntime(
+  stateDir: string,
+  runtimeId: RuntimeSessionIdModel,
+  snapshotId: string,
+): string {
+  return nodePath.join(
+    stateDir,
+    SNAPSHOT_STATE_DIRNAME,
+    encodeRuntimeSegment(String(runtimeId)),
+    encodeRuntimeSegment(snapshotId),
+  );
+}
+
+function snapshotArchivePathFor(input: {
+  readonly stateDir: string;
+  readonly runtimeId: RuntimeSessionIdModel;
+  readonly snapshotId: string;
+}): string {
+  return nodePath.join(
+    snapshotRootForRuntime(input.stateDir, input.runtimeId, input.snapshotId),
+    SNAPSHOT_ARCHIVE_DIRNAME,
+  );
+}
+
+function snapshotArchiveExists(input: {
+  readonly stateDir: string;
+  readonly runtimeId: RuntimeSessionIdModel;
+  readonly snapshotId: string;
+}): boolean {
+  const archivePath = snapshotArchivePathFor(input);
+  try {
+    return nodeFs.statSync(archivePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSnapshotRelativePath(relativePath: string): string {
+  return relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function shouldExcludeSnapshotPath(runtimeRootPath: string, sourcePath: string): boolean {
+  const relativePath = normalizeSnapshotRelativePath(
+    nodePath.relative(runtimeRootPath, sourcePath),
+  );
+  return SNAPSHOT_EXCLUDED_RELATIVE_PATHS.some(
+    (excludedPath) => relativePath === excludedPath || relativePath.startsWith(`${excludedPath}/`),
+  );
+}
+
+function assertManagedRuntimeRoot(input: {
+  readonly stateDir: string;
+  readonly runtimeRootPath: string;
+  readonly projectId: ProjectId;
+  readonly runtimeId: RuntimeSessionIdModel;
+}) {
+  const managedRuntimeParent = nodePath.resolve(input.stateDir, "thread-runtimes");
+  const runtimeRoot = nodePath.resolve(input.runtimeRootPath);
+  if (
+    runtimeRoot === managedRuntimeParent ||
+    !runtimeRoot.startsWith(`${managedRuntimeParent}${nodePath.sep}`)
+  ) {
+    throw toProjectRuntimeError({
+      message: "Refusing to modify runtime state outside the managed runtime directory.",
+      projectId: input.projectId,
+      runtimeId: input.runtimeId,
+    });
+  }
+}
+
+function copyRuntimeStateToArchive(input: {
+  readonly stateDir: string;
+  readonly runtimeRootPath: string;
+  readonly runtimeId: RuntimeSessionIdModel;
+  readonly projectId: ProjectId;
+  readonly snapshotId: string;
+  readonly createdAt: string;
+}): void {
+  assertManagedRuntimeRoot(input);
+
+  const snapshotRoot = snapshotRootForRuntime(input.stateDir, input.runtimeId, input.snapshotId);
+  const temporarySnapshotRoot = `${snapshotRoot}.tmp-${nodeCrypto.randomUUID()}`;
+  const temporaryArchivePath = nodePath.join(temporarySnapshotRoot, SNAPSHOT_ARCHIVE_DIRNAME);
+  nodeFs.rmSync(temporarySnapshotRoot, { recursive: true, force: true });
+  nodeFs.mkdirSync(temporaryArchivePath, { recursive: true });
+
+  const includedRoots: Array<(typeof SNAPSHOT_ROOT_NAMES)[number]> = [];
+  for (const rootName of SNAPSHOT_ROOT_NAMES) {
+    const sourcePath = nodePath.join(input.runtimeRootPath, rootName);
+    if (!nodeFs.existsSync(sourcePath)) {
+      continue;
+    }
+    includedRoots.push(rootName);
+    nodeFs.cpSync(sourcePath, nodePath.join(temporaryArchivePath, rootName), {
+      recursive: true,
+      force: true,
+      filter: (source) => !shouldExcludeSnapshotPath(input.runtimeRootPath, source),
+    });
+  }
+
+  const manifest: ProjectRuntimeSnapshotManifest = {
+    version: SNAPSHOT_MANIFEST_VERSION,
+    snapshotId: input.snapshotId,
+    runtimeId: String(input.runtimeId),
+    projectId: String(input.projectId),
+    createdAt: input.createdAt,
+    archiveKind: "runtime-root-v1",
+    includedRoots,
+    excludedRelativePaths: SNAPSHOT_EXCLUDED_RELATIVE_PATHS,
+  };
+  nodeFs.writeFileSync(
+    nodePath.join(temporarySnapshotRoot, SNAPSHOT_MANIFEST_FILENAME),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+
+  nodeFs.rmSync(snapshotRoot, { recursive: true, force: true });
+  nodeFs.mkdirSync(nodePath.dirname(snapshotRoot), { recursive: true });
+  nodeFs.renameSync(temporarySnapshotRoot, snapshotRoot);
+}
+
+function replaceRuntimeStateFromArchive(input: {
+  readonly stateDir: string;
+  readonly runtimeRootPath: string;
+  readonly runtimeId: RuntimeSessionIdModel;
+  readonly projectId: ProjectId;
+  readonly snapshotId: string;
+}): void {
+  assertManagedRuntimeRoot(input);
+
+  const archivePath = snapshotArchivePathFor(input);
+  const temporaryRuntimeRoot = `${input.runtimeRootPath}.restore-${nodeCrypto.randomUUID()}`;
+  nodeFs.rmSync(temporaryRuntimeRoot, { recursive: true, force: true });
+  nodeFs.mkdirSync(temporaryRuntimeRoot, { recursive: true });
+
+  for (const rootName of SNAPSHOT_ROOT_NAMES) {
+    const sourcePath = nodePath.join(archivePath, rootName);
+    if (!nodeFs.existsSync(sourcePath)) {
+      continue;
+    }
+    nodeFs.cpSync(sourcePath, nodePath.join(temporaryRuntimeRoot, rootName), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  nodeFs.rmSync(input.runtimeRootPath, { recursive: true, force: true });
+  nodeFs.mkdirSync(nodePath.dirname(input.runtimeRootPath), { recursive: true });
+  nodeFs.renameSync(temporaryRuntimeRoot, input.runtimeRootPath);
 }
 
 function mapThreadRuntimeStatus(
@@ -388,6 +565,26 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     const descriptor = descriptors[0];
     const lifecycleState = mapThreadRuntimeStatus(descriptor, metadata);
     const now = new Date().toISOString();
+    const snapshots = (metadata?.snapshots ?? []).map((snapshot) => {
+      if (snapshot.kind !== "filesystem") {
+        return snapshot;
+      }
+      const restoreAvailable = snapshotArchiveExists({
+        stateDir: config.stateDir,
+        runtimeId: snapshot.runtimeId,
+        snapshotId: snapshot.id,
+      });
+      return {
+        id: snapshot.id,
+        runtimeId: snapshot.runtimeId,
+        projectId: snapshot.projectId,
+        name: snapshot.name,
+        createdAt: snapshot.createdAt,
+        kind: snapshot.kind,
+        restoreAvailable,
+        note: restoreAvailable ? snapshot.note : MISSING_ARCHIVE_SNAPSHOT_NOTE,
+      } satisfies ProjectRuntimeSnapshotRecord;
+    });
     const statusView: ProjectRuntimeStatusView = {
       id: resolved.runtimeId,
       projectId: resolved.project.id,
@@ -410,10 +607,13 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     const detail: ProjectRuntimeDetail = {
       runtime: statusView,
       queue: queueState,
-      snapshots: [...(metadata?.snapshots ?? [])],
-      restoreAvailable: false,
-      warnings:
-        metadata?.snapshots && metadata.snapshots.length > 0 ? [METADATA_SNAPSHOT_NOTE] : [],
+      snapshots,
+      restoreAvailable: snapshots.some((snapshot) => snapshot.restoreAvailable),
+      warnings: snapshots.some((snapshot) => !snapshot.restoreAvailable)
+        ? [
+            "Some Project Runtime snapshots do not have a filesystem archive and cannot be restored.",
+          ]
+        : [],
     };
     return { runtime: detail };
   });
@@ -447,6 +647,104 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         ),
       { discard: true },
     );
+
+  const ensureRuntimeDescriptorForOperation = Effect.fn(
+    "projectRuntimeLifecycle.ensureRuntimeDescriptorForOperation",
+  )(function* (resolved: {
+    readonly project: OrchestrationProject;
+    readonly runtimeId: RuntimeSessionIdModel;
+    readonly bindingThread: OrchestrationThread;
+  }) {
+    const descriptors = yield* listRuntimeDescriptors(resolved.runtimeId);
+    if (descriptors.length > 0) {
+      return descriptors;
+    }
+
+    const descriptor = yield* threadRuntime
+      .ensureRuntime({
+        threadId: resolved.bindingThread.id,
+        runtimeId: resolved.runtimeId,
+        provider: null,
+        runtimeMode: resolved.bindingThread.runtimeMode,
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          toProjectRuntimeError({
+            message: "Failed to ensure project runtime filesystem state.",
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            threadId: resolved.bindingThread.id,
+            cause,
+          }),
+        ),
+      );
+    return [descriptor];
+  });
+
+  const stopRuntimeDescriptors = Effect.fn("projectRuntimeLifecycle.stopRuntimeDescriptors")(
+    function* (input: {
+      readonly projectId: ProjectId;
+      readonly runtimeId: RuntimeSessionIdModel;
+      readonly descriptors: ReadonlyArray<ThreadRuntimeDescriptor>;
+      readonly message: string;
+    }) {
+      yield* Effect.forEach(
+        input.descriptors,
+        (descriptor) =>
+          threadRuntime.stopRuntime(descriptor.threadId).pipe(
+            Effect.catchTags({
+              ThreadRuntimeNotFoundError: () => Effect.void,
+              ThreadRuntimeError: (cause) =>
+                Effect.fail(
+                  toProjectRuntimeError({
+                    message: input.message,
+                    projectId: input.projectId,
+                    runtimeId: input.runtimeId,
+                    threadId: descriptor.threadId,
+                    cause,
+                  }),
+                ),
+            }),
+          ),
+        { discard: true },
+      );
+    },
+  );
+
+  const destroyRuntimeDescriptors = Effect.fn("projectRuntimeLifecycle.destroyRuntimeDescriptors")(
+    function* (input: {
+      readonly projectId: ProjectId;
+      readonly runtimeId: RuntimeSessionIdModel;
+      readonly descriptors: ReadonlyArray<ThreadRuntimeDescriptor>;
+      readonly fallbackThreadId: ThreadIdModel;
+      readonly message: string;
+    }) {
+      const descriptorThreadIds =
+        input.descriptors.length > 0
+          ? input.descriptors.map((descriptor) => descriptor.threadId)
+          : [input.fallbackThreadId];
+      yield* Effect.forEach(
+        descriptorThreadIds,
+        (threadId) =>
+          threadRuntime.destroyRuntime(threadId).pipe(
+            Effect.catchTags({
+              ThreadRuntimeNotFoundError: () => Effect.void,
+              ThreadRuntimeError: (cause) =>
+                Effect.fail(
+                  toProjectRuntimeError({
+                    message: input.message,
+                    projectId: input.projectId,
+                    runtimeId: input.runtimeId,
+                    threadId,
+                    cause,
+                  }),
+                ),
+            }),
+          ),
+        { discard: true },
+      );
+    },
+  );
 
   const wake: ProjectRuntimeLifecycleShape["wake"] = Effect.fn("projectRuntimeLifecycle.wake")(
     function* (input) {
@@ -621,23 +919,166 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     "projectRuntimeLifecycle.createSnapshot",
   )(function* (input) {
     const resolved = yield* resolveRuntime(input);
+    const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
+    const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
+    yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+    yield* stopRuntimeDescriptors({
+      projectId: resolved.project.id,
+      runtimeId: resolved.runtimeId,
+      descriptors,
+      message: "Failed to stop project runtime before snapshot.",
+    });
+    const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
+      Effect.mapError((cause) =>
+        toProjectRuntimeError({
+          message: "Failed to resolve project runtime filesystem state for snapshot.",
+          projectId: resolved.project.id,
+          runtimeId: resolved.runtimeId,
+          threadId: descriptorThreadId,
+          cause,
+        }),
+      ),
+    );
+    const snapshotId = `runtime-snapshot-${nodeCrypto.randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    yield* Effect.try({
+      try: () =>
+        copyRuntimeStateToArchive({
+          stateDir: config.stateDir,
+          runtimeRootPath: launchContext.hostRuntimePath,
+          runtimeId: resolved.runtimeId,
+          projectId: resolved.project.id,
+          snapshotId,
+          createdAt,
+        }),
+      catch: (cause) =>
+        toProjectRuntimeError({
+          message: "Failed to archive project runtime filesystem state.",
+          projectId: resolved.project.id,
+          runtimeId: resolved.runtimeId,
+          threadId: resolved.bindingThread.id,
+          cause,
+        }),
+    });
     const snapshot: ProjectRuntimeSnapshotRecord = {
-      id: `runtime-snapshot-${nodeCrypto.randomUUID()}`,
+      id: snapshotId,
       runtimeId: resolved.runtimeId,
       projectId: resolved.project.id,
       name: input.name,
-      createdAt: new Date().toISOString(),
-      kind: "metadata",
-      restoreAvailable: false,
-      note: METADATA_SNAPSHOT_NOTE,
+      createdAt,
+      kind: "filesystem",
+      restoreAvailable: true,
+      note: FILESYSTEM_SNAPSHOT_NOTE,
     };
     yield* updateMetadata(resolved.runtimeId, (current) => ({
       runtimeId: resolved.runtimeId,
       projectId: resolved.project.id,
-      lifecycleState: current?.lifecycleState ?? "stopped",
+      lifecycleState: current?.lifecycleState === "archived" ? "archived" : "stopped",
       updatedAt: new Date().toISOString(),
-      lastError: current?.lastError ?? null,
+      lastError: null,
       snapshots: [...(current?.snapshots ?? []), snapshot],
+    }));
+    return yield* describeRuntime(input);
+  });
+
+  const restore: ProjectRuntimeLifecycleShape["restore"] = Effect.fn(
+    "projectRuntimeLifecycle.restore",
+  )(function* (input) {
+    const resolved = yield* resolveRuntime(input);
+    const metadata = yield* metadataForRuntime(resolved.runtimeId);
+    const snapshot = metadata?.snapshots.find((entry) => entry.id === input.snapshotId);
+    if (!snapshot) {
+      return yield* toProjectRuntimeError({
+        message: `Project Runtime snapshot '${input.snapshotId}' was not found.`,
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
+      });
+    }
+    if (
+      snapshot.kind !== "filesystem" ||
+      !snapshotArchiveExists({
+        stateDir: config.stateDir,
+        runtimeId: resolved.runtimeId,
+        snapshotId: snapshot.id,
+      })
+    ) {
+      return yield* toProjectRuntimeError({
+        message: `Project Runtime snapshot '${snapshot.name}' does not have a restorable filesystem archive.`,
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
+      });
+    }
+
+    yield* markLifecycleState({
+      projectId: resolved.project.id,
+      runtimeId: resolved.runtimeId,
+      lifecycleState: "resetting",
+    });
+
+    yield* Effect.gen(function* () {
+      const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
+      const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
+      const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
+        Effect.mapError((cause) =>
+          toProjectRuntimeError({
+            message: "Failed to resolve project runtime filesystem state for restore.",
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            threadId: descriptorThreadId,
+            cause,
+          }),
+        ),
+      );
+      yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+      yield* stopRuntimeDescriptors({
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
+        descriptors,
+        message: "Failed to stop project runtime before restore.",
+      });
+      yield* destroyRuntimeDescriptors({
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
+        descriptors,
+        fallbackThreadId: resolved.bindingThread.id,
+        message: "Failed to invalidate project runtime before restore.",
+      });
+      yield* Effect.try({
+        try: () =>
+          replaceRuntimeStateFromArchive({
+            stateDir: config.stateDir,
+            runtimeRootPath: launchContext.hostRuntimePath,
+            runtimeId: resolved.runtimeId,
+            projectId: resolved.project.id,
+            snapshotId: snapshot.id,
+          }),
+        catch: (cause) =>
+          toProjectRuntimeError({
+            message: "Failed to restore project runtime filesystem state.",
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            threadId: descriptorThreadId,
+            cause,
+          }),
+      });
+    }).pipe(
+      Effect.catchTag("ProjectRuntimeError", (error) =>
+        markLifecycleState({
+          projectId: resolved.project.id,
+          runtimeId: resolved.runtimeId,
+          lifecycleState: "failed",
+          lastError: error.message,
+        }).pipe(Effect.flatMap(() => Effect.fail(error))),
+      ),
+    );
+
+    yield* updateMetadata(resolved.runtimeId, (current) => ({
+      runtimeId: resolved.runtimeId,
+      projectId: resolved.project.id,
+      lifecycleState: "stopped",
+      updatedAt: new Date().toISOString(),
+      lastError: null,
+      snapshots: current?.snapshots ?? metadata?.snapshots ?? [],
     }));
     return yield* describeRuntime(input);
   });
@@ -649,6 +1090,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     reset,
     cleanupScratch,
     createSnapshot,
+    restore,
   } satisfies ProjectRuntimeLifecycleShape;
 });
 

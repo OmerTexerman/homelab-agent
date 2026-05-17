@@ -119,6 +119,7 @@ import {
   ProjectRuntimeError,
   ProjectRuntimeOperationInput,
   ProjectRuntimeOperationResult,
+  ProjectRuntimeRestoreSnapshotInput,
 } from "./runtimeWorkspace.ts";
 
 export const WS_METHODS = {
@@ -137,6 +138,7 @@ export const WS_METHODS = {
   projectRuntimeReset: "projectRuntime.reset",
   projectRuntimeCleanupScratch: "projectRuntime.cleanupScratch",
   projectRuntimeSnapshot: "projectRuntime.snapshot",
+  projectRuntimeRestore: "projectRuntime.restore",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -382,6 +384,12 @@ export const WsProjectRuntimeSnapshotRpc = Rpc.make(WS_METHODS.projectRuntimeSna
   error: ProjectRuntimeError,
 });
 
+export const WsProjectRuntimeRestoreRpc = Rpc.make(WS_METHODS.projectRuntimeRestore, {
+  payload: ProjectRuntimeRestoreSnapshotInput,
+  success: ProjectRuntimeOperationResult,
+  error: ProjectRuntimeError,
+});
+
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: ExternalLauncherError,
@@ -608,6 +616,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectRuntimeResetRpc,
   WsProjectRuntimeCleanupScratchRpc,
   WsProjectRuntimeSnapshotRpc,
+  WsProjectRuntimeRestoreRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsSubscribeVcsStatusRpc,

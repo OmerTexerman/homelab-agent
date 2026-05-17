@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 
@@ -33,6 +33,7 @@ import {
   type ThreadRuntimeLaunchContext,
   type ThreadRuntimeShape,
 } from "../Services/ThreadRuntime.ts";
+import { encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
 import { makeProjectRuntimeLifecycle } from "./ProjectRuntimeLifecycle.ts";
 
 const now = "2026-05-16T00:00:00.000Z";
@@ -145,11 +146,27 @@ function makeLaunchContext(
   };
 }
 
-function makeHarness(input: { readonly hostWorkspacePath: string }) {
+function makeManagedHostWorkspacePath(baseDir: string): string {
+  return nodePath.join(baseDir, "userdata", "thread-runtimes", "runtime-storage", "workspace");
+}
+
+function makeSnapshotArchivePath(baseDir: string, snapshotId: string): string {
+  return nodePath.join(
+    baseDir,
+    "userdata",
+    "project-runtime-snapshots",
+    encodeRuntimeSegment(String(runtimeId)),
+    encodeRuntimeSegment(snapshotId),
+    "runtime-state",
+  );
+}
+
+function makeHarness(input: { readonly baseDir: string; readonly hostWorkspacePath: string }) {
   const descriptors = new Map<string, ThreadRuntimeDescriptor>([
     [String(threadId), makeDescriptor({ threadId, status: "stopped" })],
   ]);
   const closedTerminalThreadIds: string[] = [];
+  const stoppedThreadIds: ThreadId[] = [];
   const destroyedThreadIds: ThreadId[] = [];
 
   const readModel = makeReadModel(input.hostWorkspacePath);
@@ -184,7 +201,14 @@ function makeHarness(input: { readonly hostWorkspacePath: string }) {
   const threadRuntime = {
     ensureRuntime: (launchInput) =>
       Effect.sync(() => {
+        const launchContext = makeLaunchContext(
+          makeDescriptor({ threadId: launchInput.threadId, status: "stopped" }),
+          input.hostWorkspacePath,
+        );
+        nodeFs.mkdirSync(launchContext.hostRuntimePath, { recursive: true });
         nodeFs.mkdirSync(input.hostWorkspacePath, { recursive: true });
+        nodeFs.mkdirSync(launchContext.hostHomePath, { recursive: true });
+        nodeFs.mkdirSync(launchContext.hostBinDir, { recursive: true });
         const descriptor =
           descriptors.get(String(launchInput.threadId)) ??
           makeDescriptor({ threadId: launchInput.threadId, status: "stopped" });
@@ -210,6 +234,7 @@ function makeHarness(input: { readonly hostWorkspacePath: string }) {
         return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
       }
       return Effect.sync(() => {
+        stoppedThreadIds.push(id);
         descriptors.set(String(id), makeDescriptor({ threadId: id, status: "stopped" }));
       });
     },
@@ -223,9 +248,13 @@ function makeHarness(input: { readonly hostWorkspacePath: string }) {
     },
     destroyRuntime: (id) =>
       Effect.sync(() => {
+        const descriptor = descriptors.get(String(id));
         destroyedThreadIds.push(id);
         descriptors.delete(String(id));
-        nodeFs.rmSync(input.hostWorkspacePath, { recursive: true, force: true });
+        if (descriptor) {
+          const launchContext = makeLaunchContext(descriptor, input.hostWorkspacePath);
+          nodeFs.rmSync(launchContext.hostRuntimePath, { recursive: true, force: true });
+        }
       }),
     resolveExecutionContext: (id) => {
       const descriptor = descriptors.get(String(id));
@@ -261,7 +290,7 @@ function makeHarness(input: { readonly hostWorkspacePath: string }) {
   } satisfies TerminalManagerShape;
 
   const layer = Layer.mergeAll(
-    ServerConfig.layerTest(process.cwd(), { prefix: "project-runtime-lifecycle-test-" }),
+    ServerConfig.layerTest(process.cwd(), input.baseDir),
     Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery),
     Layer.succeed(ThreadRuntime, threadRuntime),
     Layer.succeed(TerminalManager, terminalManager),
@@ -270,8 +299,10 @@ function makeHarness(input: { readonly hostWorkspacePath: string }) {
 
   return {
     layer,
+    readModel,
     descriptors,
     closedTerminalThreadIds,
+    stoppedThreadIds,
     destroyedThreadIds,
   };
 }
@@ -284,8 +315,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const tempDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "project-runtime-wake-",
         });
-        const hostWorkspacePath = nodePath.join(tempDir, "workspace");
-        const harness = makeHarness({ hostWorkspacePath });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
 
         const result = yield* lifecycle.wake({ projectId, threadId });
@@ -303,8 +334,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const tempDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "project-runtime-cleanup-",
         });
-        const hostWorkspacePath = nodePath.join(tempDir, "workspace");
-        const harness = makeHarness({ hostWorkspacePath });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
         yield* lifecycle.wake({ projectId, threadId });
 
@@ -334,8 +365,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const tempDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "project-runtime-reset-",
         });
-        const hostWorkspacePath = nodePath.join(tempDir, "workspace");
-        const harness = makeHarness({ hostWorkspacePath });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
         yield* lifecycle.wake({ projectId, threadId });
 
@@ -349,14 +380,189 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           name: "before-reset",
         });
         assert.equal(snapshot.runtime.snapshots.length, 1);
-        assert.equal(snapshot.runtime.snapshots[0]?.restoreAvailable, false);
-        assert.equal(snapshot.runtime.restoreAvailable, false);
+        assert.equal(snapshot.runtime.snapshots[0]?.kind, "filesystem");
+        assert.equal(snapshot.runtime.snapshots[0]?.restoreAvailable, true);
+        assert.equal(snapshot.runtime.restoreAvailable, true);
 
         const reset = yield* lifecycle.reset({ projectId, threadId });
         assert.equal(reset.runtime.runtime.lifecycleState, "stopped");
         assert.deepStrictEqual(harness.destroyedThreadIds, [threadId]);
         assert.isUndefined(harness.descriptors.get(String(threadId)));
         assert.equal(reset.runtime.snapshots.length, 1);
+      }),
+    ),
+  );
+
+  it.effect("creates a restorable filesystem archive with runtime secret/auth paths excluded", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-snapshot-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const hostRuntimePath = nodePath.dirname(hostWorkspacePath);
+        const hostHomePath = nodePath.join(hostRuntimePath, "home");
+        const hostBinPath = nodePath.join(hostRuntimePath, "bin");
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        yield* lifecycle.wake({ projectId, threadId });
+
+        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "before");
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-before");
+        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-before");
+        nodeFs.mkdirSync(nodePath.join(hostHomePath, ".codex"), { recursive: true });
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime.env"), "excluded");
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime-token"), "excluded");
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".codex", "auth.json"), "excluded");
+
+        const result = yield* lifecycle.createSnapshot({
+          projectId,
+          threadId,
+          name: "before-change",
+        });
+        const snapshot = result.runtime.snapshots[0]!;
+        const archivePath = makeSnapshotArchivePath(tempDir, snapshot.id);
+
+        assert.equal(result.runtime.runtime.lifecycleState, "stopped");
+        assert.equal(snapshot.kind, "filesystem");
+        assert.equal(snapshot.restoreAvailable, true);
+        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "workspace", "notes.md")));
+        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "home", ".profile")));
+        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "bin", "tool")));
+        assert.isFalse(
+          nodeFs.existsSync(nodePath.join(archivePath, "home", ".homelab-runtime.env")),
+        );
+        assert.isFalse(
+          nodeFs.existsSync(nodePath.join(archivePath, "home", ".homelab-runtime-token")),
+        );
+        assert.isFalse(nodeFs.existsSync(nodePath.join(archivePath, "home", ".codex")));
+        assert.isTrue(
+          nodeFs.existsSync(nodePath.join(nodePath.dirname(archivePath), "manifest.json")),
+        );
+      }),
+    ),
+  );
+
+  it.effect("restores workspace, home, and bin files while preserving project metadata", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-restore-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const hostRuntimePath = nodePath.dirname(hostWorkspacePath);
+        const hostHomePath = nodePath.join(hostRuntimePath, "home");
+        const hostBinPath = nodePath.join(hostRuntimePath, "bin");
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        yield* lifecycle.wake({ projectId, threadId });
+
+        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "before");
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-before");
+        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-before");
+        const snapshotResult = yield* lifecycle.createSnapshot({
+          projectId,
+          threadId,
+          name: "before-mutation",
+        });
+        const snapshot = snapshotResult.runtime.snapshots[0]!;
+        harness.stoppedThreadIds.splice(0);
+        harness.destroyedThreadIds.splice(0);
+
+        harness.descriptors.set(String(threadId), makeDescriptor({ threadId, status: "running" }));
+        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "after");
+        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-after");
+        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-after");
+        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "new-file.md"), "remove-me");
+
+        const restored = yield* lifecycle.restore({
+          projectId,
+          threadId,
+          snapshotId: snapshot.id,
+        });
+
+        assert.equal(restored.runtime.runtime.lifecycleState, "stopped");
+        assert.equal(restored.runtime.snapshots.length, 1);
+        assert.equal(restored.runtime.snapshots[0]?.restoreAvailable, true);
+        assert.equal(harness.readModel.threads.length, 2);
+        assert.deepStrictEqual(harness.stoppedThreadIds, [threadId]);
+        assert.deepStrictEqual(harness.destroyedThreadIds, [threadId]);
+        assert.isUndefined(harness.descriptors.get(String(threadId)));
+        assert.equal(
+          nodeFs.readFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "utf8"),
+          "before",
+        );
+        assert.equal(
+          nodeFs.readFileSync(nodePath.join(hostHomePath, ".profile"), "utf8"),
+          "home-before",
+        );
+        assert.equal(
+          nodeFs.readFileSync(nodePath.join(hostBinPath, "tool"), "utf8"),
+          "tool-before",
+        );
+        assert.isFalse(nodeFs.existsSync(nodePath.join(hostWorkspacePath, "new-file.md")));
+      }),
+    ),
+  );
+
+  it.effect("keeps metadata-only snapshots non-restorable", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-old-snapshot-",
+        });
+        const stateDir = nodePath.join(tempDir, "userdata");
+        nodeFs.mkdirSync(stateDir, { recursive: true });
+        nodeFs.writeFileSync(
+          nodePath.join(stateDir, "project-runtime-lifecycle.json"),
+          `${JSON.stringify(
+            {
+              version: 1,
+              runtimes: [
+                {
+                  runtimeId,
+                  projectId,
+                  lifecycleState: "stopped",
+                  updatedAt: now,
+                  lastError: null,
+                  snapshots: [
+                    {
+                      id: "runtime-snapshot-old",
+                      runtimeId,
+                      projectId,
+                      name: "old metadata snapshot",
+                      createdAt: now,
+                      kind: "metadata",
+                      restoreAvailable: false,
+                      note: "Metadata-only restore point.",
+                    },
+                  ],
+                },
+              ],
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        const detail = yield* lifecycle.get({ projectId, threadId });
+        assert.equal(detail.runtime.snapshots[0]?.restoreAvailable, false);
+        assert.equal(detail.runtime.restoreAvailable, false);
+
+        const failure = yield* lifecycle
+          .restore({
+            projectId,
+            threadId,
+            snapshotId: "runtime-snapshot-old",
+          })
+          .pipe(Effect.flip);
+        assert.include(failure.message, "does not have a restorable filesystem archive");
       }),
     ),
   );

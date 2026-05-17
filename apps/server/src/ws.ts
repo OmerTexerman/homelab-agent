@@ -1410,6 +1410,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               "rpc.aggregate": "projectRuntime",
             },
           ),
+        [WS_METHODS.projectRuntimeRestore]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectRuntimeRestore,
+            projectRuntimeLifecycle.restore(input),
+            {
+              "rpc.aggregate": "projectRuntime",
+            },
+          ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",
