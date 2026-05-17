@@ -74,6 +74,33 @@ describe("buildRuntimeAuthSyncEntries", () => {
       mode: "overwrite",
     });
   });
+
+  it("maps devcontainer-mounted host auth into runtime home copies", () => {
+    const entries = buildRuntimeAuthSyncEntries({
+      hostBindings: {
+        codexHostAuthPath: "/home/vscode/.codex",
+        claudeHostAuthPath: "/home/vscode/.claude",
+        claudeHostAuthJsonPath: "/home/vscode/.claude.json",
+      },
+      runtimeHomePath: "/runtime/home",
+    });
+
+    expect(entries).toContainEqual({
+      sourcePath: "/home/vscode/.codex/auth.json",
+      targetPath: "/runtime/home/.codex/auth.json",
+      mode: "overwrite",
+    });
+    expect(entries).toContainEqual({
+      sourcePath: "/home/vscode/.claude/.credentials.json",
+      targetPath: "/runtime/home/.claude/.credentials.json",
+      mode: "overwrite",
+    });
+    expect(entries).toContainEqual({
+      sourcePath: "/home/vscode/.claude.json",
+      targetPath: "/runtime/home/.claude.json",
+      mode: "overwrite",
+    });
+  });
 });
 
 describe("buildRuntimeMountSpecs", () => {

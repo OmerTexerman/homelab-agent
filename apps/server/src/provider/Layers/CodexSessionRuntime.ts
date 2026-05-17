@@ -99,6 +99,7 @@ export interface CodexSessionRuntimeOptions {
   readonly homePath?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
+  readonly processCwd?: string;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
@@ -720,7 +721,7 @@ export const makeCodexSessionRuntime = (
     const child = yield* spawner
       .spawn(
         ChildProcess.make(options.binaryPath, ["app-server"], {
-          cwd: options.cwd,
+          cwd: options.processCwd ?? options.cwd,
           env,
           forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
           shell: process.platform === "win32",

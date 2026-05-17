@@ -6,6 +6,7 @@ import {
   ThreadRuntime,
   type ThreadRuntimeLaunchContext,
 } from "../../runtime/Services/ThreadRuntime.ts";
+import { buildProviderRuntimeEnvironment } from "../../runtime/Layers/ProviderRuntimeEnvironment.ts";
 import { ProviderAdapterProcessError } from "../Errors.ts";
 
 function describeLaunchContextFailure(cause: unknown, threadId: ThreadId): string {
@@ -59,3 +60,21 @@ export const resolveProviderRuntimeLaunchContext = Effect.fn(
 
   return launchContext;
 });
+
+export const resolveProviderRuntimeEnvironment = Effect.fn("provider.resolveRuntimeEnvironment")(
+  function* (input: {
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly provider: string;
+    readonly threadId: ThreadId;
+    readonly wrapperPathFor: (context: ThreadRuntimeLaunchContext) => string;
+  }) {
+    const launchContext = yield* resolveProviderRuntimeLaunchContext(input);
+    if (!launchContext) {
+      return undefined;
+    }
+    return buildProviderRuntimeEnvironment({
+      launchContext,
+      commandPath: input.wrapperPathFor(launchContext),
+    });
+  },
+);

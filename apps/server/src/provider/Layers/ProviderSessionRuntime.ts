@@ -1,6 +1,7 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import {
   ModelSelection,
+  type ProviderDriverKind as ProviderDriverKindModel,
   type ProviderKind as ProviderKindModel,
   type ProviderSession,
   type RuntimeSessionId as RuntimeSessionIdModel,
@@ -16,6 +17,8 @@ import {
 } from "../../runtime/Services/ThreadRuntime.ts";
 import { ProviderAdapterProcessError } from "../Errors.ts";
 import type { ProviderRuntimeBinding } from "../Services/ProviderSessionDirectory.ts";
+
+const isModelSelection = Schema.is(ModelSelection);
 
 export function providerSessionRuntimeStatus(
   session: ProviderSession,
@@ -64,7 +67,7 @@ export function readPersistedModelSelection(
     return undefined;
   }
   const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  return Schema.is(ModelSelection)(raw) ? raw : undefined;
+  return isModelSelection(raw) ? raw : undefined;
 }
 
 export function readPersistedCwd(
@@ -122,7 +125,8 @@ export const ensureProviderExecutionContext = Effect.fn("provider.ensureProvider
     readonly threadRuntime: ThreadRuntimeShape;
     readonly threadId: ThreadIdModel;
     readonly runtimeId?: RuntimeSessionIdModel;
-    readonly provider: ProviderKindModel;
+    readonly provider: ProviderDriverKindModel;
+    readonly runtimeProvider: ProviderKindModel | null;
     readonly runtimeMode: RuntimeModeModel;
     readonly requestedCwd?: string;
     readonly operation: string;
@@ -131,7 +135,7 @@ export const ensureProviderExecutionContext = Effect.fn("provider.ensureProvider
       yield* input.threadRuntime.ensureRuntime({
         threadId: input.threadId,
         ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
-        provider: input.provider,
+        provider: input.runtimeProvider,
         runtimeMode: input.runtimeMode,
         ...(input.requestedCwd ? { requestedCwd: input.requestedCwd } : {}),
       });

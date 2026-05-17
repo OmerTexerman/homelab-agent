@@ -52,6 +52,7 @@ import {
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { runtimeCodexBinaryPath } from "../../runtime/launchers.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
@@ -61,6 +62,7 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { resolveProviderRuntimeEnvironment } from "./runtimeLaunch.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1378,13 +1380,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           yield* Effect.suspend(() => stopSessionInternal(existing));
         }
 
+        const runtimeEnvironment = yield* resolveProviderRuntimeEnvironment({
+          fileSystem,
+          provider: PROVIDER,
+          threadId: input.threadId,
+          wrapperPathFor: runtimeCodexBinaryPath,
+        });
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
-          cwd: input.cwd ?? process.cwd(),
-          binaryPath: codexConfig.binaryPath,
+          cwd: runtimeEnvironment?.providerCwd ?? input.cwd ?? process.cwd(),
+          binaryPath: runtimeEnvironment?.commandPath ?? codexConfig.binaryPath,
+          ...(runtimeEnvironment ? { processCwd: runtimeEnvironment.processCwd } : {}),
           ...(options?.environment ? { environment: options.environment } : {}),
-          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+          ...(!runtimeEnvironment && codexConfig.homePath
+            ? { homePath: codexConfig.homePath }
+            : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
             : {}),

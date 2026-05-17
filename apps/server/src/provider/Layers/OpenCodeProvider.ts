@@ -10,11 +10,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
-import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   buildServerProvider,
   nonEmptyTrimmed,
-  parseGenericCliVersion,
   providerModelsFromSettings,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
@@ -30,7 +28,8 @@ const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
-const MINIMUM_OPENCODE_VERSION = "1.14.19";
+export const OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE =
+  "OpenCode is installed in the Project Runtime image, but Homelab Agent cannot use its managed OpenCode server yet because the server would run inside the project runtime container without a reachable URL. Configure an external OpenCode server URL to use OpenCode.";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
   readonly cause: unknown;
@@ -357,52 +356,24 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
 
   let version: string | null = null;
   if (!isExternalServer) {
-    const versionExit = yield* Effect.exit(
-      openCodeRuntime
-        .runOpenCodeCommand({
-          binaryPath: openCodeSettings.binaryPath,
-          args: ["--version"],
-          environment,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
-          ),
-        ),
-    );
-    if (versionExit._tag === "Failure") {
-      return fallback(Cause.squash(versionExit.cause));
-    }
-    version = parseGenericCliVersion(versionExit.value.stdout) ?? null;
-
-    if (!version) {
-      return fallback(
-        new Error(
-          `Unable to determine OpenCode version from \`opencode --version\` output. Homelab Agent requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
-        ),
-        null,
-      );
-    }
-    if (compareSemverVersions(version, MINIMUM_OPENCODE_VERSION) < 0) {
-      return buildServerProvider({
-        presentation: OPENCODE_PRESENTATION,
-        enabled: openCodeSettings.enabled,
-        checkedAt,
-        models: providerModelsFromSettings(
-          [],
-          PROVIDER,
-          customModels,
-          DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-        ),
-        probe: {
-          installed: true,
-          version,
-          status: "error",
-          auth: { status: "unknown" },
-          message: `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-        },
-      });
-    }
+    return buildServerProvider({
+      presentation: OPENCODE_PRESENTATION,
+      enabled: openCodeSettings.enabled,
+      checkedAt,
+      models: providerModelsFromSettings(
+        [],
+        PROVIDER,
+        customModels,
+        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      ),
+      probe: {
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE,
+      },
+    });
   }
 
   const inventoryExit = yield* Effect.exit(

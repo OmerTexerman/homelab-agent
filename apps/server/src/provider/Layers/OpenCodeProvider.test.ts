@@ -117,25 +117,17 @@ const makeOpenCodeSettings = (overrides?: Partial<OpenCodeSettings>): OpenCodeSe
   });
 
 it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
-  it.effect("shows a codex-style missing binary message", () =>
+  it.effect("marks the managed Project Runtime server path as blocked without a server URL", () =>
     Effect.gen(function* () {
-      runtimeMock.state.runVersionError = new Error("spawn opencode ENOENT");
-      const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
-
-      assert.equal(snapshot.status, "error");
-      assert.equal(snapshot.installed, false);
-      assert.equal(snapshot.message, "OpenCode CLI (`opencode`) is not installed or not on PATH.");
-    }),
-  );
-
-  it.effect("hides generic Effect.tryPromise text for local CLI probe failures", () =>
-    Effect.gen(function* () {
-      runtimeMock.state.runVersionError = new Error("An error occurred in Effect.tryPromise");
       const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
 
       assert.equal(snapshot.status, "error");
       assert.equal(snapshot.installed, true);
-      assert.equal(snapshot.message, "Failed to execute OpenCode CLI health check.");
+      assert.equal(
+        snapshot.message,
+        "OpenCode is installed in the Project Runtime image, but Homelab Agent cannot use its managed OpenCode server yet because the server would run inside the project runtime container without a reachable URL. Configure an external OpenCode server URL to use OpenCode.",
+      );
+      assert.equal(runtimeMock.state.closeCalls, 0);
     }),
   );
 
@@ -171,7 +163,10 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         ],
       };
 
-      const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
+      const snapshot = yield* checkOpenCodeProviderStatus(
+        makeOpenCodeSettings({ serverUrl: "http://127.0.0.1:9999" }),
+        process.cwd(),
+      );
       const model = snapshot.models.find((entry) => entry.slug === "openai/gpt-5.4");
 
       assert.ok(model);
@@ -191,14 +186,6 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         agentDescriptor.options.find((option) => option.isDefault === true)?.id,
         "build",
       );
-    }),
-  );
-
-  it.effect("closes the local OpenCode server scope after provider refresh", () =>
-    Effect.gen(function* () {
-      yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
-
-      assert.equal(runtimeMock.state.closeCalls, 1);
     }),
   );
 });

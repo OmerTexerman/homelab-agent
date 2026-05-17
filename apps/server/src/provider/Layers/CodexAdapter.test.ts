@@ -10,6 +10,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderItemId,
+  RuntimeSessionId,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -35,6 +36,11 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
+import {
+  ThreadRuntime,
+  type ThreadRuntimeLaunchContext,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -57,6 +63,51 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+
+function makeThreadRuntimeLaunchContext(input: {
+  readonly baseDir: string;
+  readonly threadId: ThreadId;
+}): ThreadRuntimeLaunchContext {
+  return {
+    execution: {
+      threadId: input.threadId,
+      runtimeId: RuntimeSessionId.make("runtime-wrapper-test"),
+      backend: "docker",
+      containerId: "container-wrapper-test",
+      workspacePath: "/workspace",
+      homePath: "/runtime/home",
+      cwd: "/workspace",
+      shell: "/bin/bash",
+      env: {
+        HOME: "/runtime/home",
+        CODEX_HOME: "/runtime/home/.codex",
+      },
+    },
+    hostRuntimePath: input.baseDir,
+    hostWorkspacePath: path.join(input.baseDir, "workspace"),
+    hostHomePath: path.join(input.baseDir, "home"),
+    hostBinDir: path.join(input.baseDir, "bin"),
+    shellWrapperPath: path.join(input.baseDir, "bin", "runtime-shell"),
+  };
+}
+
+function makeThreadRuntimeTestLayer(launchContext: ThreadRuntimeLaunchContext) {
+  const service: ThreadRuntimeShape = {
+    ensureRuntime: () => Effect.die(new Error("ThreadRuntime.ensureRuntime is not used")),
+    getRuntime: () => Effect.die(new Error("ThreadRuntime.getRuntime is not used")),
+    listRuntimes: () => Effect.die(new Error("ThreadRuntime.listRuntimes is not used")),
+    startRuntime: () => Effect.die(new Error("ThreadRuntime.startRuntime is not used")),
+    stopRuntime: () => Effect.die(new Error("ThreadRuntime.stopRuntime is not used")),
+    touchRuntime: () => Effect.die(new Error("ThreadRuntime.touchRuntime is not used")),
+    refreshRuntimeEnvironment: () =>
+      Effect.die(new Error("ThreadRuntime.refreshRuntimeEnvironment is not used")),
+    destroyRuntime: () => Effect.die(new Error("ThreadRuntime.destroyRuntime is not used")),
+    resolveExecutionContext: () => Effect.succeed(launchContext.execution),
+    resolveLaunchContext: () => Effect.succeed(launchContext),
+    streamEvents: Stream.empty,
+  };
+  return Layer.succeed(ThreadRuntime, service);
+}
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -287,6 +338,54 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+
+  it.effect("starts Codex through the project runtime wrapper when launch context exists", () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-runtime-wrapper-"));
+    const threadId = asThreadId("thread-runtime-wrapper");
+    const launchContext = makeThreadRuntimeLaunchContext({ baseDir, threadId });
+    fs.mkdirSync(launchContext.hostBinDir, { recursive: true });
+    fs.writeFileSync(path.join(launchContext.hostBinDir, "codex"), "#!/bin/sh\n");
+    const runtimeFactory = makeRuntimeFactory();
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({
+          binaryPath: "server-codex",
+          homePath: "/home/vscode/.codex",
+        });
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(makeThreadRuntimeTestLayer(launchContext)),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const session = yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        cwd: "/host/project",
+        runtimeMode: "full-access",
+      });
+      const runtimeInput = runtimeFactory.factory.mock.calls[0]?.[0];
+
+      assert.ok(runtimeInput);
+      assert.equal(session.cwd, "/workspace");
+      assert.equal(runtimeInput.binaryPath, path.join(launchContext.hostBinDir, "codex"));
+      assert.equal(runtimeInput.cwd, "/workspace");
+      assert.equal(runtimeInput.processCwd, launchContext.hostWorkspacePath);
+      assert.equal("homePath" in runtimeInput, false);
+    }).pipe(
+      Effect.provide(layer),
+      Effect.ensuring(Effect.sync(() => fs.rmSync(baseDir, { recursive: true, force: true }))),
+    );
+  });
 });
 
 const sessionRuntimeFactory = makeRuntimeFactory();

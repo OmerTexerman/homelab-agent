@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   ThreadId,
   ProviderInstanceId,
+  RuntimeSessionId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
@@ -34,6 +35,11 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  ThreadRuntime,
+  type ThreadRuntimeLaunchContext,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
@@ -267,6 +273,50 @@ async function readFirstPromptMessage(
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
+function makeThreadRuntimeLaunchContext(input: {
+  readonly baseDir: string;
+  readonly threadId: ThreadId;
+}): ThreadRuntimeLaunchContext {
+  return {
+    execution: {
+      threadId: input.threadId,
+      runtimeId: RuntimeSessionId.make("runtime-claude-wrapper-test"),
+      backend: "docker",
+      containerId: "container-claude-wrapper-test",
+      workspacePath: "/workspace",
+      homePath: "/runtime/home",
+      cwd: "/workspace",
+      shell: "/bin/bash",
+      env: {
+        HOME: "/runtime/home",
+      },
+    },
+    hostRuntimePath: input.baseDir,
+    hostWorkspacePath: path.join(input.baseDir, "workspace"),
+    hostHomePath: path.join(input.baseDir, "home"),
+    hostBinDir: path.join(input.baseDir, "bin"),
+    shellWrapperPath: path.join(input.baseDir, "bin", "runtime-shell"),
+  };
+}
+
+function makeThreadRuntimeTestLayer(launchContext: ThreadRuntimeLaunchContext) {
+  const service: ThreadRuntimeShape = {
+    ensureRuntime: () => Effect.die(new Error("ThreadRuntime.ensureRuntime is not used")),
+    getRuntime: () => Effect.die(new Error("ThreadRuntime.getRuntime is not used")),
+    listRuntimes: () => Effect.die(new Error("ThreadRuntime.listRuntimes is not used")),
+    startRuntime: () => Effect.die(new Error("ThreadRuntime.startRuntime is not used")),
+    stopRuntime: () => Effect.die(new Error("ThreadRuntime.stopRuntime is not used")),
+    touchRuntime: () => Effect.die(new Error("ThreadRuntime.touchRuntime is not used")),
+    refreshRuntimeEnvironment: () =>
+      Effect.die(new Error("ThreadRuntime.refreshRuntimeEnvironment is not used")),
+    destroyRuntime: () => Effect.die(new Error("ThreadRuntime.destroyRuntime is not used")),
+    resolveExecutionContext: () => Effect.succeed(launchContext.execution),
+    resolveLaunchContext: () => Effect.succeed(launchContext),
+    streamEvents: Stream.empty,
+  };
+  return Layer.succeed(ThreadRuntime, service);
+}
+
 describe("ClaudeAdapterLive", () => {
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
@@ -399,6 +449,44 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("starts Claude through the project runtime wrapper when launch context exists", () => {
+    const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-runtime-wrapper-"));
+    const threadId = ThreadId.make("thread-claude-runtime-wrapper");
+    const launchContext = makeThreadRuntimeLaunchContext({ baseDir, threadId });
+    mkdirSync(launchContext.hostBinDir, { recursive: true });
+    writeFileSync(path.join(launchContext.hostBinDir, "claude"), "#!/bin/sh\n");
+    const harness = makeHarness({
+      claudeConfig: {
+        binaryPath: "server-claude",
+        homePath: "/home/vscode",
+      },
+    });
+    const layer = harness.layer.pipe(Layer.provideMerge(makeThreadRuntimeTestLayer(launchContext)));
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd: "/host/project",
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(session.cwd, "/workspace");
+      assert.equal(
+        createInput?.options.pathToClaudeCodeExecutable,
+        path.join(launchContext.hostBinDir, "claude"),
+      );
+      assert.equal(createInput?.options.cwd, launchContext.hostWorkspacePath);
+      assert.deepEqual(createInput?.options.additionalDirectories, ["/workspace"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+      Effect.ensuring(Effect.sync(() => rmSync(baseDir, { recursive: true, force: true }))),
     );
   });
 

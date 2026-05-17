@@ -21,8 +21,10 @@ import {
   ProviderStopSessionInput,
   type ProviderInstanceId,
   type ProviderDriverKind,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type RuntimeSessionId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -56,6 +58,8 @@ import {
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
+import { ensureProviderExecutionContext } from "./ProviderSessionRuntime.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -160,6 +164,17 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function runtimeProviderForDriver(provider: ProviderDriverKind): ProviderKind | null {
+  switch (provider) {
+    case "codex":
+      return "codex";
+    case "claudeAgent":
+      return "claudeAgent";
+    default:
+      return null;
+  }
+}
+
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -210,6 +225,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory;
+  const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -299,6 +315,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     Effect.map((map) => Array.from(map.entries())),
   );
 
+  const resolveProviderExecutionContext = (input: {
+    readonly threadId: ThreadId;
+    readonly runtimeId?: RuntimeSessionId;
+    readonly provider: ProviderDriverKind;
+    readonly runtimeMode: ProviderSession["runtimeMode"];
+    readonly requestedCwd?: string;
+    readonly operation: string;
+  }) =>
+    Option.isSome(threadRuntime)
+      ? ensureProviderExecutionContext({
+          threadRuntime: threadRuntime.value,
+          threadId: input.threadId,
+          ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
+          provider: input.provider,
+          runtimeProvider: runtimeProviderForDriver(input.provider),
+          runtimeMode: input.runtimeMode,
+          ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
+          operation: input.operation,
+        })
+      : Effect.sync(() => undefined);
+
   // Rebuild the map of id → adapter from the registry and fork a new event
   // subscription for every instance that is either brand new or whose adapter
   // identity changed (indicating the underlying `ProviderInstance` was torn
@@ -382,12 +419,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const executionContext = yield* resolveProviderExecutionContext({
+        threadId: input.binding.threadId,
+        provider: input.binding.provider,
+        runtimeMode: input.binding.runtimeMode ?? "full-access",
+        ...(persistedCwd ? { requestedCwd: persistedCwd } : {}),
+        operation: input.operation,
+      });
+      const resumeCwd = executionContext?.cwd ?? persistedCwd;
 
       const resumed = yield* adapter.startSession({
         threadId: input.binding.threadId,
         provider: input.binding.provider,
         providerInstanceId: bindingInstanceId,
-        ...(persistedCwd ? { cwd: persistedCwd } : {}),
+        ...(resumeCwd ? { cwd: resumeCwd } : {}),
         ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
         ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
         runtimeMode: input.binding.runtimeMode ?? "full-access",
@@ -572,10 +617,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        const executionContext = yield* resolveProviderExecutionContext({
+          threadId,
+          ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
+          provider: resolvedProvider,
+          runtimeMode: input.runtimeMode,
+          ...(effectiveCwd !== undefined ? { requestedCwd: effectiveCwd } : {}),
+          operation: "ProviderService.startSession",
+        });
+        const providerCwd = executionContext?.cwd ?? effectiveCwd;
         const session = yield* adapter.startSession({
           ...input,
           providerInstanceId: resolvedInstanceId,
-          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+          ...(providerCwd !== undefined ? { cwd: providerCwd } : {}),
           ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
         });
 
@@ -601,7 +655,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: sessionWithInstance.provider,
           runtimeMode: input.runtimeMode,
           hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
-          hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
+          hasCwd: typeof providerCwd === "string" && providerCwd.trim().length > 0,
           hasModel:
             typeof input.modelSelection?.model === "string" &&
             input.modelSelection.model.trim().length > 0,

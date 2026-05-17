@@ -41,6 +41,7 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 type MessageEntry = {
   info: {
@@ -193,7 +194,7 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
@@ -228,6 +229,38 @@ const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
+  it.effect("blocks managed OpenCode serving until a reachable runtime URL exists", () => {
+    const blockedSettings = decodeOpenCodeSettings({
+      binaryPath: "fake-opencode",
+      serverUrl: "",
+      serverPassword: "",
+    });
+    const blockedLayer = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(blockedSettings)).pipe(
+      Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const result = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-opencode-blocked"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") return;
+      assert.equal(result.failure._tag, "ProviderAdapterProcessError");
+      assert.equal(result.failure.threadId, "thread-opencode-blocked");
+      assert.equal(runtimeMock.state.sessionCreateUrls.length, 0);
+    }).pipe(Effect.provide(blockedLayer));
+  });
+
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

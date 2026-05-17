@@ -301,7 +301,8 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Server URL",
-        description: "Leave blank to let Homelab Agent spawn the server when needed.",
+        description:
+          "OpenCode currently requires an external server URL; managed Project Runtime serving is blocked until container URL bridging is implemented.",
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4096",
           clearWhenEmpty: "omit",

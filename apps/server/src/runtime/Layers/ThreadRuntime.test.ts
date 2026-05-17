@@ -351,6 +351,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(launchContext.shellWrapperPath, path.join(runtimeRoot, "bin", "runtime-shell"));
 
       const codexWrapperPath = path.join(runtimeRoot, "bin", "codex");
+      const claudeWrapperPath = path.join(runtimeRoot, "bin", "claude");
       const cursorWrapperPath = path.join(runtimeRoot, "bin", "agent");
       const openCodeWrapperPath = path.join(runtimeRoot, "bin", "opencode");
       const shellWrapperPath = launchContext.shellWrapperPath;
@@ -368,6 +369,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const agentsPath = path.join(runtimeWorkspace, "AGENTS.md");
       const claudePath = path.join(runtimeWorkspace, "CLAUDE.md");
       assert.equal(yield* fileSystem.exists(codexWrapperPath), true);
+      assert.equal(yield* fileSystem.exists(claudeWrapperPath), true);
       assert.equal(yield* fileSystem.exists(cursorWrapperPath), true);
       assert.equal(yield* fileSystem.exists(openCodeWrapperPath), true);
       assert.equal(yield* fileSystem.exists(shellWrapperPath), true);
@@ -396,6 +398,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
 
       const codexWrapperContents = yield* fileSystem.readFileString(codexWrapperPath);
+      const claudeWrapperContents = yield* fileSystem.readFileString(claudeWrapperPath);
       const cursorWrapperContents = yield* fileSystem.readFileString(cursorWrapperPath);
       const openCodeWrapperContents = yield* fileSystem.readFileString(openCodeWrapperPath);
       const homelabCliContents = yield* fileSystem.readFileString(homelabCliPath);
@@ -403,6 +406,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const agentsContents = yield* fileSystem.readFileString(agentsPath);
       const claudeContents = yield* fileSystem.readFileString(claudePath);
       assert.match(codexWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/);
+      assert.match(claudeWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'claude'/);
       assert.match(cursorWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'agent'/);
       assert.match(
         openCodeWrapperContents,

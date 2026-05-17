@@ -16,6 +16,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,
+  RuntimeSessionId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -60,6 +61,12 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  ThreadRuntime,
+  type ThreadRuntimeDescriptor,
+  type ThreadRuntimeLaunchInput,
+  type ThreadRuntimeShape,
+} from "../../runtime/Services/ThreadRuntime.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
@@ -311,6 +318,63 @@ function makeProviderServiceLayer() {
   };
 }
 
+function makeThreadRuntimeServiceForProviderServiceTest(input: {
+  readonly runtimeId: RuntimeSessionId;
+  readonly ensureCalls: Array<ThreadRuntimeLaunchInput>;
+}): ThreadRuntimeShape {
+  const descriptor = (threadId: ThreadId): ThreadRuntimeDescriptor => ({
+    threadId,
+    runtimeId: input.runtimeId,
+    backend: "docker",
+    status: "running",
+    health: "healthy",
+    provider: "codex",
+    runtimeMode: "full-access",
+    imageRef: "homelab-agent-runtime:test",
+    containerName: "homelab-agent-test-runtime",
+    containerId: "container-provider-service-test",
+    workspacePath: "/workspace",
+    homePath: "/runtime/home",
+    cwd: "/workspace",
+    shell: "/bin/bash",
+    env: {},
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastStartedAt: "2026-01-01T00:00:00.000Z",
+    lastStoppedAt: null,
+    lastError: null,
+  });
+
+  return {
+    ensureRuntime: (launchInput) =>
+      Effect.sync(() => {
+        input.ensureCalls.push(launchInput);
+        return descriptor(launchInput.threadId);
+      }),
+    getRuntime: () => Effect.sync(() => undefined),
+    listRuntimes: () => Effect.succeed([]),
+    startRuntime: (threadId) => Effect.succeed(descriptor(threadId)),
+    stopRuntime: () => Effect.void,
+    touchRuntime: () => Effect.void,
+    refreshRuntimeEnvironment: (threadId) => Effect.succeed(descriptor(threadId)),
+    destroyRuntime: () => Effect.void,
+    resolveExecutionContext: (threadId) =>
+      Effect.succeed({
+        threadId,
+        runtimeId: input.runtimeId,
+        backend: "docker",
+        containerId: "container-provider-service-test",
+        workspacePath: "/workspace",
+        homePath: "/runtime/home",
+        cwd: "/workspace",
+        shell: "/bin/bash",
+        env: {},
+      }),
+    resolveLaunchContext: () => Effect.die(new Error("ThreadRuntime.resolveLaunchContext unused")),
+    streamEvents: Stream.empty,
+  };
+}
+
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {
     const codex = makeFakeCodexAdapter();
@@ -550,6 +614,57 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 );
 
 const routing = makeProviderServiceLayer();
+
+it.effect("ProviderServiceLive starts provider sessions in the project runtime cwd", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    const registry = makeAdapterRegistryMock({
+      [CODEX_DRIVER]: codex.adapter,
+    });
+    const runtimeId = RuntimeSessionId.make("runtime-provider-service");
+    const ensureCalls: Array<ThreadRuntimeLaunchInput> = [];
+    const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
+    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+      Layer.provideMerge(
+        Layer.succeed(
+          ThreadRuntime,
+          makeThreadRuntimeServiceForProviderServiceTest({ runtimeId, ensureCalls }),
+        ),
+      ),
+    );
+
+    const session = yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      return yield* provider.startSession(asThreadId("thread-runtime-cwd"), {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-runtime-cwd"),
+        runtimeId,
+        cwd: "/workspaces/project-a",
+        runtimeMode: "full-access",
+      });
+    }).pipe(Effect.provide(providerLayer));
+
+    assert.equal(session.cwd, "/workspace");
+    assert.equal(codex.startSession.mock.calls[0]?.[0]?.cwd, "/workspace");
+    assert.deepEqual(ensureCalls[0], {
+      threadId: asThreadId("thread-runtime-cwd"),
+      runtimeId,
+      provider: "codex",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspaces/project-a",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("ProviderServiceLive writes canonical events to the emitting thread segment", () =>
   Effect.gen(function* () {

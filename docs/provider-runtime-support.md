@@ -25,5 +25,5 @@ provider instances that the server reports as ready.
 - The existing OpenCode adapter starts or connects to an OpenCode HTTP server and then creates an
   SDK client from the server URL it reports. Running that server inside a thread container needs a
   container-reachable URL/port strategy before the adapter can safely switch to the runtime wrapper.
-  Until that is implemented, OpenCode readiness remains based on the server/devcontainer
-  executable path or an explicitly configured external OpenCode server URL.
+  Until that is implemented, the built-in managed OpenCode path is reported as blocked. Configure
+  an external OpenCode server URL to use OpenCode.

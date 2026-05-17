@@ -35,6 +35,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE } from "./OpenCodeProvider.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -1021,6 +1022,13 @@ export function makeOpenCodeAdapter(
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
+        if (serverUrl.trim().length === 0) {
+          return yield* new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            detail: OPENCODE_MANAGED_RUNTIME_BLOCKED_MESSAGE,
+          });
+        }
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
