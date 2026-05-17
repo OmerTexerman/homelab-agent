@@ -18,7 +18,6 @@ import {
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
 } from "./ThreadStatusIndicators";
-import { ProjectFavicon } from "./ProjectFavicon";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -2287,7 +2286,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onClick={handleProjectButtonClick}
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
-          aria-label={project.isStandalone ? project.displayName : `Project ${project.displayName}`}
+          aria-label={
+            project.isStandalone ? project.displayName : `Project Runtime ${project.displayName}`
+          }
         >
           {!projectExpanded && projectStatus ? (
             <span
@@ -2314,7 +2315,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           {project.isStandalone ? (
             <SquarePenIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
           ) : (
-            <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
+            <ServerIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
           )}
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate text-xs font-medium text-foreground/90">
@@ -2323,7 +2324,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             <span className="shrink-0 rounded border border-border/60 px-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/55 max-sm:hidden">
               {project.isStandalone
                 ? HOMELAB_PRODUCT_COPY.standalone.shortTitle
-                : HOMELAB_PRODUCT_COPY.project.singular}
+                : HOMELAB_PRODUCT_COPY.projectRuntime.sidebarProjectBadgeLabel}
             </span>
             {!project.isStandalone && project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-[10px] text-muted-foreground/60">

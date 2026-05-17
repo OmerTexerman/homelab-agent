@@ -25,6 +25,7 @@ describe("Homelab product copy", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction).toBe(
       "New isolated runtime thread",
     );
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.sidebarProjectBadgeLabel).toBe("Runtime");
     expect(HOMELAB_PRODUCT_COPY.project.searchDescription).toBe(
       "Project with its own Project Runtime",
     );
@@ -32,6 +33,8 @@ describe("Homelab product copy", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.waitingThreadDescription).not.toMatch(
       /shared runtime|shared Project Runtime/i,
     );
+    expect(HOMELAB_PRODUCT_COPY.homeOverview.title).toBe("Homelab operations");
+    expect(HOMELAB_PRODUCT_COPY.homeOverview.subtitle).toMatch(/Project Runtimes/);
     expect(HOMELAB_PRODUCT_COPY.composer.defaultPlaceholder).not.toMatch(
       /repo|files\/folders|\$use skills/i,
     );

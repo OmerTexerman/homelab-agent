@@ -44,12 +44,33 @@ export const HOMELAB_PRODUCT_COPY = {
     newIsolatedThreadAction: "New isolated runtime thread",
     newIsolatedThreadDescription:
       "Runs in a runtime clone for parallel work or containment; merge back explicitly.",
+    sidebarProjectBadgeLabel: "Runtime",
     isolatedThreadBadgeLabel: "Isolated runtime clone",
     waitingThreadDescription: "This thread is waiting on the Project Runtime",
     terminalUnavailableDescription:
       "Terminal is unavailable until this thread has a Project Runtime.",
     workspaceExplorerUnavailableDescription:
       "Workspace explorer is unavailable until this thread has a Project Runtime.",
+  },
+  homeOverview: {
+    title: "Homelab operations",
+    subtitle:
+      "Project Runtimes hold the working state. Threads attach provider sessions, queue shared work, and use isolated clones only when requested.",
+    newThreadAction: "New Project Runtime thread",
+    settingsAction: "Settings",
+    refreshAction: "Refresh",
+    topologyTitle: "Topology",
+    topologyEmptyTitle: "No promoted topology yet",
+    topologyEmptyDescription:
+      "Promote hosts, services, endpoints, and relations from threads to build the shared homelab graph.",
+    runtimeWorkTitle: "Runtime work",
+    readinessTitle: "Readiness",
+    memoryTitle: "Memory and knowledge",
+    decisionsTitle: "Decisions",
+    setupTitle: "Next setup steps",
+    setupCompleteTitle: "Core setup is ready",
+    setupCompleteDescription:
+      "Providers, Project Runtimes, secrets, and promoted knowledge are available for normal work.",
   },
   settings: {
     devicesAndSessions: "Devices & Sessions",
