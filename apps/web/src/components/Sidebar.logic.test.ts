@@ -250,10 +250,10 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 });
 
 describe("sidebarThreadCreationRuntimeCopy", () => {
-  it("labels the default project runtime thread action as shared", () => {
+  it("labels the default project runtime thread action as queued on the Project Runtime", () => {
     expect(sidebarThreadCreationRuntimeCopy("shared")).toMatchObject({
       label: "New thread in Project Runtime",
-      description: expect.stringContaining("shared runtime"),
+      description: expect.stringContaining("Project Runtime"),
     });
   });
 

@@ -9,27 +9,22 @@ import {
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
 export function PairingPendingSurface() {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
-
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
+      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           {APP_DISPLAY_NAME}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pairing with this environment
+          {HOMELAB_PRODUCT_COPY.authPairing.pendingTitle}
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Validating the pairing link and preparing your session.
+          {HOMELAB_PRODUCT_COPY.authPairing.pendingDescription}
         </p>
       </section>
     </div>
@@ -95,19 +90,13 @@ export function PairingRouteSurface({
   }, [submitCredential]);
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
-
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
+      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           {APP_DISPLAY_NAME}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pair with this environment
+          {HOMELAB_PRODUCT_COPY.authPairing.title}
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           {describeAuthGate(auth.bootstrapMethods)}
@@ -126,7 +115,7 @@ export function PairingRouteSurface({
               disabled={isSubmitting}
               nativeInput
               onChange={(event) => setCredential(event.currentTarget.value)}
-              placeholder="Paste a one-time token or pairing secret"
+              placeholder={HOMELAB_PRODUCT_COPY.authPairing.tokenPlaceholder}
               spellCheck={false}
               value={credential}
             />
@@ -166,10 +155,10 @@ export function HostedPairingRouteSurface() {
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(() =>
     hostedPairingRequestRef.current ? "pairing" : "error",
   );
-  const [message, setMessage] = useState(() =>
+  const [message, setMessage] = useState<string>(() =>
     hostedPairingRequestRef.current
-      ? "Connecting to this backend."
-      : "This pairing link is missing its backend host or token.",
+      ? HOMELAB_PRODUCT_COPY.authPairing.hostedConnecting
+      : HOMELAB_PRODUCT_COPY.authPairing.hostedMissing,
   );
   const [canRetry, setCanRetry] = useState(false);
   const submitAttemptedRef = useRef(false);
@@ -180,7 +169,7 @@ export function HostedPairingRouteSurface() {
 
     if (!request) {
       setStatus("error");
-      setMessage("This pairing link is missing its backend host or token.");
+      setMessage(HOMELAB_PRODUCT_COPY.authPairing.hostedMissing);
       setCanRetry(false);
       return;
     }
@@ -193,7 +182,7 @@ export function HostedPairingRouteSurface() {
     }
 
     setStatus("pairing");
-    setMessage("Connecting to this backend.");
+    setMessage(HOMELAB_PRODUCT_COPY.authPairing.hostedConnecting);
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
@@ -210,7 +199,7 @@ export function HostedPairingRouteSurface() {
       setStatus("error");
       setCanRetry(true);
       setMessage(
-        `${errorMessageFromUnknown(error)} If the backend accepted this one-time token, request a new pairing link before retrying.`,
+        `${errorMessageFromUnknown(error)} ${HOMELAB_PRODUCT_COPY.authPairing.hostedAcceptedTokenRetry}`,
       );
     }
   }, []);
@@ -228,23 +217,17 @@ export function HostedPairingRouteSurface() {
   const request = hostedPairingRequestRef.current;
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
-
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
+      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           {APP_DISPLAY_NAME}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
           {status === "paired"
-            ? "Backend paired"
+            ? HOMELAB_PRODUCT_COPY.authPairing.hostedPairedTitle
             : status === "error"
-              ? "Pairing failed"
-              : "Pairing backend"}
+              ? HOMELAB_PRODUCT_COPY.authPairing.hostedErrorTitle
+              : HOMELAB_PRODUCT_COPY.authPairing.hostedPairingTitle}
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
@@ -256,8 +239,7 @@ export function HostedPairingRouteSurface() {
 
         {status === "error" ? (
           <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-            Verify the backend is reachable from this browser, supports CORS for hosted clients, and
-            is served over HTTPS when opening this page from HTTPS.
+            {HOMELAB_PRODUCT_COPY.authPairing.hostedReachabilityError}
           </div>
         ) : null}
 
@@ -296,10 +278,10 @@ function errorMessageFromUnknown(error: unknown): string {
 
 function describeAuthGate(bootstrapMethods: ReadonlyArray<string>): string {
   if (bootstrapMethods.includes("desktop-bootstrap")) {
-    return "This environment expects a trusted pairing credential before the app can connect.";
+    return HOMELAB_PRODUCT_COPY.authPairing.desktopGateDescription;
   }
 
-  return "Enter a pairing token to start a session with this environment.";
+  return HOMELAB_PRODUCT_COPY.authPairing.tokenGateDescription;
 }
 
 function describeSupportedMethods(bootstrapMethods: ReadonlyArray<string>): string {
@@ -307,12 +289,12 @@ function describeSupportedMethods(bootstrapMethods: ReadonlyArray<string>): stri
     bootstrapMethods.includes("desktop-bootstrap") &&
     bootstrapMethods.includes("one-time-token")
   ) {
-    return "Desktop-managed pairing and one-time pairing tokens are both accepted for this environment.";
+    return HOMELAB_PRODUCT_COPY.authPairing.desktopAndTokenMethods;
   }
 
   if (bootstrapMethods.includes("desktop-bootstrap")) {
-    return "This environment is desktop-managed. Open it from the desktop app or paste a bootstrap credential if one was issued explicitly.";
+    return HOMELAB_PRODUCT_COPY.authPairing.desktopMethod;
   }
 
-  return "This environment accepts one-time pairing tokens. Pairing links can open this page directly, or you can paste the token here.";
+  return HOMELAB_PRODUCT_COPY.authPairing.tokenMethod;
 }

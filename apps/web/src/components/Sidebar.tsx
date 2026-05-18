@@ -1609,8 +1609,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Runtime environment unavailable",
-              description: "Reconnect this environment before creating standalone threads.",
+              title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+              description:
+                HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
             }),
           );
           return;
@@ -2300,8 +2301,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Runtime environment unavailable",
-          description: "Reconnect this environment before moving the thread.",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.moveStandaloneThreadDescription,
         }),
       );
       return;
@@ -2411,8 +2412,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Runtime environment unavailable",
-              description: "Reconnect this environment before promoting the thread.",
+              title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+              description: HOMELAB_PRODUCT_COPY.serverConnection.promoteStandaloneThreadDescription,
             }),
           );
           return;
@@ -2538,7 +2539,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
           aria-label={
-            project.isStandalone ? project.displayName : `Project Runtime ${project.displayName}`
+            project.isStandalone
+              ? `${project.displayName}, ${HOMELAB_PRODUCT_COPY.standalone.newThreadDescription}`
+              : `${HOMELAB_PRODUCT_COPY.project.singular} ${project.displayName}, owns a Project Runtime`
           }
         >
           {!projectExpanded && projectStatus ? (
@@ -2631,10 +2634,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           />
           <TooltipPopup side="top">
             {project.isStandalone
-              ? HOMELAB_PRODUCT_COPY.standalone.newThreadAction
+              ? HOMELAB_PRODUCT_COPY.standalone.newThreadDescription
               : newThreadShortcutLabel
-                ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} (${newThreadShortcutLabel})`
-                : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction}
+                ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription} (${newThreadShortcutLabel})`
+                : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription}
           </TooltipPopup>
         </Tooltip>
       </div>

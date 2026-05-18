@@ -30,6 +30,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { __resetLocalApiForTests } from "../../localApi";
 import { resetSourceControlDiscoveryStateForTests } from "../../lib/sourceControlDiscoveryState";
@@ -38,8 +39,14 @@ import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/ser
 import { useUiStateStore } from "../../uiStateStore";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
-import { AdvancedSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
+import {
+  AdvancedSettingsPanel,
+  MemoryKnowledgeSettingsPanel,
+  ProjectRuntimeSettingsPanel,
+  ProviderSettingsPanel,
+} from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 function renderWithTestRouter(children: ReactNode) {
   const rootRoute = createRootRoute({
@@ -762,6 +769,59 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
+  it("shows Project Runtime and Memory & Knowledge panels with Homelab copy", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProjectRuntimeSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(
+        page.getByRole("heading", {
+          name: HOMELAB_PRODUCT_COPY.projectRuntime.title,
+          exact: true,
+        }),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(HOMELAB_PRODUCT_COPY.projectRuntime.ownershipDescription))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(HOMELAB_PRODUCT_COPY.projectRuntime.ownershipValue))
+      .toBeInTheDocument();
+
+    await mounted.unmount?.();
+    mounted = null;
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <QueryClientProvider client={queryClient}>
+          <MemoryKnowledgeSettingsPanel />
+        </QueryClientProvider>
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Shared knowledge graph")).toBeInTheDocument();
+    await expect
+      .element(page.getByText("Durable homelab entities and relations promoted from project work."))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("Runtime bootstrap state")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText("Project Runtime bootstrap mutations available through homelab tools."),
+      )
+      .toBeInTheDocument();
+  });
+
   it("creates and shows a pairing link when network access is enabled", async () => {
     window.desktopBridge = createDesktopBridgeStub({
       serverExposureState: {
@@ -1131,15 +1191,22 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
+    await expect
+      .element(page.getByText(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription))
+      .toBeInTheDocument();
+
     await page.getByLabelText("Toggle OpenCode details").click();
 
     // The unified provider-instance card renders field labels without a
     // driver-name prefix (the driver name is already shown in the card
     // header), so the labels read "Server URL" / "Server password"
     // rather than the old "OpenCode server URL" / "OpenCode server password".
-    await expect.element(page.getByText("Server URL")).toBeInTheDocument();
+    await expect.element(page.getByText("Server URL", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByPlaceholder("http://127.0.0.1:4096")).toBeInTheDocument();
-    await expect.element(page.getByText("Server password")).toBeInTheDocument();
+    await expect.element(page.getByText("Server password", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByPlaceholder("Optional")).toBeInTheDocument();
   });
 

@@ -3,6 +3,7 @@ import { memo } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { CircleAlertIcon } from "lucide-react";
 import { formatProviderDriverKindLabel } from "../../providerModels";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   status,
@@ -16,9 +17,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   const providerLabel = status.displayName?.trim() || formatProviderDriverKindLabel(status.driver);
   const defaultMessage =
     status.status === "error"
-      ? `${providerLabel} provider is unavailable.`
-      : `${providerLabel} provider has limited availability.`;
-  const title = `${providerLabel} provider status`;
+      ? `${providerLabel} ${HOMELAB_PRODUCT_COPY.providers.unavailableRuntimeMessage}`
+      : `${providerLabel} ${HOMELAB_PRODUCT_COPY.providers.limitedRuntimeMessage}`;
+  const title = `${providerLabel} ${HOMELAB_PRODUCT_COPY.providers.statusTitleSuffix}`;
 
   return (
     <div className="pt-3 mx-auto max-w-3xl">

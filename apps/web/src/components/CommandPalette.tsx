@@ -698,7 +698,7 @@ function OpenCommandPaletteDialog() {
         projects: normalProjects,
         valuePrefix: "new-thread-in",
         description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
-        additionalSearchTerms: ["new thread", "shared runtime", "project runtime", "queue"],
+        additionalSearchTerms: ["new thread", "project runtime", "shared turns", "queue"],
         icon: (project) => (
           <ProjectFavicon
             environmentId={project.environmentId}
@@ -776,7 +776,7 @@ function OpenCommandPaletteDialog() {
         (project) => project.environmentId === activeThread.environmentId,
       ),
       valuePrefix: "move-standalone-thread-to",
-      description: "Move the active chat transcript. Scratch memory and runtime files stay put.",
+      description: HOMELAB_PRODUCT_COPY.standalone.moveActiveDescription,
       additionalSearchTerms: ["move", "standalone", "scratch", "project"],
       icon: (project) => (
         <ProjectFavicon
@@ -788,7 +788,7 @@ function OpenCommandPaletteDialog() {
       runProject: async (project) => {
         const api = readEnvironmentApi(activeThread.environmentId);
         if (!api) {
-          throw new Error("Runtime environment unavailable.");
+          throw new Error(HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle);
         }
         await api.orchestration.dispatchCommand({
           type: "thread.standalone.move-to-project",
@@ -1162,8 +1162,8 @@ function OpenCommandPaletteDialog() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "No runtime environment available",
-            description: "Connect an environment before creating standalone threads.",
+            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+            description: HOMELAB_PRODUCT_COPY.serverConnection.noRuntimeServerDescription,
           }),
         );
         return;
@@ -1174,8 +1174,8 @@ function OpenCommandPaletteDialog() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Runtime environment unavailable",
-            description: "Reconnect this environment before creating standalone threads.",
+            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
           }),
         );
         return;
@@ -1256,8 +1256,7 @@ function OpenCommandPaletteDialog() {
       value: "action:move-standalone-thread-to",
       searchTerms: ["move", "standalone", "scratch", "project"],
       title: `${HOMELAB_PRODUCT_COPY.standalone.moveAction}...`,
-      description:
-        "Move the active chat transcript to an existing project. Memory and runtime files stay put.",
+      description: HOMELAB_PRODUCT_COPY.standalone.moveActiveSubmenuDescription,
       icon: <ServerIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: moveStandaloneThreadProjectItems }],
@@ -1274,7 +1273,7 @@ function OpenCommandPaletteDialog() {
       actionItems.push({
         kind: "action",
         value: "action:new-thread",
-        searchTerms: ["new thread", "chat", "create", "draft", "shared runtime", "project runtime"],
+        searchTerms: ["new thread", "chat", "create", "draft", "project runtime", "shared turns"],
         title: (
           <>
             {HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in{" "}
@@ -1331,7 +1330,7 @@ function OpenCommandPaletteDialog() {
     actionItems.push({
       kind: "submenu",
       value: "action:new-thread-in",
-      searchTerms: ["new thread", "project", "pick", "choose", "select", "shared runtime"],
+      searchTerms: ["new thread", "project", "pick", "choose", "select", "project runtime"],
       title: `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction} in...`,
       description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,

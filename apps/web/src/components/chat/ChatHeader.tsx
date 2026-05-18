@@ -82,32 +82,32 @@ export const CHAT_EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
 }> = [
   {
     format: "markdown",
-    label: "Markdown",
-    description: "Readable transcript for docs, notes, and project memory review.",
+    label: HOMELAB_PRODUCT_COPY.chatExport.formats.markdown.label,
+    description: HOMELAB_PRODUCT_COPY.chatExport.formats.markdown.description,
     Icon: FileTextIcon,
   },
   {
     format: "json",
-    label: "JSON",
-    description: "Structured versioned data for tools, reprocessing, and audit trails.",
+    label: HOMELAB_PRODUCT_COPY.chatExport.formats.json.label,
+    description: HOMELAB_PRODUCT_COPY.chatExport.formats.json.description,
     Icon: FileJsonIcon,
   },
   {
     format: "text",
-    label: "Plain text",
-    description: "Searchable flat transcript that works anywhere.",
+    label: HOMELAB_PRODUCT_COPY.chatExport.formats.text.label,
+    description: HOMELAB_PRODUCT_COPY.chatExport.formats.text.description,
     Icon: TextIcon,
   },
   {
     format: "html",
-    label: "HTML",
-    description: "Self-contained offline page with print-friendly styling.",
+    label: HOMELAB_PRODUCT_COPY.chatExport.formats.html.label,
+    description: HOMELAB_PRODUCT_COPY.chatExport.formats.html.description,
     Icon: Code2Icon,
   },
   {
     format: "pdf",
-    label: "PDF",
-    description: "Open a print view and save to PDF from the browser.",
+    label: HOMELAB_PRODUCT_COPY.chatExport.formats.pdf.label,
+    description: HOMELAB_PRODUCT_COPY.chatExport.formats.pdf.description,
     Icon: PrinterIcon,
   },
 ];
@@ -219,8 +219,8 @@ export const ChatHeader = memo(function ChatHeader({
                 size="icon-xs"
                 variant="outline"
                 className="shrink-0"
-                aria-label="Export chat"
-                title="Export chat"
+                aria-label={HOMELAB_PRODUCT_COPY.chatExport.action}
+                title={HOMELAB_PRODUCT_COPY.chatExport.action}
               />
             }
           >
@@ -229,10 +229,11 @@ export const ChatHeader = memo(function ChatHeader({
           <PopoverPopup align="end" className="w-80 p-0">
             <div className="space-y-3">
               <div className="space-y-1">
-                <PopoverTitle className="text-base">Export Chat</PopoverTitle>
+                <PopoverTitle className="text-base">
+                  {HOMELAB_PRODUCT_COPY.chatExport.title}
+                </PopoverTitle>
                 <PopoverDescription className="text-xs">
-                  Export the full thread with messages, work logs, decisions, plans, metadata, and
-                  changed files.
+                  {HOMELAB_PRODUCT_COPY.chatExport.description}
                 </PopoverDescription>
               </div>
               <div className="grid gap-1">
@@ -294,7 +295,7 @@ export const ChatHeader = memo(function ChatHeader({
                   className="shrink-0"
                   pressed={workspaceExplorerOpen}
                   onPressedChange={onToggleWorkspaceExplorer}
-                  aria-label="Toggle runtime workspace explorer"
+                  aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.toggleAction}
                   variant="outline"
                   size="xs"
                   disabled={!workspaceExplorerAvailable}
@@ -306,7 +307,7 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipPopup side="bottom">
               {!workspaceExplorerAvailable
                 ? HOMELAB_PRODUCT_COPY.projectRuntime.workspaceExplorerUnavailableDescription
-                : "Toggle runtime workspace explorer"}
+                : HOMELAB_PRODUCT_COPY.runtimeWorkspace.toggleAction}
             </TooltipPopup>
           </Tooltip>
         ) : null}

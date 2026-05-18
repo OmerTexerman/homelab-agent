@@ -11,6 +11,7 @@ vi.mock("../ui/sidebar", () => ({
 
 import { ChatHeader } from "./ChatHeader";
 import type { ChatExportFormat } from "../../chatExport";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 function renderHeader(onExportChat: (format: ChatExportFormat) => void) {
   return render(
@@ -56,9 +57,12 @@ describe("ChatHeader export popover", () => {
     const screen = await renderHeader(onExportChat);
 
     try {
-      await page.getByLabelText("Export chat").click();
+      await page.getByLabelText(HOMELAB_PRODUCT_COPY.chatExport.action).click();
 
-      await expect.element(page.getByText("Export Chat")).toBeVisible();
+      await expect.element(page.getByText(HOMELAB_PRODUCT_COPY.chatExport.title)).toBeVisible();
+      await expect
+        .element(page.getByText(HOMELAB_PRODUCT_COPY.chatExport.description))
+        .toBeVisible();
       await expect.element(page.getByText("Markdown")).toBeVisible();
       await expect.element(page.getByText("JSON")).toBeVisible();
       await expect.element(page.getByText("Plain text")).toBeVisible();

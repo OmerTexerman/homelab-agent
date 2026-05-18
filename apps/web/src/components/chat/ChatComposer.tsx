@@ -1001,7 +1001,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return "No skills found. Try / to browse provider commands.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
+      ? HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceEmptyState
       : "No matching command.";
   }, [composerTriggerKind]);
 

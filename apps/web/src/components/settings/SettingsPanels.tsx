@@ -919,11 +919,11 @@ export function ProjectRuntimeSettingsPanel() {
           }
         />
         <SettingsRow
-          title="Runtime ownership"
-          description="Each logical project owns a Project Runtime. Threads inside that project use it unless an isolated clone is selected."
+          title={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipTitle}
+          description={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipDescription}
           control={
             <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-              Per project
+              {HOMELAB_PRODUCT_COPY.projectRuntime.ownershipValue}
             </span>
           }
         />
@@ -1341,7 +1341,7 @@ export function ProviderSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Providers"
+        title={HOMELAB_PRODUCT_COPY.providers.title}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
@@ -1385,6 +1385,15 @@ export function ProviderSettingsPanel() {
           </div>
         }
       >
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle}
+          description={HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription}
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {rows.length} configured
+            </span>
+          }
+        />
         {rows.map((row) => {
           const driverOption = getDriverOption(row.driver);
           const liveProvider = serverProviders.find(

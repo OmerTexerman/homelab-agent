@@ -10,6 +10,7 @@ import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { formatProviderSkillInstallSource } from "~/providerSkillPresentation";
 import { cn } from "~/lib/utils";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import {
   Command,
   CommandGroup,
@@ -176,7 +177,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                 </CommandGroupLabel>
                 <p className="text-muted-foreground/70 text-xs">
                   {props.isLoading
-                    ? "Searching workspace skills..."
+                    ? HOMELAB_PRODUCT_COPY.composer.providerSkillsSearching
                     : (props.emptyStateText ??
                       "No skills found. Try / to browse provider commands.")}
                 </p>
@@ -184,10 +185,10 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             ) : (
               <p className="text-muted-foreground/70 text-xs">
                 {props.isLoading
-                  ? "Searching workspace files..."
+                  ? HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceSearching
                   : (props.emptyStateText ??
                     (props.triggerKind === "path"
-                      ? "No matching files or folders."
+                      ? HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceEmptyState
                       : "No matching command."))}
               </p>
             )}

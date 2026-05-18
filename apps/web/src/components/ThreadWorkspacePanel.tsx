@@ -895,7 +895,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     } else {
       items.push({
         id: "open-folder",
-        label: "Open folder",
+        label: HOMELAB_PRODUCT_COPY.runtimeWorkspace.contextOpenLocation,
         onSelect: () => selectNode(contextMenu.node),
       });
     }
@@ -1008,7 +1008,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     >
       <button
         type="button"
-        aria-label="Resize runtime workspace panel"
+        aria-label="Resize Runtime Workspace panel"
         className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
         onPointerDown={handlePanelResizePointerDown}
         onPointerMove={handlePanelResizePointerMove}
@@ -1026,10 +1026,10 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-foreground">
-                {HOMELAB_PRODUCT_COPY.runtimeWorkspaceTitle}
+                {HOMELAB_PRODUCT_COPY.runtimeWorkspace.title}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
-                {HOMELAB_PRODUCT_COPY.runtimeWorkspaceSubtitle}
+                {HOMELAB_PRODUCT_COPY.runtimeWorkspace.subtitle}
               </div>
             </div>
             <Button
@@ -1039,7 +1039,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
               className="size-7"
               onClick={refreshWorkspace}
               disabled={entriesQuery.isFetching}
-              aria-label="Refresh workspace"
+              aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.refreshAction}
             >
               {entriesQuery.isFetching ? (
                 <LoaderIcon className="size-3.5 animate-spin" />
@@ -1053,7 +1053,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
               size="icon-sm"
               className="size-7"
               onClick={props.onClose}
-              aria-label="Close workspace panel"
+              aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.closeAction}
             >
               <XIcon className="size-3.5" />
             </Button>
@@ -1101,7 +1101,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   size="icon-sm"
                   className="size-7"
                   onClick={openWorkspaceHome}
-                  aria-label="Open workspace root"
+                  aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.openRootAction}
                 >
                   <HouseIcon className="size-3.5" />
                 </Button>
@@ -1111,7 +1111,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   size="icon-sm"
                   className="size-7"
                   onClick={openParentDirectory}
-                  aria-label="Open parent directory"
+                  aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.parentAction}
                   disabled={currentPath === "/"}
                 >
                   <ArrowUpIcon className="size-3.5" />
@@ -1121,7 +1121,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   onChange={(event) => setPathDraft(event.target.value)}
                   placeholder="/workspace"
                   className="h-8 min-w-0 flex-1 font-mono text-xs"
-                  aria-label="Runtime path"
+                  aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.locationLabel}
                 />
                 <Button type="submit" variant="outline" size="xs">
                   Go
@@ -1135,7 +1135,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 <Input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Filter current directory"
+                  placeholder={HOMELAB_PRODUCT_COPY.runtimeWorkspace.filterPlaceholder}
                   className="pl-7 text-xs"
                 />
               </label>
@@ -1144,19 +1144,19 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
               {entriesQuery.isLoading ? (
                 <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
                   <LoaderIcon className="size-3.5 animate-spin" />
-                  Loading workspace
+                  {HOMELAB_PRODUCT_COPY.runtimeWorkspace.loading}
                 </div>
               ) : entriesQuery.isError ? (
                 <div className="px-2 py-3 text-xs text-destructive">
                   {entriesQuery.error instanceof Error
                     ? entriesQuery.error.message
-                    : "Unable to load workspace files."}
+                    : HOMELAB_PRODUCT_COPY.runtimeWorkspace.loadError}
                 </div>
               ) : tree.length === 0 ? (
                 <div className="px-2 py-3 text-xs text-muted-foreground">
                   {searchQuery.trim().length > 0
-                    ? "No entries in this directory match that filter."
-                    : "This directory is empty."}
+                    ? HOMELAB_PRODUCT_COPY.runtimeWorkspace.filteredEmpty
+                    : HOMELAB_PRODUCT_COPY.runtimeWorkspace.directoryEmpty}
                 </div>
               ) : (
                 <>
@@ -1183,7 +1183,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   ))}
                   {entriesQuery.data?.truncated ? (
                     <div className="px-2 pt-2 text-[11px] text-muted-foreground">
-                      Workspace list truncated. Narrow the search to load less at once.
+                      {HOMELAB_PRODUCT_COPY.runtimeWorkspace.truncated}
                     </div>
                   ) : null}
                 </>
@@ -1211,7 +1211,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         <>
           <button
             type="button"
-            aria-label="Resize workspace file tree"
+            aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.treeResizeAction}
             className="relative z-10 w-2 shrink-0 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
             onPointerDown={handleTreeResizePointerDown}
             onPointerMove={handleTreeResizePointerMove}

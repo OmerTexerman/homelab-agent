@@ -198,6 +198,7 @@ import {
   useWorkspacePanelStateStore,
 } from "../workspacePanelStateStore";
 import {
+  HOMELAB_PRODUCT_COPY,
   shouldShowPrimarySourceControlUi,
   shouldShowRuntimeWorkspaceExplorer,
 } from "../productCapabilities";
@@ -1233,7 +1234,7 @@ export default function ChatView(props: ChatViewProps) {
               : "disconnected"}
           </>
         ),
-        description: "Reconnect this environment before sending messages or running actions.",
+        description: HOMELAB_PRODUCT_COPY.serverConnection.chatActionsDescription,
         actions: (
           <>
             <Button

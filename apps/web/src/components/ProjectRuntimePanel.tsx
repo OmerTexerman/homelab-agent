@@ -183,8 +183,8 @@ export function ProjectRuntimePanel({
     void (async () => {
       const confirmed = await confirmProjectRuntimeAction(
         [
-          "Archive this Project Runtime?",
-          "This stops and hides the active runtime while preserving memory and transcripts.",
+          HOMELAB_PRODUCT_COPY.projectRuntime.archiveConfirmationTitle,
+          HOMELAB_PRODUCT_COPY.projectRuntime.archiveConfirmationDescription,
         ].join("\n"),
       );
       if (confirmed) {
@@ -197,8 +197,8 @@ export function ProjectRuntimePanel({
     void (async () => {
       const confirmed = await confirmProjectRuntimeAction(
         [
-          "Reset this Project Runtime?",
-          "This replaces filesystem/runtime state while preserving project memory and transcripts.",
+          HOMELAB_PRODUCT_COPY.projectRuntime.resetConfirmationTitle,
+          HOMELAB_PRODUCT_COPY.projectRuntime.resetConfirmationDescription,
         ].join("\n"),
       );
       if (confirmed) {
@@ -211,8 +211,8 @@ export function ProjectRuntimePanel({
     void (async () => {
       const confirmed = await confirmProjectRuntimeAction(
         [
-          "Clean scratch files from this Project Runtime?",
-          "This removes temporary, cache, and build outputs while preserving .homelab, memory, and durable files.",
+          HOMELAB_PRODUCT_COPY.projectRuntime.cleanupConfirmationTitle,
+          HOMELAB_PRODUCT_COPY.projectRuntime.cleanupConfirmationDescription,
         ].join("\n"),
       );
       if (confirmed) {
@@ -226,7 +226,10 @@ export function ProjectRuntimePanel({
       if (typeof window === "undefined") {
         return;
       }
-      const name = window.prompt("Project Runtime snapshot name", defaultSnapshotName());
+      const name = window.prompt(
+        HOMELAB_PRODUCT_COPY.projectRuntime.snapshotPromptTitle,
+        defaultSnapshotName(),
+      );
       const trimmedName = name?.trim();
       if (!trimmedName) {
         return;
@@ -234,7 +237,7 @@ export function ProjectRuntimePanel({
       const confirmed = await confirmProjectRuntimeAction(
         [
           `Create Project Runtime snapshot "${trimmedName}"?`,
-          "This pauses active runtime work, archives managed workspace/home/bin state, and leaves the runtime sleeping.",
+          HOMELAB_PRODUCT_COPY.projectRuntime.snapshotConfirmationDescription,
         ].join("\n"),
       );
       if (confirmed) {
@@ -249,7 +252,7 @@ export function ProjectRuntimePanel({
         const confirmed = await confirmProjectRuntimeAction(
           [
             `Restore Project Runtime snapshot "${snapshot.name}"?`,
-            "This stops the active runtime, replaces managed workspace/home/bin files from the snapshot, and keeps project threads, memory, promoted knowledge, and secret metadata.",
+            HOMELAB_PRODUCT_COPY.projectRuntime.restoreConfirmationDescription,
           ].join("\n"),
         );
         if (confirmed) {
@@ -262,7 +265,7 @@ export function ProjectRuntimePanel({
 
   return (
     <section
-      aria-label="Project Runtime"
+      aria-label={HOMELAB_PRODUCT_COPY.projectRuntime.title}
       className="border-b border-border/80 bg-muted/20 px-3 py-2 sm:px-5"
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -276,7 +279,9 @@ export function ProjectRuntimePanel({
                 runtimeQuery.isFetching && "animate-pulse",
               )}
             />
-            <span className="text-xs font-semibold text-foreground">Project Runtime</span>
+            <span className="text-xs font-semibold text-foreground">
+              {HOMELAB_PRODUCT_COPY.projectRuntime.title}
+            </span>
             <span className="text-xs text-muted-foreground">
               {lifecycleState ? projectRuntimeStatusLabel(lifecycleState) : "Loading"}
             </span>
