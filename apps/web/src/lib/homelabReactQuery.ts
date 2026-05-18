@@ -1,5 +1,7 @@
 import type {
   EnvironmentId,
+  HomelabGraphSearchResult,
+  HomelabEntityKind,
   HomelabSetupStatus,
   ProjectId,
   ProjectMemoryEntry,
@@ -75,7 +77,21 @@ export const homelabQueryKeys = {
     environmentId: EnvironmentId | null,
     projectId: ProjectId | null,
     query: string,
-  ) => ["homelab", "projectMemorySearch", environmentId ?? null, projectId ?? null, query] as const,
+    includeTranscripts: boolean,
+  ) =>
+    [
+      "homelab",
+      "projectMemorySearch",
+      environmentId ?? null,
+      projectId ?? null,
+      query,
+      includeTranscripts,
+    ] as const,
+  graphSearch: (
+    environmentId: EnvironmentId | null,
+    query: string,
+    kinds?: readonly HomelabEntityKind[] | undefined,
+  ) => ["homelab", "graphSearch", environmentId ?? null, query, kinds?.join(",") ?? "all"] as const,
 };
 
 export function homelabSetupStatusQueryOptions(input: {
@@ -138,6 +154,7 @@ export function homelabProjectMemorySearchQueryOptions(input: {
   readonly projectId: ProjectId | null;
   readonly query: string;
   readonly enabled?: boolean;
+  readonly includeTranscripts?: boolean;
   readonly limit?: number;
 }) {
   return queryOptions({
@@ -145,6 +162,7 @@ export function homelabProjectMemorySearchQueryOptions(input: {
       input.environmentId,
       input.projectId,
       input.query.trim(),
+      input.includeTranscripts ?? true,
     ),
     queryFn: async () => {
       if (!input.environmentId || !input.projectId) {
@@ -158,7 +176,7 @@ export function homelabProjectMemorySearchQueryOptions(input: {
         {
           projectId: input.projectId,
           query: input.query.trim(),
-          includeTranscripts: true,
+          includeTranscripts: input.includeTranscripts ?? true,
           limit: input.limit ?? 20,
         },
       );
@@ -170,6 +188,39 @@ export function homelabProjectMemorySearchQueryOptions(input: {
       input.query.trim().length > 0,
     staleTime: 2_000,
     placeholderData: (previous) => previous ?? { results: [] },
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function homelabGraphSearchQueryOptions(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly query: string;
+  readonly enabled?: boolean;
+  readonly kinds?: readonly HomelabEntityKind[] | undefined;
+  readonly limit?: number;
+}) {
+  return queryOptions({
+    queryKey: homelabQueryKeys.graphSearch(input.environmentId, input.query.trim(), input.kinds),
+    queryFn: async () => {
+      if (!input.environmentId) {
+        throw new Error("Homelab graph search is unavailable.");
+      }
+      return writeEnvironmentJson<ReadonlyArray<HomelabGraphSearchResult>>(
+        resolveEnvironmentHttpUrl({
+          environmentId: input.environmentId,
+          pathname: "/api/homelab/search",
+        }),
+        {
+          query: input.query.trim(),
+          ...(input.kinds && input.kinds.length > 0 ? { kinds: input.kinds } : {}),
+          limit: input.limit ?? 20,
+        },
+      );
+    },
+    enabled:
+      (input.enabled ?? true) && input.environmentId !== null && input.query.trim().length > 0,
+    staleTime: 2_000,
+    placeholderData: (previous) => previous ?? [],
     refetchOnWindowFocus: false,
   });
 }

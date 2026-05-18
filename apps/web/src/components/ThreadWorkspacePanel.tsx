@@ -1,8 +1,10 @@
 import type {
   EnvironmentId,
+  HomelabEntityKind,
+  HomelabEntityStatus,
+  HomelabRelationKind,
   ProjectId,
   ProjectMemoryEntry,
-  ProjectMemorySearchResult,
   ThreadId,
   ThreadWorkspaceEntry,
 } from "@t3tools/contracts";
@@ -13,10 +15,12 @@ import {
   BookOpenIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  DatabaseIcon,
   DownloadIcon,
   FileIcon,
   FolderClosedIcon,
   FolderIcon,
+  Globe2Icon,
   HouseIcon,
   LoaderIcon,
   RefreshCwIcon,
@@ -26,6 +30,7 @@ import {
 import {
   memo,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -37,6 +42,7 @@ import { ensureEnvironmentApi } from "~/environmentApi";
 import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import {
+  homelabGraphSearchQueryOptions,
   homelabProjectMemoryQueryOptions,
   homelabProjectMemorySearchQueryOptions,
   homelabQueryKeys,
@@ -54,6 +60,17 @@ import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
+import {
+  buildGuidedPromotionEnvelope,
+  createInitialPromotionDraft,
+  deriveMemoryKnowledgeReadModel,
+  type MemoryKnowledgeEntryRow,
+  type MemoryKnowledgePromotionDraft,
+  type MemoryKnowledgePromotionDraftMode,
+  type MemoryKnowledgePromotionEditorMode,
+  type MemoryKnowledgeSearchRow,
+  type MemoryKnowledgeSearchScope,
+} from "../memoryKnowledgeReadModel";
 
 interface ThreadWorkspaceTreeNode {
   readonly path: string;
@@ -73,6 +90,69 @@ const MIN_WORKSPACE_TREE_WIDTH = 190;
 const MIN_WORKSPACE_EDITOR_WIDTH = 220;
 const DEFAULT_CONTAINER_WORKSPACE_PATH = "/workspace";
 const DEFAULT_CONTAINER_HOME_PATH = "/runtime/home";
+
+const MEMORY_SEARCH_SCOPES = [
+  { value: "project-memory", label: HOMELAB_PRODUCT_COPY.memoryKnowledge.projectMemoryScope },
+  { value: "transcripts", label: HOMELAB_PRODUCT_COPY.memoryKnowledge.transcriptScope },
+  { value: "global", label: HOMELAB_PRODUCT_COPY.memoryKnowledge.globalScope },
+] as const satisfies ReadonlyArray<{
+  readonly value: MemoryKnowledgeSearchScope;
+  readonly label: string;
+}>;
+
+const PROMOTION_DRAFT_MODES = [
+  "entity",
+  "relation",
+  "finding",
+  "runbook",
+] as const satisfies readonly MemoryKnowledgePromotionDraftMode[];
+
+const PROMOTION_EDITOR_MODES = [
+  "guided",
+  "raw",
+] as const satisfies readonly MemoryKnowledgePromotionEditorMode[];
+
+const PROMOTION_ENTITY_KIND_OPTIONS = [
+  "host",
+  "service",
+  "stack",
+  "container",
+  "volume",
+  "network",
+  "domain",
+  "endpoint",
+  "secret_ref",
+  "tool",
+  "artifact",
+  "runbook",
+  "finding",
+] as const satisfies readonly HomelabEntityKind[];
+
+const PROMOTION_ENTITY_STATUS_OPTIONS = [
+  "active",
+  "planned",
+  "deprecated",
+  "unknown",
+] as const satisfies readonly HomelabEntityStatus[];
+
+const PROMOTION_RELATION_KIND_OPTIONS = [
+  "runs_on",
+  "managed_by",
+  "part_of",
+  "depends_on",
+  "exposes",
+  "routes_to",
+  "uses_secret",
+  "stores_data_in",
+  "connected_to_network",
+  "monitored_by",
+  "backed_up_by",
+  "installed_by",
+  "documented_by",
+  "discovered_in",
+  "derived_from",
+  "owns",
+] as const satisfies readonly HomelabRelationKind[];
 
 function maxWorkspacePanelWidth(): number {
   if (typeof window === "undefined") {
@@ -351,8 +431,12 @@ function formatMemoryTimestamp(value: string): string {
   });
 }
 
+function formatMemoryKnowledgeOption(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
 function ProjectMemoryEntryRow(props: {
-  readonly entry: ProjectMemoryEntry;
+  readonly row: MemoryKnowledgeEntryRow;
   readonly selected: boolean;
   readonly onSelect: () => void;
 }) {
@@ -368,15 +452,16 @@ function ProjectMemoryEntryRow(props: {
       <div className="flex items-start gap-2">
         <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 text-xs font-medium text-foreground">
-            {props.entry.summary}
+          <div className="line-clamp-2 text-xs font-medium text-foreground">{props.row.title}</div>
+          <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+            {props.row.detail}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span>{formatMemoryTimestamp(props.entry.updatedAt)}</span>
+            <span>{formatMemoryTimestamp(props.row.timestamp)}</span>
             <span className="rounded border border-border px-1 py-0.5">
-              {props.entry.promotionStatus}
+              {props.row.statusLabel}
             </span>
-            {props.entry.tags.slice(0, 3).map((tag) => (
+            {props.row.tags.slice(0, 3).map((tag) => (
               <span key={tag} className="rounded bg-muted px-1 py-0.5">
                 {tag}
               </span>
@@ -389,30 +474,61 @@ function ProjectMemoryEntryRow(props: {
 }
 
 function ProjectMemorySearchRow(props: {
-  readonly result: ProjectMemorySearchResult;
+  readonly result: MemoryKnowledgeSearchRow;
   readonly onOpenSource: (path: string) => void;
 }) {
   return (
     <div className="rounded-md border border-border px-3 py-2">
       <div className="flex items-start gap-2">
-        <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        {props.result.source === "Global knowledge" ? (
+          <Globe2Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        ) : props.result.source === "Raw transcript" ? (
+          <DatabaseIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="line-clamp-1 text-xs font-medium text-foreground">
-            {props.result.summary}
+            {props.result.title}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>{props.result.source}</span>
+            <span>{props.result.scope}</span>
+            <span>{formatMemoryTimestamp(props.result.timestamp)}</span>
           </div>
           <div className="mt-1 line-clamp-3 text-xs text-muted-foreground">
             {props.result.snippet}
           </div>
-          <button
-            type="button"
-            className="mt-1 block max-w-full truncate font-mono text-[11px] text-primary hover:underline"
-            onClick={() => props.onOpenSource(`/workspace/${props.result.sourcePath}`)}
-          >
-            {props.result.sourcePath}
-          </button>
+          <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
+            {props.result.sourcePath ? (
+              <button
+                type="button"
+                className="block min-w-0 truncate font-mono text-[11px] text-primary hover:underline"
+                onClick={() => props.onOpenSource(`/workspace/${props.result.sourcePath}`)}
+              >
+                {props.result.sourcePath}
+              </button>
+            ) : (
+              <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                Promoted graph entity
+              </span>
+            )}
+            <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              {props.result.actionLabel}
+            </span>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function PromotionField(props: { readonly label: string; readonly children: ReactNode }) {
+  return (
+    <label className="block space-y-1">
+      <span className="text-[11px] font-medium text-muted-foreground">{props.label}</span>
+      {props.children}
+    </label>
   );
 }
 
@@ -424,8 +540,13 @@ function ThreadProjectMemoryPanel(props: {
 }) {
   const queryClient = useQueryClient();
   const [memoryQuery, setMemoryQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<MemoryKnowledgeSearchScope>("project-memory");
   const [selectedMemoryId, setSelectedMemoryId] = useState<ProjectMemoryEntry["id"] | null>(null);
-  const [promotionDraft, setPromotionDraft] = useState("");
+  const [promotionEditorMode, setPromotionEditorMode] =
+    useState<MemoryKnowledgePromotionEditorMode>("guided");
+  const [guidedPromotionDraft, setGuidedPromotionDraft] =
+    useState<MemoryKnowledgePromotionDraft | null>(null);
+  const [rawPromotionDraft, setRawPromotionDraft] = useState("");
   const trimmedQuery = memoryQuery.trim();
   const listQuery = useQuery(
     homelabProjectMemoryQueryOptions({
@@ -440,43 +561,121 @@ function ThreadProjectMemoryPanel(props: {
       environmentId: props.environmentId,
       projectId: props.projectId,
       query: trimmedQuery,
-      enabled: props.open && trimmedQuery.length > 0,
+      enabled: props.open && trimmedQuery.length > 0 && searchScope !== "global",
+      includeTranscripts: searchScope === "transcripts",
       limit: 25,
     }),
   );
-  const entries = listQuery.data?.entries ?? [];
-  const proposedEntries = entries.filter((entry) => entry.promotionStatus === "proposed");
-  const selectedEntry =
-    entries.find((entry) => entry.id === selectedMemoryId) ?? proposedEntries[0] ?? null;
+  const graphSearchQueryState = useQuery(
+    homelabGraphSearchQueryOptions({
+      environmentId: props.environmentId,
+      query: trimmedQuery,
+      enabled: props.open && trimmedQuery.length > 0 && searchScope === "global",
+      limit: 25,
+    }),
+  );
+  const entries = useMemo(() => listQuery.data?.entries ?? [], [listQuery.data?.entries]);
+  const model = useMemo(
+    () =>
+      deriveMemoryKnowledgeReadModel({
+        projectMemoryEntries: entries,
+        memorySearchResults: searchQueryState.data?.results ?? [],
+        graphSearchResults: graphSearchQueryState.data ?? [],
+        searchQuery: trimmedQuery,
+        searchScope,
+        selectedPromotionMemoryId: selectedMemoryId,
+        loading: {
+          projectMemory: listQuery.isLoading,
+          memorySearch: searchQueryState.isFetching,
+          graphSearch: graphSearchQueryState.isFetching,
+        },
+        errors: {
+          projectMemory: listQuery.isError ? listQuery.error : undefined,
+          memorySearch: searchQueryState.isError ? searchQueryState.error : undefined,
+          graphSearch: graphSearchQueryState.isError ? graphSearchQueryState.error : undefined,
+        },
+      }),
+    [
+      entries,
+      graphSearchQueryState.data,
+      graphSearchQueryState.error,
+      graphSearchQueryState.isError,
+      graphSearchQueryState.isFetching,
+      listQuery.error,
+      listQuery.isError,
+      listQuery.isLoading,
+      searchQueryState.data?.results,
+      searchQueryState.error,
+      searchQueryState.isError,
+      searchQueryState.isFetching,
+      searchScope,
+      selectedMemoryId,
+      trimmedQuery,
+    ],
+  );
+  const selectedEntry = model.promotion.selectedEntry;
+
+  useEffect(() => {
+    setSelectedMemoryId((current) => {
+      if (current && entries.some((entry) => entry.id === current)) {
+        return current;
+      }
+      return model.promotion.defaultSelectedId;
+    });
+  }, [entries, model.promotion.defaultSelectedId]);
 
   useEffect(() => {
     if (!selectedEntry) {
-      setPromotionDraft("");
+      setGuidedPromotionDraft(null);
+      setRawPromotionDraft("");
       return;
     }
-    if (selectedMemoryId === selectedEntry.id) {
-      return;
-    }
-    setSelectedMemoryId(selectedEntry.id);
-  }, [selectedEntry, selectedMemoryId]);
+    setGuidedPromotionDraft(createInitialPromotionDraft(selectedEntry));
+    setRawPromotionDraft("");
+  }, [selectedEntry]);
+
+  const updateGuidedPromotionDraft = useCallback(
+    (patch: Partial<MemoryKnowledgePromotionDraft>) => {
+      setGuidedPromotionDraft((current) => (current ? { ...current, ...patch } : current));
+    },
+    [],
+  );
 
   const promoteMutation = useMutation({
     mutationFn: async () => {
       if (!selectedEntry) {
         throw new Error("Select a memory entry before promoting.");
       }
-      const promotion = JSON.parse(promotionDraft) as unknown;
+      const promotion =
+        promotionEditorMode === "guided"
+          ? (() => {
+              if (!guidedPromotionDraft) {
+                throw new Error("Complete the guided promotion form before promoting.");
+              }
+              const result = buildGuidedPromotionEnvelope({
+                entry: selectedEntry,
+                draft: guidedPromotionDraft,
+                createdAt: new Date().toISOString(),
+              });
+              if (!result.ok) {
+                throw new Error(result.error);
+              }
+              return result.promotion;
+            })()
+          : (JSON.parse(rawPromotionDraft) as Parameters<
+              typeof promoteProjectMemoryEntry
+            >[0]["promotion"]);
       return promoteProjectMemoryEntry({
         environmentId: props.environmentId,
         projectId: props.projectId,
         memoryId: selectedEntry.id,
-        promotion: promotion as Parameters<typeof promoteProjectMemoryEntry>[0]["promotion"],
+        promotion,
       });
     },
     onSuccess: async () => {
-      setPromotionDraft("");
+      setRawPromotionDraft("");
       await queryClient.invalidateQueries({
-        queryKey: homelabQueryKeys.projectMemory(props.environmentId, props.projectId),
+        queryKey: homelabQueryKeys.all,
       });
       toastManager.add({
         type: "success",
@@ -501,29 +700,44 @@ function ThreadProjectMemoryPanel(props: {
           <Input
             value={memoryQuery}
             onChange={(event) => setMemoryQuery(event.target.value)}
-            placeholder="Search memory and transcripts"
+            placeholder={HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder}
             className="pl-7 text-xs"
           />
         </label>
+        <div className="mt-2 grid grid-cols-3 rounded-md border border-border bg-muted/20 p-0.5">
+          {MEMORY_SEARCH_SCOPES.map((scope) => (
+            <button
+              key={scope.value}
+              type="button"
+              className={cn(
+                "rounded px-1.5 py-1 text-[11px]",
+                searchScope === scope.value
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setSearchScope(scope.value)}
+            >
+              {scope.label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {trimmedQuery.length > 0 ? (
-          searchQueryState.isLoading ? (
+          model.search.state.kind === "loading" ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <LoaderIcon className="size-3.5 animate-spin" />
-              Searching memory
+              {model.search.state.title}
             </div>
-          ) : searchQueryState.isError ? (
+          ) : model.search.state.kind === "error" ? (
             <div className="text-xs text-destructive">
-              {searchQueryState.error instanceof Error
-                ? searchQueryState.error.message
-                : "Unable to search memory."}
+              {model.search.state.errorMessage ?? model.search.state.title}
             </div>
-          ) : (searchQueryState.data?.results.length ?? 0) === 0 ? (
-            <div className="text-xs text-muted-foreground">No memory or transcript matches.</div>
+          ) : model.search.state.kind === "empty" ? (
+            <div className="text-xs text-muted-foreground">{model.search.state.description}</div>
           ) : (
             <div className="space-y-2">
-              {(searchQueryState.data?.results ?? []).map((result) => (
+              {model.search.results.map((result) => (
                 <ProjectMemorySearchRow
                   key={result.id}
                   result={result}
@@ -532,25 +746,31 @@ function ThreadProjectMemoryPanel(props: {
               ))}
             </div>
           )
-        ) : listQuery.isLoading ? (
+        ) : model.projectMemory.state.kind === "loading" ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <LoaderIcon className="size-3.5 animate-spin" />
-            Loading memory
+            {model.projectMemory.state.title}
           </div>
-        ) : listQuery.isError ? (
+        ) : model.projectMemory.state.kind === "error" ? (
           <div className="text-xs text-destructive">
-            {listQuery.error instanceof Error ? listQuery.error.message : "Unable to load memory."}
+            {model.projectMemory.state.errorMessage ?? model.projectMemory.state.title}
           </div>
-        ) : entries.length === 0 ? (
-          <div className="text-xs text-muted-foreground">No project memory entries yet.</div>
+        ) : model.projectMemory.state.kind === "empty" ? (
+          <div className="text-xs text-muted-foreground">
+            {model.projectMemory.state.description}
+          </div>
         ) : (
           <div className="space-y-2">
-            {entries.map((entry) => (
+            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>Recent project memory</span>
+              <span>{model.projectMemory.entries.length} total</span>
+            </div>
+            {model.projectMemory.recentEntries.map((row) => (
               <ProjectMemoryEntryRow
-                key={entry.id}
-                entry={entry}
-                selected={selectedEntry?.id === entry.id}
-                onSelect={() => setSelectedMemoryId(entry.id)}
+                key={row.id}
+                row={row}
+                selected={selectedEntry?.id === row.id}
+                onSelect={() => setSelectedMemoryId(row.id)}
               />
             ))}
           </div>
@@ -558,33 +778,257 @@ function ThreadProjectMemoryPanel(props: {
       </div>
       <div className="border-t border-border px-3 py-3">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-xs font-medium text-foreground">Promotion review</div>
-          <div className="text-[11px] text-muted-foreground">{proposedEntries.length} proposed</div>
+          <div className="text-xs font-medium text-foreground">
+            {HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionReviewTitle}
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {model.promotion.candidates.length} proposed
+          </div>
         </div>
-        {selectedEntry && selectedEntry.promotionStatus === "proposed" ? (
-          <div className="space-y-2">
+        {model.promotion.candidates.length > 0 ? (
+          <div className="mb-2 max-h-24 space-y-1 overflow-y-auto">
+            {model.promotion.candidates.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className={cn(
+                  "block w-full rounded border px-2 py-1.5 text-left text-[11px]",
+                  selectedEntry?.id === candidate.id
+                    ? "border-primary/50 bg-primary/8 text-foreground"
+                    : "border-border text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                )}
+                onClick={() => setSelectedMemoryId(candidate.id)}
+              >
+                <span className="line-clamp-1">{candidate.title}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {selectedEntry && guidedPromotionDraft ? (
+          <div className="space-y-3">
             <div className="line-clamp-2 text-xs text-muted-foreground">
               {selectedEntry.summary}
             </div>
-            <Textarea
-              value={promotionDraft}
-              onChange={(event) => setPromotionDraft(event.target.value)}
-              placeholder='{"id":"promotion-...","threadId":"...","summary":"...","createdAt":"...","entries":[]}'
-              className="h-28 resize-none font-mono text-[11px] leading-4"
-            />
+            <div className="space-y-1 rounded-md border border-border bg-muted/15 px-2 py-2 text-[11px] text-muted-foreground">
+              <div>{model.promotion.localBoundary}</div>
+              <div>{model.promotion.globalBoundary}</div>
+            </div>
+            <div className="grid grid-cols-2 rounded-md border border-border bg-muted/20 p-0.5">
+              {PROMOTION_EDITOR_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={cn(
+                    "rounded px-2 py-1 text-xs",
+                    promotionEditorMode === mode
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setPromotionEditorMode(mode)}
+                >
+                  {mode === "guided"
+                    ? HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionGuidedMode
+                    : HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionRawMode}
+                </button>
+              ))}
+            </div>
+            {promotionEditorMode === "guided" ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-4 rounded-md border border-border bg-muted/20 p-0.5">
+                  {PROMOTION_DRAFT_MODES.map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={cn(
+                        "rounded px-1 py-1 text-[11px] capitalize",
+                        guidedPromotionDraft.mode === mode
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                      onClick={() => updateGuidedPromotionDraft({ mode })}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <PromotionField label="Thread id">
+                    <Input
+                      value={guidedPromotionDraft.threadId}
+                      onChange={(event) =>
+                        updateGuidedPromotionDraft({ threadId: event.target.value })
+                      }
+                      className="h-8 font-mono text-xs"
+                    />
+                  </PromotionField>
+                  <PromotionField label="Source reference">
+                    <Input
+                      value={guidedPromotionDraft.sourceRef}
+                      onChange={(event) =>
+                        updateGuidedPromotionDraft({ sourceRef: event.target.value })
+                      }
+                      className="h-8 font-mono text-xs"
+                    />
+                  </PromotionField>
+                </div>
+                {guidedPromotionDraft.mode === "relation" ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <PromotionField label="Relation id">
+                      <Input
+                        value={guidedPromotionDraft.relationId}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ relationId: event.target.value })
+                        }
+                        className="h-8 font-mono text-xs"
+                      />
+                    </PromotionField>
+                    <PromotionField label="Relation kind">
+                      <select
+                        value={guidedPromotionDraft.relationKind}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({
+                            relationKind: event.target.value as HomelabRelationKind,
+                          })
+                        }
+                        className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                      >
+                        {PROMOTION_RELATION_KIND_OPTIONS.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {formatMemoryKnowledgeOption(kind)}
+                          </option>
+                        ))}
+                      </select>
+                    </PromotionField>
+                    <PromotionField label="From entity id">
+                      <Input
+                        value={guidedPromotionDraft.fromEntityId}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ fromEntityId: event.target.value })
+                        }
+                        className="h-8 font-mono text-xs"
+                      />
+                    </PromotionField>
+                    <PromotionField label="To entity id">
+                      <Input
+                        value={guidedPromotionDraft.toEntityId}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ toEntityId: event.target.value })
+                        }
+                        className="h-8 font-mono text-xs"
+                      />
+                    </PromotionField>
+                  </div>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <PromotionField label="Entity id">
+                      <Input
+                        value={guidedPromotionDraft.entityId}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ entityId: event.target.value })
+                        }
+                        className="h-8 font-mono text-xs"
+                      />
+                    </PromotionField>
+                    <PromotionField label="Entity name">
+                      <Input
+                        value={guidedPromotionDraft.entityName}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ entityName: event.target.value })
+                        }
+                        className="h-8 text-xs"
+                      />
+                    </PromotionField>
+                    <PromotionField label="Entity title">
+                      <Input
+                        value={guidedPromotionDraft.entityTitle}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({ entityTitle: event.target.value })
+                        }
+                        className="h-8 text-xs"
+                      />
+                    </PromotionField>
+                    <PromotionField label="Entity kind">
+                      <select
+                        value={
+                          guidedPromotionDraft.mode === "finding" ||
+                          guidedPromotionDraft.mode === "runbook"
+                            ? guidedPromotionDraft.mode
+                            : guidedPromotionDraft.entityKind
+                        }
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({
+                            entityKind: event.target.value as HomelabEntityKind,
+                          })
+                        }
+                        disabled={
+                          guidedPromotionDraft.mode === "finding" ||
+                          guidedPromotionDraft.mode === "runbook"
+                        }
+                        className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                      >
+                        {PROMOTION_ENTITY_KIND_OPTIONS.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {formatMemoryKnowledgeOption(kind)}
+                          </option>
+                        ))}
+                      </select>
+                    </PromotionField>
+                    <PromotionField label="Entity status">
+                      <select
+                        value={guidedPromotionDraft.entityStatus}
+                        onChange={(event) =>
+                          updateGuidedPromotionDraft({
+                            entityStatus: event.target.value as HomelabEntityStatus,
+                          })
+                        }
+                        className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                      >
+                        {PROMOTION_ENTITY_STATUS_OPTIONS.map((status) => (
+                          <option key={status} value={status}>
+                            {formatMemoryKnowledgeOption(status)}
+                          </option>
+                        ))}
+                      </select>
+                    </PromotionField>
+                  </div>
+                )}
+                <PromotionField label="Global summary">
+                  <Textarea
+                    value={guidedPromotionDraft.summary}
+                    onChange={(event) =>
+                      updateGuidedPromotionDraft({ summary: event.target.value })
+                    }
+                    className="h-20 resize-none text-xs leading-4"
+                  />
+                </PromotionField>
+              </div>
+            ) : (
+              <Textarea
+                value={rawPromotionDraft}
+                onChange={(event) => setRawPromotionDraft(event.target.value)}
+                placeholder='{"id":"promotion-...","threadId":"...","summary":"...","createdAt":"...","entries":[]}'
+                className="h-32 resize-none font-mono text-[11px] leading-4"
+              />
+            )}
             <Button
               type="button"
               size="xs"
               onClick={() => promoteMutation.mutate()}
-              disabled={promotionDraft.trim().length === 0 || promoteMutation.isPending}
+              disabled={
+                promoteMutation.isPending ||
+                (promotionEditorMode === "raw" && rawPromotionDraft.trim().length === 0)
+              }
             >
               {promoteMutation.isPending ? <LoaderIcon className="size-3.5 animate-spin" /> : null}
               Promote
             </Button>
           </div>
         ) : (
-          <div className="text-xs text-muted-foreground">No proposed memory selected.</div>
+          <div className="text-xs text-muted-foreground">{model.promotion.state.description}</div>
         )}
+        <div className="mt-3 border-t border-border/60 pt-2 text-[11px] leading-4 text-muted-foreground">
+          {HOMELAB_PRODUCT_COPY.memoryKnowledge.cliHint}
+        </div>
       </div>
     </div>
   );

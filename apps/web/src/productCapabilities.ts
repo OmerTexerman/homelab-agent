@@ -193,6 +193,21 @@ export const HOMELAB_PRODUCT_COPY = {
     setupCompleteDescription:
       "Providers, Project Runtimes, secrets, and promoted knowledge are available for normal work.",
   },
+  memoryKnowledge: {
+    searchPlaceholder: "Search memory, transcripts, or global knowledge",
+    projectMemoryScope: "Project memory",
+    transcriptScope: "Raw transcripts",
+    globalScope: "Global knowledge",
+    promotionReviewTitle: "Promotion review",
+    promotionGuidedMode: "Guided",
+    promotionRawMode: "Raw JSON",
+    localBoundary: "Project-local memory stays with this Project.",
+    globalBoundary: "Promoted entries become shared homelab knowledge.",
+    graphFilterKindLabel: "Entity kind",
+    graphFilterStatusLabel: "Entity status",
+    cliHint:
+      "Runtime agents can still use rg, grep, jq, and the homelab CLI against generated .homelab views.",
+  },
   settings: {
     devicesAndSessions: "Devices & Sessions",
     memoryAndKnowledge: "Memory & Knowledge",

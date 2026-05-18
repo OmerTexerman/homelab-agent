@@ -36,6 +36,10 @@ import { __resetLocalApiForTests } from "../../localApi";
 import { resetSourceControlDiscoveryStateForTests } from "../../lib/sourceControlDiscoveryState";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
+import {
+  resetPrimaryEnvironmentDescriptorForTests,
+  writePrimaryEnvironmentDescriptor,
+} from "../../environments/primary";
 import { useUiStateStore } from "../../uiStateStore";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
@@ -189,8 +193,28 @@ vi.mock("../../environments/runtime", () => {
     listSavedEnvironmentRecords: () => [],
     resetSavedEnvironmentRegistryStoreForTests: () => undefined,
     resetSavedEnvironmentRuntimeStoreForTests: () => undefined,
-    resolveEnvironmentHttpUrl: (_environmentId: unknown, path: string) =>
-      new URL(path, "http://localhost:3000").toString(),
+    resolveEnvironmentHttpUrl: (
+      input:
+        | {
+            readonly pathname: string;
+            readonly searchParams?: Record<string, string>;
+          }
+        | unknown,
+      path?: string,
+    ) => {
+      if (input && typeof input === "object" && "pathname" in input) {
+        const request = input as {
+          readonly pathname: string;
+          readonly searchParams?: Record<string, string>;
+        };
+        const url = new URL(request.pathname, "http://localhost:3000");
+        for (const [key, value] of Object.entries(request.searchParams ?? {})) {
+          url.searchParams.set(key, value);
+        }
+        return url.toString();
+      }
+      return new URL(path ?? "/", "http://localhost:3000").toString();
+    },
     waitForSavedEnvironmentRegistryHydration: async () => undefined,
     addSavedEnvironment: vi.fn(),
     connectDesktopSshEnvironment: mockConnectDesktopSshEnvironment,
@@ -243,6 +267,14 @@ function createBaseServerConfig(): ServerConfig {
     },
     settings: DEFAULT_SERVER_SETTINGS,
   };
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
 }
 
 function createOutdatedProvider(
@@ -508,6 +540,7 @@ describe("GeneralSettingsPanel observability", () => {
 
   beforeEach(async () => {
     resetServerStateForTests();
+    resetPrimaryEnvironmentDescriptorForTests();
     await __resetLocalApiForTests();
     localStorage.clear();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
@@ -526,6 +559,7 @@ describe("GeneralSettingsPanel observability", () => {
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
     resetServerStateForTests();
+    resetPrimaryEnvironmentDescriptorForTests();
     await __resetLocalApiForTests();
     authAccessHarness.reset();
   });
@@ -844,6 +878,113 @@ describe("GeneralSettingsPanel observability", () => {
         page.getByText("Project Runtime bootstrap mutations available through homelab tools."),
       )
       .toBeInTheDocument();
+    await expect.element(page.getByTestId("settings-knowledge-graph-empty")).toBeInTheDocument();
+    await expect.element(page.getByText("No promoted global knowledge yet")).toBeInTheDocument();
+  });
+
+  it("shows populated Memory & Knowledge graph search and real graph rows", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    writePrimaryEnvironmentDescriptor(createBaseServerConfig().environment);
+    const now = "2026-05-17T12:00:00.000Z";
+    const setupStatus = {
+      snapshot: {
+        entities: [
+          {
+            id: "entity-host",
+            kind: "host",
+            name: "nuc",
+            title: "NUC",
+            summary: "Primary mini PC.",
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: "entity-plex",
+            kind: "service",
+            name: "plex",
+            title: "Plex",
+            summary: "Media service.",
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        relations: [
+          {
+            id: "relation-plex-host",
+            kind: "runs_on",
+            fromEntityId: "entity-plex",
+            toEntityId: "entity-host",
+            summary: "Plex runs on the NUC.",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        observations: [],
+        updatedAt: now,
+      },
+      secrets: { secrets: [] },
+      runtimeBootstrap: {
+        backend: "docker",
+        imageRef: "homelab-agent-runtime:local",
+        bootstrapVersion: "test",
+        mutations: [],
+        updatedAt: now,
+      },
+      runtimeBootstrapCatalog: {
+        activeBlueprint: {
+          backend: "docker",
+          imageRef: "homelab-agent-runtime:local",
+          bootstrapVersion: "test",
+          mutations: [],
+          updatedAt: now,
+        },
+        activeBootstrapVersion: "test",
+        availableMaterializations: [],
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/homelab/setup-status") && method === "GET") {
+        return jsonResponse(setupStatus);
+      }
+      if (url.endsWith("/api/homelab/search") && method === "POST") {
+        return jsonResponse([{ entity: setupStatus.snapshot.entities[1], score: 120 }]);
+      }
+      throw new Error(`Unhandled fetch ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <QueryClientProvider client={queryClient}>
+          <MemoryKnowledgeSettingsPanel />
+        </QueryClientProvider>
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByTestId("settings-knowledge-graph-populated"))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("Plex", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Plex -> runs on -> NUC")).toBeInTheDocument();
+
+    await page
+      .getByPlaceholder(HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder)
+      .fill("plex");
+    await expect.element(page.getByText("Review global entity")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/api/homelab/search",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("creates and shows a pairing link when network access is enabled", async () => {

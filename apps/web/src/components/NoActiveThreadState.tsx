@@ -399,6 +399,16 @@ function TopologySection({ topology }: { readonly topology: HomeOverviewTopology
             <SummaryPill icon={<GitBranchIcon className="size-3.5" />}>
               {topology.edges.length} relations
             </SummaryPill>
+            {topology.kindGroups.map((group) => (
+              <SummaryPill key={`kind:${group.label}`}>
+                {group.label} {group.count}
+              </SummaryPill>
+            ))}
+            {topology.statusGroups.map((group) => (
+              <SummaryPill key={`status:${group.label}`}>
+                {group.label} {group.count}
+              </SummaryPill>
+            ))}
             {topology.omittedEntityCount > 0 || topology.omittedRelationCount > 0 ? (
               <SummaryPill>
                 {topology.omittedEntityCount} entities, {topology.omittedRelationCount} relations

@@ -96,10 +96,17 @@ export interface HomeOverviewTopologyEdge {
   readonly toId: HomelabEntity["id"];
 }
 
+export interface HomeOverviewTopologyGroup {
+  readonly label: string;
+  readonly count: number;
+}
+
 export interface HomeOverviewTopology {
   readonly hasGraphData: boolean;
   readonly nodes: readonly HomeOverviewTopologyNode[];
   readonly edges: readonly HomeOverviewTopologyEdge[];
+  readonly kindGroups: readonly HomeOverviewTopologyGroup[];
+  readonly statusGroups: readonly HomeOverviewTopologyGroup[];
   readonly omittedEntityCount: number;
   readonly omittedRelationCount: number;
   readonly emptyTitle: string;
@@ -440,6 +447,23 @@ function topologyPosition(
   };
 }
 
+function topologyGroups<T extends string>(
+  values: readonly T[],
+  limit: number,
+): readonly HomeOverviewTopologyGroup[] {
+  const counts = new Map<T, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts]
+    .toSorted((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([value, count]) => ({
+      label: formatKind(value),
+      count,
+    }));
+}
+
 function deriveTopology(setupStatus: HomelabSetupStatus | null | undefined): HomeOverviewTopology {
   const entities = setupStatus?.snapshot.entities ?? [];
   const relations = setupStatus?.snapshot.relations ?? [];
@@ -448,6 +472,8 @@ function deriveTopology(setupStatus: HomelabSetupStatus | null | undefined): Hom
       hasGraphData: false,
       nodes: [],
       edges: [],
+      kindGroups: [],
+      statusGroups: [],
       omittedEntityCount: 0,
       omittedRelationCount: 0,
       emptyTitle: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyTitle,
@@ -483,6 +509,14 @@ function deriveTopology(setupStatus: HomelabSetupStatus | null | undefined): Hom
       fromId: relation.fromEntityId,
       toId: relation.toEntityId,
     })),
+    kindGroups: topologyGroups(
+      entities.map((entity) => entity.kind),
+      4,
+    ),
+    statusGroups: topologyGroups(
+      entities.map((entity) => entity.status ?? "unknown"),
+      4,
+    ),
     omittedEntityCount: Math.max(0, entities.length - selectedEntities.length),
     omittedRelationCount: Math.max(0, relations.length - selectedRelations.length),
     emptyTitle: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyTitle,

@@ -62,6 +62,10 @@ describe("Homelab product copy", () => {
       "This screen uses server provider probes and wrapper readiness. It does not send a provider prompt.",
     );
     expect(HOMELAB_PRODUCT_COPY.runtimeWorkspace.title).toBe("Runtime Workspace");
+    expect(HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder).toBe(
+      "Search memory, transcripts, or global knowledge",
+    );
+    expect(HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionGuidedMode).toBe("Guided");
     expect(HOMELAB_PRODUCT_COPY.standalone.newThreadDescription).toContain(
       "Scratch Project Runtime",
     );

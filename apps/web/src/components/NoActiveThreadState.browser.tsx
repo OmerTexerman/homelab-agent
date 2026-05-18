@@ -222,6 +222,9 @@ describe("HomeOverviewSurface", () => {
       await expect
         .element(page.getByTestId("home-topology").getByText("Plex", { exact: true }))
         .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("home-topology").getByText("active 2", { exact: true }))
+        .toBeInTheDocument();
       await expect.element(page.getByText("Next setup steps")).not.toBeInTheDocument();
       await expect.element(page.getByText("Core setup is ready")).not.toBeInTheDocument();
     } finally {

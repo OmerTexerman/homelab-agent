@@ -274,6 +274,21 @@ thread transcript indexes for exact recovery. Promotion to global homelab
 knowledge remains explicit: a proposed memory entry can be marked promoted only
 when a normal homelab promotion envelope is submitted and recorded.
 
+The browser presents memory through a pure web read model rather than deriving
+state inline in React. The read model separates recent project memory, proposed
+promotion candidates, scoped memory/transcript/global search results, graph
+entities and relations, empty/loading/error states, and actionable next steps.
+The Runtime Workspace Memory tab uses the same model for a unified search
+surface across project-local memory, raw thread transcripts, and promoted global
+knowledge while keeping the underlying project-memory and graph APIs separate.
+
+The primary browser promotion path no longer requires hand-editing raw JSON for
+common cases. Proposed project memory can be reviewed with a guided form for
+entities, relations, findings, and runbooks. The advanced raw JSON editor remains
+available for technical promotion envelopes. The review UI explicitly shows that
+project memory stays project-local until promotion is submitted, and that only
+reviewed graph entries become shared global homelab knowledge.
+
 Standalone threads use the hidden `system:standalone` project memory scope.
 When a standalone thread is moved to an existing project, the transcript moves
 with the thread automatically. Durable Scratch memory entries move only when the

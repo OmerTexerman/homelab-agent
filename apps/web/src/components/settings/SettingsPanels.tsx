@@ -1,10 +1,22 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  DatabaseIcon,
+  GitBranchIcon,
+  Globe2Icon,
+  LoaderIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+} from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
+  type HomelabEntityKind,
+  type HomelabEntityStatus,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
@@ -55,6 +67,7 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -84,7 +97,10 @@ import {
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useServerObservability, useServerProviders } from "../../rpc/serverState";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
-import { homelabSetupStatusQueryOptions } from "../../lib/homelabReactQuery";
+import {
+  homelabGraphSearchQueryOptions,
+  homelabSetupStatusQueryOptions,
+} from "../../lib/homelabReactQuery";
 import {
   HOMELAB_PRODUCT_COPY,
   shouldShowCompatibilityHostPathProjectUi,
@@ -95,6 +111,10 @@ import {
   deriveProviderReadinessForInstance,
   deriveSetupReadiness,
 } from "../../setupReadinessReadModel";
+import {
+  deriveMemoryKnowledgeReadModel,
+  type MemoryKnowledgeReadModel,
+} from "../../memoryKnowledgeReadModel";
 
 const THEME_OPTIONS = [
   {
@@ -936,18 +956,248 @@ export function ProjectRuntimeSettingsPanel() {
   );
 }
 
+function formatKnowledgeOption(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function formatKnowledgeTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function KnowledgeSearchResults(props: { readonly model: MemoryKnowledgeReadModel }) {
+  const state = props.model.search.state;
+  if (state.kind === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <LoaderIcon className="size-3.5 animate-spin" />
+        {state.title}
+      </div>
+    );
+  }
+  if (state.kind === "error") {
+    return <div className="text-xs text-destructive">{state.errorMessage ?? state.title}</div>;
+  }
+  if (state.kind === "empty") {
+    return <div className="text-xs text-muted-foreground">{state.description}</div>;
+  }
+  return (
+    <div className="space-y-2">
+      {props.model.search.results.map((result) => (
+        <div key={result.id} className="rounded-md border border-border px-3 py-2">
+          <div className="flex items-start gap-2">
+            <Globe2Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-foreground">{result.title}</div>
+              <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                <span>{result.source}</span>
+                <span>{result.scope}</span>
+                <span>{formatKnowledgeTimestamp(result.timestamp)}</span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                {result.snippet}
+              </div>
+              <div className="mt-2 text-[11px] text-muted-foreground">{result.actionLabel}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KnowledgeGraphExplorer(props: {
+  readonly model: MemoryKnowledgeReadModel;
+  readonly kindFilter: HomelabEntityKind | "all";
+  readonly statusFilter: HomelabEntityStatus | "unknown" | "all";
+  readonly onKindFilterChange: (value: HomelabEntityKind | "all") => void;
+  readonly onStatusFilterChange: (value: HomelabEntityStatus | "unknown" | "all") => void;
+}) {
+  const graph = props.model.graph;
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="space-y-1">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterKindLabel}
+          </span>
+          <select
+            value={props.kindFilter}
+            onChange={(event) =>
+              props.onKindFilterChange(event.target.value as HomelabEntityKind | "all")
+            }
+            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+            aria-label={HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterKindLabel}
+          >
+            {graph.kindGroups.map((group) => (
+              <option key={group.value} value={group.value}>
+                {group.label} ({group.count})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterStatusLabel}
+          </span>
+          <select
+            value={props.statusFilter}
+            onChange={(event) =>
+              props.onStatusFilterChange(
+                event.target.value as HomelabEntityStatus | "unknown" | "all",
+              )
+            }
+            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+            aria-label={HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterStatusLabel}
+          >
+            {graph.statusGroups.map((group) => (
+              <option key={group.value} value={group.value}>
+                {group.label} ({group.count})
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {graph.state.kind === "loading" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderIcon className="size-3.5 animate-spin" />
+          {graph.state.title}
+        </div>
+      ) : graph.state.kind === "error" ? (
+        <div className="text-xs text-destructive">
+          {graph.state.errorMessage ?? graph.state.title}
+        </div>
+      ) : graph.state.kind === "empty" ? (
+        <div
+          data-testid="settings-knowledge-graph-empty"
+          className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground"
+        >
+          <div className="font-medium text-foreground">{graph.state.title}</div>
+          <div className="mt-1 leading-5">{graph.state.description}</div>
+        </div>
+      ) : (
+        <div data-testid="settings-knowledge-graph-populated" className="space-y-3">
+          <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1">
+              <DatabaseIcon className="size-3.5" />
+              {graph.filteredEntityCount} shown
+            </span>
+            <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1">
+              <GitBranchIcon className="size-3.5" />
+              {graph.filteredRelationCount} relations
+            </span>
+          </div>
+          <div className="grid gap-2">
+            {graph.entities.slice(0, 8).map((entity) => (
+              <div
+                key={entity.id}
+                className="grid gap-2 rounded-md border border-border px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground">{entity.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                    <span>{formatKnowledgeOption(entity.kind)}</span>
+                    <span>{formatKnowledgeOption(entity.status)}</span>
+                    <span>{formatKnowledgeTimestamp(entity.updatedAt)}</span>
+                  </div>
+                  {entity.summary ? (
+                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {entity.summary}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {entity.relationCount} relations
+                </div>
+              </div>
+            ))}
+          </div>
+          {graph.relations.length > 0 ? (
+            <div className="space-y-1 border-t border-border/60 pt-3">
+              <div className="text-[11px] font-medium text-muted-foreground">Visible relations</div>
+              {graph.relations.slice(0, 6).map((relation) => (
+                <div key={relation.id} className="truncate text-[11px] text-muted-foreground">
+                  {relation.fromLabel}
+                  {" -> "}
+                  {relation.label}
+                  {" -> "}
+                  {relation.toLabel}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<HomelabEntityKind | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<HomelabEntityStatus | "unknown" | "all">("all");
+  const trimmedGlobalSearchQuery = globalSearchQuery.trim();
   const homelabSetupStatusQuery = useQuery(
     homelabSetupStatusQueryOptions({
       environmentId: primaryEnvironmentId,
       enabled: primaryEnvironmentId !== null,
     }),
   );
+  const homelabGraphSearchQuery = useQuery(
+    homelabGraphSearchQueryOptions({
+      environmentId: primaryEnvironmentId,
+      query: trimmedGlobalSearchQuery,
+      enabled: primaryEnvironmentId !== null && trimmedGlobalSearchQuery.length > 0,
+      limit: 25,
+    }),
+  );
   const homelabSetupStatus = homelabSetupStatusQuery.data;
   const entityCount = homelabSetupStatus?.snapshot.entities.length ?? 0;
   const relationCount = homelabSetupStatus?.snapshot.relations.length ?? 0;
   const bootstrapMutationCount = homelabSetupStatus?.runtimeBootstrap.mutations.length ?? 0;
+  const model = useMemo(
+    () =>
+      deriveMemoryKnowledgeReadModel({
+        setupStatus: homelabSetupStatus ?? null,
+        graphSearchResults: homelabGraphSearchQuery.data ?? [],
+        searchQuery: trimmedGlobalSearchQuery,
+        searchScope: "global",
+        graphFilters: {
+          kind: kindFilter,
+          status: statusFilter,
+        },
+        loading: {
+          graph: homelabSetupStatusQuery.isLoading,
+          graphSearch: homelabGraphSearchQuery.isFetching,
+        },
+        errors: {
+          graph: homelabSetupStatusQuery.isError ? homelabSetupStatusQuery.error : undefined,
+          graphSearch: homelabGraphSearchQuery.isError ? homelabGraphSearchQuery.error : undefined,
+        },
+      }),
+    [
+      homelabGraphSearchQuery.data,
+      homelabGraphSearchQuery.error,
+      homelabGraphSearchQuery.isError,
+      homelabGraphSearchQuery.isFetching,
+      homelabSetupStatus,
+      homelabSetupStatusQuery.error,
+      homelabSetupStatusQuery.isError,
+      homelabSetupStatusQuery.isLoading,
+      kindFilter,
+      statusFilter,
+      trimmedGlobalSearchQuery,
+    ],
+  );
 
   return (
     <SettingsPageContainer>
@@ -962,7 +1212,31 @@ export function MemoryKnowledgeSettingsPanel() {
                 : `${entityCount} entities · ${relationCount} relations`}
             </span>
           }
-        />
+        >
+          <div className="mt-3 space-y-4 border-t border-border/60 py-3">
+            <div className="space-y-2">
+              <label className="relative block">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+                <Input
+                  value={globalSearchQuery}
+                  onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                  placeholder={HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder}
+                  className="h-8 pl-7 text-xs"
+                />
+              </label>
+              {trimmedGlobalSearchQuery.length > 0 ? (
+                <KnowledgeSearchResults model={model} />
+              ) : null}
+            </div>
+            <KnowledgeGraphExplorer
+              model={model}
+              kindFilter={kindFilter}
+              statusFilter={statusFilter}
+              onKindFilterChange={setKindFilter}
+              onStatusFilterChange={setStatusFilter}
+            />
+          </div>
+        </SettingsRow>
         <SettingsRow
           title="Runtime bootstrap state"
           description="Project Runtime bootstrap mutations available through homelab tools."

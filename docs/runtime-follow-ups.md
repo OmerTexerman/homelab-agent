@@ -80,12 +80,20 @@ Completed V2:
 
 Goal: replace the current no-active-thread/default panel with an actually useful Homelab Agent overview.
 
-Current problems:
+Completed slices:
 
-- The surface reads like nested status cards instead of an operational workspace.
-- It keeps showing setup/checklist content even after the environment is usable.
-- The homelab graph is described but not visualized.
-- The page does not help the user understand projects, runtimes, standalone work, memory, recent activity, or what needs attention.
+- Added a pure home overview read model that derives runtime, provider,
+  decision, memory, and topology summaries.
+- The overview now shows real promoted homelab graph entities and relations when
+  present, plus empty states when no graph data exists.
+- Topology visibility includes grouped entity kind/status summaries so the graph
+  is inspectable without decorative fake visuals.
+- The Memory & Knowledge settings panel now exposes global graph search, real
+  entity/relation rows, kind/status filters, and empty states from the shared
+  memory/knowledge read model.
+- The Runtime Workspace Memory tab now supports scoped search across
+  project-local memory, raw transcripts, and promoted global knowledge; recent
+  memory entries; guided promotion review; and secondary `.homelab`/CLI hints.
 
 Preferred direction:
 
@@ -98,10 +106,13 @@ Preferred direction:
 
 Candidate slices:
 
-- Add a pure home overview read model that derives graph, runtime, provider, memory, and decision summaries.
-- Add a simple graph/topology visualization from existing homelab entities and relations.
-- Replace the current setup checklist with compact health/status rows and actionable links.
-- Add visual regression coverage for empty, partially configured, and populated homelab states.
+- Add richer graph drill-down actions from overview/settings into entity detail
+  pages once entity detail routing exists.
+- Add saved search/filter preferences for Memory & Knowledge.
+- Add visual regression coverage for empty, partially configured, and populated
+  homelab states beyond the current browser component assertions.
+- Add server-side pagination or cursoring if project memory or graph snapshots
+  grow beyond the current lightweight browser lists.
 
 ## Full Server And Web Runtime Smoke
 

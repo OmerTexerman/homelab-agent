@@ -361,6 +361,8 @@ describe("deriveHomeOverviewReadModel", () => {
     expect(model.topology.hasGraphData).toBe(true);
     expect(model.topology.nodes.map((node) => node.label)).toContain("Plex");
     expect(model.topology.edges).toHaveLength(1);
+    expect(model.topology.kindGroups).toContainEqual({ label: "service", count: 1 });
+    expect(model.topology.statusGroups).toContainEqual({ label: "active", count: 2 });
     expect(model.memory.promotedProjectMemoryCount).toBe(1);
     expect(model.memory.proposedProjectMemoryCount).toBe(1);
     expect(model.decisions.totalCount).toBe(2);
