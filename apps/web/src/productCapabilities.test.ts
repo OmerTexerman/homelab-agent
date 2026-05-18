@@ -55,6 +55,12 @@ describe("Homelab product copy", () => {
     );
     expect(HOMELAB_PRODUCT_COPY.homeOverview.title).toBe("Homelab operations");
     expect(HOMELAB_PRODUCT_COPY.homeOverview.subtitle).toMatch(/Project Runtimes/);
+    expect(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription).toMatch(
+      /wrappers and synced auth mounts/,
+    );
+    expect(HOMELAB_PRODUCT_COPY.providers.runtimeVerificationDescription).toBe(
+      "This screen uses server provider probes and wrapper readiness. It does not send a provider prompt.",
+    );
     expect(HOMELAB_PRODUCT_COPY.runtimeWorkspace.title).toBe("Runtime Workspace");
     expect(HOMELAB_PRODUCT_COPY.standalone.newThreadDescription).toContain(
       "Scratch Project Runtime",

@@ -45,6 +45,7 @@ import {
   getProviderVersionLabel,
   type ProviderStatusKey,
 } from "./providerStatus";
+import type { SetupProviderReadiness, SetupReadinessSeverity } from "../../setupReadinessReadModel";
 
 const PROVIDER_ACCENT_SWATCHES = [
   "#2563eb",
@@ -154,6 +155,34 @@ function ProviderAuthEmail(props: {
         hideTooltip="Click to hide email"
       />
     </span>
+  );
+}
+
+function readinessBadgeVariant(severity: SetupReadinessSeverity) {
+  switch (severity) {
+    case "good":
+      return "success" as const;
+    case "attention":
+      return "error" as const;
+    case "partial":
+      return "warning" as const;
+    case "neutral":
+      return "outline" as const;
+  }
+}
+
+function ProviderReadinessBadges(props: { readonly readiness: SetupProviderReadiness }) {
+  return (
+    <div
+      className="flex min-w-0 flex-wrap gap-1.5"
+      aria-label={`${props.readiness.displayName} Project Runtime readiness`}
+    >
+      {props.readiness.badges.map((badge) => (
+        <Badge key={badge.id} size="sm" variant={readinessBadgeVariant(badge.severity)}>
+          {badge.label}
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -395,6 +424,7 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
+  readonly readiness?: SetupProviderReadiness | undefined;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -452,6 +482,7 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
+  readiness,
   isExpanded,
   onExpandedChange,
   onUpdate,
@@ -666,6 +697,21 @@ export function ProviderInstanceCard({
     </p>
   );
 
+  const readinessNode = readiness ? (
+    <div className="space-y-1.5">
+      <ProviderReadinessBadges readiness={readiness} />
+      <p className="text-xs leading-5 text-muted-foreground">
+        Project Runtime access: {readiness.runtime.detail} Auth mount: {readiness.authSync.detail}
+      </p>
+      {readiness.runtime.blockedReason ? (
+        <p className="text-xs leading-5 text-warning-foreground">
+          Blocked: {readiness.runtime.blockedReason}
+          {readiness.nextAction ? ` Next: ${readiness.nextAction}` : null}
+        </p>
+      ) : null}
+    </div>
+  ) : null;
+
   const versionCodeNode = versionLabel ? (
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
@@ -776,6 +822,7 @@ export function ProviderInstanceCard({
               {titleTailNode}
             </div>
             {authRowNode}
+            {readinessNode}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             <Button

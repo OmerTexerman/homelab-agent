@@ -222,6 +222,8 @@ describe("HomeOverviewSurface", () => {
       await expect
         .element(page.getByTestId("home-topology").getByText("Plex", { exact: true }))
         .toBeInTheDocument();
+      await expect.element(page.getByText("Next setup steps")).not.toBeInTheDocument();
+      await expect.element(page.getByText("Core setup is ready")).not.toBeInTheDocument();
     } finally {
       await mounted.unmount();
     }
@@ -252,6 +254,7 @@ describe("HomeOverviewSurface", () => {
     try {
       await expect.element(page.getByText("No promoted topology yet")).toBeInTheDocument();
       await expect.element(page.getByText("Create a logical project")).toBeInTheDocument();
+      await expect.element(page.getByText("Configure a provider")).toBeInTheDocument();
       expect(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth + 1);
     } finally {
       await mounted.unmount();

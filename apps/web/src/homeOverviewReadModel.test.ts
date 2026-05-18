@@ -303,6 +303,7 @@ describe("deriveHomeOverviewReadModel", () => {
     });
     expect(model.readiness.find((item) => item.id === "providers")?.severity).toBe("attention");
     expect(model.readiness.find((item) => item.id === "secrets")?.severity).toBe("attention");
+    expect(model.setup.steps.map((step) => step.id)).toEqual(["providers", "secrets"]);
     expect(model.topology.hasGraphData).toBe(false);
   });
 
@@ -363,5 +364,7 @@ describe("deriveHomeOverviewReadModel", () => {
     expect(model.memory.promotedProjectMemoryCount).toBe(1);
     expect(model.memory.proposedProjectMemoryCount).toBe(1);
     expect(model.decisions.totalCount).toBe(2);
+    expect(model.setup.incompleteCount).toBe(0);
+    expect(model.setup.steps).toEqual([]);
   });
 });

@@ -99,6 +99,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { useServerConfig } from "~/rpc/serverState";
 import { APP_BASE_NAME } from "../../branding";
+import { deriveDeviceSessionReadiness } from "../../setupReadinessReadModel";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 
@@ -545,7 +546,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             key: endpointDefaultPreferenceKey(endpoint),
             label: endpoint.label,
             url,
-            detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Server pairing URL",
+            detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Server pairing link",
           };
         }),
     [endpoints, pairingLink.credential],
@@ -573,14 +574,14 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           kind === "hosted-link"
             ? "Hosted app link copied"
             : kind === "link"
-              ? "Pairing URL copied"
+              ? "Pairing link copied"
               : "Pairing code copied",
         description:
           kind === "hosted-link"
-            ? "Open it in the browser on the device you want to connect."
+            ? "Open it in the browser on the device you want to pair."
             : kind === "link"
-              ? "Open it in the client you want to pair to this server."
-              : "Paste it into another client to finish pairing.",
+              ? "Open it in the browser you want to pair to this Homelab Agent server."
+              : "Paste it into another browser to finish pairing.",
       });
     },
     onError: (error, kind) => {
@@ -592,7 +593,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             ? kind === "hosted-link"
               ? "Could not copy hosted app link"
               : kind === "link"
-                ? "Could not copy pairing URL"
+                ? "Could not copy pairing link"
                 : "Could not copy pairing code"
             : "Clipboard copy unavailable",
           description: canCopyToClipboard ? error.message : "Showing the full value instead.",
@@ -625,7 +626,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   const expiresAbsolute = formatAccessTimestamp(pairingLink.expiresAt);
 
   const roleLabel = pairingLink.role === "owner" ? "Owner" : "Client";
-  const primaryLabel = pairingLink.label ?? `${roleLabel} link`;
+  const primaryLabel = pairingLink.label ?? `${roleLabel} pairing link`;
   const defaultEndpointCopyOption =
     endpointCopyOptions.find((option) => option.key === defaultEndpointKey) ??
     endpointCopyOptions[0] ??
@@ -691,7 +692,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           {endpointCopyOptions.length > 0 ? <MenuSeparator /> : null}
         </>
       ) : null}
-      {renderCompactEndpointGroup("Pairing URLs", backendEndpointCopyOptions, false)}
+      {renderCompactEndpointGroup("Pairing links", backendEndpointCopyOptions, false)}
       {renderCompactEndpointGroup(
         "Hosted app link",
         hostedEndpointCopyOptions,
@@ -758,7 +759,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
           </p>
           {shareablePairingUrl === null ? (
             <p className="text-[11px] text-muted-foreground/70">
-              Copy the token and pair from another client using this server&apos;s reachable host.
+              Copy the token and pair another browser using this server&apos;s reachable address.
             </p>
           ) : null}
         </div>
@@ -772,11 +773,11 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       size="xs"
                       variant="outline"
                       className="max-w-56"
-                      title={`Copy pairing URL for: ${defaultEndpointCopyLabel}`}
+                      title={`Copy pairing link for: ${defaultEndpointCopyLabel}`}
                       onClick={handleCopyDefaultLink}
                     >
                       <span className="truncate">
-                        Copy pairing URL for: {defaultEndpointCopyLabel}
+                        Copy pairing link for: {defaultEndpointCopyLabel}
                       </span>
                     </Button>
                     <GroupSeparator />
@@ -820,9 +821,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                 <DialogDescription>
                   {shareablePairingUrl
                     ? isShareableHostedAppPairingUrl
-                      ? "Clipboard copy is unavailable here. Open or manually copy this hosted app link on the device you want to connect."
-                      : "Clipboard copy is unavailable here. Open or manually copy this full pairing URL on the device you want to connect."
-                    : "Clipboard copy is unavailable here. Manually copy this code into another client."}
+                      ? "Clipboard copy is unavailable here. Open or manually copy this hosted app link on the device you want to pair."
+                      : "Clipboard copy is unavailable here. Open or manually copy this full pairing link on the device you want to pair."
+                    : "Clipboard copy is unavailable here. Manually copy this code into another browser."}
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel className="space-y-4">
@@ -864,7 +865,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             disabled={revokingPairingLinkId === pairingLink.id}
             onClick={() => void onRevoke(pairingLink.id)}
           >
-            {revokingPairingLinkId === pairingLink.id ? "Revoking…" : "Revoke"}
+            {revokingPairingLinkId === pairingLink.id ? "Revoking…" : "Revoke link"}
           </Button>
         </div>
       </div>
@@ -922,7 +923,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
             <h3 className="text-sm font-medium text-foreground">{primaryLabel}</h3>
             {clientSession.current ? (
               <span className="text-[10px] text-muted-foreground/80 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5">
-                This device
+                Current session
               </span>
             ) : null}
           </div>
@@ -938,7 +939,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
               disabled={revokingClientSessionId === clientSession.sessionId}
               onClick={() => void onRevokeSession(clientSession.sessionId)}
             >
-              {revokingClientSessionId === clientSession.sessionId ? "Revoking…" : "Revoke"}
+              {revokingClientSessionId === clientSession.sessionId ? "Revoking…" : "Revoke device"}
             </Button>
           ) : null}
         </div>
@@ -969,11 +970,11 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       setPairingLabel("");
       setDialogOpen(false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
+      const message = error instanceof Error ? error.message : "Failed to create pairing link.";
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not create pairing URL",
+          title: "Could not create pairing link",
           description: message,
         }),
       );
@@ -992,7 +993,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
         }
         onClick={() => void onRevokeOtherClients()}
       >
-        {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
+        {isRevokingOtherClients ? "Revoking…" : "Revoke other devices"}
       </Button>
       <Dialog
         open={dialogOpen}
@@ -1007,22 +1008,22 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           render={
             <Button size="xs" variant="default">
               <PlusIcon className="size-3" />
-              Create link
+              Pair device
             </Button>
           }
         />
         <DialogPopup className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Create pairing link</DialogTitle>
+            <DialogTitle>Pair another device</DialogTitle>
             <DialogDescription>
-              Generate a one-time link that another device can use to pair with this server as an
-              authorized client.
+              Generate a one-time link another browser can use to pair with this Homelab Agent
+              server.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Client label (optional)
+                Device label (optional)
               </span>
               <Input
                 value={pairingLabel}
@@ -1042,7 +1043,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               Cancel
             </Button>
             <Button disabled={isCreatingPairingLink} onClick={() => void handleCreatePairingLink()}>
-              {isCreatingPairingLink ? "Creating…" : "Create link"}
+              {isCreatingPairingLink ? "Creating…" : "Create pairing link"}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -1105,7 +1106,9 @@ const PairingClientsList = memo(function PairingClientsList({
 
       {pairingLinks.length === 0 && clientSessions.length === 0 && !isLoading ? (
         <div className={accessRowClassName(presentation)}>
-          <p className="text-xs text-muted-foreground/60">No pairing links or client sessions.</p>
+          <p className="text-xs text-muted-foreground/60">
+            No paired devices or pending pairing links.
+          </p>
         </div>
       ) : null}
     </>
@@ -2064,6 +2067,21 @@ export function ConnectionsSettings() {
     () => desktopPairingLinks.filter((pairingLink) => pairingLink.role === "client"),
     [desktopPairingLinks],
   );
+  const deviceReadiness = useMemo(
+    () =>
+      deriveDeviceSessionReadiness({
+        pairingLinks: visibleDesktopPairingLinks,
+        clientSessions: desktopClientSessions,
+        isLoading: isLoadingDesktopAccessManagement,
+        canManage: canManageLocalBackend,
+      }),
+    [
+      canManageLocalBackend,
+      desktopClientSessions,
+      isLoadingDesktopAccessManagement,
+      visibleDesktopPairingLinks,
+    ],
+  );
   const tailscaleHttpsEndpoint = useMemo(
     () => desktopAdvertisedEndpoints.find(isTailscaleHttpsEndpoint) ?? null,
     [desktopAdvertisedEndpoints],
@@ -2185,7 +2203,7 @@ export function ConnectionsSettings() {
       </div>
       <div>
         <span className="mt-1 block text-[11px] text-muted-foreground">
-          Paste a full pairing URL here to fill both fields automatically.
+          Paste a full pairing link here to fill both fields automatically.
         </span>
       </div>
     </div>
@@ -2459,6 +2477,30 @@ export function ConnectionsSettings() {
                 }
               />
             ) : null}
+            <SettingsRow
+              title="Current Homelab Agent session"
+              description={deviceReadiness.detail}
+              control={
+                <span className="inline-flex min-h-8 max-w-64 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+                  <span className="truncate">
+                    {deviceReadiness.currentDeviceLabel ?? deviceReadiness.label}
+                  </span>
+                </span>
+              }
+            />
+            <SettingsRow
+              title="Paired devices"
+              description={`${deviceReadiness.activeSessionCount} active session${
+                deviceReadiness.activeSessionCount === 1 ? "" : "s"
+              }, ${deviceReadiness.pendingPairingLinkCount} pending pairing link${
+                deviceReadiness.pendingPairingLinkCount === 1 ? "" : "s"
+              }.`}
+              control={
+                <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+                  {deviceReadiness.pairedSessionCount} authorized
+                </span>
+              }
+            />
             {desktopBridge ? (
               <>
                 {renderNetworkAccessRow()}
@@ -2472,7 +2514,7 @@ export function ConnectionsSettings() {
 
           {isLocalBackendRemotelyReachable ? (
             <SettingsSection
-              title="Authorized clients"
+              title="Paired devices"
               headerAction={
                 <AuthorizedClientsHeaderAction
                   clientSessions={desktopClientSessions}
@@ -2646,7 +2688,7 @@ export function ConnectionsSettings() {
         <SettingsSection title="Devices & Sessions">
           <SettingsRow
             title="Owner tools"
-            description="Pairing links and client-session management are only available to owner sessions for this server."
+            description="Pairing links and paired-device management are only available to owner sessions for this server."
           />
         </SettingsSection>
       )}

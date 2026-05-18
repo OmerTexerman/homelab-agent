@@ -128,7 +128,9 @@ export const HOMELAB_PRODUCT_COPY = {
     title: "Providers",
     runtimeReadinessTitle: "Runtime readiness",
     runtimeReadinessDescription:
-      "A provider can run Project Runtime turns when it is installed, enabled, authenticated when required, and reporting usable models.",
+      "Provider CLIs run inside Project Runtimes through Homelab Agent wrappers and synced auth mounts. Host auth only counts when runtime access is ready here.",
+    runtimeVerificationDescription:
+      "This screen uses server provider probes and wrapper readiness. It does not send a provider prompt.",
     unavailableRuntimeMessage: "is not ready for Project Runtime turns.",
     limitedRuntimeMessage: "has limited availability for Project Runtime turns.",
     statusTitleSuffix: "runtime readiness",

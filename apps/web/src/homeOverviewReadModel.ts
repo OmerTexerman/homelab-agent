@@ -9,10 +9,14 @@ import type {
   ServerProvider,
   ThreadRuntimeMode,
 } from "@t3tools/contracts";
-import { isProviderAvailable } from "@t3tools/contracts";
 import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 
 import { HOMELAB_PRODUCT_COPY } from "./productCapabilities";
+import {
+  deriveSetupReadiness,
+  type SetupDeviceSessionReadinessInput,
+  type SetupReadinessReadModel,
+} from "./setupReadinessReadModel";
 import type { Project, SidebarThreadSummary } from "./types";
 
 export type HomeOverviewSeverity = "good" | "partial" | "attention" | "neutral";
@@ -31,6 +35,7 @@ export interface HomeOverviewInput {
   readonly setupStatus?: HomelabSetupStatus | null | undefined;
   readonly projectMemoryEntries?: readonly ProjectMemoryEntry[] | undefined;
   readonly projectRuntimeDetails?: readonly HomeOverviewProjectRuntimeDetailInput[] | undefined;
+  readonly devices?: SetupDeviceSessionReadinessInput | null | undefined;
 }
 
 export interface HomeOverviewMetric {
@@ -150,6 +155,7 @@ export interface HomeOverviewReadModel {
   readonly runtime: HomeOverviewRuntimeSummary;
   readonly topology: HomeOverviewTopology;
   readonly readiness: readonly HomeOverviewReadinessItem[];
+  readonly setupReadiness: SetupReadinessReadModel;
   readonly setup: {
     readonly title: string;
     readonly description: string;
@@ -179,17 +185,6 @@ const ENTITY_KIND_RANK: Partial<Record<HomelabEntity["kind"], number>> = {
   tool: 11,
   artifact: 12,
 };
-
-function isReadyProvider(provider: ServerProvider): boolean {
-  return (
-    isProviderAvailable(provider) &&
-    provider.enabled &&
-    provider.installed &&
-    provider.auth.status === "authenticated" &&
-    provider.status !== "error" &&
-    provider.status !== "disabled"
-  );
-}
 
 function severityForRatio(ready: number, total: number): HomeOverviewSeverity {
   if (total === 0) return "attention";
@@ -568,87 +563,65 @@ function deriveDecisionSummary(
 
 function deriveSetupSteps(input: {
   readonly projectsCount: number;
-  readonly readyProviderCount: number;
-  readonly secretCount: number;
-  readonly missingSecretCount: number;
-  readonly entityCount: number;
-  readonly bootstrapMutationCount: number;
+  readonly setupReadiness: SetupReadinessReadModel;
 }): HomeOverviewSetupStep[] {
-  return [
-    {
+  const steps: HomeOverviewSetupStep[] = [];
+  if (input.projectsCount === 0) {
+    steps.push({
       id: "projects",
       label: "Create a logical project",
       detail: "Projects own the default Project Runtime and project-local memory scope.",
-      complete: input.projectsCount > 0,
-    },
-    {
-      id: "providers",
-      label: "Authenticate a provider",
-      detail: "Codex, Claude, Cursor, or OpenCode must be ready before threads can run turns.",
-      complete: input.readyProviderCount > 0,
-    },
-    {
-      id: "secrets",
-      label: "Register required secrets",
-      detail:
-        input.secretCount > 0 && input.missingSecretCount > 0
-          ? `${input.missingSecretCount} secret placeholders still need values.`
-          : "Secret references let agents request access without pasting raw values into chat.",
-      complete: input.secretCount > 0 && input.missingSecretCount === 0,
-    },
-    {
-      id: "knowledge",
-      label: "Promote homelab knowledge",
-      detail: "Hosts, services, endpoints, and findings should live in the shared graph.",
-      complete: input.entityCount > 0,
-    },
-    {
-      id: "bootstrap",
-      label: "Review runtime bootstrap",
-      detail: "Bootstrap mutations document tools future Project Runtimes inherit.",
-      complete: input.bootstrapMutationCount > 0,
-    },
-  ];
+      complete: false,
+    });
+  }
+
+  for (const step of input.setupReadiness.nextSteps) {
+    steps.push({
+      id: step.id,
+      label: step.label,
+      detail: step.detail,
+      complete: false,
+    });
+  }
+
+  return steps;
 }
 
 function deriveReadinessItems(input: {
-  readonly providers: readonly ServerProvider[];
-  readonly readyProviderCount: number;
-  readonly secretCount: number;
-  readonly missingSecretCount: number;
+  readonly setupReadiness: SetupReadinessReadModel;
   readonly memory: HomeOverviewMemorySummary;
   readonly decisions: HomeOverviewDecisionSummary;
   readonly bootstrapMutationCount: number;
 }): HomeOverviewReadinessItem[] {
-  const providerTotal = input.providers.length;
-  return [
+  const providerSummary = input.setupReadiness.providerSummary;
+  const secrets = input.setupReadiness.secrets;
+  const items: HomeOverviewReadinessItem[] = [
     {
       id: "providers",
       label: "Providers",
-      value: `${input.readyProviderCount}/${providerTotal}`,
-      detail:
-        providerTotal === 0
-          ? "No provider instances are available yet."
-          : input.readyProviderCount === providerTotal
-            ? "Every configured provider is ready for Project Runtime sessions."
-            : "Some provider instances need installation, auth, or settings attention.",
-      severity: severityForRatio(input.readyProviderCount, providerTotal),
+      value: `${providerSummary.runtimeUsableCount}/${providerSummary.totalCount}`,
+      detail: providerSummary.detail,
+      severity: providerSummary.severity,
+    },
+    {
+      id: "runtime-auth",
+      label: "Runtime auth sync",
+      value:
+        input.setupReadiness.runtimeAuth.totalCount === 0
+          ? "0"
+          : `${input.setupReadiness.runtimeAuth.readyCount}/${input.setupReadiness.runtimeAuth.totalCount}`,
+      detail: input.setupReadiness.runtimeAuth.detail,
+      severity: input.setupReadiness.runtimeAuth.severity,
     },
     {
       id: "secrets",
       label: "Secrets",
       value:
-        input.missingSecretCount > 0
-          ? `${input.secretCount - input.missingSecretCount}/${input.secretCount}`
-          : formatCount(input.secretCount),
-      detail:
-        input.secretCount === 0
-          ? "No brokered secret references are registered."
-          : input.missingSecretCount > 0
-            ? `${input.missingSecretCount} registered secret values are still missing.`
-            : "Registered secrets are populated and ready for brokered use.",
-      severity:
-        input.secretCount === 0 ? "partial" : input.missingSecretCount > 0 ? "attention" : "good",
+        secrets.missingCount > 0
+          ? `${secrets.configuredCount}/${secrets.totalCount}`
+          : formatCount(secrets.totalCount),
+      detail: secrets.detail,
+      severity: secrets.severity,
     },
     {
       id: "knowledge",
@@ -692,6 +665,16 @@ function deriveReadinessItems(input: {
       severity: input.bootstrapMutationCount > 0 ? "good" : "neutral",
     },
   ];
+  if (input.setupReadiness.devices) {
+    items.splice(3, 0, {
+      id: "devices",
+      label: "Devices",
+      value: formatCount(input.setupReadiness.devices.pairedSessionCount),
+      detail: input.setupReadiness.devices.detail,
+      severity: input.setupReadiness.devices.severity,
+    });
+  }
+  return items;
 }
 
 export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverviewReadModel {
@@ -702,10 +685,12 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
   const standaloneThreads = activeThreads.filter((thread) =>
     isStandaloneProject({ id: thread.projectId }),
   );
-  const readyProviderCount = input.providers.filter(isReadyProvider).length;
-  const secretCount = input.setupStatus?.secrets.secrets.length ?? 0;
-  const missingSecretCount =
-    input.setupStatus?.secrets.secrets.filter((secret) => !secret.hasValue).length ?? 0;
+  const setupReadiness = deriveSetupReadiness({
+    providers: input.providers,
+    setupStatus: input.setupStatus,
+    ...(input.devices !== undefined ? { devices: input.devices } : {}),
+  });
+  const readyProviderCount = setupReadiness.providerSummary.runtimeUsableCount;
   const entityCount = input.setupStatus?.snapshot.entities.length ?? 0;
   const relationCount = input.setupStatus?.snapshot.relations.length ?? 0;
   const bootstrapMutationCount = input.setupStatus?.runtimeBootstrap.mutations.length ?? 0;
@@ -722,18 +707,11 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
   const decisions = deriveDecisionSummary(activeThreads);
   const setupSteps = deriveSetupSteps({
     projectsCount: normalProjects.length,
-    readyProviderCount,
-    secretCount,
-    missingSecretCount,
-    entityCount,
-    bootstrapMutationCount,
+    setupReadiness,
   });
   const incompleteSetupSteps = setupSteps.filter((step) => !step.complete);
   const readiness = deriveReadinessItems({
-    providers: input.providers,
-    readyProviderCount,
-    secretCount,
-    missingSecretCount,
+    setupReadiness,
     memory,
     decisions,
     bootstrapMutationCount,
@@ -812,6 +790,7 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
     runtime,
     topology,
     readiness,
+    setupReadiness,
     setup: {
       title:
         incompleteSetupSteps.length === 0
@@ -821,10 +800,7 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
         incompleteSetupSteps.length === 0
           ? HOMELAB_PRODUCT_COPY.homeOverview.setupCompleteDescription
           : "Compact guidance for the parts that are still blocking reliable operations.",
-      steps:
-        mode === "operational"
-          ? setupSteps.filter((step) => step.complete).slice(0, 3)
-          : setupSteps,
+      steps: setupSteps,
       incompleteCount: incompleteSetupSteps.length,
     },
     memory,

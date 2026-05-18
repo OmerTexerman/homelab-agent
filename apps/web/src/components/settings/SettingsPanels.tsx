@@ -91,6 +91,10 @@ import {
   shouldShowPrimarySourceControlUi,
   shouldShowThreadRuntimeIsolationControls,
 } from "../../productCapabilities";
+import {
+  deriveProviderReadinessForInstance,
+  deriveSetupReadiness,
+} from "../../setupReadinessReadModel";
 
 const THEME_OPTIONS = [
   {
@@ -1099,6 +1103,10 @@ export function ProviderSettingsPanel() {
     () => collectProviderUpdateCandidates(serverProviders),
     [serverProviders],
   );
+  const setupReadiness = useMemo(
+    () => deriveSetupReadiness({ providers: serverProviders }),
+    [serverProviders],
+  );
   const providerUpdateCandidateByInstanceId = useMemo(
     () => new Map(providerUpdateCandidates.map((candidate) => [candidate.instanceId, candidate])),
     [providerUpdateCandidates],
@@ -1387,10 +1395,18 @@ export function ProviderSettingsPanel() {
       >
         <SettingsRow
           title={HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle}
-          description={HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription}
+          description={
+            <>
+              {HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription}
+              <span className="mt-1 block">
+                {HOMELAB_PRODUCT_COPY.providers.runtimeVerificationDescription}
+              </span>
+            </>
+          }
           control={
             <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-              {rows.length} configured
+              {setupReadiness.providerSummary.runtimeUsableCount}/
+              {setupReadiness.providerSummary.totalCount} runtime ready
             </span>
           }
         />
@@ -1399,6 +1415,11 @@ export function ProviderSettingsPanel() {
           const liveProvider = serverProviders.find(
             (candidate) => candidate.instanceId === row.instanceId,
           );
+          const readiness = deriveProviderReadinessForInstance({
+            liveProvider,
+            instance: row.instance,
+            instanceId: row.instanceId,
+          });
           const updateCandidate = liveProvider
             ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
             : undefined;
@@ -1438,6 +1459,7 @@ export function ProviderSettingsPanel() {
               instance={row.instance}
               driverOption={driverOption}
               liveProvider={liveProvider}
+              readiness={readiness}
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

@@ -273,6 +273,28 @@ function createOutdatedProvider(
   };
 }
 
+function createProviderStatus(
+  driver: string,
+  overrides: Partial<ServerProvider> = {},
+): ServerProvider {
+  return {
+    instanceId: ProviderInstanceId.make(driver),
+    driver: ProviderDriverKind.make(driver),
+    displayName:
+      driver === "claudeAgent" ? "Claude" : driver.charAt(0).toUpperCase() + driver.slice(1),
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-05-04T10:00:00.000Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+    ...overrides,
+  } as ServerProvider;
+}
+
 function makeUtc(value: string) {
   return DateTime.makeUnsafe(value);
 }
@@ -570,7 +592,9 @@ describe("GeneralSettingsPanel observability", () => {
       )
       .toBeInTheDocument();
     await expect.element(page.getByText("Authorized clients")).not.toBeInTheDocument();
-    await expect.element(page.getByText("Chrome on Mac")).not.toBeInTheDocument();
+    await expect
+      .element(page.getByText(/^Chrome on Mac is the current Homelab Agent session\./))
+      .toBeInTheDocument();
     await expect
       .element(page.getByRole("heading", { name: "Connected servers", exact: true }))
       .toBeInTheDocument();
@@ -923,21 +947,28 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await expect.element(page.getByText("Authorized clients")).toBeInTheDocument();
-    await expect.element(page.getByText("Revoke others")).toBeInTheDocument();
-    await expect.element(page.getByText("This Mac")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Create link", exact: true }).click();
-    await expect.element(page.getByText("Create pairing link")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Create link", exact: true }).click();
+    await expect
+      .element(page.getByRole("heading", { name: "Paired devices", exact: true, level: 2 }))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("Revoke other devices")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("heading", { name: "This Mac", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("heading", { name: "Current Homelab Agent session", exact: true }))
+      .toBeInTheDocument();
+    await page.getByRole("button", { name: "Pair device", exact: true }).click();
+    await expect.element(page.getByText("Pair another device")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Create pairing link", exact: true }).click();
     authAccessHarness.emitPairingLinkUpserted(pairingLinks[0]!);
     authAccessHarness.emitClientUpserted(clientSessions[1]!);
     await expect
       .element(page.getByText("Client · Mobile · iOS · Safari · 192.168.1.88"))
       .toBeInTheDocument();
     await expect
-      .element(page.getByRole("button", { name: /^Copy pairing URL for:/ }))
+      .element(page.getByRole("button", { name: /^Copy pairing link for:/ }))
       .toBeInTheDocument();
-    await expect.element(page.getByText("Revoke others")).toBeInTheDocument();
+    await expect.element(page.getByText("Revoke other devices")).toBeInTheDocument();
   });
 
   it("revokes all other paired clients from settings", async () => {
@@ -1019,8 +1050,10 @@ describe("GeneralSettingsPanel observability", () => {
     );
 
     await expect.element(page.getByText("Julius iPhone")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Revoke others", exact: true }).click();
-    await expect.element(page.getByText("This Mac")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Revoke other devices", exact: true }).click();
+    await expect
+      .element(page.getByRole("heading", { name: "This Mac", exact: true }))
+      .toBeInTheDocument();
     await expect.element(page.getByText("Julius iPhone")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalled();
   });
@@ -1192,7 +1225,12 @@ describe("GeneralSettingsPanel observability", () => {
     );
 
     await expect
-      .element(page.getByText(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle))
+      .element(
+        page.getByRole("heading", {
+          name: HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle,
+          exact: true,
+        }),
+      )
       .toBeInTheDocument();
     await expect
       .element(page.getByText(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription))
@@ -1208,6 +1246,55 @@ describe("GeneralSettingsPanel observability", () => {
     await expect.element(page.getByPlaceholder("http://127.0.0.1:4096")).toBeInTheDocument();
     await expect.element(page.getByText("Server password", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByPlaceholder("Optional")).toBeInTheDocument();
+  });
+
+  it("shows provider readiness for ready, blocked, OpenCode external, and deferred Cursor states", async () => {
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [
+        createProviderStatus("codex", { displayName: "Codex" }),
+        createProviderStatus("claudeAgent", {
+          displayName: "Claude",
+          status: "warning",
+          auth: { status: "unauthenticated" },
+          message: "Claude is not authenticated.",
+        }),
+        createProviderStatus("cursor", {
+          displayName: "Cursor",
+          auth: { status: "authenticated", email: "user@example.com" },
+        }),
+        createProviderStatus("opencode", {
+          displayName: "OpenCode",
+          auth: { status: "authenticated" },
+          message: "1 upstream provider connected through the configured OpenCode server.",
+        }),
+      ],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("2/4 runtime ready")).toBeInTheDocument();
+    await expect.element(page.getByText("Installed").first()).toBeInTheDocument();
+    await expect.element(page.getByText("Authenticated").first()).toBeInTheDocument();
+    await expect.element(page.getByText("Project Runtime ready").first()).toBeInTheDocument();
+    await expect.element(page.getByText("Auth required")).toBeInTheDocument();
+    await expect
+      .element(page.getByText(/Blocked: Claude is not authenticated\./))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("OpenCode external")).toBeInTheDocument();
+    await expect.element(page.getByText("External server")).toBeInTheDocument();
+    await expect.element(page.getByText("Cursor deferred")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          /^Blocked: Cursor Agent is not available for Project Runtime sessions until a pinned, installable runtime binary/,
+        ),
+      )
+      .toBeInTheDocument();
   });
 
   it("runs one-click provider updates from the provider card", async () => {
