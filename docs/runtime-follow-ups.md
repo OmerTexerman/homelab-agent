@@ -62,9 +62,19 @@ Completed first slice:
   timestamps.
 - Export stays client-side and avoids provider-specific raw event payloads.
 
-Follow-up:
+Completed V2:
 
-- Defer PDF until the Markdown/JSON structure is stable.
+- Replaced the simple header export actions with a compact `Export Chat`
+  popover.
+- Added Markdown, JSON, plain text, HTML, and PDF print-view export paths.
+- JSON is versioned at export schema V2 and includes project/thread/runtime,
+  provider/model, timeline, work logs, decisions, pending prompts, plans,
+  changed-file summaries, and standalone/shared/isolated runtime metadata.
+- Markdown and plain text include a raw searchable JSONL transcript section for
+  local grep/search and durable review.
+- HTML exports are self-contained, offline-readable, and print-friendly.
+- PDF uses the browser print/save-to-PDF flow from the same print-friendly HTML
+  rather than adding a direct PDF dependency.
 
 ## Home And Project Overview
 

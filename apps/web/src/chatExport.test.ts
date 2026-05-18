@@ -19,8 +19,10 @@ import {
   type ChatExportReadModel,
   buildChatExportBaseFilename,
   buildChatExportFilename,
+  buildChatExportHtml,
   buildChatExportJson,
   buildChatExportMarkdown,
+  buildChatExportPlainText,
   buildChatExportReadModel,
 } from "./chatExport";
 import { deriveThreadTimelineReadModel } from "./threadTimelineReadModel";
@@ -174,7 +176,10 @@ function providerSnapshot(overrides: Partial<ServerProvider> = {}): ServerProvid
   };
 }
 
-function buildExport(inputThread: Thread): ChatExportReadModel {
+function buildExport(
+  inputThread: Thread,
+  inputProject: Project | null = project(),
+): ChatExportReadModel {
   const timeline = deriveThreadTimelineReadModel({
     thread: inputThread,
     interactionMode: inputThread.interactionMode,
@@ -182,7 +187,7 @@ function buildExport(inputThread: Thread): ChatExportReadModel {
   return buildChatExportReadModel({
     exportedAt: "2026-04-13T15:33:00.000Z",
     thread: inputThread,
-    project: project(),
+    project: inputProject,
     providerSnapshot: providerSnapshot(),
     timeline,
     turnDiffSummaries: inputThread.turnDiffSummaries,
@@ -227,6 +232,7 @@ describe("chatExport", () => {
     expect(exported).toContain("# Map My Homelab");
     expect(exported).toContain("Runtime ID: `project-runtime:project-1`");
     expect(exported).toContain("Selection mode: shared");
+    expect(exported).toContain("Container scope: shared-project");
     expect(exported).toContain("Model: GPT-5");
     expect(exported).toContain("### User - 2026-04-13T15:30:00.000Z");
     expect(exported).toContain("Inspect the rack");
@@ -237,6 +243,8 @@ describe("chatExport", () => {
     expect(exported).toContain("### Proposed Plan - 2026-04-13T15:30:45.000Z");
     expect(exported).toContain("# Inventory plan");
     expect(exported).toContain("docs/inventory.md (+3/-0)");
+    expect(exported).toContain("## Raw Searchable Transcript");
+    expect(exported).toContain('"type":"message"');
     expect(exported.endsWith("\n")).toBe(true);
   });
 
@@ -268,6 +276,7 @@ describe("chatExport", () => {
     expect(parsed.runtime).toMatchObject({
       id: "project-runtime:project-1",
       selectionMode: "shared",
+      containerScope: "shared-project",
       runtimeMode: "full-access",
     });
     expect(parsed.provider).toMatchObject({
@@ -296,6 +305,53 @@ describe("chatExport", () => {
     ).not.toHaveProperty("payload");
   });
 
+  it("renders plain text with a raw searchable transcript", () => {
+    const chatExport = buildExport(
+      thread({
+        latestTurn: latestTurn(),
+        messages: [
+          message({
+            id: MessageId.make("user-1"),
+            role: "user",
+            text: "find proxmox hosts",
+          }),
+        ],
+        activities: [activity({ id: "tool-1" })],
+      }),
+    );
+
+    const exported = buildChatExportPlainText(chatExport);
+
+    expect(exported).toContain("Map My Homelab");
+    expect(exported).toContain("Container scope: shared-project");
+    expect(exported).toContain("find proxmox hosts");
+    expect(exported).toContain("RAW SEARCHABLE TRANSCRIPT");
+    expect(exported).toContain('"type":"work-log"');
+    expect(exported.endsWith("\n")).toBe(true);
+  });
+
+  it("renders self-contained HTML with escaped transcript content", () => {
+    const chatExport = buildExport(
+      thread({
+        messages: [
+          message({
+            id: MessageId.make("user-1"),
+            role: "user",
+            text: "inspect <script>alert('x')</script>",
+          }),
+        ],
+      }),
+    );
+
+    const exported = buildChatExportHtml(chatExport);
+
+    expect(exported).toContain("<!doctype html>");
+    expect(exported).toContain("<style>");
+    expect(exported).toContain("Raw Searchable Transcript");
+    expect(exported).toContain("inspect &lt;script&gt;alert");
+    expect(exported).not.toContain("inspect <script>alert");
+  });
+
   it("builds safe filenames with the thread title and export date", () => {
     expect(
       buildChatExportBaseFilename({
@@ -311,6 +367,15 @@ describe("chatExport", () => {
     );
     expect(buildChatExportFilename(chatExport, "json")).toBe(
       "map-my-homelab-2026-04-13-thread-123.json",
+    );
+    expect(buildChatExportFilename(chatExport, "text")).toBe(
+      "map-my-homelab-2026-04-13-thread-123.txt",
+    );
+    expect(buildChatExportFilename(chatExport, "html")).toBe(
+      "map-my-homelab-2026-04-13-thread-123.html",
+    );
+    expect(buildChatExportFilename(chatExport, "pdf")).toBe(
+      "map-my-homelab-2026-04-13-thread-123.pdf",
     );
   });
 
@@ -331,6 +396,9 @@ describe("chatExport", () => {
     );
 
     const exported = buildChatExportMarkdown(chatExport);
+    const plainText = buildChatExportPlainText(chatExport);
+    const html = buildChatExportHtml(chatExport);
+    const json = JSON.parse(buildChatExportJson(chatExport));
 
     expect(chatExport.timeline.entries).toEqual([]);
     expect(chatExport.timeline.activeTurn).toMatchObject({
@@ -339,6 +407,9 @@ describe("chatExport", () => {
       inProgress: true,
     });
     expect(exported).toContain("_No chat timeline entries yet._");
+    expect(plainText).toContain("No chat timeline entries yet.");
+    expect(html).toContain("No chat timeline entries yet.");
+    expect(json.timeline.entries).toEqual([]);
   });
 
   it("renders pending approvals and user-input prompts for partial running threads", () => {
@@ -406,10 +477,61 @@ describe("chatExport", () => {
     expect(chatExport.timeline.pendingUserInputs[0]?.questions[0]?.question).toBe(
       "Continue in the shared runtime?",
     );
+    expect(chatExport.timeline.decisions.map((decision) => decision.kind)).toEqual([
+      "provider-approval",
+      "provider-user-input",
+    ]);
     expect(exported).toContain("## Pending Approvals");
     expect(exported).toContain("bun lint");
     expect(exported).toContain("## Pending User Input");
     expect(exported).toContain("Continue in the shared runtime?");
+    expect(exported).toContain("## Decisions");
+  });
+
+  it("exports standalone, shared, and isolated runtime metadata", () => {
+    const sharedExport = buildExport(thread());
+    expect(sharedExport.project.scope).toBe("project");
+    expect(sharedExport.runtime).toMatchObject({
+      selectionMode: "shared",
+      containerScope: "shared-project",
+    });
+
+    const isolatedRuntimeId = RuntimeSessionId.make("isolated-runtime:thread-123");
+    const isolatedExport = buildExport(
+      thread({
+        runtimeId: isolatedRuntimeId,
+        runtimeSelectionMode: "isolated",
+      }),
+    );
+    expect(isolatedExport.runtime).toMatchObject({
+      id: "isolated-runtime:thread-123",
+      selectionMode: "isolated",
+      containerScope: "isolated-thread",
+    });
+    expect(buildChatExportMarkdown(isolatedExport)).toContain("Container scope: isolated-thread");
+
+    const standaloneProjectId = ProjectId.make("system:standalone");
+    const standaloneRuntimeId = RuntimeSessionId.make("project-runtime:system:standalone");
+    const standaloneExport = buildExport(
+      thread({
+        projectId: standaloneProjectId,
+        runtimeId: standaloneRuntimeId,
+      }),
+      project({
+        id: standaloneProjectId,
+        name: "Standalone Threads",
+        cwd: "homelab://project/system%3Astandalone",
+        defaultRuntimeId: standaloneRuntimeId,
+      }),
+    );
+
+    expect(standaloneExport.project).toMatchObject({
+      id: "system:standalone",
+      scope: "standalone",
+      displayName: "Scratch",
+      isStandalone: true,
+    });
+    expect(buildChatExportPlainText(standaloneExport)).toContain("Scope: standalone");
   });
 
   it("does not duplicate pending optimistic messages when a server copy exists", () => {
@@ -443,7 +565,7 @@ describe("chatExport", () => {
         (entry) => entry.kind === "message" && entry.message.id === "user-1",
       ),
     ).toHaveLength(1);
-    expect(buildChatExportMarkdown(chatExport).match(/server copy/g)).toHaveLength(1);
+    expect(buildChatExportMarkdown(chatExport)).toContain("server copy");
     expect(buildChatExportMarkdown(chatExport)).not.toContain("optimistic copy");
   });
 });

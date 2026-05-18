@@ -52,11 +52,15 @@ import {
   deriveThreadTimelineReadModel,
 } from "../threadTimelineReadModel";
 import {
+  type ChatExportFormat,
   buildChatExportFilename,
+  buildChatExportHtml,
   buildChatExportJson,
   buildChatExportMarkdown,
+  buildChatExportPlainText,
   buildChatExportReadModel,
   downloadTextFile,
+  openChatExportPrintWindow,
 } from "../chatExport";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -1623,28 +1627,64 @@ export default function ChatView(props: ChatViewProps) {
       turnDiffSummaries: activeThread.turnDiffSummaries,
     });
   }, [activeProject, activeProviderStatus, activeThread, threadTimeline]);
-  const exportChatAsMarkdown = useCallback(() => {
-    const chatExport = buildActiveChatExport();
-    if (!chatExport) {
-      return;
-    }
-    downloadTextFile(
-      buildChatExportFilename(chatExport, "markdown"),
-      buildChatExportMarkdown(chatExport),
-      "text/markdown;charset=utf-8",
-    );
-  }, [buildActiveChatExport]);
-  const exportChatAsJson = useCallback(() => {
-    const chatExport = buildActiveChatExport();
-    if (!chatExport) {
-      return;
-    }
-    downloadTextFile(
-      buildChatExportFilename(chatExport, "json"),
-      buildChatExportJson(chatExport),
-      "application/json;charset=utf-8",
-    );
-  }, [buildActiveChatExport]);
+  const exportActiveChat = useCallback(
+    (format: ChatExportFormat) => {
+      const chatExport = buildActiveChatExport();
+      if (!chatExport) {
+        return;
+      }
+
+      try {
+        if (format === "pdf") {
+          openChatExportPrintWindow(chatExport);
+          toastManager.add({
+            type: "success",
+            title: "Print view opened",
+            description: "Use the browser print dialog to save the chat as a PDF.",
+          });
+          return;
+        }
+
+        const filename = buildChatExportFilename(chatExport, format);
+        if (format === "markdown") {
+          downloadTextFile(
+            filename,
+            buildChatExportMarkdown(chatExport),
+            "text/markdown;charset=utf-8",
+          );
+        } else if (format === "json") {
+          downloadTextFile(
+            filename,
+            buildChatExportJson(chatExport),
+            "application/json;charset=utf-8",
+          );
+        } else if (format === "text") {
+          downloadTextFile(
+            filename,
+            buildChatExportPlainText(chatExport),
+            "text/plain;charset=utf-8",
+          );
+        } else {
+          downloadTextFile(filename, buildChatExportHtml(chatExport), "text/html;charset=utf-8");
+        }
+        toastManager.add({
+          type: "success",
+          title: "Chat exported",
+          description: filename,
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not export chat",
+            description:
+              error instanceof Error ? error.message : "The export could not be created.",
+          }),
+        );
+      }
+    },
+    [buildActiveChatExport],
+  );
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -3532,8 +3572,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
-          onExportMarkdown={exportChatAsMarkdown}
-          onExportJson={exportChatAsJson}
+          onExportChat={exportActiveChat}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleWorkspaceExplorer={toggleWorkspaceExplorer}
           onToggleDiff={onToggleDiff}

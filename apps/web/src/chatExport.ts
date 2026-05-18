@@ -1,4 +1,9 @@
 import type { ServerProvider, ThreadRuntimeMode } from "@t3tools/contracts";
+import {
+  STANDALONE_PROJECT_SHORT_TITLE,
+  STANDALONE_PROJECT_TITLE,
+  isStandaloneProject,
+} from "@t3tools/shared/standaloneProject";
 
 import type {
   ActivePlanState,
@@ -7,6 +12,7 @@ import type {
   PendingUserInput,
   WorkLogEntry,
 } from "./session-logic";
+import type { DecisionQueueEntry } from "./decisionQueueReadModel";
 import type { ThreadTimelineEntry, ThreadTimelineReadModel } from "./threadTimelineReadModel";
 import type {
   ChatAttachment,
@@ -17,9 +23,9 @@ import type {
   TurnDiffSummary,
 } from "./types";
 
-export const CHAT_EXPORT_VERSION = 1;
+export const CHAT_EXPORT_VERSION = 2;
 
-export type ChatExportFormat = "markdown" | "json";
+export type ChatExportFormat = "markdown" | "json" | "text" | "html" | "pdf";
 
 export interface ChatExportInput {
   readonly exportedAt: string;
@@ -109,6 +115,9 @@ export interface ChatExportReadModel {
     readonly defaultRuntimeId: string | null;
     readonly createdAt: string | null;
     readonly updatedAt: string | null;
+    readonly scope: "project" | "standalone";
+    readonly displayName: string;
+    readonly isStandalone: boolean;
   };
   readonly thread: {
     readonly id: string;
@@ -126,6 +135,7 @@ export interface ChatExportReadModel {
   readonly runtime: {
     readonly id: string | null;
     readonly selectionMode: ThreadRuntimeMode;
+    readonly containerScope: "shared-project" | "isolated-thread";
     readonly runtimeMode: string;
     readonly waitingOnProjectRuntime: boolean;
     readonly queuePosition: number | null;
@@ -166,6 +176,7 @@ export interface ChatExportReadModel {
     readonly proposedPlans: ChatExportProposedPlan[];
     readonly pendingApprovals: ChatExportPendingApproval[];
     readonly pendingUserInputs: ChatExportPendingUserInput[];
+    readonly decisions: ChatExportDecisionEntry[];
     readonly activePlan: ChatExportActivePlan | null;
     readonly activeProposedPlan: ChatExportLatestProposedPlan | null;
     readonly activeTurn: ThreadTimelineReadModel["activeTurn"];
@@ -219,6 +230,24 @@ export interface ChatExportTurnDiffSummary {
   }>;
 }
 
+export interface ChatExportDecisionEntry {
+  readonly id: string;
+  readonly kind: DecisionQueueEntry["kind"];
+  readonly priority: number;
+  readonly title: string;
+  readonly body: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly status: DecisionQueueEntry["status"];
+  readonly createdAt: string;
+  readonly context: {
+    readonly threadId: string | null;
+    readonly projectId: string | null;
+    readonly runtimeId: string | null;
+  };
+  readonly ui: DecisionQueueEntry["ui"];
+  readonly proposedPlan: ChatExportProposedPlan | null;
+}
+
 function sanitizeExportFileSegment(input: string, fallback: string, maxLength = 72): string {
   const sanitized = input
     .toLowerCase()
@@ -259,17 +288,31 @@ export function buildChatExportFilename(
   input: Pick<ChatExportReadModel, "thread" | "exportedAt">,
   format: ChatExportFormat,
 ): string {
-  const extension = format === "markdown" ? "md" : "json";
+  const extensionByFormat: Record<ChatExportFormat, string> = {
+    markdown: "md",
+    json: "json",
+    text: "txt",
+    html: "html",
+    pdf: "pdf",
+  };
   return `${buildChatExportBaseFilename({
     title: input.thread.title,
     threadId: input.thread.id,
     exportedAt: input.exportedAt,
-  })}.${extension}`;
+  })}.${extensionByFormat[format]}`;
 }
 
 export function buildChatExportReadModel(input: ChatExportInput): ChatExportReadModel {
   const thread = input.thread;
   const project = input.project ?? null;
+  const projectId = project?.id ?? thread.projectId;
+  const workspaceRoot = project?.cwd ?? null;
+  const projectIsStandalone = isStandaloneProject({
+    id: projectId,
+    cwd: workspaceRoot,
+  });
+  const projectName =
+    project?.name ?? (projectIsStandalone ? STANDALONE_PROJECT_TITLE : "Unknown project");
   const providerSnapshot = input.providerSnapshot ?? null;
   const selectedModel = providerSnapshot?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -284,13 +327,16 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
     exportVersion: CHAT_EXPORT_VERSION,
     exportedAt: input.exportedAt,
     project: {
-      id: project?.id ?? thread.projectId,
+      id: projectId,
       environmentId: project?.environmentId ?? thread.environmentId,
       name: project?.name ?? null,
-      workspaceRoot: project?.cwd ?? null,
+      workspaceRoot,
       defaultRuntimeId: project?.defaultRuntimeId ?? null,
       createdAt: project?.createdAt ?? null,
       updatedAt: project?.updatedAt ?? null,
+      scope: projectIsStandalone ? "standalone" : "project",
+      displayName: projectIsStandalone ? STANDALONE_PROJECT_SHORT_TITLE : projectName,
+      isStandalone: projectIsStandalone,
     },
     thread: {
       id: thread.id,
@@ -308,6 +354,7 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
     runtime: {
       id: runtimeId,
       selectionMode: runtimeSelectionMode,
+      containerScope: runtimeSelectionMode === "isolated" ? "isolated-thread" : "shared-project",
       runtimeMode: thread.runtimeMode,
       waitingOnProjectRuntime: input.timeline.runtime.waitingOnProjectRuntime,
       queuePosition: input.timeline.runtime.queuePosition,
@@ -352,6 +399,7 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
       proposedPlans,
       pendingApprovals: input.timeline.pendingApprovals.map(toExportPendingApproval),
       pendingUserInputs: input.timeline.pendingUserInputs.map(toExportPendingUserInput),
+      decisions: input.timeline.decisionQueue.entries.map(toExportDecisionEntry),
       activePlan: toExportActivePlan(input.timeline.activePlan),
       activeProposedPlan: toExportLatestProposedPlan(input.timeline.activeProposedPlan),
       activeTurn: input.timeline.activeTurn,
@@ -373,8 +421,9 @@ export function buildChatExportMarkdown(input: ChatExportReadModel): string {
     `  - Version: ${input.exportVersion}`,
     `  - Exported at: ${input.exportedAt}`,
     "- Project",
-    `  - Name: ${input.project.name ?? "Unknown project"}`,
+    `  - Name: ${input.project.displayName}`,
     `  - ID: \`${input.project.id}\``,
+    `  - Scope: ${input.project.scope}`,
     `  - Environment ID: \`${input.project.environmentId}\``,
     `  - Workspace root: ${input.project.workspaceRoot ?? "Unavailable"}`,
     "- Thread",
@@ -387,6 +436,7 @@ export function buildChatExportMarkdown(input: ChatExportReadModel): string {
     "- Runtime",
     `  - Runtime ID: ${input.runtime.id ? `\`${input.runtime.id}\`` : "Unavailable"}`,
     `  - Selection mode: ${input.runtime.selectionMode}`,
+    `  - Container scope: ${input.runtime.containerScope}`,
     `  - Runtime mode: ${input.runtime.runtimeMode}`,
     `  - Waiting on Project Runtime: ${input.runtime.waitingOnProjectRuntime ? "yes" : "no"}`,
     "- Provider",
@@ -410,9 +460,315 @@ export function buildChatExportMarkdown(input: ChatExportReadModel): string {
   renderActivePlanMarkdown(lines, input.timeline.activePlan);
   renderPendingApprovalsMarkdown(lines, input.timeline.pendingApprovals);
   renderPendingUserInputsMarkdown(lines, input.timeline.pendingUserInputs);
+  renderDecisionsMarkdown(lines, input.timeline.decisions);
   renderTurnDiffSummariesMarkdown(lines, input.timeline.turnDiffSummaries);
+  renderRawTranscriptMarkdown(lines, input);
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+export function buildChatExportPlainText(input: ChatExportReadModel): string {
+  const lines: string[] = [
+    input.thread.title || "Untitled chat",
+    "=".repeat(Math.max(12, input.thread.title.length || "Untitled chat".length)),
+    "",
+    "EXPORT",
+    `Version: ${input.exportVersion}`,
+    `Exported at: ${input.exportedAt}`,
+    "",
+    "PROJECT",
+    `Name: ${input.project.displayName}`,
+    `ID: ${input.project.id}`,
+    `Scope: ${input.project.scope}`,
+    `Environment ID: ${input.project.environmentId}`,
+    `Workspace root: ${input.project.workspaceRoot ?? "Unavailable"}`,
+    "",
+    "THREAD",
+    `ID: ${input.thread.id}`,
+    `Created at: ${input.thread.createdAt}`,
+    `Updated at: ${input.thread.updatedAt ?? "Unknown"}`,
+    `Phase: ${input.thread.phase}`,
+    `Branch: ${input.thread.branch ?? "None"}`,
+    `Worktree path: ${input.thread.worktreePath ?? "None"}`,
+    "",
+    "RUNTIME",
+    `Runtime ID: ${input.runtime.id ?? "Unavailable"}`,
+    `Selection mode: ${input.runtime.selectionMode}`,
+    `Container scope: ${input.runtime.containerScope}`,
+    `Runtime mode: ${input.runtime.runtimeMode}`,
+    `Waiting on Project Runtime: ${input.runtime.waitingOnProjectRuntime ? "yes" : "no"}`,
+    "",
+    "PROVIDER",
+    `Instance ID: ${input.provider.selection.instanceId}`,
+    `Driver: ${input.provider.snapshot?.driver ?? input.provider.session?.provider ?? "Unknown"}`,
+    `Name: ${input.provider.snapshot?.displayName ?? "Unknown provider"}`,
+    `Model: ${input.provider.model.name ?? input.provider.model.slug}`,
+    "",
+    "TIMELINE",
+    "--------",
+    "",
+  ];
+
+  if (input.timeline.entries.length === 0) {
+    lines.push("No chat timeline entries yet.", "");
+  } else {
+    for (const entry of input.timeline.entries) {
+      renderTimelineEntryPlainText(lines, entry);
+    }
+  }
+
+  renderActivePlanPlainText(lines, input.timeline.activePlan);
+  renderPendingApprovalsPlainText(lines, input.timeline.pendingApprovals);
+  renderPendingUserInputsPlainText(lines, input.timeline.pendingUserInputs);
+  renderDecisionsPlainText(lines, input.timeline.decisions);
+  renderTurnDiffSummariesPlainText(lines, input.timeline.turnDiffSummaries);
+  lines.push("RAW SEARCHABLE TRANSCRIPT", "-------------------------", "");
+  lines.push(buildChatExportRawTranscript(input).trimEnd(), "");
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+export function buildChatExportHtml(input: ChatExportReadModel): string {
+  const title = input.thread.title || "Untitled chat";
+  const metadataHtml = renderHtmlDefinitionList([
+    ["Export version", String(input.exportVersion)],
+    ["Exported at", input.exportedAt],
+    ["Project", input.project.displayName],
+    ["Project ID", input.project.id],
+    ["Project scope", input.project.scope],
+    ["Environment ID", input.project.environmentId],
+    ["Workspace root", input.project.workspaceRoot ?? "Unavailable"],
+    ["Thread ID", input.thread.id],
+    ["Thread phase", input.thread.phase],
+    ["Runtime ID", input.runtime.id ?? "Unavailable"],
+    ["Runtime selection", input.runtime.selectionMode],
+    ["Runtime container scope", input.runtime.containerScope],
+    ["Runtime mode", input.runtime.runtimeMode],
+    [
+      "Provider",
+      input.provider.snapshot?.displayName ?? input.provider.session?.provider ?? "Unknown",
+    ],
+    ["Model", input.provider.model.name ?? input.provider.model.slug],
+  ]);
+
+  const timelineHtml =
+    input.timeline.entries.length === 0
+      ? `<p class="empty">No chat timeline entries yet.</p>`
+      : input.timeline.entries.map(renderTimelineEntryHtml).join("\n");
+
+  const activePlanHtml = renderActivePlanHtml(input.timeline.activePlan);
+  const approvalsHtml = renderPendingApprovalsHtml(input.timeline.pendingApprovals);
+  const userInputsHtml = renderPendingUserInputsHtml(input.timeline.pendingUserInputs);
+  const decisionsHtml = renderDecisionsHtml(input.timeline.decisions);
+  const changedFilesHtml = renderTurnDiffSummariesHtml(input.timeline.turnDiffSummaries);
+  const rawTranscript = buildChatExportRawTranscript(input).trimEnd();
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} export</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --border: #d8dee7;
+      --muted: #586272;
+      --panel: #f7f9fc;
+      --ink: #111827;
+      --accent: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: var(--ink);
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 24px 48px;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+      padding-bottom: 18px;
+    }
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin: 0;
+    }
+    h1 {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      border-bottom: 1px solid var(--border);
+      font-size: 18px;
+      margin: 28px 0 14px;
+      padding-bottom: 8px;
+    }
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+    .muted, .empty {
+      color: var(--muted);
+    }
+    dl {
+      display: grid;
+      grid-template-columns: minmax(140px, 220px) 1fr;
+      gap: 6px 14px;
+      margin: 0;
+    }
+    dt {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    article {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 12px 0;
+      padding: 14px;
+      break-inside: avoid;
+    }
+    article.message { border-left: 4px solid var(--accent); }
+    article.work { border-left: 4px solid #6d5bd0; }
+    article.plan { border-left: 4px solid #b45309; }
+    pre {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin: 10px 0 0;
+      overflow: auto;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+    .meta-line {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    @media print {
+      body { font-size: 12px; }
+      main { max-width: none; padding: 0; }
+      article { page-break-inside: avoid; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>${escapeHtml(title)}</h1>
+      <div class="muted">Exported at ${escapeHtml(input.exportedAt)}</div>
+    </header>
+    <section>
+      <h2>Metadata</h2>
+      ${metadataHtml}
+    </section>
+    <section>
+      <h2>Timeline</h2>
+      ${timelineHtml}
+    </section>
+    ${activePlanHtml}
+    ${approvalsHtml}
+    ${userInputsHtml}
+    ${decisionsHtml}
+    ${changedFilesHtml}
+    <section>
+      <h2>Raw Searchable Transcript</h2>
+      <pre>${escapeHtml(rawTranscript)}</pre>
+    </section>
+  </main>
+</body>
+</html>
+`;
+}
+
+export function buildChatExportRawTranscript(input: ChatExportReadModel): string {
+  const records: unknown[] = [
+    {
+      type: "metadata",
+      exportVersion: input.exportVersion,
+      exportedAt: input.exportedAt,
+      project: input.project,
+      thread: input.thread,
+      runtime: input.runtime,
+      provider: input.provider,
+    },
+    ...input.timeline.entries.map(rawRecordForTimelineEntry),
+    ...input.timeline.pendingApprovals.map((approval) => ({
+      type: "pending-approval",
+      ...approval,
+    })),
+    ...input.timeline.pendingUserInputs.map((userInput) => ({
+      type: "pending-user-input",
+      ...userInput,
+    })),
+    ...input.timeline.decisions.map((decision) => ({
+      type: "decision",
+      ...decision,
+    })),
+    ...(input.timeline.activePlan
+      ? [
+          {
+            type: "active-plan",
+            ...input.timeline.activePlan,
+          },
+        ]
+      : []),
+    ...(input.timeline.activeProposedPlan
+      ? [
+          {
+            type: "active-proposed-plan",
+            ...input.timeline.activeProposedPlan,
+          },
+        ]
+      : []),
+    ...input.timeline.turnDiffSummaries.map((summary) => ({
+      type: "turn-diff-summary",
+      ...summary,
+    })),
+    {
+      type: "completion",
+      activeTurn: input.timeline.activeTurn,
+      completion: input.timeline.completion,
+    },
+  ];
+
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+export function openChatExportPrintWindow(input: ChatExportReadModel): void {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    throw new Error("The browser blocked the export print window.");
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(buildChatExportHtml(input));
+  printWindow.document.close();
+  printWindow.document.title = buildChatExportFilename(input, "pdf");
+  printWindow.focus();
+  printWindow.setTimeout(() => {
+    printWindow.print();
+  }, 100);
 }
 
 function toExportTimelineEntry(entry: ThreadTimelineEntry): ChatExportTimelineEntry {
@@ -566,6 +922,30 @@ function toExportTurnDiffSummary(summary: TurnDiffSummary): ChatExportTurnDiffSu
       deletions: file.deletions ?? null,
     })),
   };
+}
+
+function toExportDecisionEntry(entry: DecisionQueueEntry): ChatExportDecisionEntry {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    priority: entry.priority,
+    title: entry.title,
+    body: entry.body ?? null,
+    metadata: sanitizeDecisionMetadata(entry.metadata),
+    status: entry.status,
+    createdAt: entry.createdAt,
+    context: {
+      threadId: entry.threadId ?? null,
+      projectId: entry.projectId ?? null,
+      runtimeId: entry.runtimeId ?? null,
+    },
+    ui: entry.ui,
+    proposedPlan: entry.kind === "plan-follow-up" ? toExportProposedPlan(entry.proposedPlan) : null,
+  };
+}
+
+function sanitizeDecisionMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(metadata)) as Record<string, unknown>;
 }
 
 function roleLabel(role: ChatExportMessage["role"]): string {
@@ -723,6 +1103,34 @@ function renderPendingUserInputsMarkdown(
   }
 }
 
+function renderDecisionsMarkdown(
+  lines: string[],
+  decisions: ReadonlyArray<ChatExportDecisionEntry>,
+): void {
+  if (decisions.length === 0) {
+    return;
+  }
+  lines.push("## Decisions", "");
+  for (const decision of decisions) {
+    lines.push(
+      `### ${decision.title} - ${decision.createdAt}`,
+      "",
+      `- Decision ID: \`${decision.id}\``,
+      `- Kind: ${decision.kind}`,
+      `- Status: ${decision.status}`,
+      `- Blocks turn: ${decision.ui.blocksTurn ? "yes" : "no"}`,
+      `- Blocks composer: ${decision.ui.blocksComposer ? "yes" : "no"}`,
+    );
+    if (decision.body) {
+      lines.push("", decision.body.trimEnd());
+    }
+    if (Object.keys(decision.metadata).length > 0) {
+      lines.push("", "Metadata:", "", fenced(JSON.stringify(decision.metadata, null, 2), "json"));
+    }
+    lines.push("");
+  }
+}
+
 function renderTurnDiffSummariesMarkdown(
   lines: string[],
   summaries: ReadonlyArray<ChatExportTurnDiffSummary>,
@@ -746,6 +1154,393 @@ function renderTurnDiffSummariesMarkdown(
     }
     lines.push("");
   }
+}
+
+function renderRawTranscriptMarkdown(lines: string[], input: ChatExportReadModel): void {
+  lines.push(
+    "## Raw Searchable Transcript",
+    "",
+    fenced(buildChatExportRawTranscript(input).trimEnd(), "jsonl"),
+    "",
+  );
+}
+
+function renderTimelineEntryPlainText(lines: string[], entry: ChatExportTimelineEntry): void {
+  if (entry.kind === "message") {
+    renderMessagePlainText(lines, entry.message);
+    return;
+  }
+  if (entry.kind === "work") {
+    renderWorkPlainText(lines, entry.work);
+    return;
+  }
+  renderProposedPlanPlainText(lines, entry.proposedPlan);
+}
+
+function renderMessagePlainText(lines: string[], message: ChatExportMessage): void {
+  lines.push(`${roleLabel(message.role)} - ${message.createdAt}`);
+  if (message.turnId) {
+    lines.push(`Turn ID: ${message.turnId}`);
+  }
+  if (message.streaming) {
+    lines.push("This message was still streaming when exported.");
+  }
+  lines.push(message.text.trimEnd() || "No text.");
+  if (message.attachments.length > 0) {
+    lines.push("Attachments:");
+    for (const attachment of message.attachments) {
+      lines.push(`- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`);
+    }
+  }
+  lines.push("");
+}
+
+function renderWorkPlainText(lines: string[], work: ChatExportWorkLogEntry): void {
+  lines.push(`Work Log - ${work.createdAt}`, `Label: ${work.toolTitle ?? work.label}`);
+  lines.push(`Tone: ${work.tone}`);
+  if (work.itemType) {
+    lines.push(`Item type: ${work.itemType}`);
+  }
+  if (work.requestKind) {
+    lines.push(`Request kind: ${work.requestKind}`);
+  }
+  if (work.command) {
+    lines.push("Command:", work.command.trimEnd());
+  }
+  if (work.rawCommand && work.rawCommand !== work.command) {
+    lines.push("Raw command:", work.rawCommand.trimEnd());
+  }
+  if (work.detail) {
+    lines.push("Detail:", work.detail.trimEnd());
+  }
+  if (work.changedFiles.length > 0) {
+    lines.push("Changed files:");
+    for (const filePath of work.changedFiles) {
+      lines.push(`- ${filePath}`);
+    }
+  }
+  lines.push("");
+}
+
+function renderProposedPlanPlainText(lines: string[], plan: ChatExportProposedPlan): void {
+  lines.push(
+    `Proposed Plan - ${plan.createdAt}`,
+    `Plan ID: ${plan.id}`,
+    `Turn ID: ${plan.turnId ?? "None"}`,
+    `Implemented at: ${plan.implementedAt ?? "Not implemented"}`,
+    plan.planMarkdown.trimEnd(),
+    "",
+  );
+}
+
+function renderActivePlanPlainText(lines: string[], activePlan: ChatExportActivePlan | null): void {
+  if (!activePlan) {
+    return;
+  }
+  lines.push("ACTIVE PLAN", "-----------", `Created at: ${activePlan.createdAt}`);
+  if (activePlan.turnId) {
+    lines.push(`Turn ID: ${activePlan.turnId}`);
+  }
+  if (activePlan.explanation) {
+    lines.push(activePlan.explanation.trimEnd());
+  }
+  for (const step of activePlan.steps) {
+    lines.push(`- [${step.status}] ${step.step}`);
+  }
+  lines.push("");
+}
+
+function renderPendingApprovalsPlainText(
+  lines: string[],
+  approvals: ReadonlyArray<ChatExportPendingApproval>,
+): void {
+  if (approvals.length === 0) {
+    return;
+  }
+  lines.push("PENDING APPROVALS", "-----------------");
+  for (const approval of approvals) {
+    lines.push(
+      `Approval - ${approval.createdAt}`,
+      `Request ID: ${approval.requestId}`,
+      `Request kind: ${approval.requestKind}`,
+    );
+    if (approval.detail) {
+      lines.push(approval.detail.trimEnd());
+    }
+    lines.push("");
+  }
+}
+
+function renderPendingUserInputsPlainText(
+  lines: string[],
+  userInputs: ReadonlyArray<ChatExportPendingUserInput>,
+): void {
+  if (userInputs.length === 0) {
+    return;
+  }
+  lines.push("PENDING USER INPUT", "------------------");
+  for (const userInput of userInputs) {
+    lines.push(`User Input - ${userInput.createdAt}`, `Request ID: ${userInput.requestId}`);
+    for (const question of userInput.questions) {
+      lines.push(question.header, question.question);
+      for (const option of question.options) {
+        lines.push(`- ${option.label}: ${option.description}`);
+      }
+    }
+    lines.push("");
+  }
+}
+
+function renderDecisionsPlainText(
+  lines: string[],
+  decisions: ReadonlyArray<ChatExportDecisionEntry>,
+): void {
+  if (decisions.length === 0) {
+    return;
+  }
+  lines.push("DECISIONS", "---------");
+  for (const decision of decisions) {
+    lines.push(
+      `${decision.title} - ${decision.createdAt}`,
+      `Decision ID: ${decision.id}`,
+      `Kind: ${decision.kind}`,
+      `Status: ${decision.status}`,
+      `Blocks turn: ${decision.ui.blocksTurn ? "yes" : "no"}`,
+      `Blocks composer: ${decision.ui.blocksComposer ? "yes" : "no"}`,
+    );
+    if (decision.body) {
+      lines.push(decision.body.trimEnd());
+    }
+    if (Object.keys(decision.metadata).length > 0) {
+      lines.push("Metadata:", JSON.stringify(decision.metadata));
+    }
+    lines.push("");
+  }
+}
+
+function renderTurnDiffSummariesPlainText(
+  lines: string[],
+  summaries: ReadonlyArray<ChatExportTurnDiffSummary>,
+): void {
+  if (summaries.length === 0) {
+    return;
+  }
+  lines.push("CHANGED FILES", "-------------");
+  for (const summary of summaries) {
+    lines.push(`Turn ${summary.turnId} - ${summary.completedAt}`);
+    if (summary.files.length === 0) {
+      lines.push("- No changed files", "");
+      continue;
+    }
+    for (const file of summary.files) {
+      const stats =
+        file.additions !== null || file.deletions !== null
+          ? ` (+${file.additions ?? 0}/-${file.deletions ?? 0})`
+          : "";
+      lines.push(`- ${file.path}${stats}`);
+    }
+    lines.push("");
+  }
+}
+
+function rawRecordForTimelineEntry(entry: ChatExportTimelineEntry): unknown {
+  if (entry.kind === "message") {
+    return {
+      type: "message",
+      timelineEntryId: entry.id,
+      timelineCreatedAt: entry.createdAt,
+      phase: entry.phase,
+      message: entry.message,
+    };
+  }
+  if (entry.kind === "work") {
+    return {
+      type: "work-log",
+      timelineEntryId: entry.id,
+      timelineCreatedAt: entry.createdAt,
+      phase: entry.phase,
+      work: entry.work,
+    };
+  }
+  return {
+    type: "proposed-plan",
+    timelineEntryId: entry.id,
+    timelineCreatedAt: entry.createdAt,
+    phase: entry.phase,
+    proposedPlan: entry.proposedPlan,
+  };
+}
+
+function renderTimelineEntryHtml(entry: ChatExportTimelineEntry): string {
+  if (entry.kind === "message") {
+    const message = entry.message;
+    const attachments =
+      message.attachments.length === 0
+        ? ""
+        : `<ul>${message.attachments
+            .map(
+              (attachment) =>
+                `<li>${escapeHtml(attachment.name)} (${escapeHtml(attachment.mimeType)}, ${attachment.sizeBytes} bytes)</li>`,
+            )
+            .join("")}</ul>`;
+    return `<article class="message">
+      <h3>${escapeHtml(roleLabel(message.role))} - ${escapeHtml(message.createdAt)}</h3>
+      <div class="meta-line">${escapeHtml(message.turnId ? `Turn ${message.turnId}` : "No turn ID")}${message.streaming ? " | still streaming" : ""}</div>
+      <pre>${escapeHtml(message.text.trimEnd() || "No text.")}</pre>
+      ${attachments}
+    </article>`;
+  }
+  if (entry.kind === "work") {
+    const work = entry.work;
+    const changedFiles =
+      work.changedFiles.length === 0
+        ? ""
+        : `<ul>${work.changedFiles.map((filePath) => `<li>${escapeHtml(filePath)}</li>`).join("")}</ul>`;
+    return `<article class="work">
+      <h3>Work Log - ${escapeHtml(work.createdAt)}</h3>
+      <div class="meta-line">${escapeHtml(work.toolTitle ?? work.label)} | ${escapeHtml(work.tone)}</div>
+      ${work.command ? `<pre>${escapeHtml(work.command)}</pre>` : ""}
+      ${work.rawCommand && work.rawCommand !== work.command ? `<pre>${escapeHtml(work.rawCommand)}</pre>` : ""}
+      ${work.detail ? `<pre>${escapeHtml(work.detail)}</pre>` : ""}
+      ${changedFiles}
+    </article>`;
+  }
+  const plan = entry.proposedPlan;
+  return `<article class="plan">
+    <h3>Proposed Plan - ${escapeHtml(plan.createdAt)}</h3>
+    <div class="meta-line">Plan ${escapeHtml(plan.id)} | Turn ${escapeHtml(plan.turnId ?? "None")}</div>
+    <pre>${escapeHtml(plan.planMarkdown.trimEnd())}</pre>
+  </article>`;
+}
+
+function renderActivePlanHtml(activePlan: ChatExportActivePlan | null): string {
+  if (!activePlan) {
+    return "";
+  }
+  const steps = activePlan.steps
+    .map((step) => `<li>[${escapeHtml(step.status)}] ${escapeHtml(step.step)}</li>`)
+    .join("");
+  return `<section>
+    <h2>Active Plan</h2>
+    <p class="meta-line">Created at ${escapeHtml(activePlan.createdAt)}${activePlan.turnId ? ` | Turn ${escapeHtml(activePlan.turnId)}` : ""}</p>
+    ${activePlan.explanation ? `<pre>${escapeHtml(activePlan.explanation.trimEnd())}</pre>` : ""}
+    <ul>${steps}</ul>
+  </section>`;
+}
+
+function renderPendingApprovalsHtml(approvals: ReadonlyArray<ChatExportPendingApproval>): string {
+  if (approvals.length === 0) {
+    return "";
+  }
+  return `<section>
+    <h2>Pending Approvals</h2>
+    ${approvals
+      .map(
+        (approval) => `<article>
+          <h3>Approval - ${escapeHtml(approval.createdAt)}</h3>
+          <div class="meta-line">${escapeHtml(approval.requestId)} | ${escapeHtml(approval.requestKind)}</div>
+          ${approval.detail ? `<pre>${escapeHtml(approval.detail)}</pre>` : ""}
+        </article>`,
+      )
+      .join("")}
+  </section>`;
+}
+
+function renderPendingUserInputsHtml(
+  userInputs: ReadonlyArray<ChatExportPendingUserInput>,
+): string {
+  if (userInputs.length === 0) {
+    return "";
+  }
+  return `<section>
+    <h2>Pending User Input</h2>
+    ${userInputs
+      .map(
+        (userInput) => `<article>
+          <h3>User Input - ${escapeHtml(userInput.createdAt)}</h3>
+          <div class="meta-line">${escapeHtml(userInput.requestId)}</div>
+          ${userInput.questions
+            .map(
+              (question) => `<h3>${escapeHtml(question.header)}</h3>
+                <p>${escapeHtml(question.question)}</p>
+                <ul>${question.options
+                  .map(
+                    (option) =>
+                      `<li>${escapeHtml(option.label)}: ${escapeHtml(option.description)}</li>`,
+                  )
+                  .join("")}</ul>`,
+            )
+            .join("")}
+        </article>`,
+      )
+      .join("")}
+  </section>`;
+}
+
+function renderDecisionsHtml(decisions: ReadonlyArray<ChatExportDecisionEntry>): string {
+  if (decisions.length === 0) {
+    return "";
+  }
+  return `<section>
+    <h2>Decisions</h2>
+    ${decisions
+      .map(
+        (decision) => `<article>
+          <h3>${escapeHtml(decision.title)} - ${escapeHtml(decision.createdAt)}</h3>
+          <div class="meta-line">${escapeHtml(decision.kind)} | ${escapeHtml(decision.status)}</div>
+          ${decision.body ? `<pre>${escapeHtml(decision.body)}</pre>` : ""}
+          ${
+            Object.keys(decision.metadata).length > 0
+              ? `<pre>${escapeHtml(JSON.stringify(decision.metadata, null, 2))}</pre>`
+              : ""
+          }
+        </article>`,
+      )
+      .join("")}
+  </section>`;
+}
+
+function renderTurnDiffSummariesHtml(summaries: ReadonlyArray<ChatExportTurnDiffSummary>): string {
+  if (summaries.length === 0) {
+    return "";
+  }
+  return `<section>
+    <h2>Changed Files</h2>
+    ${summaries
+      .map((summary) => {
+        const files =
+          summary.files.length === 0
+            ? "<li>No changed files</li>"
+            : summary.files
+                .map((file) => {
+                  const stats =
+                    file.additions !== null || file.deletions !== null
+                      ? ` (+${file.additions ?? 0}/-${file.deletions ?? 0})`
+                      : "";
+                  return `<li>${escapeHtml(file.path)}${escapeHtml(stats)}</li>`;
+                })
+                .join("");
+        return `<article>
+          <h3>Turn ${escapeHtml(summary.turnId)} - ${escapeHtml(summary.completedAt)}</h3>
+          <ul>${files}</ul>
+        </article>`;
+      })
+      .join("")}
+  </section>`;
+}
+
+function renderHtmlDefinitionList(items: ReadonlyArray<readonly [string, string]>): string {
+  return `<dl>${items
+    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .join("")}</dl>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function fenced(value: string, language: string): string {

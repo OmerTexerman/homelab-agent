@@ -9,7 +9,17 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { DiffIcon, DownloadIcon, FolderTreeIcon, TerminalSquareIcon } from "lucide-react";
+import {
+  Code2Icon,
+  DiffIcon,
+  DownloadIcon,
+  FileJsonIcon,
+  FileTextIcon,
+  FolderTreeIcon,
+  PrinterIcon,
+  TerminalSquareIcon,
+  TextIcon,
+} from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -17,7 +27,14 @@ import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Popover,
+  PopoverClose,
+  PopoverDescription,
+  PopoverPopup,
+  PopoverTitle,
+  PopoverTrigger,
+} from "../ui/popover";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import {
   HOMELAB_PRODUCT_COPY,
@@ -25,6 +42,7 @@ import {
   shouldShowPrimarySourceControlUi,
   shouldShowRuntimeWorkspaceExplorer,
 } from "../../productCapabilities";
+import type { ChatExportFormat } from "../../chatExport";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -50,12 +68,49 @@ interface ChatHeaderProps {
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
-  onExportMarkdown: () => void;
-  onExportJson: () => void;
+  onExportChat: (format: ChatExportFormat) => void;
   onToggleTerminal: () => void;
   onToggleWorkspaceExplorer: () => void;
   onToggleDiff: () => void;
 }
+
+export const CHAT_EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
+  readonly format: ChatExportFormat;
+  readonly label: string;
+  readonly description: string;
+  readonly Icon: typeof FileTextIcon;
+}> = [
+  {
+    format: "markdown",
+    label: "Markdown",
+    description: "Readable transcript for docs, notes, and project memory review.",
+    Icon: FileTextIcon,
+  },
+  {
+    format: "json",
+    label: "JSON",
+    description: "Structured versioned data for tools, reprocessing, and audit trails.",
+    Icon: FileJsonIcon,
+  },
+  {
+    format: "text",
+    label: "Plain text",
+    description: "Searchable flat transcript that works anywhere.",
+    Icon: TextIcon,
+  },
+  {
+    format: "html",
+    label: "HTML",
+    description: "Self-contained offline page with print-friendly styling.",
+    Icon: Code2Icon,
+  },
+  {
+    format: "pdf",
+    label: "PDF",
+    description: "Open a print view and save to PDF from the browser.",
+    Icon: PrinterIcon,
+  },
+];
 
 export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
@@ -95,8 +150,7 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
-  onExportMarkdown,
-  onExportJson,
+  onExportChat,
   onToggleTerminal,
   onToggleWorkspaceExplorer,
   onToggleDiff,
@@ -158,8 +212,8 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
-        <Menu>
-          <MenuTrigger
+        <Popover>
+          <PopoverTrigger
             render={
               <Button
                 size="icon-xs"
@@ -171,12 +225,43 @@ export const ChatHeader = memo(function ChatHeader({
             }
           >
             <DownloadIcon className="size-3" />
-          </MenuTrigger>
-          <MenuPopup align="end">
-            <MenuItem onClick={onExportMarkdown}>Export Markdown</MenuItem>
-            <MenuItem onClick={onExportJson}>Export JSON</MenuItem>
-          </MenuPopup>
-        </Menu>
+          </PopoverTrigger>
+          <PopoverPopup align="end" className="w-80 p-0">
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <PopoverTitle className="text-base">Export Chat</PopoverTitle>
+                <PopoverDescription className="text-xs">
+                  Export the full thread with messages, work logs, decisions, plans, metadata, and
+                  changed files.
+                </PopoverDescription>
+              </div>
+              <div className="grid gap-1">
+                {CHAT_EXPORT_FORMAT_OPTIONS.map(({ format, label, description, Icon }) => (
+                  <PopoverClose
+                    key={format}
+                    render={
+                      <button
+                        className="flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                        type="button"
+                      />
+                    }
+                    onClick={() => onExportChat(format)}
+                  >
+                    <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">
+                      <Icon className="size-3.5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">{label}</span>
+                      <span className="block text-xs leading-5 text-muted-foreground">
+                        {description}
+                      </span>
+                    </span>
+                  </PopoverClose>
+                ))}
+              </div>
+            </div>
+          </PopoverPopup>
+        </Popover>
         <Tooltip>
           <TooltipTrigger
             render={
