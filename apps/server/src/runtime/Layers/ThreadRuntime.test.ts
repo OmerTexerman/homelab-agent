@@ -315,6 +315,7 @@ function makeRuntimeLayer(overrides: RuntimeLayerOverrides = {}) {
 
 const runtimeLayer = makeRuntimeLayer();
 const runtimeLayerWithAutoNetwork = makeRuntimeLayer({ dockerNetwork: undefined });
+const runtimeLayerWithServerUrlOverride = makeRuntimeLayer();
 let mutableRuntimeSecretEnv: Readonly<Record<string, string>> = {};
 
 const runtimeLayerWithSecrets = it.layer(
@@ -982,6 +983,52 @@ runtimeLayerWithAutoNetwork("ThreadRuntimeLive Docker server connectivity", (it)
           delete process.env.HOSTNAME;
         } else {
           process.env.HOSTNAME = previousHostname;
+        }
+      }
+    }),
+  );
+});
+
+runtimeLayerWithServerUrlOverride("ThreadRuntimeLive Docker server URL override", (it) => {
+  it.effect("preserves HOMELAB_AGENT_RUNTIME_SERVER_URL for runtime server access", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const previousServerUrl = process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL;
+      process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL = "http://homelab-agent.local:13773";
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-server-url-override"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        const runCall = findRunCall(docker.calls);
+
+        assert.ok(runCall);
+        const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+        assert.notEqual(networkFlagIndex, -1);
+        assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+        assert.equal(runCall.includes("--add-host"), false);
+        assert.match(
+          secretEnvContents,
+          /export HOMELAB_AGENT_SERVER_URL='http:\/\/homelab-agent\.local:13773'/,
+        );
+      } finally {
+        if (previousServerUrl === undefined) {
+          delete process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL;
+        } else {
+          process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL = previousServerUrl;
         }
       }
     }),

@@ -88,6 +88,47 @@ interface RuntimeSmokeRpcResult {
     readonly lifecycleState: string;
     readonly terminalStatus: string;
     readonly homelabEntryNames: readonly string[];
+    readonly homelabCliMarkers: readonly string[];
+  };
+}
+
+interface RuntimeSmokeTerminalEvent {
+  readonly type: string;
+  readonly data?: string;
+  readonly message?: string;
+  readonly snapshot?: {
+    readonly history: string;
+  };
+}
+
+interface RuntimeSmokeTerminalClient {
+  readonly terminal: {
+    readonly open: (input: {
+      readonly threadId: string;
+      readonly terminalId: string;
+      readonly cwd: string;
+      readonly cols: number;
+      readonly rows: number;
+    }) => Promise<{ readonly status: string; readonly history: string }>;
+    readonly attach: (
+      input: {
+        readonly threadId: string;
+        readonly terminalId: string;
+        readonly cwd: string;
+        readonly restartIfNotRunning: boolean;
+      },
+      listener: (event: RuntimeSmokeTerminalEvent) => void,
+    ) => () => void;
+    readonly write: (input: {
+      readonly threadId: string;
+      readonly terminalId: string;
+      readonly data: string;
+    }) => Promise<unknown>;
+    readonly close: (input: {
+      readonly threadId: string;
+      readonly terminalId: string;
+      readonly deleteHistory: boolean;
+    }) => Promise<unknown>;
   };
 }
 
@@ -503,6 +544,95 @@ async function verifyRuntimeRpc(input: {
       };
 
       if (args.withRuntime) {
+        const wait = (ms: number) =>
+          new Promise<void>((resolveWait) => {
+            globalThis.setTimeout(resolveWait, ms);
+          });
+        const runRuntimeCliProbe = async (
+          runtimeClient: RuntimeSmokeTerminalClient,
+        ): Promise<{
+          readonly terminalStatus: string;
+          readonly markers: readonly string[];
+        }> => {
+          const terminalId = "runtime-smoke-cli";
+          const cwd = `homelab://project/${args.projectId}`;
+          const expectedMarkers = [
+            "HOMELAB_SMOKE_SNAPSHOT_OK",
+            "HOMELAB_SMOKE_MEMORY_LIST_OK",
+            "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
+            "HOMELAB_SMOKE_SECRETS_OK",
+            "HOMELAB_SMOKE_BOOTSTRAP_OK",
+            "HOMELAB_SMOKE_DONE",
+          ];
+          let output = "";
+          const appendEvent = (event: RuntimeSmokeTerminalEvent) => {
+            if (event.type === "snapshot" && typeof event.snapshot?.history === "string") {
+              output += event.snapshot.history;
+            }
+            if (event.type === "output" && typeof event.data === "string") {
+              output += event.data;
+            }
+            if (event.type === "error" && typeof event.message === "string") {
+              output += event.message;
+            }
+          };
+          const terminal = await runtimeClient.terminal.open({
+            threadId: args.sharedThreadId,
+            terminalId,
+            cwd,
+            cols: 100,
+            rows: 30,
+          });
+          output += terminal.history;
+          const unsubscribe = runtimeClient.terminal.attach(
+            {
+              threadId: args.sharedThreadId,
+              terminalId,
+              cwd,
+              restartIfNotRunning: true,
+            },
+            appendEvent,
+          );
+          try {
+            await runtimeClient.terminal.write({
+              threadId: args.sharedThreadId,
+              terminalId,
+              data: [
+                "homelab snapshot >/tmp/homelab-smoke-snapshot.json && echo HOMELAB_SMOKE_SNAPSHOT_OK || echo HOMELAB_SMOKE_SNAPSHOT_FAIL:$?",
+                "homelab memory list >/tmp/homelab-smoke-memory-list.json && echo HOMELAB_SMOKE_MEMORY_LIST_OK || echo HOMELAB_SMOKE_MEMORY_LIST_FAIL:$?",
+                "homelab memory search smoke >/tmp/homelab-smoke-memory-search.json && echo HOMELAB_SMOKE_MEMORY_SEARCH_OK || echo HOMELAB_SMOKE_MEMORY_SEARCH_FAIL:$?",
+                "homelab secrets >/tmp/homelab-smoke-secrets.json && echo HOMELAB_SMOKE_SECRETS_OK || echo HOMELAB_SMOKE_SECRETS_FAIL:$?",
+                "homelab bootstrap >/tmp/homelab-smoke-bootstrap.json && echo HOMELAB_SMOKE_BOOTSTRAP_OK || echo HOMELAB_SMOKE_BOOTSTRAP_FAIL:$?",
+                "echo HOMELAB_SMOKE_DONE",
+                "",
+              ].join("\n"),
+            });
+
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < 45_000 && !output.includes("HOMELAB_SMOKE_DONE")) {
+              await wait(250);
+            }
+            const missingMarkers = expectedMarkers.filter((marker) => !output.includes(marker));
+            if (missingMarkers.length > 0) {
+              throw new Error(
+                `Runtime homelab CLI probe missed markers ${missingMarkers.join(", ")}. Output tail:\n${output.slice(
+                  -4_000,
+                )}`,
+              );
+            }
+            return {
+              terminalStatus: terminal.status,
+              markers: expectedMarkers,
+            };
+          } finally {
+            unsubscribe();
+            await runtimeClient.terminal.close({
+              threadId: args.sharedThreadId,
+              terminalId,
+              deleteHistory: true,
+            });
+          }
+        };
         const woken = await client.projectRuntime.wake({
           projectId: args.projectId,
           threadId: args.sharedThreadId,
@@ -515,25 +645,16 @@ async function verifyRuntimeRpc(input: {
           limit: 100,
           basePath: ".homelab",
         });
-        const terminal = await client.terminal.open({
-          threadId: args.sharedThreadId,
-          terminalId: "runtime-smoke",
-          cwd: `homelab://project/${args.projectId}`,
-          cols: 80,
-          rows: 24,
-        });
-        await client.terminal.close({
-          threadId: args.sharedThreadId,
-          terminalId: "runtime-smoke",
-        });
+        const cliProbe = await runRuntimeCliProbe(client);
         result = {
           ...result,
           wake: {
             lifecycleState: woken.runtime.runtime.lifecycleState,
-            terminalStatus: terminal.status,
+            terminalStatus: cliProbe.terminalStatus,
             homelabEntryNames: entries.entries.map(
               (entry: { readonly name: string }) => entry.name,
             ),
+            homelabCliMarkers: cliProbe.markers,
           },
         };
       }
@@ -794,6 +915,44 @@ async function main(): Promise<void> {
       "Standalone shared thread runtime id mismatch",
     );
 
+    await dispatchCommand({
+      serverBaseUrl,
+      bearerToken,
+      command: {
+        type: "thread.standalone.move-to-project",
+        commandId: `runtime-smoke-standalone-move-${suffix}`,
+        threadId: standaloneThreadId,
+        projectId,
+        memoryMigration: { mode: "none" },
+        runtimeHandling: { filesystem: "no-merge" },
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const movedSnapshot = await waitForSnapshot(serverBaseUrl, bearerToken, (candidate) => {
+      const movedThread = candidate.threads.find((thread) => thread.id === standaloneThreadId);
+      return (
+        movedThread?.projectId === projectId &&
+        movedThread.runtimeId === sharedRuntimeId &&
+        movedThread.runtimeSelectionMode === "shared"
+      );
+    });
+    const movedStandaloneThread = requireThread(movedSnapshot, standaloneThreadId);
+    assertEqual(
+      movedStandaloneThread.projectId,
+      projectId,
+      "Moved standalone thread project id mismatch",
+    );
+    assertEqual(
+      movedStandaloneThread.runtimeId,
+      sharedRuntimeId,
+      "Moved standalone thread runtime id mismatch",
+    );
+    assertEqual(
+      movedStandaloneThread.runtimeSelectionMode,
+      "shared",
+      "Moved standalone thread mode mismatch",
+    );
+
     const runtimeRpcResult = await runBrowserSmoke({
       options,
       pairUrl: pairing.pairUrl,
@@ -826,12 +985,36 @@ async function main(): Promise<void> {
         isolatedRuntimeId,
         "Isolated runtime queue id mismatch",
       );
-      if (options.withRuntime && !runtimeRpcResult.wake?.homelabEntryNames.includes("README.md")) {
-        throw new Error(
-          `Woken runtime did not expose .homelab/README.md. Entries: ${JSON.stringify(
-            runtimeRpcResult.wake?.homelabEntryNames ?? [],
-          )}`,
+      assertEqual(runtimeRpcResult.sharedQueuedCount, 0, "Project Runtime queue count mismatch");
+      assertEqual(runtimeRpcResult.isolatedQueuedCount, 0, "Isolated runtime queue count mismatch");
+      if (options.withRuntime) {
+        const requiredHomelabEntries = ["README.md", "memory", "threads"];
+        const missingHomelabEntries = requiredHomelabEntries.filter(
+          (entryName) => !runtimeRpcResult.wake?.homelabEntryNames.includes(entryName),
         );
+        if (missingHomelabEntries.length > 0) {
+          throw new Error(
+            `Woken runtime did not expose required .homelab entries ${missingHomelabEntries.join(
+              ", ",
+            )}. Entries: ${JSON.stringify(runtimeRpcResult.wake?.homelabEntryNames ?? [])}`,
+          );
+        }
+        const requiredCliMarkers = [
+          "HOMELAB_SMOKE_SNAPSHOT_OK",
+          "HOMELAB_SMOKE_MEMORY_LIST_OK",
+          "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
+          "HOMELAB_SMOKE_SECRETS_OK",
+          "HOMELAB_SMOKE_BOOTSTRAP_OK",
+          "HOMELAB_SMOKE_DONE",
+        ];
+        const missingCliMarkers = requiredCliMarkers.filter(
+          (marker) => !runtimeRpcResult.wake?.homelabCliMarkers.includes(marker),
+        );
+        if (missingCliMarkers.length > 0) {
+          throw new Error(
+            `Runtime homelab CLI probe missed markers: ${missingCliMarkers.join(", ")}`,
+          );
+        }
       }
     }
 
@@ -850,7 +1033,9 @@ async function main(): Promise<void> {
             projectDefaultRuntimeId: project.defaultRuntimeId,
             sharedThreadRuntimeId: sharedThread.runtimeId,
             isolatedThreadRuntimeId: isolatedThread.runtimeId,
-            standaloneThreadRuntimeId: standaloneThread.runtimeId,
+            standaloneThreadInitialRuntimeId: standaloneThread.runtimeId,
+            standaloneThreadMovedProjectId: movedStandaloneThread.projectId,
+            standaloneThreadRuntimeId: movedStandaloneThread.runtimeId,
             browserPaired: !options.noBrowser,
             runtimeRpc: runtimeRpcResult,
           },
