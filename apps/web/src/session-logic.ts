@@ -928,6 +928,10 @@ function summarizeToolRawOutput(payload: Record<string, unknown> | null): string
     return `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`;
   }
 
+  if (asTrimmedString(payload?.itemType) === "command_execution") {
+    return null;
+  }
+
   const content = asTrimmedString(rawOutput.content);
   if (content) {
     return summarizeToolTextOutput(content);

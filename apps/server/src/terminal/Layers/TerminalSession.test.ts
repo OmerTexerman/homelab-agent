@@ -164,6 +164,7 @@ describe("terminal session state transitions", () => {
       history: "old\n",
       exitCode: null,
       exitSignal: null,
+      label: "Terminal 1",
       updatedAt: STARTED_AT,
     });
 
@@ -291,6 +292,7 @@ describe("snapshotTerminalSession", () => {
       history: "hello",
       exitCode: null,
       exitSignal: null,
+      label: "Terminal 1",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
   });

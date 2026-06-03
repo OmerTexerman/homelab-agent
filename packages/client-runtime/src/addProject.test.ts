@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   ProjectId,
   CommandId,
+  DEFAULT_MODEL,
   SourceControlDiscoveryResult,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -139,7 +140,7 @@ describe("add project shared logic", () => {
       createWorkspaceRootIfMissing: true,
       defaultModelSelection: {
         instanceId: "codex",
-        model: "gpt-5.4",
+        model: DEFAULT_MODEL,
       },
     });
   });

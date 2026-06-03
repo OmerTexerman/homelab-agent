@@ -13,7 +13,7 @@ layer("031_AuthAuthorizationScopes", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 30 });
+      yield* runMigrations({ toMigrationInclusive: 35 });
 
       yield* sql`
         INSERT INTO auth_pairing_links (
@@ -54,7 +54,7 @@ layer("031_AuthAuthorizationScopes", (it) => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 31 });
+      yield* runMigrations({ toMigrationInclusive: 36 });
 
       const pairingColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(auth_pairing_links)

@@ -453,7 +453,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       const third = yield* manager.open(openInput());
 
       assert.equal(first.threadId, "thread-1");
-      assert.equal(first.terminalId, "default");
+      assert.equal(first.terminalId, DEFAULT_TERMINAL_ID);
       assert.equal(second.threadId, "thread-1");
       assert.equal(third.threadId, "thread-1");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
@@ -625,7 +625,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
           (event) =>
             event.type === "cleared" &&
             event.threadId === "thread-1" &&
-            event.terminalId === "default",
+            event.terminalId === DEFAULT_TERMINAL_ID,
         ),
       ).toBe(true);
     }),

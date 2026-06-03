@@ -66,6 +66,20 @@ const rpcClientMock = {
     cloneRepository: vi.fn(),
     publishRepository: vi.fn(),
   },
+  threadWorkspace: {
+    listEntries: vi.fn(),
+    readFile: vi.fn(),
+    writeFile: vi.fn(),
+  },
+  projectRuntime: {
+    get: vi.fn(),
+    wake: vi.fn(),
+    archive: vi.fn(),
+    reset: vi.fn(),
+    cleanupScratch: vi.fn(),
+    snapshot: vi.fn(),
+    restore: vi.fn(),
+  },
   shell: {
     openInEditor: vi.fn(),
   },
@@ -108,6 +122,7 @@ const rpcClientMock = {
     dispatchCommand: vi.fn(),
     getTurnDiff: vi.fn(),
     getFullThreadDiff: vi.fn(),
+    getArchivedShellSnapshot: vi.fn(),
     subscribeShell: vi.fn((listener: (event: OrchestrationShellStreamItem) => void) =>
       registerListener(shellStreamListeners, listener),
     ),

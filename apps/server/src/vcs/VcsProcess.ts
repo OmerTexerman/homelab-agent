@@ -45,6 +45,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 
+function appendTruncationMarker(output: string, truncated: boolean, enabled: boolean): string {
+  if (!truncated || !enabled || output.endsWith(OUTPUT_TRUNCATED_MARKER)) {
+    return output;
+  }
+  return `${output}${OUTPUT_TRUNCATED_MARKER}`;
+}
+
 function commandLabel(command: string, args: ReadonlyArray<string>): string {
   return [command, ...args].join(" ");
 }
@@ -99,8 +106,16 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
 
     return {
       exitCode: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
+      stdout: appendTruncationMarker(
+        result.stdout,
+        result.stdoutTruncated ?? false,
+        input.appendTruncationMarker === true,
+      ),
+      stderr: appendTruncationMarker(
+        result.stderr,
+        result.stderrTruncated ?? false,
+        input.appendTruncationMarker === true,
+      ),
       stdoutTruncated: result.stdoutTruncated ?? false,
       stderrTruncated: result.stderrTruncated ?? false,
     } satisfies VcsProcessOutput;
