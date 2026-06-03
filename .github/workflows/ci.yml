@@ -67,7 +67,9 @@ jobs:
         run: bun run test
 
       - name: Install browser test runtime
-        run: bun run --cwd apps/web test:browser:install
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install chromium
 
       - name: Browser test
         run: bun run --cwd apps/web test:browser
