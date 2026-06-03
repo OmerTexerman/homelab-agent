@@ -67,9 +67,7 @@ jobs:
         run: bun run test
 
       - name: Install browser test runtime
-        run: |
-          cd apps/web
-          bunx playwright install --with-deps chromium
+        run: bun run --cwd apps/web test:browser:install
 
       - name: Browser test
         run: bun run --cwd apps/web test:browser
