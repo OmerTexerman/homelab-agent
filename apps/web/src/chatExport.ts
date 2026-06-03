@@ -413,6 +413,32 @@ export function buildChatExportJson(input: ChatExportReadModel): string {
   return `${JSON.stringify(input, null, 2)}\n`;
 }
 
+function appendCompatibilityThreadMetadataMarkdown(
+  lines: string[],
+  thread: Pick<ChatExportReadModel["thread"], "branch" | "worktreePath">,
+): void {
+  if (thread.branch === null && thread.worktreePath === null) {
+    return;
+  }
+  lines.push(
+    `  - Compatibility source branch: ${thread.branch ?? "None"}`,
+    `  - Compatibility workspace path: ${thread.worktreePath ?? "None"}`,
+  );
+}
+
+function appendCompatibilityThreadMetadataPlainText(
+  lines: string[],
+  thread: Pick<ChatExportReadModel["thread"], "branch" | "worktreePath">,
+): void {
+  if (thread.branch === null && thread.worktreePath === null) {
+    return;
+  }
+  lines.push(
+    `Compatibility source branch: ${thread.branch ?? "None"}`,
+    `Compatibility workspace path: ${thread.worktreePath ?? "None"}`,
+  );
+}
+
 export function buildChatExportMarkdown(input: ChatExportReadModel): string {
   const lines: string[] = [
     `# ${input.thread.title || "Untitled chat"}`,
@@ -431,8 +457,9 @@ export function buildChatExportMarkdown(input: ChatExportReadModel): string {
     `  - Created at: ${input.thread.createdAt}`,
     `  - Updated at: ${input.thread.updatedAt ?? "Unknown"}`,
     `  - Phase: ${input.thread.phase}`,
-    `  - Branch: ${input.thread.branch ?? "None"}`,
-    `  - Worktree path: ${input.thread.worktreePath ?? "None"}`,
+  ];
+  appendCompatibilityThreadMetadataMarkdown(lines, input.thread);
+  lines.push(
     "- Runtime",
     `  - Runtime ID: ${input.runtime.id ? `\`${input.runtime.id}\`` : "Unavailable"}`,
     `  - Selection mode: ${input.runtime.selectionMode}`,
@@ -447,7 +474,7 @@ export function buildChatExportMarkdown(input: ChatExportReadModel): string {
     "",
     "## Timeline",
     "",
-  ];
+  );
 
   if (input.timeline.entries.length === 0) {
     lines.push("_No chat timeline entries yet._", "");
@@ -488,8 +515,9 @@ export function buildChatExportPlainText(input: ChatExportReadModel): string {
     `Created at: ${input.thread.createdAt}`,
     `Updated at: ${input.thread.updatedAt ?? "Unknown"}`,
     `Phase: ${input.thread.phase}`,
-    `Branch: ${input.thread.branch ?? "None"}`,
-    `Worktree path: ${input.thread.worktreePath ?? "None"}`,
+  ];
+  appendCompatibilityThreadMetadataPlainText(lines, input.thread);
+  lines.push(
     "",
     "RUNTIME",
     `Runtime ID: ${input.runtime.id ?? "Unavailable"}`,
@@ -507,7 +535,7 @@ export function buildChatExportPlainText(input: ChatExportReadModel): string {
     "TIMELINE",
     "--------",
     "",
-  ];
+  );
 
   if (input.timeline.entries.length === 0) {
     lines.push("No chat timeline entries yet.", "");

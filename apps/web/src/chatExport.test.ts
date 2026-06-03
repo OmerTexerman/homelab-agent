@@ -233,6 +233,8 @@ describe("chatExport", () => {
     expect(exported).toContain("Runtime ID: `project-runtime:project-1`");
     expect(exported).toContain("Selection mode: shared");
     expect(exported).toContain("Container scope: shared-project");
+    expect(exported).not.toContain("Branch:");
+    expect(exported).not.toContain("Worktree path:");
     expect(exported).toContain("Model: GPT-5");
     expect(exported).toContain("### User - 2026-04-13T15:30:00.000Z");
     expect(exported).toContain("Inspect the rack");
@@ -246,6 +248,25 @@ describe("chatExport", () => {
     expect(exported).toContain("## Raw Searchable Transcript");
     expect(exported).toContain('"type":"message"');
     expect(exported.endsWith("\n")).toBe(true);
+  });
+
+  it("only renders source-control compatibility metadata when legacy fields are present", () => {
+    const chatExport = buildExport(
+      thread({
+        branch: "inventory/router",
+        worktreePath: "/tmp/homelab-agent/worktrees/router",
+      }),
+    );
+
+    const markdown = buildChatExportMarkdown(chatExport);
+    const plainText = buildChatExportPlainText(chatExport);
+
+    expect(markdown).toContain("Compatibility source branch: inventory/router");
+    expect(markdown).toContain("Compatibility workspace path: /tmp/homelab-agent/worktrees/router");
+    expect(plainText).toContain("Compatibility source branch: inventory/router");
+    expect(plainText).toContain(
+      "Compatibility workspace path: /tmp/homelab-agent/worktrees/router",
+    );
   });
 
   it("serializes a stable JSON schema with structured timeline entries", () => {
@@ -324,6 +345,8 @@ describe("chatExport", () => {
 
     expect(exported).toContain("Map My Homelab");
     expect(exported).toContain("Container scope: shared-project");
+    expect(exported).not.toContain("Branch:");
+    expect(exported).not.toContain("Worktree path:");
     expect(exported).toContain("find proxmox hosts");
     expect(exported).toContain("RAW SEARCHABLE TRANSCRIPT");
     expect(exported).toContain('"type":"work-log"');

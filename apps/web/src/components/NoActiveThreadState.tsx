@@ -3,7 +3,6 @@ import {
   CheckCircle2Icon,
   ClockIcon,
   DatabaseIcon,
-  GitBranchIcon,
   KeyRoundIcon,
   LoaderIcon,
   NetworkIcon,
@@ -308,7 +307,7 @@ function RuntimeWorkSection({ model }: { readonly model: HomeOverviewReadModel }
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <SummaryPill icon={<GitBranchIcon className="size-3.5" />}>
+          <SummaryPill icon={<ServerIcon className="size-3.5" />}>
             {runtime.sharedThreadCount} shared
           </SummaryPill>
           <SummaryPill icon={<NetworkIcon className="size-3.5" />}>
@@ -396,7 +395,7 @@ function TopologySection({ topology }: { readonly topology: HomeOverviewTopology
             <SummaryPill icon={<ServerIcon className="size-3.5" />}>
               {topology.nodes.length} shown
             </SummaryPill>
-            <SummaryPill icon={<GitBranchIcon className="size-3.5" />}>
+            <SummaryPill icon={<NetworkIcon className="size-3.5" />}>
               {topology.edges.length} relations
             </SummaryPill>
             {topology.kindGroups.map((group) => (
