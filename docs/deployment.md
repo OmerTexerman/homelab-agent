@@ -14,16 +14,22 @@ From the repo root:
 
 ```bash
 bun install --frozen-lockfile
-bun run build
+bun run build:prod
 
-export T3CODE_HOME="$PWD/.local-state/prod"
+export T3CODE_HOME="$PWD/.t3/prod"
 export T3CODE_HOST=127.0.0.1
 export T3CODE_PORT=13773
 export T3CODE_NO_BROWSER=1
-bun apps/server/dist/bin.mjs serve
+bun run start:prod
 ```
 
 Open the printed pairing URL, or copy the printed token into `/pair`.
+
+For a disposable production-like server smoke:
+
+```bash
+bun run smoke:prod
+```
 
 Runtime-container coverage is separate because it needs Docker access:
 
@@ -33,7 +39,7 @@ bun run smoke:runtime -- --with-runtime
 
 ## Production Build And Start
 
-`bun run build` builds:
+`bun run build:prod` builds:
 
 - `apps/web/dist`
 - `apps/server/dist/bin.mjs`
@@ -42,7 +48,7 @@ bun run smoke:runtime -- --with-runtime
 The production server entry point is:
 
 ```bash
-bun apps/server/dist/bin.mjs serve \
+bun run start:prod -- \
   --base-dir /var/lib/homelab-agent \
   --host 0.0.0.0 \
   --port 13773
