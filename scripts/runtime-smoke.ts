@@ -84,6 +84,12 @@ interface RuntimeSmokeRpcResult {
   readonly isolatedRuntimeId: string;
   readonly isolatedQueueRuntimeId: string;
   readonly isolatedQueuedCount: number;
+  readonly chatExport: {
+    readonly threadId: string;
+    readonly projectId: string;
+    readonly runtimeId: string | null;
+    readonly containerScope: string;
+  };
   readonly wake?: {
     readonly lifecycleState: string;
     readonly terminalStatus: string;
@@ -518,9 +524,18 @@ async function verifyRuntimeRpc(input: {
   const { page, ...rpcInput } = input;
   return page.evaluate(async (args) => {
     const wsTransportModule = "/src/rpc/wsTransport.ts";
-    const [{ WsTransport }, { createWsRpcClient }] = await Promise.all([
+    const chatExportModule = "/src/chatExport.ts";
+    const timelineModule = "/src/threadTimelineReadModel.ts";
+    const [
+      { WsTransport },
+      { createWsRpcClient },
+      { buildChatExportReadModel },
+      { deriveThreadTimelineReadModel },
+    ] = await Promise.all([
       import(wsTransportModule),
       import(args.wsRpcClientModule),
+      import(chatExportModule),
+      import(timelineModule),
     ]);
     const client = createWsRpcClient(new WsTransport(args.wsUrl));
     try {
@@ -534,6 +549,53 @@ async function verifyRuntimeRpc(input: {
         threadId: args.isolatedThreadId,
         runtimeId: args.isolatedRuntimeId,
       });
+      const exportedAt = new Date().toISOString();
+      const exportThread = {
+        id: args.sharedThreadId,
+        environmentId: "runtime-smoke",
+        codexThreadId: null,
+        projectId: args.projectId,
+        runtimeId: args.sharedRuntimeId,
+        runtimeSelectionMode: "shared",
+        title: "Shared Project Runtime smoke",
+        modelSelection: { instanceId: "codex", model: "gpt-5" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        session: null,
+        messages: [],
+        proposedPlans: [],
+        error: null,
+        createdAt: exportedAt,
+        archivedAt: null,
+        updatedAt: exportedAt,
+        latestTurn: null,
+        branch: null,
+        worktreePath: null,
+        turnDiffSummaries: [],
+        activities: [],
+      };
+      const exportProject = {
+        id: args.projectId,
+        environmentId: "runtime-smoke",
+        name: "Runtime Smoke",
+        cwd: `homelab://project/${args.projectId}`,
+        repositoryIdentity: null,
+        defaultRuntimeId: args.sharedRuntimeId,
+        defaultModelSelection: { instanceId: "codex", model: "gpt-5" },
+        createdAt: exportedAt,
+        updatedAt: exportedAt,
+        scripts: [],
+      };
+      const exportTimeline = deriveThreadTimelineReadModel({
+        thread: exportThread,
+        interactionMode: "default",
+      });
+      const exportReadModel = buildChatExportReadModel({
+        exportedAt,
+        thread: exportThread,
+        project: exportProject,
+        timeline: exportTimeline,
+      });
       let result: RuntimeSmokeRpcResult = {
         sharedRuntimeId: shared.runtime.runtime.id,
         sharedQueueRuntimeId: shared.runtime.queue.runtimeId,
@@ -541,6 +603,12 @@ async function verifyRuntimeRpc(input: {
         isolatedRuntimeId: isolated.runtime.runtime.id,
         isolatedQueueRuntimeId: isolated.runtime.queue.runtimeId,
         isolatedQueuedCount: isolated.runtime.queue.queued.length,
+        chatExport: {
+          threadId: exportReadModel.thread.id,
+          projectId: exportReadModel.project.id,
+          runtimeId: exportReadModel.runtime.id,
+          containerScope: exportReadModel.runtime.containerScope,
+        },
       };
 
       if (args.withRuntime) {
@@ -987,6 +1055,26 @@ async function main(): Promise<void> {
       );
       assertEqual(runtimeRpcResult.sharedQueuedCount, 0, "Project Runtime queue count mismatch");
       assertEqual(runtimeRpcResult.isolatedQueuedCount, 0, "Isolated runtime queue count mismatch");
+      assertEqual(
+        runtimeRpcResult.chatExport.threadId,
+        sharedThreadId,
+        "Chat export thread id mismatch",
+      );
+      assertEqual(
+        runtimeRpcResult.chatExport.projectId,
+        projectId,
+        "Chat export project id mismatch",
+      );
+      assertEqual(
+        runtimeRpcResult.chatExport.runtimeId,
+        sharedRuntimeId,
+        "Chat export runtime id mismatch",
+      );
+      assertEqual(
+        runtimeRpcResult.chatExport.containerScope,
+        "shared-project",
+        "Chat export runtime scope mismatch",
+      );
       if (options.withRuntime) {
         const requiredHomelabEntries = ["README.md", "memory", "threads"];
         const missingHomelabEntries = requiredHomelabEntries.filter(
