@@ -118,12 +118,64 @@ Candidate slices:
 
 Goal: cover the complete browser flow once the test harness can pair a headless browser with a disposable dev server reliably.
 
-Required scenario:
+Completed coverage:
 
-- Start server and web with a disposable `T3CODE_HOME`.
-- Pair the browser without reusing the user's local session.
-- Create a project.
-- Create a shared Project Runtime thread and an isolated runtime thread.
-- Verify projected runtime ids: `project-runtime:<project-id>` for shared and `isolated-runtime:<thread-id>` for isolated.
-- Verify shared runtime queueing, isolated runtime concurrency, runtime terminal routing, generated `.homelab` files, and in-runtime `homelab` CLI connectivity.
-- Capture desktop and narrow viewport screenshots of the project sidebar, New Thread affordance, and command palette actions.
+- `bun run smoke:runtime` starts server and web with a disposable
+  `T3CODE_HOME`, pairs a browser session, creates a logical project, creates
+  shared and isolated runtime threads, creates a standalone Scratch thread, and
+  moves the standalone thread into the project.
+- The smoke verifies projected runtime ids:
+  `project-runtime:<project-id>` for shared Project Runtime work,
+  `isolated-runtime:<thread-id>` for isolated work, and
+  `project-runtime:system:standalone` for Scratch before move-to-project.
+- The browser portion verifies queue read models, runtime panel RPC routing,
+  chat export read-model runtime metadata, sidebar new-thread affordances, and
+  command palette actions for new project and standalone thread creation.
+- With `--with-runtime`, the smoke wakes a runtime, opens a runtime terminal,
+  verifies generated `.homelab` entries, and probes the in-runtime `homelab`
+  CLI for `snapshot`, `memory list`, `memory search`, `secrets`, and
+  `bootstrap`.
+- With `--artifacts-dir <dir>`, the smoke captures desktop home, narrow home,
+  and command palette screenshots.
+
+Remaining follow-ups:
+
+- Add deeper visual regression coverage for project/thread sidebar states,
+  settings panels, Runtime Workspace, and active chat export popovers.
+- Add end-to-end provider prompt coverage once Codex/Claude auth fixtures are
+  available without touching a real user's provider accounts.
+- Add restore/merge smoke coverage when isolated runtime merge/discard and
+  snapshot restore semantics are finalized.
+
+## Deployment Readiness Status
+
+Completed after the upstream sync:
+
+- Active deployment reference covering state paths, ports, environment
+  variables, Docker runtime access, auth/session storage, reverse proxy
+  assumptions, backup requirements, and unsupported paths.
+- Production scripts for `build:prod`, `start:prod`, and disposable
+  `smoke:prod`.
+- Runtime networking tests that preserve
+  `HOMELAB_AGENT_RUNTIME_SERVER_URL` and cover Docker network planning.
+- In-runtime `homelab` CLI smoke coverage for snapshot, memory, secrets, and
+  bootstrap paths.
+- First-run pairing, reverse-proxy-style browser session, CORS, and cookie
+  behavior tests.
+- Homelab-aligned home overview and chat export copy that avoids repo/Git-first
+  labels unless compatibility fields are actually present.
+
+Remaining risks before a broader deployment:
+
+- Filesystem snapshots are directory copies. They are not compressed,
+  deduplicated, or path-level merges.
+- Provider auth depends on host CLI state being mounted or copied into Project
+  Runtimes. The app does not yet provide fixture-safe provider auth bootstrap.
+- OpenCode managed mode has wrapper support but should still be treated as
+  under active hardening.
+- Cursor runtime execution remains deferred until a stable pinned install/auth
+  CLI path exists.
+- Reverse proxy deployments assume HTTPS termination, forwarded `Host` and
+  `X-Forwarded-Proto`, WebSocket upgrades, and long streaming timeouts.
+- Backup and restore are manual: persist and restore the entire `T3CODE_HOME`
+  directory, not only `state.sqlite`.

@@ -37,6 +37,25 @@ Runtime-container coverage is separate because it needs Docker access:
 bun run smoke:runtime -- --with-runtime
 ```
 
+## First Deployment Checklist
+
+Before putting a persistent instance behind a reverse proxy:
+
+- Run `bun run build:prod`, `bun run smoke:prod`, and `bun run smoke:runtime`.
+- Run `bun run smoke:runtime -- --with-runtime` on the Docker host that will run
+  Project Runtimes.
+- Set an explicit `T3CODE_HOME` or `--base-dir` on persistent storage.
+- Confirm the server user can run `docker ps` and start containers.
+- Decide whether `HOMELAB_AGENT_RUNTIME_SERVER_URL` is needed for your Docker
+  network or reverse proxy topology.
+- Pair the first administrator from the startup URL printed by `serve`.
+- Create a new pairing link from Settings -> Devices & Sessions and verify a
+  second browser can pair.
+- Add provider CLI auth on the host for the providers you intend to use.
+- Configure backups for the full `T3CODE_HOME`, not just SQLite.
+- Put the app behind HTTPS and a trusted network boundary before exposing it
+  outside a private LAN or VPN.
+
 ## Production Build And Start
 
 `bun run build:prod` builds:

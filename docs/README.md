@@ -26,6 +26,28 @@ material.
 - [provider-runtime-support.md](./provider-runtime-support.md)
   Current Cursor/OpenCode provider wiring status and runtime-container blockers.
 
+## Recommended Test And Deploy Path
+
+For realistic local testing after an upstream sync:
+
+```bash
+bun install --frozen-lockfile
+bun run build:prod
+bun run smoke:prod
+bun run smoke:runtime
+```
+
+Run Docker-backed runtime coverage when Docker socket access is available:
+
+```bash
+bun run smoke:runtime -- --with-runtime --artifacts-dir .t3/runtime-smoke-artifacts
+```
+
+For the first persistent local deployment, follow
+[deployment.md](./deployment.md): set an explicit `T3CODE_HOME`, run
+`bun run start:prod`, pair the first browser session from the printed URL, and
+back up the full state directory.
+
 ## Reference
 
 - [reference/README.md](./reference/README.md)

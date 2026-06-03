@@ -757,11 +757,87 @@ async function runBrowserSmoke(input: {
     const page = await context.newPage();
     await page.goto(input.pairUrl, { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
+    await page.waitForSelector('[data-testid="new-thread-button"]', { timeout: 30_000 });
+
+    const newThreadLabels = await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        readonly document: {
+          querySelectorAll(selector: string): ArrayLike<{
+            getAttribute(name: string): string | null;
+          }>;
+        };
+      };
+      return Array.from(
+        browserGlobal.document.querySelectorAll('[data-testid="new-thread-button"]'),
+      ).map((element) => element.getAttribute("aria-label") ?? "");
+    }, undefined);
+    if (!newThreadLabels.some((label) => label.includes("New thread in Project Runtime"))) {
+      throw new Error("Sidebar is missing the shared Project Runtime thread creation affordance.");
+    }
 
     if (input.options.artifactsDir) {
       mkdirSync(input.options.artifactsDir, { recursive: true });
       await page.screenshot({
         path: resolve(input.options.artifactsDir, "home-desktop.png"),
+        fullPage: true,
+      });
+    }
+
+    await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        dispatchEvent(event: Event): boolean;
+        KeyboardEvent: new (
+          type: string,
+          init: {
+            readonly key?: string;
+            readonly code?: string;
+            readonly ctrlKey?: boolean;
+            readonly bubbles?: boolean;
+            readonly cancelable?: boolean;
+          },
+        ) => Event;
+      };
+      browserGlobal.dispatchEvent(
+        new browserGlobal.KeyboardEvent("keydown", {
+          key: "k",
+          code: "KeyK",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, undefined);
+    await page.waitForSelector('[data-slot="command-dialog-popup"]', { timeout: 10_000 });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolvePromise) => {
+          setTimeout(resolvePromise, 250);
+        }),
+      undefined,
+    );
+    const commandPaletteText = await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        readonly document: {
+          querySelector(selector: string): { readonly textContent: string | null } | null;
+        };
+      };
+      return (
+        browserGlobal.document.querySelector('[data-slot="command-dialog-popup"]')?.textContent ??
+        ""
+      );
+    }, undefined);
+    for (const requiredAction of [
+      "New project",
+      "New standalone thread",
+      "New isolated standalone thread",
+    ]) {
+      if (!commandPaletteText.includes(requiredAction)) {
+        throw new Error(`Command palette is missing "${requiredAction}".`);
+      }
+    }
+    if (input.options.artifactsDir) {
+      await page.screenshot({
+        path: resolve(input.options.artifactsDir, "command-palette-desktop.png"),
         fullPage: true,
       });
     }
