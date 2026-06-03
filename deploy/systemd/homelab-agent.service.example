@@ -1,0 +1,18 @@
+[Unit]
+Description=Homelab Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/homelab-agent
+Environment=T3CODE_HOME=/var/lib/homelab-agent
+Environment=T3CODE_HOST=0.0.0.0
+Environment=T3CODE_PORT=13773
+Environment=T3CODE_NO_BROWSER=true
+ExecStart=/usr/bin/env bun run start:prod -- --base-dir /var/lib/homelab-agent --host 0.0.0.0 --port 13773
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

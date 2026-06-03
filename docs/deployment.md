@@ -42,6 +42,8 @@ bun run smoke:runtime -- --with-runtime
 Before putting a persistent instance behind a reverse proxy:
 
 - Run `bun run build:prod`, `bun run smoke:prod`, and `bun run smoke:runtime`.
+- Run `bun run smoke:dev` before a release when dev startup or migration
+  behavior changed.
 - Run `bun run smoke:runtime -- --with-runtime` on the Docker host that will run
   Project Runtimes.
 - Set an explicit `T3CODE_HOME` or `--base-dir` on persistent storage.
@@ -55,6 +57,56 @@ Before putting a persistent instance behind a reverse proxy:
 - Configure backups for the full `T3CODE_HOME`, not just SQLite.
 - Put the app behind HTTPS and a trusted network boundary before exposing it
   outside a private LAN or VPN.
+
+## Host Auto-Deploy From Main
+
+For a homelab host, the simplest low-maintenance deploy path is a local
+systemd timer that polls `origin/main`, fast-forwards the deployment checkout,
+builds, runs the disposable production smoke, backs up `T3CODE_HOME`, and
+restarts the service.
+
+The repo includes:
+
+- `scripts/deploy-main.sh`
+- `deploy/systemd/homelab-agent.service.example`
+- `deploy/systemd/homelab-agent-autodeploy.service.example`
+- `deploy/systemd/homelab-agent-autodeploy.timer.example`
+
+The deploy script refuses dirty or diverged checkouts. It does not hard-reset
+local changes.
+
+Example host setup:
+
+```bash
+sudo mkdir -p /opt/homelab-agent /var/lib/homelab-agent
+sudo chown -R "$USER":"$USER" /opt/homelab-agent /var/lib/homelab-agent
+
+git clone https://github.com/OmerTexerman/homelab-agent.git /opt/homelab-agent
+cd /opt/homelab-agent
+bun install --frozen-lockfile
+bun run build:prod
+
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/homelab-agent.service.example \
+  ~/.config/systemd/user/homelab-agent.service
+cp deploy/systemd/homelab-agent-autodeploy.service.example \
+  ~/.config/systemd/user/homelab-agent-autodeploy.service
+cp deploy/systemd/homelab-agent-autodeploy.timer.example \
+  ~/.config/systemd/user/homelab-agent-autodeploy.timer
+
+systemctl --user daemon-reload
+systemctl --user enable --now homelab-agent.service
+systemctl --user enable --now homelab-agent-autodeploy.timer
+```
+
+Edit the copied units if your checkout, port, service manager, or
+`T3CODE_HOME` differs. Run one dry deployment before enabling the timer:
+
+```bash
+HOMELAB_AGENT_REPO_DIR=/opt/homelab-agent \
+T3CODE_HOME=/var/lib/homelab-agent \
+/opt/homelab-agent/scripts/deploy-main.sh --dry-run
+```
 
 ## Production Build And Start
 
