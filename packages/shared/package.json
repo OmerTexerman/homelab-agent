@@ -71,17 +71,17 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
-    "./workspace": {
-      "types": "./src/workspace.ts",
-      "import": "./src/workspace.ts"
+    "./orchestrationTiming": {
+      "types": "./src/orchestrationTiming.ts",
+      "import": "./src/orchestrationTiming.ts"
     },
-    "./standaloneProject": {
-      "types": "./src/standaloneProject.ts",
-      "import": "./src/standaloneProject.ts"
+    "./remote": {
+      "types": "./src/remote.ts",
+      "import": "./src/remote.ts"
     },
-    "./providerInterruptions": {
-      "types": "./src/providerInterruptions.ts",
-      "import": "./src/providerInterruptions.ts"
+    "./oauthScope": {
+      "types": "./src/oauthScope.ts",
+      "import": "./src/oauthScope.ts"
     },
     "./searchRanking": {
       "types": "./src/searchRanking.ts",
@@ -102,10 +102,30 @@
     "./keybindings": {
       "types": "./src/keybindings.ts",
       "import": "./src/keybindings.ts"
+    },
+    "./composerTrigger": {
+      "types": "./src/composerTrigger.ts",
+      "import": "./src/composerTrigger.ts"
+    },
+    "./workspace": {
+      "types": "./src/workspace.ts",
+      "import": "./src/workspace.ts"
+    },
+    "./standaloneProject": {
+      "types": "./src/standaloneProject.ts",
+      "import": "./src/standaloneProject.ts"
+    },
+    "./providerInterruptions": {
+      "types": "./src/providerInterruptions.ts",
+      "import": "./src/providerInterruptions.ts"
+    },
+    "./terminalLabels": {
+      "types": "./src/terminalLabels.ts",
+      "import": "./src/terminalLabels.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -113,11 +133,9 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

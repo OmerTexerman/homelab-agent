@@ -1,6 +1,6 @@
-// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import { Effect, FileSystem, Path } from "effect";
-import * as Random from "effect/Random";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
@@ -10,7 +10,6 @@ export const writeFileStringAtomically = (input: {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const tempFileId = yield* Random.nextUUIDv4;
       const targetDirectory = path.dirname(input.filePath);
 
       yield* fs.makeDirectory(targetDirectory, { recursive: true });
@@ -18,7 +17,7 @@ export const writeFileStringAtomically = (input: {
         directory: targetDirectory,
         prefix: `${path.basename(input.filePath)}.`,
       });
-      const tempPath = path.join(tempDirectory, `${tempFileId}.tmp`);
+      const tempPath = path.join(tempDirectory, "contents.tmp");
 
       yield* fs.writeFileString(tempPath, input.contents);
       yield* fs.rename(tempPath, input.filePath);

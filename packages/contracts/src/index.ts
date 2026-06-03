@@ -1,6 +1,7 @@
 export * from "./baseSchemas.ts";
 export * from "./auth.ts";
 export * from "./environment.ts";
+export * from "./environmentHttp.ts";
 export * from "./desktopBootstrap.ts";
 export * from "./remoteAccess.ts";
 export * from "./ipc.ts";
@@ -24,6 +25,7 @@ export * from "./editor.ts";
 export * from "./project.ts";
 export * from "./filesystem.ts";
 export * from "./threadWorkspace.ts";
+export * from "./review.ts";
 export * from "./rpc.ts";
 export * from "./runtimeBootstrap.ts";
 export * from "./runtimeWorkspace.ts";

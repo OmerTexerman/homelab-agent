@@ -49,4 +49,4 @@ export interface RuntimeBootstrapResolverShape {
 export class RuntimeBootstrapResolver extends Context.Service<
   RuntimeBootstrapResolver,
   RuntimeBootstrapResolverShape
->()("homelab/runtime/Services/RuntimeBootstrapResolver") {}
+>()("t3/runtime/Services/RuntimeBootstrapResolver") {}

@@ -88,7 +88,7 @@ export interface ProcessRunnerShape {
 }
 
 export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerShape>()(
-  "t3/process/ProcessRunner",
+  "t3/processRunner",
 ) {}
 
 function commandLabel(command: string, args: readonly string[]): string {

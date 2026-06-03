@@ -72,5 +72,5 @@ export interface ProjectMemoryShape {
 }
 
 export class ProjectMemory extends Context.Service<ProjectMemory, ProjectMemoryShape>()(
-  "homelab/Services/ProjectMemory",
+  "t3/homelab/Services/ProjectMemory",
 ) {}

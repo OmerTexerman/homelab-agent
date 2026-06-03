@@ -3,6 +3,7 @@ import "../../index.css";
 import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
+  type AuthEnvironmentScope,
   AuthSessionId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -249,7 +250,7 @@ function createBaseServerConfig(): ServerConfig {
     auth: {
       policy: "loopback-browser",
       bootstrapMethods: ["one-time-token"],
-      sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+      sessionMethods: ["browser-session-cookie", "bearer-access-token"],
       sessionCookieName: "t3_session",
     },
     cwd: "/repo/project",
@@ -348,7 +349,7 @@ function createEmptyProcessResourceHistoryResult(): ServerProcessResourceHistory
 function makePairingLink(input: {
   readonly id: string;
   readonly credential: string;
-  readonly role: "owner" | "client";
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
   readonly label?: string;
   readonly createdAt: string;
@@ -364,7 +365,7 @@ function makePairingLink(input: {
 function makeClientSession(input: {
   readonly sessionId: string;
   readonly subject: string;
-  readonly role: "owner" | "client";
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly method: "browser-session-cookie";
   readonly client?: {
     readonly label?: string;
@@ -456,26 +457,26 @@ const createDesktopBridgeStub = (overrides?: {
       },
     }),
     bootstrapSshBearerSession: vi.fn().mockResolvedValue({
-      authenticated: true,
-      role: "owner",
-      sessionMethod: "bearer-session-token",
-      expiresAt: "2026-05-01T12:00:00.000Z",
-      sessionToken: "ssh-bearer-token",
+      access_token: "ssh-bearer-token",
+      issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      token_type: "Bearer",
+      expires_in: 3_600,
+      scope: "orchestration:read orchestration:operate terminal:operate review:write relay:read",
     }),
     fetchSshSessionState: vi.fn().mockResolvedValue({
       authenticated: true,
       auth: {
         policy: "remote-reachable",
         bootstrapMethods: ["one-time-token"],
-        sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+        sessionMethods: ["browser-session-cookie", "bearer-access-token"],
         sessionCookieName: "t3_session",
       },
-      role: "owner",
-      sessionMethod: "bearer-session-token",
+      scopes: ["orchestration:read", "access:write"],
+      sessionMethod: "bearer-access-token",
       expiresAt: "2026-05-01T12:00:00.000Z",
     }),
-    issueSshWebSocketToken: vi.fn().mockResolvedValue({
-      token: "ssh-ws-token",
+    issueSshWebSocketTicket: vi.fn().mockResolvedValue({
+      ticket: "ssh-ws-ticket",
       expiresAt: "2026-05-01T12:05:00.000Z",
     }),
     onSshPasswordPrompt: vi.fn(() => () => {}),
@@ -572,7 +573,7 @@ describe("GeneralSettingsPanel observability", () => {
         makeClientSession({
           sessionId: "session-owner",
           subject: "browser-owner",
-          role: "owner",
+          scopes: ["orchestration:read", "access:write"],
           method: "browser-session-cookie",
           client: {
             label: "Chrome on Mac",
@@ -595,7 +596,7 @@ describe("GeneralSettingsPanel observability", () => {
           JSON.stringify({
             authenticated: true,
             auth: createBaseServerConfig().auth,
-            role: "owner",
+            scopes: ["orchestration:read", "access:write"],
             sessionMethod: "browser-session-cookie",
             expiresAt: "2036-05-07T00:00:00.000Z",
           }),
@@ -1002,7 +1003,7 @@ describe("GeneralSettingsPanel observability", () => {
       makeClientSession({
         sessionId: "session-owner",
         subject: "desktop-bootstrap",
-        role: "owner",
+        scopes: ["orchestration:read", "access:write"],
         method: "browser-session-cookie",
         client: {
           label: "This Mac",
@@ -1031,7 +1032,7 @@ describe("GeneralSettingsPanel observability", () => {
             makePairingLink({
               id: "pairing-link-1",
               credential: "pairing-token",
-              role: "client",
+              scopes: ["orchestration:read"],
               subject: "one-time-token",
               label: "Julius iPhone",
               createdAt: "2036-04-07T00:00:00.000Z",
@@ -1043,7 +1044,7 @@ describe("GeneralSettingsPanel observability", () => {
             makeClientSession({
               sessionId: "session-client",
               subject: "one-time-token",
-              role: "client",
+              scopes: ["orchestration:read"],
               method: "browser-session-cookie",
               client: {
                 label: "Julius iPhone",
@@ -1100,12 +1101,22 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Pair device", exact: true }).click();
     await expect.element(page.getByText("Pair another device")).toBeInTheDocument();
+    await expect.element(page.getByRole("checkbox", { name: /View environment/ })).toBeChecked();
+    await expect.element(page.getByRole("checkbox", { name: /Operate tasks/ })).toBeChecked();
+    await page.getByRole("button", { name: "Read only", exact: true }).click();
+    await expect.element(page.getByRole("checkbox", { name: /View environment/ })).toBeChecked();
+    await expect.element(page.getByRole("checkbox", { name: /Operate tasks/ })).not.toBeChecked();
     await page.getByRole("button", { name: "Create pairing link", exact: true }).click();
     authAccessHarness.emitPairingLinkUpserted(pairingLinks[0]!);
     authAccessHarness.emitClientUpserted(clientSessions[1]!);
     await expect
-      .element(page.getByText("Client · Mobile · iOS · Safari · 192.168.1.88"))
+      .element(page.getByRole("button", { name: "Pairing link scopes: show 1 scope" }))
       .toBeInTheDocument();
+    await expect
+      .element(page.getByText("Mobile · iOS · Safari · 192.168.1.88"))
+      .toBeInTheDocument();
+    await page.getByRole("button", { name: "Client scopes: show 1 scope" }).click();
+    await expect.element(page.getByText("orchestration:read", { exact: true })).toBeInTheDocument();
     await expect
       .element(page.getByRole("button", { name: /^Copy pairing link for:/ }))
       .toBeInTheDocument();
@@ -1126,7 +1137,7 @@ describe("GeneralSettingsPanel observability", () => {
       makeClientSession({
         sessionId: "session-owner",
         subject: "desktop-bootstrap",
-        role: "owner",
+        scopes: ["orchestration:read", "access:write"],
         method: "browser-session-cookie",
         client: {
           label: "This Mac",
@@ -1142,7 +1153,7 @@ describe("GeneralSettingsPanel observability", () => {
       makeClientSession({
         sessionId: "session-client",
         subject: "one-time-token",
-        role: "client",
+        scopes: ["orchestration:read"],
         method: "browser-session-cookie",
         client: {
           label: "Julius iPhone",

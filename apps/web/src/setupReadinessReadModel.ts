@@ -1,5 +1,7 @@
 import {
+  AuthAccessWriteScope,
   ProviderDriverKind,
+  type AuthEnvironmentScope,
   type HomelabSetupStatus,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
@@ -61,7 +63,7 @@ export interface SetupProviderReadiness {
 
 export interface SetupPairingLinkReadinessInput {
   readonly id: string;
-  readonly role: "owner" | "client";
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly label?: string | undefined;
   readonly expiresAt?: string | undefined;
 }
@@ -69,7 +71,7 @@ export interface SetupPairingLinkReadinessInput {
 export interface SetupClientSessionReadinessInput {
   readonly sessionId: string;
   readonly subject: string;
-  readonly role: "owner" | "client";
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly connected: boolean;
   readonly current: boolean;
   readonly client?: {
@@ -814,7 +816,8 @@ export function deriveDeviceSessionReadiness(
   const otherSessionCount = currentSession
     ? Math.max(0, pairedSessionCount - 1)
     : pairedSessionCount;
-  const canManage = input.canManage !== false;
+  const canManage =
+    input.canManage ?? currentSession?.scopes.includes(AuthAccessWriteScope) ?? true;
   const isLoading = input.isLoading === true;
 
   if (isLoading) {
@@ -843,8 +846,8 @@ export function deriveDeviceSessionReadiness(
       otherSessionCount,
       activeSessionCount,
       pendingPairingLinkCount,
-      label: "Owner required",
-      detail: "Pairing links and session management require an owner session.",
+      label: "Administrative access required",
+      detail: "Pairing links and session management require the access:write scope.",
       severity: "partial",
     };
   }

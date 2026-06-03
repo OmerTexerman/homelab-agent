@@ -13,7 +13,7 @@ import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
-import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
+import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import {

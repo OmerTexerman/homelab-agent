@@ -1,5 +1,8 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  type AuthEnvironmentScope,
   HomelabEntityId,
   HomelabEntityKind,
   HomelabGraphSearchInput,
@@ -27,8 +30,7 @@ import {
 import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import { respondToAuthError } from "../auth/http.ts";
-import { ServerAuth } from "../auth/Services/ServerAuth.ts";
+import { EnvironmentAuth } from "../auth/EnvironmentAuth.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
@@ -83,18 +85,41 @@ const respondToProjectMemoryError = (error: ProjectMemoryError) =>
     }),
   );
 
-const authenticateOwnerSession = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const serverAuth = yield* ServerAuth;
-  const session = yield* serverAuth.authenticateHttpRequest(request);
-  if (session.role !== "owner") {
-    return yield* new HomelabHttpError({
-      message: "Only owner sessions can manage homelab state.",
-      status: 403,
-    });
-  }
-  return session;
-});
+const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const environmentAuth = yield* EnvironmentAuth;
+    const session = yield* environmentAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) =>
+          Effect.fail(
+            new HomelabHttpError({
+              message: "Authentication required.",
+              status: 401,
+              cause: error,
+            }),
+          ),
+        ServerAuthInternalError: (error) =>
+          Effect.fail(
+            new HomelabHttpError({
+              message: "Authentication failed.",
+              status: 500,
+              cause: error,
+            }),
+          ),
+      }),
+    );
+    if (!session.scopes.includes(requiredScope)) {
+      return yield* new HomelabHttpError({
+        message: `Missing required scope: ${requiredScope}.`,
+        status: 403,
+      });
+    }
+    return session;
+  });
+
+const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
+const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
 
 const getRequestUrl = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
@@ -226,12 +251,11 @@ export const homelabSnapshotRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/snapshot",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const knowledgeGraph = yield* KnowledgeGraph;
     const snapshot = yield* knowledgeGraph.getSnapshot();
     return HttpServerResponse.jsonUnsafe(snapshot satisfies HomelabSnapshot, { status: 200 });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -241,14 +265,13 @@ export const homelabSecretsRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/secrets",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const registry = yield* HomelabSecretRegistry;
     const secrets = yield* registry.listSecrets();
     return HttpServerResponse.jsonUnsafe({ secrets } satisfies HomelabSecretsListResult, {
       status: 200,
     });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("HomelabSecretRegistryError", (error) =>
       respondToHomelabHttpError(
         new HomelabHttpError({
@@ -266,7 +289,7 @@ export const homelabSecretRequestsRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets/request",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabOperate;
     const registry = yield* HomelabSecretRegistry;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretRequestInput).pipe(
       Effect.mapError(
@@ -281,7 +304,6 @@ export const homelabSecretRequestsRouteLayer = HttpRouter.add(
     const secret = yield* registry.requestSecret(input);
     return HttpServerResponse.jsonUnsafe(secret, { status: 201 });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("HomelabSecretRegistryError", (error) =>
       respondToHomelabHttpError(
         new HomelabHttpError({
@@ -299,14 +321,13 @@ export const homelabRuntimeBootstrapRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/runtime-bootstrap",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const runtimeBootstrapRegistry = yield* RuntimeBootstrapRegistry;
     const runtimeBootstrapCatalog = yield* runtimeBootstrapRegistry.getCatalog();
     return HttpServerResponse.jsonUnsafe(runtimeBootstrapCatalogView(runtimeBootstrapCatalog), {
       status: 200,
     });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
       respondToHomelabHttpError(
         new HomelabHttpError({
@@ -324,7 +345,7 @@ export const homelabSetupStatusRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/setup-status",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const knowledgeGraph = yield* KnowledgeGraph;
     const secretRegistry = yield* HomelabSecretRegistry;
     const runtimeBootstrapRegistry = yield* RuntimeBootstrapRegistry;
@@ -344,7 +365,6 @@ export const homelabSetupStatusRouteLayer = HttpRouter.add(
       { status: 200 },
     );
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabSecretRegistryError", (error) =>
       respondToHomelabHttpError(
@@ -372,7 +392,7 @@ export const homelabEntitiesRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/entities",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const url = yield* getRequestUrl;
     const kinds = yield* parseKindsFromUrl(url);
     const knowledgeGraph = yield* KnowledgeGraph;
@@ -383,7 +403,6 @@ export const homelabEntitiesRouteLayer = HttpRouter.add(
       status: 200,
     });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -393,7 +412,7 @@ export const homelabEntityRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/entity",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const url = yield* getRequestUrl;
     const entityId = yield* decodeEntityIdQueryParam(url.searchParams.get("id"), "entity id");
     const knowledgeGraph = yield* KnowledgeGraph;
@@ -407,7 +426,6 @@ export const homelabEntityRouteLayer = HttpRouter.add(
 
     return HttpServerResponse.jsonUnsafe(entity satisfies HomelabEntity, { status: 200 });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -417,7 +435,7 @@ export const homelabRelationsRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/relations",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const url = yield* getRequestUrl;
     const entityId = yield* decodeEntityIdQueryParam(url.searchParams.get("entityId"), "entityId");
     const knowledgeGraph = yield* KnowledgeGraph;
@@ -434,7 +452,6 @@ export const homelabRelationsRouteLayer = HttpRouter.add(
       status: 200,
     });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -444,7 +461,7 @@ export const homelabSearchRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/search",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const knowledgeGraph = yield* KnowledgeGraph;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabGraphSearchInput).pipe(
       Effect.mapError(
@@ -464,7 +481,6 @@ export const homelabSearchRouteLayer = HttpRouter.add(
       },
     );
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -474,7 +490,7 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/project-memory",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const url = yield* getRequestUrl;
     const rawInput = {
       ...(url.searchParams.get("projectId")
@@ -510,7 +526,6 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
       { status: 200 },
     );
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -520,7 +535,7 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory/search",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabRead;
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemorySearchInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -545,7 +560,6 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
       { status: 200 },
     );
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -555,7 +569,7 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabOperate;
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemoryCreateInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -582,7 +596,6 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
     yield* refreshActiveProjectContextViews(projectId);
     return HttpServerResponse.jsonUnsafe(redactProjectMemoryEntry(entry, secrets), { status: 201 });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -592,7 +605,7 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory/promote",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabOperate;
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemoryPromoteInput).pipe(
       Effect.mapError((cause) => {
         const detail =
@@ -622,7 +635,6 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
       { status: 201 },
     );
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
@@ -633,7 +645,7 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/promotions",
   Effect.gen(function* () {
-    yield* authenticateOwnerSession;
+    yield* authenticateHomelabOperate;
     const promotion = yield* HttpServerRequest.schemaBodyJson(HomelabPromotionEnvelope).pipe(
       Effect.mapError((cause) => {
         const detail =
@@ -657,7 +669,6 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
       status: 201,
     });
   }).pipe(
-    Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),

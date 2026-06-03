@@ -3,6 +3,7 @@ import type {
   TerminalSessionSnapshot,
   TerminalSessionStatus,
 } from "@t3tools/contracts";
+import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 
 export interface TerminalSessionState {
   threadId: string;
@@ -136,6 +137,7 @@ export function snapshotTerminalSession(session: TerminalSnapshotState): Termina
     history: session.history,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
+    label: getTerminalLabel(session.terminalId),
     updatedAt: session.updatedAt,
   };
 }

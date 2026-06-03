@@ -1,10 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:net";
+import {
+  AuthAccessTokenType,
+  AuthEnvironmentBootstrapTokenType,
+  AuthTokenExchangeGrantType,
+} from "@t3tools/contracts";
 
 interface SmokeOptions {
   readonly keep: boolean;
@@ -84,10 +91,27 @@ interface RuntimeSmokeRpcResult {
   };
 }
 
+interface SimpleHttpResponse {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly text: () => Promise<string>;
+  readonly json: () => Promise<unknown>;
+}
+
+interface SimpleHttpRequestInit {
+  readonly method?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: string;
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverBinPath = resolve(repoRoot, "apps/server/src/bin.ts");
 const webCwd = resolve(repoRoot, "apps/web");
 const playwrightModulePath = resolve(repoRoot, "apps/web/node_modules/playwright/index.mjs");
+const clientRuntimeWsRpcClientModule = `/@fs/${resolve(
+  repoRoot,
+  "packages/client-runtime/src/wsRpcClient.ts",
+)}`;
 
 function parseOptions(argv: readonly string[]): SmokeOptions {
   let artifactsDir: string | null = null;
@@ -119,16 +143,42 @@ function delay(ms: number): Promise<void> {
 
 async function fetchWithTimeout(
   url: string | URL,
-  init: RequestInit | undefined,
+  init: SimpleHttpRequestInit | undefined,
   timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeoutId);
-  }
+): Promise<SimpleHttpResponse> {
+  const target = typeof url === "string" ? new URL(url) : url;
+  const request = target.protocol === "https:" ? httpsRequest : httpRequest;
+  return await new Promise((resolveResponse, rejectResponse) => {
+    const req = request(
+      target,
+      {
+        method: init?.method ?? "GET",
+        headers: init?.headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const bodyText = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 0;
+          resolveResponse({
+            status,
+            ok: status >= 200 && status < 300,
+            text: async () => bodyText,
+            json: async () => JSON.parse(bodyText) as unknown,
+          });
+        });
+      },
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`HTTP request timed out after ${timeoutMs}ms: ${target.toString()}`));
+    });
+    req.on("error", rejectResponse);
+    if (init?.body !== undefined) {
+      req.write(init.body);
+    }
+    req.end();
+  });
 }
 
 function findOpenPort(): Promise<number> {
@@ -270,28 +320,36 @@ async function bootstrapBearerSession(input: {
   readonly serverBaseUrl: string;
   readonly startupCredential: string;
 }): Promise<string> {
+  const scope =
+    "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write";
+  const body = new URLSearchParams({
+    grant_type: AuthTokenExchangeGrantType,
+    subject_token: input.startupCredential,
+    subject_token_type: AuthEnvironmentBootstrapTokenType,
+    requested_token_type: AuthAccessTokenType,
+    scope,
+    client_label: "runtime-smoke",
+  });
   const response = await fetchWithTimeout(
-    new URL("/api/auth/bootstrap/bearer", input.serverBaseUrl),
+    new URL("/oauth/token", input.serverBaseUrl),
     {
       method: "POST",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify({ credential: input.startupCredential }),
+      body: body.toString(),
     },
     15_000,
   );
   if (!response.ok) {
-    throw new Error(
-      `POST /api/auth/bootstrap/bearer failed with ${response.status}: ${await response.text()}`,
-    );
+    throw new Error(`POST /oauth/token failed with ${response.status}: ${await response.text()}`);
   }
-  const body = (await response.json()) as { readonly sessionToken?: string };
-  if (!body.sessionToken) {
-    throw new Error("Bearer bootstrap response did not include a sessionToken.");
+  const result = (await response.json()) as { readonly access_token?: string };
+  if (!result.access_token) {
+    throw new Error("Token exchange response did not include an access_token.");
   }
-  return body.sessionToken;
+  return result.access_token;
 }
 
 async function createBrowserPairingLink(input: {
@@ -306,8 +364,6 @@ async function createBrowserPairingLink(input: {
     method: "POST",
     body: {
       label: "runtime-smoke-browser",
-      role: "owner",
-      ttlMinutes: 30,
     },
   });
   const pairUrl = new URL("/pair", input.webBaseUrl);
@@ -415,15 +471,15 @@ async function verifyRuntimeRpc(input: {
   readonly sharedRuntimeId: string;
   readonly isolatedThreadId: string;
   readonly isolatedRuntimeId: string;
+  readonly wsRpcClientModule: string;
   readonly withRuntime: boolean;
 }): Promise<RuntimeSmokeRpcResult> {
   const { page, ...rpcInput } = input;
   return page.evaluate(async (args) => {
     const wsTransportModule = "/src/rpc/wsTransport.ts";
-    const wsRpcClientModule = "/src/rpc/wsRpcClient.ts";
     const [{ WsTransport }, { createWsRpcClient }] = await Promise.all([
       import(wsTransportModule),
-      import(wsRpcClientModule),
+      import(args.wsRpcClientModule),
     ]);
     const client = createWsRpcClient(new WsTransport(args.wsUrl));
     try {
@@ -550,6 +606,7 @@ async function runBrowserSmoke(input: {
       sharedRuntimeId: input.sharedRuntimeId,
       isolatedThreadId: input.isolatedThreadId,
       isolatedRuntimeId: input.isolatedRuntimeId,
+      wsRpcClientModule: clientRuntimeWsRpcClientModule,
       withRuntime: input.options.withRuntime,
     });
   } finally {

@@ -9,7 +9,18 @@ import {
 } from "lucide-react";
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  AuthAdministrativeScopes,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  AuthReviewWriteScope,
+  AuthStandardClientScopes,
+  AuthTerminalOperateScope,
   type AuthClientSession,
+  type AuthEnvironmentScope,
   type AuthPairingLink,
   type AdvertisedEndpoint,
   type DesktopDiscoveredSshHost,
@@ -17,6 +28,7 @@ import {
   type DesktopServerExposureState,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import { WsRpcClient } from "@t3tools/client-runtime";
 import * as DateTime from "effect/DateTime";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -30,6 +42,7 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { Input } from "../ui/input";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -74,15 +87,14 @@ import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
 import { readHostedPairingRequest } from "../../hostedPairing";
 import {
   createServerPairingCredential,
-  fetchSessionState,
   revokeOtherServerClientSessions,
   revokeServerClientSession,
   revokeServerPairingLink,
   isLoopbackHostname,
+  usePrimarySessionState,
   type ServerClientSessionRecord,
   type ServerPairingLinkRecord,
 } from "~/environments/primary";
-import type { WsRpcClient } from "~/rpc/wsRpcClient";
 import {
   type SavedEnvironmentRecord,
   type SavedEnvironmentRuntimeState,
@@ -114,6 +126,97 @@ function formatAccessTimestamp(value: string): string {
     return value;
   }
   return accessTimestampFormatter.format(parsed);
+}
+
+const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
+  readonly scope: AuthEnvironmentScope;
+  readonly title: string;
+  readonly description: string;
+}> = [
+  {
+    scope: AuthOrchestrationReadScope,
+    title: "View environment",
+    description: "Read threads, status, diffs, and configuration.",
+  },
+  {
+    scope: AuthOrchestrationOperateScope,
+    title: "Operate tasks",
+    description: "Start tasks and perform changes in the environment.",
+  },
+  {
+    scope: AuthTerminalOperateScope,
+    title: "Use terminals",
+    description: "Create terminals and send input to running shells.",
+  },
+  {
+    scope: AuthReviewWriteScope,
+    title: "Write reviews",
+    description: "Create comments while reviewing changes.",
+  },
+  {
+    scope: AuthAccessReadScope,
+    title: "View access",
+    description: "Inspect pairing links and authorized clients.",
+  },
+  {
+    scope: AuthAccessWriteScope,
+    title: "Manage access",
+    description: "Issue and revoke credentials for other clients.",
+  },
+  {
+    scope: AuthRelayReadScope,
+    title: "View relay",
+    description: "Inspect managed relay connectivity.",
+  },
+  {
+    scope: AuthRelayWriteScope,
+    title: "Manage relay",
+    description: "Change managed tunnel connectivity.",
+  },
+];
+
+function AccessScopeSummary({
+  scopes,
+  label,
+}: {
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly label: string;
+}) {
+  const scopeCountLabel = `${scopes.length} ${scopes.length === 1 ? "scope" : "scopes"}`;
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        openOnHover
+        delay={250}
+        closeDelay={100}
+        render={
+          <button
+            type="button"
+            aria-label={`${label}: show ${scopeCountLabel}`}
+            className="cursor-help underline decoration-border underline-offset-2 outline-hidden hover:text-foreground focus-visible:text-foreground"
+          />
+        }
+      >
+        {scopeCountLabel}
+      </PopoverTrigger>
+      <PopoverPopup
+        side="top"
+        align="start"
+        tooltipStyle
+        className="w-max max-w-80 whitespace-normal"
+      >
+        <p className="mb-1 font-medium">Granted scopes</p>
+        <div className="flex flex-col gap-0.5">
+          {scopes.map((scope) => (
+            <code key={scope} className="font-mono text-foreground/85">
+              {scope}
+            </code>
+          ))}
+        </div>
+      </PopoverPopup>
+    </Popover>
+  );
 }
 
 type ConnectionStatusDotProps = {
@@ -536,21 +639,27 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
     const endpoint = selectPairingEndpoint(endpoints, defaultEndpointKey);
     return endpoint ? resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential) : null;
   }, [defaultEndpointKey, endpoints, pairingLink.credential]);
-  const endpointCopyOptions = useMemo(
-    () =>
-      endpoints
-        .filter((endpoint) => endpoint.status !== "unavailable")
-        .map((endpoint) => {
-          const url = resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential);
-          return {
-            key: endpointDefaultPreferenceKey(endpoint),
-            label: endpoint.label,
-            url,
-            detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Server pairing link",
-          };
-        }),
-    [endpoints, pairingLink.credential],
-  );
+  const endpointCopyOptions = useMemo(() => {
+    const options: Array<{
+      readonly key: string;
+      readonly label: string;
+      readonly url: string;
+      readonly detail: string;
+    }> = [];
+    for (const endpoint of endpoints) {
+      if (endpoint.status === "unavailable") {
+        continue;
+      }
+      const url = resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential);
+      options.push({
+        key: endpointDefaultPreferenceKey(endpoint),
+        label: endpoint.label,
+        url,
+        detail: isHostedAppPairingUrl(url) ? "Hosted app link" : "Server pairing link",
+      });
+    }
+    return options;
+  }, [endpoints, pairingLink.credential]);
   const shareablePairingUrl =
     endpointPairingUrl ??
     (endpointUrl != null && endpointUrl !== ""
@@ -625,8 +734,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
 
   const expiresAbsolute = formatAccessTimestamp(pairingLink.expiresAt);
 
-  const roleLabel = pairingLink.role === "owner" ? "Owner" : "Client";
-  const primaryLabel = pairingLink.label ?? `${roleLabel} pairing link`;
+  const primaryLabel = pairingLink.label ?? "Pairing link";
   const defaultEndpointCopyOption =
     endpointCopyOptions.find((option) => option.key === defaultEndpointKey) ??
     endpointCopyOptions[0] ??
@@ -755,7 +863,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             </Popover>
           </div>
           <p className="text-xs text-muted-foreground" title={expiresAbsolute}>
-            {[roleLabel, formatExpiresInLabel(pairingLink.expiresAt, nowMs)].join(" · ")}
+            {formatExpiresInLabel(pairingLink.expiresAt, nowMs)}
+            <span aria-hidden> · </span>
+            <AccessScopeSummary scopes={pairingLink.scopes} label="Pairing link scopes" />
           </p>
           {shareablePairingUrl === null ? (
             <p className="text-[11px] text-muted-foreground/70">
@@ -896,7 +1006,6 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
     : lastConnectedAt
       ? `Last connected at ${formatAccessTimestamp(lastConnectedAt)}`
       : "Not connected yet.";
-  const roleLabel = clientSession.role === "owner" ? "Owner" : "Client";
   const deviceInfoBits = [
     clientSession.client.deviceType !== "unknown"
       ? clientSession.client.deviceType[0]?.toUpperCase() + clientSession.client.deviceType.slice(1)
@@ -928,7 +1037,13 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            {[roleLabel, ...deviceInfoBits].join(" · ")}
+            {deviceInfoBits.length > 0 ? (
+              <>
+                {deviceInfoBits.join(" · ")}
+                <span aria-hidden> · </span>
+              </>
+            ) : null}
+            <AccessScopeSummary scopes={clientSession.scopes} label="Client scopes" />
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
@@ -961,13 +1076,17 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 }: AuthorizedClientsHeaderActionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
+  const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthEnvironmentScope>>([
+    ...AuthStandardClientScopes,
+  ]);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
     setIsCreatingPairingLink(true);
     try {
-      await createServerPairingCredential(pairingLabel);
+      await createServerPairingCredential({ label: pairingLabel, scopes: pairingScopes });
       setPairingLabel("");
+      setPairingScopes([...AuthStandardClientScopes]);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing link.";
@@ -981,7 +1100,13 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [pairingLabel]);
+  }, [pairingLabel, pairingScopes]);
+
+  const togglePairingScope = useCallback((scope: AuthEnvironmentScope, checked: boolean) => {
+    setPairingScopes((current) =>
+      checked ? [...current, scope] : current.filter((currentScope) => currentScope !== scope),
+    );
+  }, []);
 
   return (
     <div className="flex items-center gap-2">
@@ -1001,6 +1126,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           setDialogOpen(open);
           if (!open) {
             setPairingLabel("");
+            setPairingScopes([...AuthStandardClientScopes]);
           }
         }}
       >
@@ -1012,7 +1138,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
             </Button>
           }
         />
-        <DialogPopup className="max-w-sm">
+        <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle>Pair another device</DialogTitle>
             <DialogDescription>
@@ -1020,7 +1146,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               server.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel>
+          <DialogPanel className="space-y-5">
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
                 Device label (optional)
@@ -1033,6 +1159,62 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                 autoFocus
               />
             </label>
+            <section className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-xs font-medium text-foreground">Permissions</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Limit what the paired client can do.
+                  </p>
+                </div>
+                <div className="flex gap-1">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={isCreatingPairingLink}
+                    onClick={() => setPairingScopes([AuthOrchestrationReadScope])}
+                  >
+                    Read only
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={isCreatingPairingLink}
+                    onClick={() => setPairingScopes([...AuthStandardClientScopes])}
+                  >
+                    Standard
+                  </Button>
+                </div>
+              </div>
+              <div className="divide-y divide-border/60 rounded-lg border border-input bg-muted/25">
+                {PAIRING_SCOPE_OPTIONS.map(({ scope, title, description }) => (
+                  <label
+                    key={scope}
+                    className="flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
+                  >
+                    <Checkbox
+                      className="mt-0.5"
+                      checked={pairingScopes.includes(scope)}
+                      disabled={isCreatingPairingLink}
+                      onCheckedChange={(checked) => togglePairingScope(scope, checked === true)}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium text-foreground">{title}</span>
+                      <span className="block text-xs leading-snug text-muted-foreground">
+                        {description}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {pairingScopes.length === 0 ? (
+                <p className="text-xs text-destructive">Select at least one permission.</p>
+              ) : pairingScopes.includes(AuthAccessWriteScope) ? (
+                <p className="text-xs text-warning">
+                  This client can create or revoke access for other devices.
+                </p>
+              ) : null}
+            </section>
           </DialogPanel>
           <DialogFooter variant="bare">
             <Button
@@ -1042,7 +1224,10 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
             >
               Cancel
             </Button>
-            <Button disabled={isCreatingPairingLink} onClick={() => void handleCreatePairingLink()}>
+            <Button
+              disabled={isCreatingPairingLink || pairingScopes.length === 0}
+              onClick={() => void handleCreatePairingLink()}
+            >
               {isCreatingPairingLink ? "Creating…" : "Create pairing link"}
             </Button>
           </DialogFooter>
@@ -1288,14 +1473,12 @@ function SavedBackendListRow({
         : connectionState === "error"
           ? "bg-destructive"
           : "bg-muted-foreground/40";
-  const roleLabel = runtime?.role ? (runtime.role === "owner" ? "Owner" : "Client") : null;
   const descriptorLabel = runtime?.descriptor?.label ?? null;
   const displayLabel = descriptorLabel ?? record.label;
   const statusTooltip = getSavedBackendStatusTooltip(runtime, record, nowMs);
   const versionMismatch = resolveServerConfigVersionMismatch(runtime?.serverConfig);
   const metadataBits = [
     record.desktopSsh ? `SSH ${formatDesktopSshTarget(record.desktopSsh)}` : null,
-    roleLabel,
     record.lastConnectedAt
       ? `Last connected ${formatAccessTimestamp(record.lastConnectedAt)}`
       : null,
@@ -1315,8 +1498,14 @@ function SavedBackendListRow({
             />
             <h3 className="text-sm font-medium text-foreground">{displayLabel}</h3>
           </div>
-          {metadataBits.length > 0 ? (
-            <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
+          {metadataBits.length > 0 || runtime?.scopes ? (
+            <p className="text-xs text-muted-foreground">
+              {metadataBits.length > 0 ? metadataBits.join(" · ") : null}
+              {metadataBits.length > 0 && runtime?.scopes ? <span aria-hidden> · </span> : null}
+              {runtime?.scopes ? (
+                <AccessScopeSummary scopes={runtime.scopes} label="Granted scopes" />
+              ) : null}
+            </p>
           ) : null}
           {versionMismatch ? (
             <p className="flex items-center gap-1 text-warning text-xs">
@@ -1399,12 +1588,13 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
-  const [currentSessionRole, setCurrentSessionRole] = useState<"owner" | "client" | null>(
-    desktopBridge ? "owner" : null,
-  );
-  const [currentAuthPolicy, setCurrentAuthPolicy] = useState<
-    "desktop-managed-local" | "loopback-browser" | "remote-reachable" | "unsafe-no-auth" | null
-  >(desktopBridge ? null : null);
+  const primarySessionState = usePrimarySessionState();
+  const currentSessionScopes = desktopBridge
+    ? AuthAdministrativeScopes
+    : primarySessionState.data?.authenticated
+      ? (primarySessionState.data.scopes ?? null)
+      : null;
+  const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironmentsById = useSavedEnvironmentRegistryStore((state) => state.byId);
   const savedEnvironmentIds = useMemo(
     () =>
@@ -1514,7 +1704,7 @@ export function ConnectionsSettings() {
   const setDefaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
-  const canManageLocalBackend = currentSessionRole === "owner";
+  const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
     : currentAuthPolicy === "remote-reachable";
@@ -1928,30 +2118,6 @@ export function ConnectionsSettings() {
   ]);
 
   useEffect(() => {
-    if (desktopBridge) {
-      setCurrentSessionRole("owner");
-      return;
-    }
-
-    let cancelled = false;
-    void fetchSessionState()
-      .then((session) => {
-        if (cancelled) return;
-        setCurrentSessionRole(session.authenticated ? (session.role ?? null) : null);
-        setCurrentAuthPolicy(session.auth.policy);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCurrentSessionRole(null);
-        setCurrentAuthPolicy(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [desktopBridge]);
-
-  useEffect(() => {
     if (!canManageLocalBackend) return;
 
     let cancelled = false;
@@ -2063,10 +2229,7 @@ export function ConnectionsSettings() {
     setDesktopAdvertisedEndpoints([]);
     setDesktopServerExposureError(null);
   }, [canManageLocalBackend]);
-  const visibleDesktopPairingLinks = useMemo(
-    () => desktopPairingLinks.filter((pairingLink) => pairingLink.role === "client"),
-    [desktopPairingLinks],
-  );
+  const visibleDesktopPairingLinks = desktopPairingLinks;
   const deviceReadiness = useMemo(
     () =>
       deriveDeviceSessionReadiness({
@@ -2687,8 +2850,8 @@ export function ConnectionsSettings() {
       ) : (
         <SettingsSection title="Devices & Sessions">
           <SettingsRow
-            title="Owner tools"
-            description="Pairing links and paired-device management are only available to owner sessions for this server."
+            title="Administrative access"
+            description="Pairing links and client-session management require the access:write scope for this backend."
           />
         </SettingsSection>
       )}

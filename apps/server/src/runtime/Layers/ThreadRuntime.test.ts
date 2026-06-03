@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off preferSchemaOverJson:off
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import os from "node:os";

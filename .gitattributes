@@ -1,2 +1,6 @@
 # git autocrlf=true converts LF to CRLF on Windows, causing issues with oxfmt
 * text=auto eol=lf
+
+# Upstream reference repos and binary/vendor header bundles are mirrored as-is.
+.repos/** -whitespace
+apps/mobile/modules/t3-terminal/Vendor/** -whitespace

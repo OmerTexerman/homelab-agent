@@ -105,4 +105,4 @@ export interface RuntimeBootstrapRegistryShape {
 export class RuntimeBootstrapRegistry extends Context.Service<
   RuntimeBootstrapRegistry,
   RuntimeBootstrapRegistryShape
->()("homelab/runtime/Services/RuntimeBootstrapRegistry") {}
+>()("t3/runtime/Services/RuntimeBootstrapRegistry") {}

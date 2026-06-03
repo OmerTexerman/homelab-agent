@@ -4,7 +4,7 @@ export interface OrchestrationBatchEffects {
   promoteDraftThreadIds: ThreadId[];
   clearDeletedThreadIds: ThreadId[];
   clearDeletedProjectIds: ProjectId[];
-  removeTerminalStateThreadIds: ThreadId[];
+  removeTerminalUiStateThreadIds: ThreadId[];
   needsProviderInvalidation: boolean;
 }
 
@@ -16,7 +16,7 @@ export function deriveOrchestrationBatchEffects(
     {
       clearPromotedDraft: boolean;
       clearDeletedThread: boolean;
-      removeTerminalState: boolean;
+      removeTerminalUiState: boolean;
     }
   >();
   const deletedProjectIds = new Set<ProjectId>();
@@ -34,7 +34,7 @@ export function deriveOrchestrationBatchEffects(
         threadLifecycleEffects.set(event.payload.threadId, {
           clearPromotedDraft: true,
           clearDeletedThread: false,
-          removeTerminalState: false,
+          removeTerminalUiState: false,
         });
         break;
       }
@@ -43,7 +43,7 @@ export function deriveOrchestrationBatchEffects(
         threadLifecycleEffects.set(event.payload.threadId, {
           clearPromotedDraft: false,
           clearDeletedThread: true,
-          removeTerminalState: true,
+          removeTerminalUiState: true,
         });
         break;
       }
@@ -57,7 +57,7 @@ export function deriveOrchestrationBatchEffects(
         threadLifecycleEffects.set(event.payload.threadId, {
           clearPromotedDraft: false,
           clearDeletedThread: false,
-          removeTerminalState: true,
+          removeTerminalUiState: true,
         });
         break;
       }
@@ -66,7 +66,7 @@ export function deriveOrchestrationBatchEffects(
         threadLifecycleEffects.set(event.payload.threadId, {
           clearPromotedDraft: false,
           clearDeletedThread: false,
-          removeTerminalState: false,
+          removeTerminalUiState: false,
         });
         break;
       }
@@ -79,7 +79,7 @@ export function deriveOrchestrationBatchEffects(
 
   const promoteDraftThreadIds: ThreadId[] = [];
   const clearDeletedThreadIds: ThreadId[] = [];
-  const removeTerminalStateThreadIds: ThreadId[] = [];
+  const removeTerminalUiStateThreadIds: ThreadId[] = [];
   for (const [threadId, effect] of threadLifecycleEffects) {
     if (effect.clearPromotedDraft) {
       promoteDraftThreadIds.push(threadId);
@@ -87,8 +87,8 @@ export function deriveOrchestrationBatchEffects(
     if (effect.clearDeletedThread) {
       clearDeletedThreadIds.push(threadId);
     }
-    if (effect.removeTerminalState) {
-      removeTerminalStateThreadIds.push(threadId);
+    if (effect.removeTerminalUiState) {
+      removeTerminalUiStateThreadIds.push(threadId);
     }
   }
 
@@ -96,7 +96,7 @@ export function deriveOrchestrationBatchEffects(
     promoteDraftThreadIds,
     clearDeletedThreadIds,
     clearDeletedProjectIds: [...deletedProjectIds],
-    removeTerminalStateThreadIds,
+    removeTerminalUiStateThreadIds,
     needsProviderInvalidation,
   };
 }

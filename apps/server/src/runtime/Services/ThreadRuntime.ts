@@ -172,5 +172,5 @@ export interface ThreadRuntimeShape {
 }
 
 export class ThreadRuntime extends Context.Service<ThreadRuntime, ThreadRuntimeShape>()(
-  "homelab/runtime/Services/ThreadRuntime",
+  "t3/runtime/Services/ThreadRuntime",
 ) {}

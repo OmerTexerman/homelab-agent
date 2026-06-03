@@ -1,4 +1,6 @@
 import {
+  AuthAdministrativeScopes,
+  AuthStandardClientScopes,
   ProviderDriverKind,
   ProviderInstanceId,
   type HomelabSetupStatus,
@@ -167,7 +169,7 @@ describe("setup readiness read model", () => {
           {
             sessionId: "session-owner",
             subject: "browser-owner",
-            role: "owner",
+            scopes: AuthAdministrativeScopes,
             connected: true,
             current: true,
             client: { label: "This browser", deviceType: "desktop" },
@@ -193,7 +195,7 @@ describe("setup readiness read model", () => {
           {
             sessionId: "session-owner",
             subject: "browser-owner",
-            role: "owner",
+            scopes: AuthAdministrativeScopes,
             connected: true,
             current: true,
             client: { label: "Current browser" },
@@ -209,12 +211,12 @@ describe("setup readiness read model", () => {
 
   it("summarizes current and other paired device sessions", () => {
     const devices = deriveDeviceSessionReadiness({
-      pairingLinks: [{ id: "pairing-link", role: "client", label: "iPad" }],
+      pairingLinks: [{ id: "pairing-link", scopes: AuthStandardClientScopes, label: "iPad" }],
       clientSessions: [
         {
           sessionId: "session-owner",
           subject: "owner",
-          role: "owner",
+          scopes: AuthAdministrativeScopes,
           connected: true,
           current: true,
           client: { label: "This laptop", deviceType: "desktop" },
@@ -222,7 +224,7 @@ describe("setup readiness read model", () => {
         {
           sessionId: "session-client",
           subject: "client",
-          role: "client",
+          scopes: AuthStandardClientScopes,
           connected: false,
           current: false,
           client: { label: "Wall tablet", deviceType: "tablet" },

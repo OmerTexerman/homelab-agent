@@ -35,4 +35,4 @@ export interface ProjectRuntimeLifecycleShape {
 export class ProjectRuntimeLifecycle extends Context.Service<
   ProjectRuntimeLifecycle,
   ProjectRuntimeLifecycleShape
->()("homelab/runtime/Services/ProjectRuntimeLifecycle") {}
+>()("t3/runtime/Services/ProjectRuntimeLifecycle") {}

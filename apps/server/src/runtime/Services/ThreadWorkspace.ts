@@ -42,5 +42,5 @@ export interface ThreadWorkspaceShape {
 }
 
 export class ThreadWorkspace extends Context.Service<ThreadWorkspace, ThreadWorkspaceShape>()(
-  "runtime/Services/ThreadWorkspace",
+  "t3/runtime/Services/ThreadWorkspace",
 ) {}

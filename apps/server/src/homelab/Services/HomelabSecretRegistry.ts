@@ -36,4 +36,4 @@ export interface HomelabSecretRegistryShape {
 export class HomelabSecretRegistry extends Context.Service<
   HomelabSecretRegistry,
   HomelabSecretRegistryShape
->()("homelab/Services/HomelabSecretRegistry") {}
+>()("t3/homelab/Services/HomelabSecretRegistry") {}

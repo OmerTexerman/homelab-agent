@@ -1,4 +1,9 @@
-import { AuthClientMetadataDeviceType, AuthSessionId } from "@t3tools/contracts";
+import {
+  AuthClientMetadataDeviceType,
+  AuthEnvironmentScopes,
+  AuthSessionId,
+  ServerAuthSessionMethod,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -16,15 +21,11 @@ export const AuthSessionClientMetadataRecord = Schema.Struct({
 });
 export type AuthSessionClientMetadataRecord = typeof AuthSessionClientMetadataRecord.Type;
 
-export const AuthSessionVisibility = Schema.Literals(["user", "internal"]);
-export type AuthSessionVisibility = typeof AuthSessionVisibility.Type;
-
 export const AuthSessionRecord = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
-  role: Schema.Literals(["owner", "client"]),
-  method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
-  visibility: AuthSessionVisibility,
+  scopes: AuthEnvironmentScopes,
+  method: ServerAuthSessionMethod,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -36,9 +37,8 @@ export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 export const CreateAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
-  role: Schema.Literals(["owner", "client"]),
-  method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
-  visibility: AuthSessionVisibility,
+  scopes: AuthEnvironmentScopes,
+  method: ServerAuthSessionMethod,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,

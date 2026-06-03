@@ -1,5 +1,10 @@
 import Mime from "@effect/platform-node/Mime";
-import { ThreadId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  EnvironmentHttpApi,
+  ThreadId,
+} from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -18,7 +23,9 @@ import {
   HttpRouter,
   HttpServerResponse,
   HttpServerRequest,
+  HttpServerRespondable,
 } from "effect/unstable/http";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { OtlpTracer } from "effect/unstable/observability";
 
 import {
@@ -30,13 +37,17 @@ import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
-import { respondToAuthError } from "./auth/http.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import {
+  annotateEnvironmentRequest,
+  failEnvironmentScopeRequired,
+  failEnvironmentAuthInvalid,
+  failEnvironmentInternal,
+} from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
-  browserApiCorsHeaders,
   isBrowserApiCorsOriginAllowed,
 } from "./httpCors.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
@@ -95,23 +106,35 @@ function contentDispositionAttachment(filename: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
-const requireAuthenticatedRequest = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(request);
-});
-
-export const serverEnvironmentRouteLayer = HttpRouter.add(
-  "GET",
-  "/.well-known/t3/environment",
+const authenticateRawRouteWithScope = (
+  scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
+) =>
   Effect.gen(function* () {
-    const descriptor = yield* Effect.service(ServerEnvironment).pipe(
-      Effect.flatMap((serverEnvironment) => serverEnvironment.getDescriptor),
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+        ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+      }),
     );
-    return HttpServerResponse.jsonUnsafe(descriptor, {
-      status: 200,
-      headers: browserApiCorsHeaders,
-    });
+    if (!session.scopes.includes(scope)) {
+      return yield* failEnvironmentScopeRequired(scope);
+    }
+  });
+
+export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "metadata",
+  Effect.fnUntraced(function* (handlers) {
+    const serverEnvironment = yield* ServerEnvironment;
+    return handlers.handle(
+      "descriptor",
+      Effect.fn("environment.metadata.descriptor")(function* (args) {
+        yield* annotateEnvironmentRequest(args.endpoint.name);
+        return yield* serverEnvironment.getDescriptor;
+      }),
+    );
   }),
 );
 
@@ -124,7 +147,7 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const config = yield* ServerConfig;
     const otlpTracesUrl = config.otlpTracesUrl;
@@ -166,14 +189,20 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
           Effect.succeed(HttpServerResponse.text("Trace export failed.", { status: 502 })),
         ),
       );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const attachmentsRouteLayer = HttpRouter.add(
   "GET",
   `${ATTACHMENTS_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (Option.isNone(url)) {
@@ -222,14 +251,20 @@ export const attachmentsRouteLayer = HttpRouter.add(
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
       ),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const threadWorkspaceFileRouteLayer = HttpRouter.add(
   "GET",
   "/api/thread-workspace/file",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (Option.isNone(url)) {
@@ -274,14 +309,20 @@ export const threadWorkspaceFileRouteLayer = HttpRouter.add(
         "Content-Disposition": contentDispositionAttachment(downloadedFile.name),
       },
     });
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const projectFaviconRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (Option.isNone(url)) {
@@ -315,7 +356,13 @@ export const projectFaviconRouteLayer = HttpRouter.add(
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
       ),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const staticAndDevRouteLayer = HttpRouter.add(

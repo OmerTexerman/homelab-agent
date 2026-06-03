@@ -8,6 +8,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createStandaloneProjectWorkspaceRoot } from "@t3tools/shared/standaloneProject";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
@@ -49,7 +50,9 @@ async function applyPlannedEvents(
 }
 
 async function decide(command: OrchestrationCommand, readModel: OrchestrationReadModel) {
-  return Effect.runPromise(decideOrchestrationCommand({ command, readModel }));
+  return Effect.runPromise(
+    decideOrchestrationCommand({ command, readModel }).pipe(Effect.provide(NodeServices.layer)),
+  );
 }
 
 function standaloneCreateCommand(

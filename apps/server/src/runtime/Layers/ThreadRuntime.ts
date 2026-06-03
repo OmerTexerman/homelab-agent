@@ -4,6 +4,8 @@ import nodeOs from "node:os";
 import nodePath from "node:path";
 
 import {
+  AuthAccessWriteScope,
+  AuthAdministrativeScopes,
   ProviderKind,
   RuntimeMode,
   RuntimeSessionId,
@@ -16,7 +18,7 @@ import {
 import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { SessionCredentialService } from "../../auth/Services/SessionCredentialService.ts";
+import { SessionStore } from "../../auth/SessionStore.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
@@ -1909,8 +1911,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const resolveRuntimeAccessToken = Effect.fn("threadRuntime.resolveRuntimeAccessToken")(function* (
     runtime: ThreadRuntimeDescriptor,
   ): Effect.fn.Return<string | undefined, ThreadRuntimeError> {
-    const sessionCredentialService = yield* Effect.serviceOption(SessionCredentialService);
-    if (sessionCredentialService._tag === "None") {
+    const sessionStore = yield* Effect.serviceOption(SessionStore);
+    if (sessionStore._tag === "None") {
       return undefined;
     }
 
@@ -1920,34 +1922,35 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
     if (persisted) {
-      const verified = yield* sessionCredentialService.value
-        .verify(persisted.token)
-        .pipe(Effect.catchTag("SessionCredentialError", () => Effect.as(Effect.void, undefined)));
+      const verified = yield* sessionStore.value.verify(persisted.token).pipe(
+        Effect.catchTags({
+          SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
+          SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
+        }),
+      );
       if (
         verified &&
         verified.subject === expectedSubject &&
-        verified.role === "owner" &&
-        verified.method === "bearer-session-token" &&
-        verified.visibility === "internal"
+        verified.method === "bearer-access-token" &&
+        verified.scopes.includes(AuthAccessWriteScope)
       ) {
         return persisted.token;
       }
 
       if (verified) {
-        yield* sessionCredentialService.value
+        yield* sessionStore.value
           .revoke(verified.sessionId)
-          .pipe(Effect.catchTag("SessionCredentialError", () => Effect.succeed(false)));
+          .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
       }
     }
 
-    const issued = yield* sessionCredentialService.value
+    const issued = yield* sessionStore.value
       .issue({
-        method: "bearer-session-token",
-        role: "owner",
-        visibility: "internal",
+        method: "bearer-access-token",
+        scopes: AuthAdministrativeScopes,
         subject: expectedSubject,
         client: {
-          deviceType: "unknown",
+          deviceType: "bot",
           label: `Thread runtime ${runtime.threadId}`,
         },
       })
@@ -1972,8 +1975,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const revokeRuntimeAccessToken = Effect.fn("threadRuntime.revokeRuntimeAccessToken")(function* (
     runtime: ThreadRuntimeDescriptor,
   ) {
-    const sessionCredentialService = yield* Effect.serviceOption(SessionCredentialService);
-    if (sessionCredentialService._tag === "None") {
+    const sessionStore = yield* Effect.serviceOption(SessionStore);
+    if (sessionStore._tag === "None") {
       return;
     }
 
@@ -1984,16 +1987,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       return;
     }
 
-    const verified = yield* sessionCredentialService.value
-      .verify(persisted.token)
-      .pipe(Effect.catchTag("SessionCredentialError", () => Effect.as(Effect.void, undefined)));
+    const verified = yield* sessionStore.value.verify(persisted.token).pipe(
+      Effect.catchTags({
+        SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
+        SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
+      }),
+    );
     if (!verified || verified.subject !== `thread-runtime:${runtime.threadId}`) {
       return;
     }
 
-    yield* sessionCredentialService.value
+    yield* sessionStore.value
       .revoke(verified.sessionId)
-      .pipe(Effect.catchTag("SessionCredentialError", () => Effect.succeed(false)));
+      .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
   });
 
   const resolveHostGatewayRuntimeServerUrl = () =>

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -21,6 +20,7 @@ import {
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration.ts";
+import { ProjectMemoryId } from "./projectMemory.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
@@ -251,7 +251,7 @@ it.effect("decodes standalone move-to-project commands with memory controls", ()
     assert.strictEqual(parsed.projectId, "project-existing");
     assert.deepStrictEqual(parsed.memoryMigration, {
       mode: "copy",
-      memoryIds: ["memory-router", "memory-dashboard"],
+      memoryIds: [ProjectMemoryId.make("memory-router"), ProjectMemoryId.make("memory-dashboard")],
     });
     assert.deepStrictEqual(parsed.runtimeHandling, {
       filesystem: "no-merge",
@@ -417,7 +417,9 @@ it.effect("decodes thread archived and unarchived events", () =>
       },
     });
 
-    assert.strictEqual(archived.type, "thread.archived");
+    if (archived.type !== "thread.archived") {
+      assert.fail(`Expected thread.archived event, received ${archived.type}.`);
+    }
     assert.strictEqual(archived.payload.archivedAt, "2026-01-01T00:00:00.000Z");
     assert.strictEqual(unarchived.type, "thread.unarchived");
   }),

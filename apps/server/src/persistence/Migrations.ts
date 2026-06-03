@@ -48,6 +48,7 @@ import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
 import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
 import Migration0034 from "./Migrations/034_ProjectRuntimeAssignments.ts";
 import Migration0035 from "./Migrations/035_ProjectMemory.ts";
+import Migration0036 from "./Migrations/031_AuthAuthorizationScopes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -95,6 +96,7 @@ export const migrationEntries = [
   [33, "AuthSessionVisibility", Migration0033],
   [34, "ProjectRuntimeAssignments", Migration0034],
   [35, "ProjectMemory", Migration0035],
+  [36, "AuthAuthorizationScopes", Migration0036],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

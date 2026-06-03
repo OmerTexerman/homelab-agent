@@ -55,4 +55,4 @@ export interface ProjectMemoryEntryRepositoryShape {
 export class ProjectMemoryEntryRepository extends Context.Service<
   ProjectMemoryEntryRepository,
   ProjectMemoryEntryRepositoryShape
->()("homelab/persistence/Services/ProjectMemoryEntries/ProjectMemoryEntryRepository") {}
+>()("t3/persistence/Services/ProjectMemoryEntries/ProjectMemoryEntryRepository") {}

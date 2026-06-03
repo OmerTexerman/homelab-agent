@@ -31,7 +31,7 @@ export interface ProjectRuntimeQueueShape {
 export class ProjectRuntimeQueue extends Context.Service<
   ProjectRuntimeQueue,
   ProjectRuntimeQueueShape
->()("homelab/runtime/ProjectRuntimeQueue") {}
+>()("t3/runtime/ProjectRuntimeQueue") {}
 
 interface RuntimeQueueState {
   readonly active: ProjectRuntimeQueueWorkItem | null;

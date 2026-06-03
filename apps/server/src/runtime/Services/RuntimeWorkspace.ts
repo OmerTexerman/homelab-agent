@@ -49,5 +49,5 @@ export interface RuntimeWorkspaceShape {
 }
 
 export class RuntimeWorkspace extends Context.Service<RuntimeWorkspace, RuntimeWorkspaceShape>()(
-  "homelab/runtime/Services/RuntimeWorkspace",
+  "t3/runtime/Services/RuntimeWorkspace",
 ) {}

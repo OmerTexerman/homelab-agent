@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off schemaSyncInEffect:off
 import { Buffer } from "node:buffer";
 import nodePath from "node:path";
 

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off globalDate:off
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off globalDate:off globalDateInEffect:off
 import os from "node:os";
 import path from "node:path";
 

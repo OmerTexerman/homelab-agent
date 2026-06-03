@@ -48,5 +48,5 @@ export interface KnowledgeGraphShape {
 }
 
 export class KnowledgeGraph extends Context.Service<KnowledgeGraph, KnowledgeGraphShape>()(
-  "homelab/Services/KnowledgeGraph",
+  "t3/homelab/Services/KnowledgeGraph",
 ) {}

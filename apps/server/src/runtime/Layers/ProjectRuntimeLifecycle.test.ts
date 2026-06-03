@@ -278,6 +278,7 @@ function makeHarness(input: { readonly baseDir: string; readonly hostWorkspacePa
 
   const terminalManager = {
     open: () => Effect.die("unused"),
+    attachStream: () => Effect.die("unused"),
     write: () => Effect.die("unused"),
     resize: () => Effect.die("unused"),
     clear: () => Effect.die("unused"),
@@ -287,6 +288,7 @@ function makeHarness(input: { readonly baseDir: string; readonly hostWorkspacePa
         closedTerminalThreadIds.push(closeInput.threadId);
       }),
     subscribe: () => Effect.succeed(() => undefined),
+    subscribeMetadata: () => Effect.succeed(() => undefined),
   } satisfies TerminalManagerShape;
 
   const layer = Layer.mergeAll(

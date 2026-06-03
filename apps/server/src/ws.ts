@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthReviewWriteScope,
+  AuthTerminalOperateScope,
+  AuthAccessReadScope,
+  AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
   EventId,
@@ -31,13 +39,17 @@ import {
   FilesystemBrowseError,
   HomelabSecretError,
   ThreadWorkspaceError,
+  EnvironmentAuthorizationError,
   ThreadId,
+  type TerminalAttachStreamEvent,
+  type TerminalError,
   type TerminalEvent,
+  type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
@@ -48,9 +60,9 @@ import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
-  observeRpcEffect,
-  observeRpcStream,
-  observeRpcStreamEffect,
+  observeRpcEffect as instrumentRpcEffect,
+  observeRpcStream as instrumentRpcStream,
+  observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -71,10 +83,12 @@ import {
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
+import { ReviewService } from "./review/ReviewService.ts";
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import type { AuthenticatedSession } from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -89,15 +103,9 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
-import {
-  BootstrapCredentialService,
-  type BootstrapCredentialChange,
-} from "./auth/Services/BootstrapCredentialService.ts";
-import {
-  SessionCredentialService,
-  type SessionCredentialChange,
-} from "./auth/Services/SessionCredentialService.ts";
-import { respondToAuthError } from "./auth/http.ts";
+import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
+import * as SessionStore from "./auth/SessionStore.ts";
+import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 const isLogicalWorkspaceRootError = Schema.is(LogicalWorkspaceRootError);
@@ -135,8 +143,75 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
+const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
+  [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
+  [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getFullThreadDiff, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.replayEvents, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
+  [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUpsertKeybinding, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
+  [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
+  [WS_METHODS.serverUpsertHomelabSecret, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverDeleteHomelabSecret, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
+  [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
+  [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
+  [WS_METHODS.sourceControlCloneRepository, AuthOrchestrationOperateScope],
+  [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
+  [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
+  [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],
+  [WS_METHODS.threadWorkspaceReadFile, AuthOrchestrationReadScope],
+  [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeGet, AuthOrchestrationReadScope],
+  [WS_METHODS.projectRuntimeWake, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeArchive, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeReset, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeSnapshot, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeRestore, AuthOrchestrationOperateScope],
+  [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
+  [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsRefreshStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsPull, AuthOrchestrationOperateScope],
+  [WS_METHODS.gitRunStackedAction, AuthOrchestrationOperateScope],
+  [WS_METHODS.gitResolvePullRequest, AuthOrchestrationOperateScope],
+  [WS_METHODS.gitPreparePullRequestThread, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsListRefs, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsCreateWorktree, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsRemoveWorktree, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsCreateRef, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
+  [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
+  [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
+  [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
+  [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
+  [WS_METHODS.terminalResize, AuthTerminalOperateScope],
+  [WS_METHODS.terminalClear, AuthTerminalOperateScope],
+  [WS_METHODS.terminalRestart, AuthTerminalOperateScope],
+  [WS_METHODS.terminalClose, AuthTerminalOperateScope],
+  [WS_METHODS.subscribeTerminalEvents, AuthTerminalOperateScope],
+  [WS_METHODS.subscribeTerminalMetadata, AuthTerminalOperateScope],
+  [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
+]);
+
 function toAuthAccessStreamEvent(
-  change: BootstrapCredentialChange | SessionCredentialChange,
+  change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
   currentSessionId: AuthSessionId,
 ): AuthAccessStreamEvent {
@@ -175,15 +250,18 @@ function toAuthAccessStreamEvent(
   }
 }
 
-const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
+const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
+      const currentSessionId = currentSession.sessionId;
+      const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const keybindings = yield* Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const gitWorkflow = yield* GitWorkflowService;
+      const review = yield* ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
@@ -202,7 +280,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment;
-      const serverAuth = yield* ServerAuth;
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscoveryLayer.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map((settings) => settings.automaticGitFetchInterval),
@@ -213,12 +291,85 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         ),
       );
       const sourceControlRepositories = yield* SourceControlRepositoryService;
-      const bootstrapCredentials = yield* BootstrapCredentialService;
-      const sessions = yield* SessionCredentialService;
+      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+      const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const authorizationError = (requiredScope: AuthEnvironmentScope) =>
+        new EnvironmentAuthorizationError({
+          message: `The authenticated token is missing required scope: ${requiredScope}.`,
+          requiredScope,
+        });
+      const authorizeEffect = <A, E, R>(
+        requiredScope: AuthEnvironmentScope,
+        effect: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
+        currentSession.scopes.includes(requiredScope)
+          ? effect
+          : Effect.fail(authorizationError(requiredScope));
+      const authorizeStream = <A, E, R>(
+        requiredScope: AuthEnvironmentScope,
+        stream: Stream.Stream<A, E, R>,
+      ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> =>
+        currentSession.scopes.includes(requiredScope)
+          ? stream
+          : Stream.fail(authorizationError(requiredScope));
+      const requiredScopeForMethod = (method: string): AuthEnvironmentScope => {
+        const requiredScope = RPC_REQUIRED_SCOPE.get(method);
+        if (requiredScope === undefined) {
+          throw new Error(`RPC method ${method} has no declared authorization scope.`);
+        }
+        return requiredScope;
+      };
+      const observeRpcEffect = <A, E, R>(
+        method: string,
+        effect: Effect.Effect<A, E, R>,
+        traceAttributes?: Readonly<Record<string, unknown>>,
+      ) =>
+        instrumentRpcEffect(
+          method,
+          authorizeEffect(requiredScopeForMethod(method), effect),
+          traceAttributes,
+        );
+      const observeRpcStream = <A, E, R>(
+        method: string,
+        stream: Stream.Stream<A, E, R>,
+        traceAttributes?: Readonly<Record<string, unknown>>,
+      ) =>
+        instrumentRpcStream(
+          method,
+          authorizeStream(requiredScopeForMethod(method), stream),
+          traceAttributes,
+        );
+      const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
+        method: string,
+        effect: Effect.Effect<
+          Stream.Stream<A, StreamError, StreamContext>,
+          EffectError,
+          EffectContext
+        >,
+        traceAttributes?: Readonly<Record<string, unknown>>,
+      ) =>
+        instrumentRpcStreamEffect(
+          method,
+          authorizeEffect(requiredScopeForMethod(method), effect),
+          traceAttributes,
+        );
+      const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
+        isOrchestrationDispatchCommandError(cause)
+          ? cause
+          : new OrchestrationDispatchCommandError({
+              message: cause instanceof Error ? cause.message : fallbackMessage,
+              cause,
+            });
+      const randomUUID = crypto.randomUUIDv4.pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to generate orchestration command identifier."),
+        ),
+      );
+      const serverEventId = randomUUID.pipe(Effect.map(EventId.make));
       const serverCommandId = (tag: string) =>
-        CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
+        randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
 
       const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
         Effect.gen(function* () {
@@ -267,9 +418,16 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
 
       const loadAuthAccessSnapshot = () =>
         Effect.all({
-          pairingLinks: serverAuth.listPairingLinks().pipe(Effect.orDie),
-          clientSessions: serverAuth.listClientSessions(currentSessionId).pipe(Effect.orDie),
-        });
+          pairingLinks: serverAuth.listPairingLinks(),
+          clientSessions: serverAuth.listClientSessions(currentSessionId),
+        }).pipe(
+          Effect.mapError(
+            (error) =>
+              new AuthAccessStreamError({
+                message: error.message,
+              }),
+          ),
+        );
 
       const appendSetupScriptActivity = (input: {
         readonly threadId: ThreadId;
@@ -279,29 +437,28 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         readonly payload: Record<string, unknown>;
         readonly tone: "info" | "error";
       }) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
+        Effect.all({
           commandId: serverCommandId("setup-script-activity"),
-          threadId: input.threadId,
-          activity: {
-            id: EventId.make(crypto.randomUUID()),
-            tone: input.tone,
-            kind: input.kind,
-            summary: input.summary,
-            payload: input.payload,
-            turnId: null,
-            createdAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-        });
-
-      const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
-        isOrchestrationDispatchCommandError(cause)
-          ? cause
-          : new OrchestrationDispatchCommandError({
-              message: cause instanceof Error ? cause.message : fallbackMessage,
-              cause,
-            });
+          activityId: serverEventId,
+        }).pipe(
+          Effect.flatMap(({ commandId, activityId }) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: input.threadId,
+              activity: {
+                id: activityId,
+                tone: input.tone,
+                kind: input.kind,
+                summary: input.summary,
+                payload: input.payload,
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+        );
 
       const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
         const error = Cause.squash(cause);
@@ -558,28 +715,37 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   .pipe(Effect.ignoreCause({ log: true }))
               : Effect.void;
 
-          const rollbackExistingThreadMetadata = () =>
-            previousThreadMetadata
-              ? orchestrationEngine
-                  .dispatch({
-                    type: "thread.meta.update",
-                    commandId: serverCommandId("bootstrap-thread-meta-rollback"),
-                    threadId: command.threadId,
-                    branch: previousThreadMetadata.branch,
-                    worktreePath: previousThreadMetadata.worktreePath,
-                  })
+          const rollbackExistingThreadMetadata = () => {
+            const metadata = previousThreadMetadata;
+            return metadata
+              ? serverCommandId("bootstrap-thread-meta-rollback")
+                  .pipe(
+                    Effect.flatMap((commandId) =>
+                      orchestrationEngine.dispatch({
+                        type: "thread.meta.update",
+                        commandId,
+                        threadId: command.threadId,
+                        branch: metadata.branch,
+                        worktreePath: metadata.worktreePath,
+                      }),
+                    ),
+                  )
                   .pipe(Effect.ignoreCause({ log: true }))
               : Effect.void;
+          };
 
           const cleanupCreatedThread = () =>
             createdThread
-              ? orchestrationEngine
-                  .dispatch({
-                    type: "thread.delete",
-                    commandId: serverCommandId("bootstrap-thread-delete"),
-                    threadId: command.threadId,
-                  })
-                  .pipe(Effect.ignoreCause({ log: true }))
+              ? serverCommandId("bootstrap-thread-delete").pipe(
+                  Effect.flatMap((commandId) =>
+                    orchestrationEngine.dispatch({
+                      type: "thread.delete",
+                      commandId,
+                      threadId: command.threadId,
+                    }),
+                  ),
+                  Effect.ignoreCause({ log: true }),
+                )
               : Effect.void;
 
           const recordSetupScriptLaunchFailure = (input: {
@@ -717,7 +883,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 const createResult = yield* orchestrationEngine
                   .dispatch({
                     type: "thread.create",
-                    commandId: serverCommandId("bootstrap-thread-create"),
+                    commandId: yield* serverCommandId("bootstrap-thread-create"),
                     threadId: command.threadId,
                     projectId: bootstrap.createThread.projectId,
                     ...(bootstrap.createThread.runtimeId !== undefined
@@ -788,7 +954,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               yield* orchestrationEngine
                 .dispatch({
                   type: "thread.meta.update",
-                  commandId: serverCommandId("bootstrap-thread-meta-update"),
+                  commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
                   threadId: command.threadId,
                   branch: worktree.worktree.refName,
                   worktreePath: targetWorktreePath,
@@ -1541,10 +1707,25 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
+        [WS_METHODS.reviewGetDiffPreview]: (input) =>
+          observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
+            "rpc.aggregate": "review",
+          }),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
             "rpc.aggregate": "terminal",
           }),
+        [WS_METHODS.terminalAttach]: (input) =>
+          observeRpcStream(
+            WS_METHODS.terminalAttach,
+            Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
+              Effect.acquireRelease(
+                terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
+                (unsubscribe) => Effect.sync(unsubscribe),
+              ),
+            ),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalWrite]: (input) =>
           observeRpcEffect(WS_METHODS.terminalWrite, terminalManager.write(input), {
             "rpc.aggregate": "terminal",
@@ -1571,6 +1752,17 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             Stream.callback<TerminalEvent>((queue) =>
               Effect.acquireRelease(
                 terminalManager.subscribe((event) => Queue.offer(queue, event)),
+                (unsubscribe) => Effect.sync(unsubscribe),
+              ),
+            ),
+            { "rpc.aggregate": "terminal" },
+          ),
+        [WS_METHODS.subscribeTerminalMetadata]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeTerminalMetadata,
+            Stream.callback<TerminalMetadataStreamEvent>((queue) =>
+              Effect.acquireRelease(
+                terminalManager.subscribeMetadata((event) => Queue.offer(queue, event)),
                 (unsubscribe) => Effect.sync(unsubscribe),
               ),
             ),
@@ -1649,7 +1841,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               const initialSnapshot = yield* loadAuthAccessSnapshot();
               const revisionRef = yield* Ref.make(1);
               const accessChanges: Stream.Stream<
-                BootstrapCredentialChange | SessionCredentialChange
+                PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
               > = Stream.merge(bootstrapCredentials.streamChanges, sessions.streamChanges);
 
               const liveEvents: Stream.Stream<AuthAccessStreamEvent> = accessChanges.pipe(
@@ -1685,14 +1877,19 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       "/ws",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        const sessions = yield* SessionCredentialService;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+          Effect.catchTags({
+            ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+            ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+          }),
+        );
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session.sessionId).pipe(
+            makeWsRpcLayer(session).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
@@ -1724,7 +1921,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           () => rpcWebSocketHttpEffect,
           () => sessions.markDisconnected(session.sessionId),
         );
-      }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+      }).pipe(
+        Effect.catchTags({
+          EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+          EnvironmentInternalError: HttpServerRespondable.toResponse,
+        }),
+      ),
     ),
   ),
 );

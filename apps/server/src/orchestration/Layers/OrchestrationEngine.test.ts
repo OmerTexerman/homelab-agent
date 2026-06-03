@@ -170,6 +170,7 @@ describe("OrchestrationEngine", () => {
       Layer.provide(Layer.succeed(OrchestrationEventStore, failOnHistoricalReplayStore)),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
+      Layer.provideMerge(NodeServices.layer),
     );
 
     const runtime = ManagedRuntime.make(layer);
@@ -431,6 +432,7 @@ describe("OrchestrationEngine", () => {
         type: "project.delete",
         commandId: CommandId.make("cmd-project-delete-cascade"),
         projectId: asProjectId("project-delete-cascade"),
+        force: true,
       }),
     );
 
@@ -815,6 +817,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -1035,6 +1038,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

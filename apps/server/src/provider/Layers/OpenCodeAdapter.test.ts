@@ -47,7 +47,7 @@ import {
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
 class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterShape>()(
-  "test/OpenCodeAdapter",
+  "t3/provider/Layers/OpenCodeAdapter.test/OpenCodeAdapter",
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);

@@ -7,10 +7,10 @@ import {
   type AppState,
   useStore,
 } from "./store";
-import { collectActiveTerminalThreadIds } from "./lib/terminalStateCleanup";
+import { collectActiveTerminalUiThreadKeys } from "./lib/terminalUiStateCleanup";
 import { getClientSettings } from "./hooks/useSettings";
 import { deriveLogicalProjectKeyFromSettings, derivePhysicalProjectKey } from "./logicalProject";
-import { useTerminalStateStore } from "./terminalStateStore";
+import { useTerminalUiStateStore } from "./terminalUiStateStore";
 import { useThreadSelectionStore } from "./threadSelectionStore";
 import { useUiStateStore } from "./uiStateStore";
 import { useWorkspacePanelStateStore } from "./workspacePanelStateStore";
@@ -41,7 +41,7 @@ export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.ge
     threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
   );
 
-  const activeThreadKeys = collectActiveTerminalThreadIds({
+  const activeThreadKeys = collectActiveTerminalUiThreadKeys({
     snapshotThreads: threads.map((thread) => ({
       key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       deletedAt: null,
@@ -49,7 +49,7 @@ export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.ge
     })),
     draftThreadKeys: useComposerDraftStore.getState().listDraftThreadKeys(),
   });
-  useTerminalStateStore.getState().removeOrphanedTerminalStates(activeThreadKeys);
+  useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(activeThreadKeys);
   useWorkspacePanelStateStore.getState().removeOrphanedWorkspacePanels(activeThreadKeys);
 
   return {

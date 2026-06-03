@@ -316,28 +316,25 @@ export function deriveActivePlanState(
   if (!Array.isArray(rawPlan)) {
     return null;
   }
-  const steps = rawPlan
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const record = entry as Record<string, unknown>;
-      if (typeof record.step !== "string") {
-        return null;
-      }
-      const status =
-        record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
-      return {
-        step: record.step,
-        status,
-      };
-    })
-    .filter(
-      (
-        step,
-      ): step is {
-        step: string;
-        status: "pending" | "inProgress" | "completed";
-      } => step !== null,
-    );
+  const steps: Array<{
+    step: string;
+    status: "pending" | "inProgress" | "completed";
+  }> = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.step !== "string") {
+      continue;
+    }
+    const status =
+      record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
+    steps.push({
+      step: record.step,
+      status,
+    });
+  }
   if (steps.length === 0) {
     return null;
   }
@@ -416,15 +413,17 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const entries = ordered
-    .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
-    .filter((activity) => activity.kind !== "task.started")
-    .filter((activity) => activity.kind !== "context-window.updated")
-    .filter((activity) => activity.summary !== "Checkpoint captured")
-    .filter((activity) => !isInterruptedRuntimeErrorActivity(activity))
-    .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .map(toDerivedWorkLogEntry);
+  const entries: DerivedWorkLogEntry[] = [];
+  for (const activity of ordered) {
+    if (latestTurnId && activity.turnId !== latestTurnId) continue;
+    if (activity.kind === "tool.started") continue;
+    if (activity.kind === "task.started") continue;
+    if (activity.kind === "context-window.updated") continue;
+    if (activity.summary === "Checkpoint captured") continue;
+    if (isInterruptedRuntimeErrorActivity(activity)) continue;
+    if (isPlanBoundaryToolActivity(activity)) continue;
+    entries.push(toDerivedWorkLogEntry(activity));
+  }
   return collapseDerivedWorkLogEntries(entries).map(
     ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
   );
@@ -638,7 +637,7 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
 function extractToolCallCollapseKey(payload: Record<string, unknown> | null): string | undefined {
   const data = asRecord(payload?.data);
   const toolCallId =
-    asTrimmedString(data?.toolCallId) ??
+    extractToolCallId(payload) ??
     asTrimmedString(asRecord(data?.item)?.id) ??
     asTrimmedString(payload?.toolCallId);
   return toolCallId ? `tool-call:${toolCallId}` : undefined;
@@ -813,9 +812,13 @@ function formatCommandValue(value: unknown): string | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const parts = value
-    .map((entry) => asTrimmedString(entry))
-    .filter((entry): entry is string => entry !== null);
+  const parts: Array<string> = [];
+  for (const entry of value) {
+    const part = asTrimmedString(entry);
+    if (part !== null) {
+      parts.push(part);
+    }
+  }
   if (parts.length === 0) {
     return null;
   }
@@ -874,28 +877,72 @@ function extractToolTitle(payload: Record<string, unknown> | null): string | nul
   return asTrimmedString(payload?.title);
 }
 
-function extractRawOutputSummary(payload: Record<string, unknown> | null): string | null {
+function extractToolCallId(payload: Record<string, unknown> | null): string | null {
+  const data = asRecord(payload?.data);
+  return asTrimmedString(data?.toolCallId);
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeInlinePreview(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateInlinePreview(value: string, maxLength = 84): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function summarizeToolTextOutput(value: string): string | null {
+  const lines: Array<string> = [];
+  for (const rawLine of value.split(/\r?\n/u)) {
+    const line = normalizeInlinePreview(rawLine);
+    if (line.length > 0) {
+      lines.push(line);
+    }
+  }
+  const firstLine = lines.find((line) => line !== "```");
+  if (firstLine) {
+    return truncateInlinePreview(firstLine);
+  }
+  if (lines.length > 1) {
+    return `${lines.length.toLocaleString()} lines`;
+  }
+  return null;
+}
+
+function summarizeToolRawOutput(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const rawOutput = asRecord(data?.rawOutput);
   if (!rawOutput) {
     return null;
   }
 
-  if (typeof rawOutput.totalFiles === "number" && Number.isFinite(rawOutput.totalFiles)) {
-    return `${rawOutput.totalFiles} file${rawOutput.totalFiles === 1 ? "" : "s"}`;
+  const totalFiles = asNumber(rawOutput.totalFiles);
+  if (totalFiles !== null) {
+    const suffix = rawOutput.truncated === true ? "+" : "";
+    return `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`;
   }
 
   const content = asTrimmedString(rawOutput.content);
   if (content) {
-    return firstNonEmptyLine(content);
+    return summarizeToolTextOutput(content);
   }
 
-  const summary = asTrimmedString(rawOutput.summary);
-  if (summary) {
-    return summary;
+  const stdout = asTrimmedString(rawOutput.stdout);
+  if (stdout) {
+    return summarizeToolTextOutput(stdout);
   }
 
   return null;
+}
+
+function extractRawOutputSummary(payload: Record<string, unknown> | null): string | null {
+  return summarizeToolRawOutput(payload);
 }
 
 function firstNonEmptyLine(value: string): string | null {
