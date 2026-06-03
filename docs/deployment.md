@@ -198,6 +198,11 @@ non-empty origin. That supports hosted/static clients and reverse-proxy testing,
 but deployments should still put Homelab Agent behind HTTPS and a trusted
 network boundary.
 
+Browser session cookies are `HttpOnly`, `SameSite=Lax`, and scoped to `/`.
+They are intentionally usable on local HTTP during first-run testing. If you
+publish through a reverse proxy, terminate HTTPS at the proxy and forward both
+HTTP and WebSocket traffic to the app server.
+
 ## Auth, Pairing, And Recovery
 
 `serve` prints a one-time pairing token and pairing URL. Startup pairing grants
@@ -213,9 +218,21 @@ Recovery options:
   Settings -> Devices & Sessions.
 - If no browser session remains, restart with `serve` and use the new startup
   token printed in logs/stdout.
-- To revoke all access, stop the server and remove or rotate
-  `<T3CODE_HOME>/userdata/secrets/` plus the active auth sessions in
-  `state.sqlite`. This is a destructive recovery path; back up first.
+- To revoke all client access while keeping other app state, stop the server
+  and clear `auth_sessions` plus `auth_pairing_links` in
+  `<T3CODE_HOME>/userdata/state.sqlite`. The next `serve` start will print a
+  fresh startup pairing token.
+- To rotate the session signing secret too, stop the server and remove
+  `<T3CODE_HOME>/userdata/secrets/session-signing-key.bin` after clearing those
+  auth tables. This invalidates all existing session credentials.
+
+Example destructive reset, after a backup:
+
+```bash
+sqlite3 "$T3CODE_HOME/userdata/state.sqlite" \
+  "DELETE FROM auth_sessions; DELETE FROM auth_pairing_links;"
+rm -f "$T3CODE_HOME/userdata/secrets/session-signing-key.bin"
+```
 
 ## Unsupported Or Deferred Paths
 

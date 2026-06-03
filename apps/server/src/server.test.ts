@@ -1502,6 +1502,13 @@ const assertBrowserApiCorsPreflightHeaders = (
 };
 const crossOriginClientOrigin = "http://remote-client.test:3773";
 
+const getHttpServerUrl = (pathname = "") =>
+  Effect.gen(function* () {
+    const server = yield* HttpServer.HttpServer;
+    const address = server.address as HttpServer.TcpAddress;
+    return `http://127.0.0.1:${address.port}${pathname}`;
+  });
+
 const getWsServerUrl = (
   pathname = "",
   options?: { authenticated?: boolean; credential?: string },
@@ -1686,6 +1693,47 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
 
       assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.sessionMethod, "browser-session-cookie");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("sets browser session cookies with credentialed CORS for reverse-proxy origins", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const origin = "https://agent.example.test";
+      const {
+        response: bootstrapResponse,
+        body: bootstrapBody,
+        cookie: setCookie,
+      } = yield* bootstrapBrowserSession(defaultDesktopBootstrapToken, {
+        headers: { origin },
+      });
+
+      assert.equal(bootstrapResponse.status, 200);
+      assertBrowserApiCorsResponseHeaders(bootstrapResponse.headers, origin);
+      assert.equal(bootstrapBody.authenticated, true);
+      assert.equal(bootstrapBody.sessionMethod, "browser-session-cookie");
+      assert.isDefined(setCookie);
+      assert.include(setCookie ?? "", "HttpOnly");
+      assert.include(setCookie ?? "", "Path=/");
+      assert.include(setCookie ?? "", "SameSite=Lax");
+      assert.match(setCookie ?? "", /\bExpires=/);
+
+      const sessionResponse = yield* HttpClient.get("/api/auth/session", {
+        headers: {
+          cookie: setCookie?.split(";")[0] ?? "",
+          origin,
+        },
+      });
+      const sessionBody = (yield* sessionResponse.json) as {
+        readonly authenticated: boolean;
+        readonly sessionMethod?: string;
+      };
+
+      assert.equal(sessionResponse.status, 200);
+      assertBrowserApiCorsResponseHeaders(sessionResponse.headers, origin);
       assert.equal(sessionBody.authenticated, true);
       assert.equal(sessionBody.sessionMethod, "browser-session-cookie");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
