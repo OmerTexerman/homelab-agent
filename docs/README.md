@@ -20,6 +20,9 @@ material.
 - [upstream-sync.md](./upstream-sync.md)
   Playbook for rebasing/pulling from upstream while keeping homelab-specific
   behavior isolated behind fork-owned modules.
+- [deployment.md](./deployment.md)
+  Production-like local testing and first deployment requirements: state paths,
+  env vars, Docker runtime access, pairing, reverse proxy, and known gaps.
 - [provider-runtime-support.md](./provider-runtime-support.md)
   Current Cursor/OpenCode provider wiring status and runtime-container blockers.
 
