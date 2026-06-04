@@ -646,6 +646,54 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("never clobbers an existing richer .homelab view when re-seeding the baseline", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-homelab-rich-view"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const runtimeWorkspace = launchContext.hostWorkspacePath;
+
+      // Simulate the richer, data-driven `.homelab` view that writeHomelabContextView
+      // regenerates on turn start, wake, and memory writes. The baseline writer seeds
+      // these same paths only when absent, so re-materializing the runtime must NOT
+      // overwrite this content with the empty skeleton.
+      const homelabReadmePath = path.join(runtimeWorkspace, ".homelab", "README.md");
+      const homelabMemoryIndexPath = path.join(
+        runtimeWorkspace,
+        ".homelab",
+        "memory",
+        "index.jsonl",
+      );
+      const richReadmeContents = "# RICH-VIEW-SENTINEL\n\nData-driven homelab context.\n";
+      const richMemoryEntry = '{"id":"mem-1","summary":"RICH-VIEW-SENTINEL memory entry"}\n';
+      yield* fileSystem.writeFileString(homelabReadmePath, richReadmeContents);
+      yield* fileSystem.writeFileString(homelabMemoryIndexPath, richMemoryEntry);
+
+      // Re-trigger writeRuntimeHomelabBaselineView via both the ensureRuntime and
+      // startRuntime materialization paths.
+      yield* runtime.ensureRuntime({
+        threadId: descriptor.threadId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+
+      assert.equal(yield* fileSystem.readFileString(homelabReadmePath), richReadmeContents);
+      assert.equal(yield* fileSystem.readFileString(homelabMemoryIndexPath), richMemoryEntry);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("maps logical project roots back to /workspace for runtime cwd", () =>
     Effect.gen(function* () {
       docker.calls.length = 0;
