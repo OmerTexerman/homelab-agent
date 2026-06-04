@@ -1,7 +1,10 @@
-import { AuthSessionId } from "@t3tools/contracts";
+import { AuthEnvironmentScopes, AuthSessionId, ServerAuthSessionMethod } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Option, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import {
   toPersistenceDecodeError,
@@ -23,9 +26,8 @@ import {
 const AuthSessionDbRow = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
-  role: Schema.Literals(["owner", "client"]),
-  method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
-  visibility: Schema.Literals(["user", "internal"]),
+  scopes: Schema.fromJsonString(AuthEnvironmentScopes),
+  method: ServerAuthSessionMethod,
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
   clientUserAgent: Schema.NullOr(Schema.String),
@@ -38,13 +40,12 @@ const AuthSessionDbRow = Schema.Struct({
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
-function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): typeof AuthSessionRecord.Type {
+function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionRecord {
   return {
     sessionId: row.sessionId,
     subject: row.subject,
-    role: row.role,
+    scopes: row.scopes,
     method: row.method,
-    visibility: row.visibility,
     client: {
       label: row.clientLabel,
       ipAddress: row.clientIpAddress,
@@ -77,9 +78,8 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         INSERT INTO auth_sessions (
           session_id,
           subject,
-          role,
+          scopes,
           method,
-          visibility,
           client_label,
           client_ip_address,
           client_user_agent,
@@ -93,9 +93,8 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         VALUES (
           ${input.sessionId},
           ${input.subject},
-          ${input.role},
+          ${JSON.stringify(input.scopes)},
           ${input.method},
-          ${input.visibility},
           ${input.client.label},
           ${input.client.ipAddress},
           ${input.client.userAgent},
@@ -117,9 +116,8 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
-          role AS "role",
+          scopes AS "scopes",
           method AS "method",
-          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -143,9 +141,8 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
-          role AS "role",
+          scopes AS "scopes",
           method AS "method",
-          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",

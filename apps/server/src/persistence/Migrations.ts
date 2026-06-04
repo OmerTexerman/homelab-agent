@@ -35,9 +35,21 @@ import Migration0019 from "./Migrations/019_ProjectionSnapshotLookupIndexes.ts";
 import Migration0020 from "./Migrations/020_AuthAccessManagement.ts";
 import Migration0021 from "./Migrations/021_AuthSessionClientMetadata.ts";
 import Migration0022 from "./Migrations/022_AuthSessionLastConnectedAt.ts";
-import Migration0023 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
-import Migration0024 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
-import Migration0025 from "./Migrations/025_AuthSessionVisibility.ts";
+import Migration0023 from "./Migrations/023_ProjectionThreadShellSummary.ts";
+import Migration0024 from "./Migrations/024_BackfillProjectionThreadShellSummary.ts";
+import Migration0025 from "./Migrations/025_CleanupInvalidProjectionPendingApprovals.ts";
+import Migration0026 from "./Migrations/026_CanonicalizeModelSelectionOptions.ts";
+import Migration0027 from "./Migrations/027_ProviderSessionRuntimeInstanceId.ts";
+import Migration0028 from "./Migrations/028_ProjectionThreadSessionInstanceId.ts";
+import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexes.ts";
+import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
+import Migration0031 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
+import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
+import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
+import Migration0034 from "./Migrations/034_ProjectRuntimeAssignments.ts";
+import Migration0035 from "./Migrations/035_ProjectMemory.ts";
+import Migration0036 from "./Migrations/031_AuthAuthorizationScopes.ts";
+import Migration0037 from "./Migrations/037_RepairProjectionThreadShellSummarySchema.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -72,9 +84,21 @@ export const migrationEntries = [
   [20, "AuthAccessManagement", Migration0020],
   [21, "AuthSessionClientMetadata", Migration0021],
   [22, "AuthSessionLastConnectedAt", Migration0022],
-  [23, "ProjectionPendingTurnIntent", Migration0023],
-  [24, "RepairInterruptedClaudeTurns", Migration0024],
-  [25, "AuthSessionVisibility", Migration0025],
+  [23, "ProjectionThreadShellSummary", Migration0023],
+  [24, "BackfillProjectionThreadShellSummary", Migration0024],
+  [25, "CleanupInvalidProjectionPendingApprovals", Migration0025],
+  [26, "CanonicalizeModelSelectionOptions", Migration0026],
+  [27, "ProviderSessionRuntimeInstanceId", Migration0027],
+  [28, "ProjectionThreadSessionInstanceId", Migration0028],
+  [29, "ProjectionThreadDetailOrderingIndexes", Migration0029],
+  [30, "ProjectionThreadShellArchiveIndexes", Migration0030],
+  [31, "ProjectionPendingTurnIntent", Migration0031],
+  [32, "RepairInterruptedClaudeTurns", Migration0032],
+  [33, "AuthSessionVisibility", Migration0033],
+  [34, "ProjectRuntimeAssignments", Migration0034],
+  [35, "ProjectMemory", Migration0035],
+  [36, "AuthAuthorizationScopes", Migration0036],
+  [37, "RepairProjectionThreadShellSummarySchema", Migration0037],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

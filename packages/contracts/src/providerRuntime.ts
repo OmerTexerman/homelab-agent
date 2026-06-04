@@ -1,4 +1,5 @@
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   EventId,
   IsoDateTime,
@@ -11,19 +12,22 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
-} from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+} from "./baseSchemas.ts";
+import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
-const RuntimeEventRawSource = Schema.Literals([
-  "codex.app-server.notification",
-  "codex.app-server.request",
-  "codex.eventmsg",
-  "claude.sdk.message",
-  "claude.sdk.permission",
-  "codex.sdk.thread-event",
+const RuntimeEventRawSource = Schema.Union([
+  Schema.Literal("codex.app-server.notification"),
+  Schema.Literal("codex.app-server.request"),
+  Schema.Literal("codex.eventmsg"),
+  Schema.Literal("claude.sdk.message"),
+  Schema.Literal("claude.sdk.permission"),
+  Schema.Literal("codex.sdk.thread-event"),
+  Schema.Literal("opencode.sdk.event"),
+  Schema.Literal("acp.jsonrpc"),
+  Schema.TemplateLiteral(["acp.", Schema.String, ".extension"]),
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;
 
@@ -242,7 +246,11 @@ const RuntimeErrorType = Schema.Literal("runtime.error");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  // Optional during the driver/instance migration. See providerInstance.ts
+  // for the routing-key-vs-driver-id distinction. Once every emitter
+  // populates it (post-slice-4), routing flips to instance-id-only.
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   turnId: Schema.optional(TurnId),

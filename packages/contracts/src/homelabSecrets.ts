@@ -1,6 +1,6 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const HomelabSecretKey = Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/)).check(
   Schema.isMaxLength(128),

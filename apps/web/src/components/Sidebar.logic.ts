@@ -3,9 +3,13 @@ import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/clie
 import type {
   CommandId,
   EnvironmentId,
+  ProjectMemoryId,
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
+  StandaloneThreadMoveMemoryMigration,
+  StandaloneThreadMoveMemoryMigrationMode,
+  ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
@@ -18,17 +22,86 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 import { draftSessionHasMeaningfulWork } from "../draftThreadLifecycle";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
+import { deriveSidebarThreadDecisionQueue } from "../decisionQueueReadModel";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
+// Visible sidebar rows are prewarmed into the thread-detail cache so opening a
+// nearby thread usually reuses an already-hot subscription.
+export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadCreationRuntimeMode = ThreadRuntimeMode;
+export type StandaloneThreadMoveMemorySelection = "all-relevant" | "selected";
 type SidebarProject = {
   id: string;
   name: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
+
+export function sidebarThreadCreationRuntimeCopy(
+  runtimeSelectionMode: SidebarThreadCreationRuntimeMode,
+): { label: string; description: string } {
+  if (runtimeSelectionMode === "isolated") {
+    return {
+      label: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction,
+      description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
+    };
+  }
+
+  return {
+    label: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction,
+    description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
+  };
+}
+
+export function standaloneThreadMoveRuntimeDescription(
+  runtimeSelectionMode: ThreadRuntimeMode | null | undefined,
+): string {
+  if (runtimeSelectionMode === "isolated") {
+    return "This isolated thread keeps its isolated runtime. Runtime filesystem state is not merged into the target Project Runtime.";
+  }
+
+  return "This shared thread switches to the target Project Runtime. Runtime filesystem state is not merged from Scratch.";
+}
+
+export function standaloneThreadMoveMemoryDescription(
+  mode: StandaloneThreadMoveMemoryMigrationMode,
+  selection: StandaloneThreadMoveMemorySelection,
+): string {
+  if (mode === "none") {
+    return "Chat transcript moves automatically. Durable Scratch memory stays in Standalone Threads.";
+  }
+
+  const selectedCopy = selection === "selected" ? "selected" : "all relevant";
+  if (mode === "copy") {
+    return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are copied to the target project.`;
+  }
+
+  return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are moved to the target project.`;
+}
+
+export function buildStandaloneThreadMoveMemoryMigration(input: {
+  readonly mode: StandaloneThreadMoveMemoryMigrationMode;
+  readonly selection: StandaloneThreadMoveMemorySelection;
+  readonly selectedMemoryIds: ReadonlyArray<ProjectMemoryId>;
+}): StandaloneThreadMoveMemoryMigration {
+  if (input.mode === "none") {
+    return { mode: "none" };
+  }
+
+  if (input.selection === "selected") {
+    return {
+      mode: input.mode,
+      memoryIds: [...input.selectedMemoryIds],
+    };
+  }
+
+  return {
+    mode: input.mode,
+  };
+}
 
 export type ThreadTraversalDirection = "previous" | "next";
 
@@ -197,6 +270,12 @@ export function resolveSidebarNewThreadSeedContext(input: {
   worktreePath?: string | null;
   envMode: SidebarNewThreadEnvMode;
 } {
+  if (input.defaultEnvMode === "worktree") {
+    return {
+      envMode: "worktree",
+    };
+  }
+
   if (input.activeDraftThread?.projectId === input.projectId) {
     return {
       branch: input.activeDraftThread.branch,
@@ -388,6 +467,13 @@ export function getVisibleSidebarThreadIds<TThreadId>(
   );
 }
 
+export function getSidebarThreadIdsToPrewarm<TThreadId>(
+  visibleThreadIds: readonly TThreadId[],
+  limit = SIDEBAR_THREAD_PREWARM_LIMIT,
+): TThreadId[] {
+  return visibleThreadIds.slice(0, Math.max(0, limit));
+}
+
 export function resolveAdjacentThreadId<T>(input: {
   threadIds: readonly T[];
   currentThreadId: T | null;
@@ -429,7 +515,7 @@ export function resolveThreadRowClassName(input: {
   isSelected: boolean;
 }): string {
   const baseClassName =
-    "h-7 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+    "h-6 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring sm:h-7";
 
   if (input.isSelected && input.isActive) {
     return cn(
@@ -459,8 +545,9 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
   const { thread } = input;
+  const decisionQueue = deriveSidebarThreadDecisionQueue({ thread });
 
-  if (thread.hasPendingApprovals) {
+  if (decisionQueue.activeDecision?.kind === "provider-approval") {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -469,7 +556,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (decisionQueue.activeDecision?.kind === "provider-user-input") {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
@@ -496,12 +583,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+  if (decisionQueue.activeDecision?.kind === "plan-follow-up") {
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",

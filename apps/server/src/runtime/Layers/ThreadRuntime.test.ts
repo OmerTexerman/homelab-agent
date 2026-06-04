@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off preferSchemaOverJson:off
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -5,7 +6,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer } from "effect";
 
@@ -13,6 +14,7 @@ import { type ProcessRunResult } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { makeThreadRuntimeLive } from "./ThreadRuntime.ts";
 
@@ -28,6 +30,9 @@ interface FakeDockerContainer {
   image: string;
   workdir: string;
   mounts: FakeDockerMount[];
+  ports: Record<string, Array<{ HostIp: string; HostPort: string }>>;
+  networks: Record<string, { IPAddress: string }>;
+  labels: Record<string, string>;
   running: boolean;
 }
 
@@ -46,6 +51,7 @@ class FakeDockerRunner {
   readonly calls: string[][] = [];
   readonly containers = new Map<string, FakeDockerContainer>();
   readonly images = new Set<string>();
+  readonly imageLabels = new Map<string, Record<string, string>>();
   private nextId = 1;
 
   run = (args: ReadonlyArray<string>) =>
@@ -73,12 +79,17 @@ class FakeDockerRunner {
               Config: {
                 Image: container.image,
                 WorkingDir: container.workdir,
+                Labels: container.labels,
               },
               Mounts: container.mounts.map((mount) => ({
                 Source: mount.source,
                 Destination: mount.target,
                 RW: !mount.readOnly,
               })),
+              NetworkSettings: {
+                Ports: container.ports,
+                Networks: container.networks,
+              },
             },
           ]),
         });
@@ -106,13 +117,16 @@ class FakeDockerRunner {
           return okResult({ code: 1, stderr: "missing image tag" });
         }
         this.images.add(imageRef);
+        this.imageLabels.set(imageRef, readDockerBuildLabels(input));
         return okResult({ stdout: `Successfully built ${imageRef}\n` });
       }
 
       if (command === "run") {
         let name = "";
         let workdir = "";
+        let networkName = "bridge";
         const mounts: FakeDockerMount[] = [];
+        const ports: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
         let index = 1;
 
         while (index < input.length) {
@@ -131,10 +145,25 @@ class FakeDockerRunner {
             continue;
           }
           if (value === "--network") {
+            networkName = input[index + 1] ?? "bridge";
             index += 2;
             continue;
           }
           if (value === "--add-host") {
+            index += 2;
+            continue;
+          }
+          if (value === "-p") {
+            const rawPort = input[index + 1] ?? "";
+            const match = rawPort.match(/^([^:]+)::(\d+)\/tcp$/);
+            if (match) {
+              ports[`${match[2]}/tcp`] = [
+                {
+                  HostIp: match[1] ?? "127.0.0.1",
+                  HostPort: String(32_000 + this.nextId),
+                },
+              ];
+            }
             index += 2;
             continue;
           }
@@ -177,6 +206,13 @@ class FakeDockerRunner {
           image,
           workdir,
           mounts,
+          ports,
+          networks: {
+            [networkName]: {
+              IPAddress: `172.30.0.${this.nextId}`,
+            },
+          },
+          labels: Object.assign({}, this.imageLabels.get(image)),
           running: true,
         });
         return okResult({ stdout: `${id}\n` });
@@ -226,18 +262,37 @@ function findRunCall(
   return calls.find((call) => call[0] === "run");
 }
 
+function readDockerBuildLabels(args: ReadonlyArray<string>): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--label") continue;
+    const [name, ...valueParts] = (args[index + 1] ?? "").split("=");
+    if (!name || valueParts.length === 0) continue;
+    labels[name] = valueParts.join("=");
+  }
+  return labels;
+}
+
 const docker = new FakeDockerRunner();
 
-function makeRuntimeLayer(
-  overrides: Partial<NonNullable<Parameters<typeof makeThreadRuntimeLive>[0]>> = {},
-) {
+type RuntimeLayerOverrides = Partial<
+  Omit<NonNullable<Parameters<typeof makeThreadRuntimeLive>[0]>, "dockerNetwork">
+> & {
+  readonly dockerNetwork?: string | undefined;
+};
+
+function makeRuntimeLayer(overrides: RuntimeLayerOverrides = {}) {
+  const { dockerNetwork: overrideDockerNetwork, ...restOverrides } = overrides;
+  const dockerNetwork = Object.hasOwn(overrides, "dockerNetwork")
+    ? overrideDockerNetwork
+    : "homelab-agent-test";
   return it.layer(
     makeThreadRuntimeLive({
       dockerBinaryPath: "docker",
-      dockerNetwork: "homelab-agent-test",
       containerShellPath: "/bin/zsh",
       dockerRunner: docker.run,
-      ...overrides,
+      ...(dockerNetwork !== undefined ? { dockerNetwork } : {}),
+      ...restOverrides,
     }).pipe(
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-test-" }).pipe(
@@ -259,6 +314,8 @@ function makeRuntimeLayer(
 }
 
 const runtimeLayer = makeRuntimeLayer();
+const runtimeLayerWithAutoNetwork = makeRuntimeLayer({ dockerNetwork: undefined });
+const runtimeLayerWithServerUrlOverride = makeRuntimeLayer();
 let mutableRuntimeSecretEnv: Readonly<Record<string, string>> = {};
 
 const runtimeLayerWithSecrets = it.layer(
@@ -301,16 +358,40 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;
       const settings = yield* ServerSettingsService;
       const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
+      const previousXdgDataHome = process.env.XDG_DATA_HOME;
+      const hostXdgDataHome = path.join(
+        os.tmpdir(),
+        "homelab-agent-opencode-auth",
+        crypto.randomUUID(),
+      );
+      process.env.XDG_DATA_HOME = hostXdgDataHome;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousXdgDataHome === undefined) {
+            delete process.env.XDG_DATA_HOME;
+          } else {
+            process.env.XDG_DATA_HOME = previousXdgDataHome;
+          }
+        }),
+      );
+
       yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
       yield* fileSystem.writeFileString(path.join(codexAuthPath, "auth.json"), '{"token":"host"}');
       yield* fileSystem.writeFileString(
         path.join(codexAuthPath, "config.toml"),
         'model = "gpt-5"\n',
+      );
+      const openCodeDataPath = path.join(hostXdgDataHome, "opencode");
+      yield* fileSystem.makeDirectory(openCodeDataPath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(openCodeDataPath, "auth.json"),
+        '{"provider":"host"}',
       );
 
       const descriptor = yield* runtime.ensureRuntime({
@@ -333,6 +414,9 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(launchContext.shellWrapperPath, path.join(runtimeRoot, "bin", "runtime-shell"));
 
       const codexWrapperPath = path.join(runtimeRoot, "bin", "codex");
+      const claudeWrapperPath = path.join(runtimeRoot, "bin", "claude");
+      const cursorWrapperPath = path.join(runtimeRoot, "bin", "agent");
+      const openCodeWrapperPath = path.join(runtimeRoot, "bin", "opencode");
       const shellWrapperPath = launchContext.shellWrapperPath;
       const bashProfilePath = path.join(runtimeHome, ".bash_profile");
       const bashRcPath = path.join(runtimeHome, ".bashrc");
@@ -348,6 +432,9 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const agentsPath = path.join(runtimeWorkspace, "AGENTS.md");
       const claudePath = path.join(runtimeWorkspace, "CLAUDE.md");
       assert.equal(yield* fileSystem.exists(codexWrapperPath), true);
+      assert.equal(yield* fileSystem.exists(claudeWrapperPath), true);
+      assert.equal(yield* fileSystem.exists(cursorWrapperPath), true);
+      assert.equal(yield* fileSystem.exists(openCodeWrapperPath), true);
       assert.equal(yield* fileSystem.exists(shellWrapperPath), true);
       assert.equal(yield* fileSystem.exists(bashProfilePath), true);
       assert.equal(yield* fileSystem.exists(bashRcPath), true);
@@ -374,16 +461,30 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
 
       const codexWrapperContents = yield* fileSystem.readFileString(codexWrapperPath);
+      const claudeWrapperContents = yield* fileSystem.readFileString(claudeWrapperPath);
+      const cursorWrapperContents = yield* fileSystem.readFileString(cursorWrapperPath);
+      const openCodeWrapperContents = yield* fileSystem.readFileString(openCodeWrapperPath);
       const homelabCliContents = yield* fileSystem.readFileString(homelabCliPath);
       const homelabSecretToFileContents = yield* fileSystem.readFileString(homelabSecretToFilePath);
       const agentsContents = yield* fileSystem.readFileString(agentsPath);
       const claudeContents = yield* fileSystem.readFileString(claudePath);
       assert.match(codexWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/);
+      assert.match(claudeWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'claude'/);
+      assert.match(cursorWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'agent'/);
+      assert.match(
+        openCodeWrapperContents,
+        /sh '\/runtime\/home\/\.homelab-runtime\.env' 'opencode'/,
+      );
       assert.match(homelabCliContents, /--no-wait/);
       assert.match(homelabCliContents, /--timeout-seconds/);
       assert.match(homelabCliContents, /--example/);
       assert.match(homelabCliContents, /--schema/);
+      assert.match(homelabCliContents, /memory/);
+      assert.match(homelabCliContents, /project-memory\/search/);
+      assert.match(homelabCliContents, /cmd_memory_propose/);
       assert.match(homelabCliContents, /Waiting for secret/);
+      assert.match(homelabCliContents, /historical Project Runtime bootstrap materializations/);
+      assert.doesNotMatch(homelabCliContents, /shared runtime bootstrap descriptor/);
       assert.match(
         homelabCliContents,
         /Create or update a secret reference, open the secure UI prompt, and wait for the value/,
@@ -444,8 +545,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
       assert.match(
         agentsContents,
-        /`\/workspace` is this thread's scratch area inside the container\./,
+        /`\/workspace` is the project runtime workspace inside the container\./,
       );
+      assert.match(agentsContents, /homelab memory search <query>/);
+      assert.match(agentsContents, /homelab memory propose/);
       assert.match(
         claudeContents,
         /Don't avoid searching when current external information matters\./,
@@ -457,6 +560,15 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
       assert.notEqual(networkFlagIndex, -1);
       assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      const openCodePortFlagIndex = runCall.findIndex((entry) => entry === "-p");
+      assert.notEqual(openCodePortFlagIndex, -1);
+      assert.equal(runCall[openCodePortFlagIndex + 1], "127.0.0.1::4096/tcp");
+      assert.deepEqual(started.managedOpenCodeServer, {
+        containerPort: 4096,
+        hostIp: "127.0.0.1",
+        hostPort: 32_001,
+      });
+      assert.deepEqual(launchContext.managedOpenCodeServer, started.managedOpenCodeServer);
       const runtimeCodexHome = path.join(runtimeHome, ".codex");
       assert.equal(
         yield* fileSystem.readFileString(path.join(runtimeCodexHome, "auth.json")),
@@ -465,6 +577,12 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(
         yield* fileSystem.readFileString(path.join(runtimeCodexHome, "config.toml")),
         'model = "gpt-5"\n',
+      );
+      assert.equal(
+        yield* fileSystem.readFileString(
+          path.join(runtimeHome, ".local", "share", "opencode", "auth.json"),
+        ),
+        '{"provider":"host"}',
       );
       const authMount = `${codexAuthPath}:${runtimeCodexHome}:ro`;
       assert.equal(runCall.includes(authMount), false);
@@ -480,7 +598,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         docker.calls.some((call) => call[0] === "build"),
         true,
       );
-    }),
+    }).pipe(Effect.scoped),
   );
 
   it.effect("maps logical project roots back to /workspace for runtime cwd", () =>
@@ -488,6 +606,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const runtime = yield* ThreadRuntime;
       const descriptor = yield* runtime.ensureRuntime({
@@ -500,6 +619,142 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(descriptor.cwd, "/workspace");
       assert.equal(descriptor.workspacePath, "/workspace");
     }),
+  );
+
+  it.effect(
+    "keeps a requested historical bootstrap materialization across descriptor refresh",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const runtime = yield* ThreadRuntime;
+        const registry = yield* RuntimeBootstrapRegistry;
+        const firstBlueprint = yield* registry.recordMutation({
+          id: "thread-runtime-historical-env",
+          sourceThreadId: ThreadId.make("thread-runtime-history-source"),
+          kind: "env",
+          summary: "Set historical env",
+          payload: {
+            key: "HISTORICAL_TOOL_HOME",
+            value: "/opt/historical",
+          },
+          createdAt: "2026-05-16T00:00:00.000Z",
+        });
+        const historicalVersion = firstBlueprint.bootstrapVersion;
+        yield* registry.recordMutation({
+          id: "thread-runtime-historical-env",
+          sourceThreadId: ThreadId.make("thread-runtime-history-source"),
+          kind: "env",
+          summary: "Set current env",
+          payload: {
+            key: "HISTORICAL_TOOL_HOME",
+            value: "/opt/current",
+          },
+          createdAt: "2026-05-17T00:00:00.000Z",
+        });
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-historical-bootstrap"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          bootstrapVersion: historicalVersion,
+        });
+        const refreshed = yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
+
+        assert.equal(descriptor.bootstrapVersion, historicalVersion);
+        assert.equal(descriptor.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+        assert.equal(refreshed.bootstrapVersion, historicalVersion);
+        assert.equal(refreshed.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+      }),
+  );
+
+  it.effect("uses the host-gateway server URL for normal local docker runtimes", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-host-gateway"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+      const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+      const runCall = findRunCall(docker.calls);
+
+      assert.ok(runCall);
+      const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+      assert.notEqual(networkFlagIndex, -1);
+      assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      assert.equal(runCall.includes("--add-host"), true);
+      assert.match(
+        secretEnvContents,
+        /export HOMELAB_AGENT_SERVER_URL='http:\/\/host\.docker\.internal:0'/,
+      );
+    }),
+  );
+
+  it.effect(
+    "uses runtime-id derived storage and container names for shared and isolated runtimes",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const runtime = yield* ThreadRuntime;
+        const sharedRuntimeId = RuntimeSessionId.make("project-runtime:project-alpha");
+        const isolatedRuntimeId = RuntimeSessionId.make("isolated-runtime:thread-runtime-isolated");
+
+        const shared = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-shared-binding"),
+          runtimeId: sharedRuntimeId,
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const isolated = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-isolated"),
+          runtimeId: isolatedRuntimeId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const sharedLaunch = yield* runtime.resolveLaunchContext(shared.threadId);
+        const isolatedLaunch = yield* runtime.resolveLaunchContext(isolated.threadId);
+
+        assert.equal(shared.containerName, "runtime-cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
+        assert.equal(
+          isolated.containerName,
+          "runtime-aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
+        );
+        assert.equal(
+          path.basename(sharedLaunch.hostRuntimePath),
+          "cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE",
+        );
+        assert.equal(
+          path.basename(isolatedLaunch.hostRuntimePath),
+          "aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
+        );
+        assert.equal(
+          sharedLaunch.hostWorkspacePath,
+          path.join(sharedLaunch.hostRuntimePath, "workspace"),
+        );
+        assert.equal(
+          isolatedLaunch.hostHomePath,
+          path.join(isolatedLaunch.hostRuntimePath, "home"),
+        );
+      }),
   );
 
   it.effect("refreshes auth files without clobbering runtime codex config", () =>
@@ -559,11 +814,59 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }),
   );
 
+  it.effect(
+    "recreates an existing container when the local runtime image fingerprint changes",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+        const settings = yield* ServerSettingsService;
+        const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
+        yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-image-fingerprint"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const firstStart = yield* runtime.startRuntime(descriptor.threadId);
+        yield* runtime.stopRuntime(descriptor.threadId);
+
+        const container = docker.containers.get(firstStart.containerName);
+        assert.ok(container);
+        container.labels["homelab.runtime.fingerprint"] = "stale-runtime-image";
+
+        docker.calls.length = 0;
+        const restarted = yield* runtime.startRuntime(descriptor.threadId);
+
+        assert.equal(restarted.status, "running");
+        assert.notEqual(restarted.containerId, firstStart.containerId);
+        assert.equal(
+          docker.calls.some((call) => call[0] === "rm"),
+          true,
+        );
+        assert.equal(
+          docker.calls.some((call) => call[0] === "run"),
+          true,
+        );
+        assert.equal(
+          docker.calls.some((call) => call[0] === "start"),
+          false,
+        );
+      }),
+  );
+
   it.effect("reuses a compatible stopped container instead of recreating it", () =>
     Effect.gen(function* () {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;
@@ -599,6 +902,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       docker.containers.clear();
       docker.images.clear();
+      docker.imageLabels.clear();
 
       const fileSystem = yield* FileSystem.FileSystem;
       const runtime = yield* ThreadRuntime;
@@ -624,7 +928,153 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
   );
 });
 
+runtimeLayerWithAutoNetwork("ThreadRuntimeLive Docker server connectivity", (it) => {
+  it.effect("uses the current container network for runtime server access in devcontainers", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const previousHostname = process.env.HOSTNAME;
+      process.env.HOSTNAME = "devcontainer-host";
+      docker.containers.set("devcontainer-host", {
+        id: "devcontainer-host-id",
+        name: "devcontainer-host",
+        image: "devcontainer-image",
+        workdir: "/workspace",
+        mounts: [],
+        ports: {},
+        networks: {
+          "homelab-devcontainer-network": {
+            IPAddress: "172.28.0.4",
+          },
+        },
+        labels: {},
+        running: true,
+      });
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-devcontainer-network"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        const runCall = findRunCall(docker.calls);
+
+        assert.ok(runCall);
+        const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+        assert.notEqual(networkFlagIndex, -1);
+        assert.equal(runCall[networkFlagIndex + 1], "homelab-devcontainer-network");
+        assert.equal(runCall.includes("--add-host"), false);
+        assert.match(
+          secretEnvContents,
+          /export HOMELAB_AGENT_SERVER_URL='http:\/\/172\.28\.0\.4:0'/,
+        );
+      } finally {
+        if (previousHostname === undefined) {
+          delete process.env.HOSTNAME;
+        } else {
+          process.env.HOSTNAME = previousHostname;
+        }
+      }
+    }),
+  );
+});
+
+runtimeLayerWithServerUrlOverride("ThreadRuntimeLive Docker server URL override", (it) => {
+  it.effect("preserves HOMELAB_AGENT_RUNTIME_SERVER_URL for runtime server access", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const previousServerUrl = process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL;
+      process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL = "http://homelab-agent.local:13773";
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-server-url-override"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        const runCall = findRunCall(docker.calls);
+
+        assert.ok(runCall);
+        const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
+        assert.notEqual(networkFlagIndex, -1);
+        assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+        assert.equal(runCall.includes("--add-host"), false);
+        assert.match(
+          secretEnvContents,
+          /export HOMELAB_AGENT_SERVER_URL='http:\/\/homelab-agent\.local:13773'/,
+        );
+      } finally {
+        if (previousServerUrl === undefined) {
+          delete process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL;
+        } else {
+          process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL = previousServerUrl;
+        }
+      }
+    }),
+  );
+});
+
 runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
+  it.effect(
+    "injects all registered homelab secrets into runtime env without writing them to instruction files",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        mutableRuntimeSecretEnv = {
+          FIRST_REGISTERED_SECRET: "first-secret-value",
+          SECOND_REGISTERED_SECRET: "second-secret-value",
+        };
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-secret-injection"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        yield* runtime.startRuntime(descriptor.threadId);
+        const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const agentsPath = path.join(launchContext.hostWorkspacePath, "AGENTS.md");
+        const claudePath = path.join(launchContext.hostWorkspacePath, "CLAUDE.md");
+
+        const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
+        assert.match(secretEnvContents, /export FIRST_REGISTERED_SECRET='first-secret-value'/);
+        assert.match(secretEnvContents, /export SECOND_REGISTERED_SECRET='second-secret-value'/);
+
+        const generatedContext = [
+          yield* fileSystem.readFileString(agentsPath),
+          yield* fileSystem.readFileString(claudePath),
+        ].join("\n");
+        assert.doesNotMatch(generatedContext, /first-secret-value/);
+        assert.doesNotMatch(generatedContext, /second-secret-value/);
+      }),
+  );
+
   it.effect(
     "rewrites the runtime secret env file after secrets change without restarting docker",
     () =>

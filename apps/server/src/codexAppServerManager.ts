@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalConsole:off globalTimers:off
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -17,24 +18,30 @@ import {
   type ProviderTurnStartResult,
   RuntimeMode,
   ProviderInteractionMode,
+  DEFAULT_MODEL_BY_PROVIDER,
+  ProviderDriverKind,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { Effect, Context } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 
 import {
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
   parseCodexCliVersion,
-} from "./provider/codexCliVersion";
+} from "./provider/codexCliVersion.ts";
 import {
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
   type CodexAccountSnapshot,
-} from "./provider/codexAccount";
-import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer";
+} from "./provider/codexAccount.ts";
+import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer.ts";
+import { expandHomePath } from "./pathExpansion.ts";
 
-export { buildCodexInitializeParams } from "./provider/codexAppServer";
-export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount";
+export { buildCodexInitializeParams } from "./provider/codexAppServer.ts";
+export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount.ts";
+
+const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 type PendingRequestKey = string;
 
@@ -356,7 +363,7 @@ function buildCodexCollaborationMode(input: {
   if (input.interactionMode === undefined) {
     return undefined;
   }
-  const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
+  const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL_BY_PROVIDER.codex;
   return {
     mode: input.interactionMode,
     settings: {
@@ -456,7 +463,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const processCwd = input.processCwd ?? threadCwd;
 
       const session: ProviderSession = {
-        provider: "codex",
+        provider: CODEX_DRIVER_KIND,
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
@@ -468,16 +475,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const codexBinaryPath = input.binaryPath;
       const codexHomePath = input.homePath;
+      const resolvedCodexHomePath = codexHomePath ? expandHomePath(codexHomePath) : undefined;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: processCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(resolvedCodexHomePath ? { homePath: resolvedCodexHomePath } : {}),
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: processCwd,
         env: {
           ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
+          ...(resolvedCodexHomePath ? { CODEX_HOME: resolvedCodexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
@@ -646,7 +654,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.emitEvent({
           id: EventId.make(randomUUID()),
           kind: "error",
-          provider: "codex",
+          provider: CODEX_DRIVER_KIND,
           threadId,
           createdAt: new Date().toISOString(),
           method: "session/startFailed",
@@ -846,7 +854,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "notification",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method: "item/requestApproval/decision",
@@ -885,7 +893,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "notification",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method: "item/tool/requestUserInput/answered",
@@ -1067,7 +1075,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "notification",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method: notification.method,
@@ -1170,7 +1178,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "request",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method: request.method,
@@ -1260,7 +1268,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "session",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method,
@@ -1272,7 +1280,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "error",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method,
@@ -1288,7 +1296,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitEvent({
       id: EventId.make(randomUUID()),
       kind: "notification",
-      provider: "codex",
+      provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       method,
@@ -1541,7 +1549,7 @@ function assertSupportedCodexCliVersion(input: {
     cwd: input.cwd,
     env: {
       ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+      ...(input.homePath ? { CODEX_HOME: expandHomePath(input.homePath) } : {}),
     },
     encoding: "utf8",
     shell: process.platform === "win32",

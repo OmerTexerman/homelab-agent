@@ -4,6 +4,7 @@ import { memo, useMemo } from "react";
 import {
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
+  resolveLockedWorkspaceLabel,
   type EnvMode,
 } from "./BranchToolbar.logic";
 import {
@@ -43,12 +44,12 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         {activeWorktreePath ? (
           <>
             <FolderGitIcon className="size-3" />
-            {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+            {resolveLockedWorkspaceLabel(activeWorktreePath)}
           </>
         ) : (
           <>
             <FolderIcon className="size-3" />
-            {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+            {resolveLockedWorkspaceLabel(activeWorktreePath)}
           </>
         )}
       </span>
@@ -57,6 +58,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
 
   return (
     <Select
+      modal={false}
       value={effectiveEnvMode}
       onValueChange={(value) => onEnvModeChange(value as EnvMode)}
       items={envModeItems}

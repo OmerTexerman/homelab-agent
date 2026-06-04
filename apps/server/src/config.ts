@@ -6,7 +6,13 @@
  *
  * @module ServerConfig
  */
-import { Effect, FileSystem, Layer, LogLevel, Path, Schema, Context } from "effect";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as LogLevel from "effect/LogLevel";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
 
 export const DEFAULT_PORT = 3773;
 
@@ -24,6 +30,7 @@ export interface ServerDerivedPaths {
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
+  readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
   readonly logsDir: string;
@@ -64,6 +71,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly desktopBootstrapToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly tailscaleServeEnabled: boolean;
+  readonly tailscaleServePort: number;
 }
 
 export const deriveServerPaths = Effect.fn(function* (
@@ -72,16 +81,17 @@ export const deriveServerPaths = Effect.fn(function* (
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
   const stateDir = join(baseDir, devUrl !== undefined ? "dev" : "userdata");
-  const configDir = join(stateDir, "config");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
+  const providerStatusCacheDir = join(baseDir, "caches");
   return {
     stateDir,
     dbPath,
-    keybindingsConfigPath: join(configDir, "keybindings.json"),
-    settingsPath: join(configDir, "settings.json"),
+    keybindingsConfigPath: join(stateDir, "keybindings.json"),
+    settingsPath: join(stateDir, "settings.json"),
+    providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
     logsDir,
@@ -111,6 +121,7 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.worktreesDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.keybindingsConfigPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true }),
+      fs.makeDirectory(derivedPaths.providerStatusCacheDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.anonymousIdPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
     ],
@@ -155,6 +166,8 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           mode: "web",
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: false,
+          tailscaleServeEnabled: false,
+          tailscaleServePort: 443,
           port: 0,
           host: undefined,
           desktopBootstrapToken: undefined,

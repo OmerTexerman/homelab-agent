@@ -1,6 +1,9 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Struct } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -30,6 +33,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         INSERT INTO projection_threads (
           thread_id,
           project_id,
+          runtime_id,
+          runtime_selection_mode,
           title,
           model_selection_json,
           runtime_mode,
@@ -40,11 +45,17 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at,
           updated_at,
           archived_at,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
           deleted_at
         )
         VALUES (
           ${row.threadId},
           ${row.projectId},
+          ${row.runtimeId ?? null},
+          ${row.runtimeSelectionMode ?? "shared"},
           ${row.title},
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
@@ -55,11 +66,17 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.createdAt},
           ${row.updatedAt},
           ${row.archivedAt},
+          ${row.latestUserMessageAt},
+          ${row.pendingApprovalCount},
+          ${row.pendingUserInputCount},
+          ${row.hasActionableProposedPlan},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
           project_id = excluded.project_id,
+          runtime_id = excluded.runtime_id,
+          runtime_selection_mode = excluded.runtime_selection_mode,
           title = excluded.title,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -70,6 +87,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
+          latest_user_message_at = excluded.latest_user_message_at,
+          pending_approval_count = excluded.pending_approval_count,
+          pending_user_input_count = excluded.pending_user_input_count,
+          has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -82,6 +103,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -92,6 +115,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -106,6 +133,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -116,6 +145,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isClaudeUserInterruptionDiagnostic,
   isProviderInterruptionMessage,
-} from "./providerInterruptions";
+} from "./providerInterruptions.ts";
 
 describe("providerInterruptions", () => {
   it("detects Claude ede interruption diagnostics", () => {

@@ -1,7 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { ServerProviderSkill } from "@t3tools/contracts";
-import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount";
+import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 
 interface JsonRpcProbeResponse {
   readonly id?: unknown;
@@ -83,7 +85,7 @@ export function buildCodexInitializeParams() {
   return {
     clientInfo: {
       name: "t3code_desktop",
-      title: "T3 Code Desktop",
+      title: "Homelab Agent Desktop",
       version: "0.1.0",
     },
     capabilities: {
@@ -115,7 +117,7 @@ export async function probeCodexDiscovery(input: {
     const child = spawn(input.binaryPath, ["app-server"], {
       env: {
         ...process.env,
-        ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+        ...(input.homePath ? { CODEX_HOME: expandHomePath(input.homePath) } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",

@@ -1,9 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  DEFAULT_MODEL_BY_PROVIDER,
+  type ProviderEvent,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   buildCodexInitializeParams,
@@ -15,7 +21,7 @@ import {
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
-} from "./codexAppServerManager";
+} from "./codexAppServerManager.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 
@@ -352,7 +358,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: "plus",
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.3-codex");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 
   it("keeps spark for supported plans", () => {
@@ -372,7 +378,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: null,
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.3-codex");
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 });
 
@@ -381,7 +387,7 @@ describe("startSession", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
         name: "t3code_desktop",
-        title: "T3 Code Desktop",
+        title: "Homelab Agent Desktop",
         version: "0.1.0",
       },
       capabilities: {
@@ -393,7 +399,7 @@ describe("startSession", () => {
   it("emits session/startFailed when resolving cwd throws before process launch", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
+    manager.on("event", (event: ProviderEvent) => {
       events.push({
         method: event.method,
         kind: event.kind,
@@ -428,7 +434,7 @@ describe("startSession", () => {
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
+    manager.on("event", (event: ProviderEvent) => {
       events.push({
         method: event.method,
         kind: event.kind,
@@ -449,7 +455,7 @@ describe("startSession", () => {
       )
       .mockImplementation(() => {
         throw new Error(
-          "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+          "Codex CLI v0.36.0 is too old for Homelab Agent. Upgrade to v0.37.0 or newer and restart Homelab Agent.",
         );
       });
 
@@ -462,7 +468,7 @@ describe("startSession", () => {
           runtimeMode: "full-access",
         }),
       ).rejects.toThrow(
-        "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+        "Codex CLI v0.36.0 is too old for Homelab Agent. Upgrade to v0.37.0 or newer and restart Homelab Agent.",
       );
       expect(versionCheck).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
@@ -470,7 +476,7 @@ describe("startSession", () => {
           method: "session/startFailed",
           kind: "error",
           message:
-            "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+            "Codex CLI v0.36.0 is too old for Homelab Agent. Upgrade to v0.37.0 or newer and restart Homelab Agent.",
         },
       ]);
     } finally {

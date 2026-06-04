@@ -20,13 +20,13 @@ import {
   keybindingValueForCommand,
   decodeProjectScriptKeybindingRule,
 } from "~/lib/projectScriptKeybindings";
+import { keybindingFromKeyboardEvent } from "~/components/settings/KeybindingsSettings.logic";
 import {
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
 } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
-import { isMacPlatform } from "~/lib/utils";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -53,6 +53,7 @@ import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "./ui/menu"
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
+import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
 
 const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
   { id: "play", label: "Play" },
@@ -96,57 +97,6 @@ interface ProjectScriptsControlProps {
   onDeleteScript: (scriptId: string) => Promise<void> | void;
 }
 
-function normalizeShortcutKeyToken(key: string): string | null {
-  const normalized = key.toLowerCase();
-  if (
-    normalized === "meta" ||
-    normalized === "control" ||
-    normalized === "ctrl" ||
-    normalized === "shift" ||
-    normalized === "alt" ||
-    normalized === "option"
-  ) {
-    return null;
-  }
-  if (normalized === " ") return "space";
-  if (normalized === "escape") return "esc";
-  if (normalized === "arrowup") return "arrowup";
-  if (normalized === "arrowdown") return "arrowdown";
-  if (normalized === "arrowleft") return "arrowleft";
-  if (normalized === "arrowright") return "arrowright";
-  if (normalized.length === 1) return normalized;
-  if (normalized.startsWith("f") && normalized.length <= 3) return normalized;
-  if (normalized === "enter" || normalized === "tab" || normalized === "backspace") {
-    return normalized;
-  }
-  if (normalized === "delete" || normalized === "home" || normalized === "end") {
-    return normalized;
-  }
-  if (normalized === "pageup" || normalized === "pagedown") return normalized;
-  return null;
-}
-
-function keybindingFromEvent(event: KeyboardEvent<HTMLInputElement>): string | null {
-  const keyToken = normalizeShortcutKeyToken(event.key);
-  if (!keyToken) return null;
-
-  const parts: string[] = [];
-  if (isMacPlatform(navigator.platform)) {
-    if (event.metaKey) parts.push("mod");
-    if (event.ctrlKey) parts.push("ctrl");
-  } else {
-    if (event.ctrlKey) parts.push("mod");
-    if (event.metaKey) parts.push("meta");
-  }
-  if (event.altKey) parts.push("alt");
-  if (event.shiftKey) parts.push("shift");
-  if (parts.length === 0) {
-    return null;
-  }
-  parts.push(keyToken);
-  return parts.join("+");
-}
-
 export default function ProjectScriptsControl({
   scripts,
   keybindings,
@@ -167,6 +117,7 @@ export default function ProjectScriptsControl({
   const [keybinding, setKeybinding] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
 
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {
@@ -186,7 +137,7 @@ export default function ProjectScriptsControl({
       setKeybinding("");
       return;
     }
-    const next = keybindingFromEvent(event);
+    const next = keybindingFromKeyboardEvent(event, navigator.platform);
     if (!next) return;
     setKeybinding(next);
   };
@@ -216,11 +167,16 @@ export default function ProjectScriptsControl({
         keybinding,
         command: commandForProjectScript(scriptIdForValidation),
       });
+      const existingScript = editingScriptId
+        ? scripts.find((script) => script.id === editingScriptId)
+        : undefined;
       const payload = {
         name: trimmedName,
         command: trimmedCommand,
         icon,
-        runOnWorktreeCreate,
+        runOnWorktreeCreate: showSourceControlUi
+          ? runOnWorktreeCreate
+          : (existingScript?.runOnWorktreeCreate ?? false),
         keybinding: keybindingRule?.key ?? null,
       } satisfies NewProjectScriptInput;
       if (editingScriptId) {
@@ -449,13 +405,15 @@ export default function ProjectScriptsControl({
                   onChange={(event) => setCommand(event.target.value)}
                 />
               </div>
-              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
-                <span>Run automatically on worktree creation</span>
-                <Switch
-                  checked={runOnWorktreeCreate}
-                  onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
-                />
-              </label>
+              {showSourceControlUi ? (
+                <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
+                  <span>Run automatically on worktree creation</span>
+                  <Switch
+                    checked={runOnWorktreeCreate}
+                    onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                  />
+                </label>
+              ) : null}
               {validationError && <p className="text-sm text-destructive">{validationError}</p>}
             </form>
           </DialogPanel>

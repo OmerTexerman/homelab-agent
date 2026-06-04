@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import {
+  buildProjectActionItems,
   buildThreadActionItems,
   filterCommandPaletteGroups,
+  getCommandPaletteInputPlaceholder,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
@@ -17,7 +20,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     codexThreadId: null,
     projectId: PROJECT_ID,
     title: "Thread",
-    modelSelection: { provider: "codex", model: "gpt-5" },
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,
@@ -35,6 +38,42 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   };
 }
+
+describe("buildProjectActionItems", () => {
+  it("uses project/runtime language instead of showing host workspace paths", () => {
+    const items = buildProjectActionItems({
+      projects: [
+        {
+          id: PROJECT_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          name: "Observability",
+          cwd: "/srv/repos/observability",
+          defaultModelSelection: null,
+          scripts: [],
+        },
+      ],
+      valuePrefix: "project",
+      icon: () => null,
+      runProject: async () => undefined,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title).toBe("Observability");
+    expect(items[0]?.description).toBe(HOMELAB_PRODUCT_COPY.project.searchDescription);
+    expect(items[0]?.description).not.toContain("/srv/repos");
+  });
+});
+
+describe("getCommandPaletteInputPlaceholder", () => {
+  it("keeps compatibility path copy out of the primary project creation flow", () => {
+    expect(HOMELAB_PRODUCT_COPY.project.newAction).toBe("New project");
+    expect(HOMELAB_PRODUCT_COPY.project.createPlaceholder).toBe("Project name");
+    expect(getCommandPaletteInputPlaceholder("root-browse")).toBe(
+      "Enter compatibility workspace path",
+    );
+    expect(getCommandPaletteInputPlaceholder("root-browse")).not.toMatch(/project path|browse/i);
+  });
+});
 
 describe("buildThreadActionItems", () => {
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {

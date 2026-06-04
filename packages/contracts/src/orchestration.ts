@@ -1,6 +1,11 @@
-import { Effect, Option, Schema, SchemaIssue, Struct } from "effect";
-import { ClaudeModelOptions, CodexModelOptions } from "./model";
-import { RepositoryIdentity } from "./environment";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+import * as Struct from "effect/Struct";
+import { ProviderOptionSelections } from "./model.ts";
+import { RepositoryIdentity } from "./environment.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -11,10 +16,13 @@ import {
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  RuntimeSessionId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
-} from "./baseSchemas";
+} from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProjectMemoryId } from "./projectMemory.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
@@ -22,10 +30,11 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
+  getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
+  subscribeShell: "orchestration.subscribeShell",
+  subscribeThread: "orchestration.subscribeThread",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
-export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
   "on-failure",
@@ -40,23 +49,72 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 
-export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
-
-export const CodexModelSelection = Schema.Struct({
-  provider: Schema.Literal("codex"),
+/**
+ * `ModelSelection` — selection of a model on a configured provider instance.
+ *
+ * The routing key is `instanceId` (a user-defined slug identifying one
+ * configured provider instance). Drivers, credentials, working-directory
+ * bindings, and any other per-instance state are recovered from the
+ * runtime registry via the instance id.
+ *
+ * Wire legacy: persisted selections produced before the driver/instance
+ * split carried a `provider: <driver-id>` field instead. The schema absorbs
+ * that shape via a pre-decoding transform — `{provider, model}` is promoted
+ * to `{instanceId: defaultInstanceIdForDriver(provider), model}`. No
+ * post-decode compatibility code lives in the runtime; the transform is the
+ * only compat surface.
+ */
+const ModelSelectionWire = Schema.Struct({
+  instanceId: ProviderInstanceId,
   model: TrimmedNonEmptyString,
-  options: Schema.optionalKey(CodexModelOptions),
+  options: Schema.optionalKey(ProviderOptionSelections),
 });
-export type CodexModelSelection = typeof CodexModelSelection.Type;
 
-export const ClaudeModelSelection = Schema.Struct({
-  provider: Schema.Literal("claudeAgent"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optionalKey(ClaudeModelOptions),
+// Source shape for persisted legacy payloads. Fields are typed as
+// `Schema.Unknown` so malformed drafts still make it into the transform and
+// fail validation through the target schema (with proper error messages)
+// rather than at the source-struct layer where the error is less actionable.
+const ModelSelectionSource = Schema.Struct({
+  provider: Schema.optional(Schema.Unknown),
+  instanceId: Schema.optional(Schema.Unknown),
+  model: Schema.Unknown,
+  options: Schema.optional(Schema.Unknown),
 });
-export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
-export const ModelSelection = Schema.Union([CodexModelSelection, ClaudeModelSelection]);
+export const ModelSelection = ModelSelectionSource.pipe(
+  Schema.decodeTo(
+    ModelSelectionWire,
+    SchemaTransformation.transformOrFail({
+      decode: (raw) => {
+        // Resolve the routing key: prefer an explicit `instanceId`; fall
+        // back to promoting the legacy `provider` slug (the canonical
+        // `defaultInstanceIdForDriver` mapping) so persisted rollout-era
+        // payloads decode without data loss. The target schema brands the
+        // string as `ProviderInstanceId`.
+        const instanceIdSource =
+          raw.instanceId !== undefined
+            ? raw.instanceId
+            : typeof raw.provider === "string"
+              ? raw.provider
+              : undefined;
+        const base: Record<string, unknown> = {
+          instanceId: instanceIdSource,
+          model: raw.model,
+        };
+        if (raw.options !== undefined) base.options = raw.options;
+        return Effect.succeed(base as typeof ModelSelectionWire.Encoded);
+      },
+      encode: (value) => {
+        const base: Record<string, unknown> = {
+          model: value.model,
+          instanceId: value.instanceId,
+        };
+        if (value.options !== undefined) base.options = value.options;
+        return Effect.succeed(base as typeof ModelSelectionSource.Encoded);
+      },
+    }),
+  ),
+);
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const RuntimeMode = Schema.Literals([
@@ -66,6 +124,9 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const ThreadRuntimeMode = Schema.Literals(["shared", "isolated"]);
+export type ThreadRuntimeMode = typeof ThreadRuntimeMode.Type;
+export const DEFAULT_THREAD_RUNTIME_MODE: ThreadRuntimeMode = "shared";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -147,6 +208,7 @@ export const OrchestrationProject = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
@@ -206,6 +268,7 @@ export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
@@ -277,6 +340,8 @@ export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -308,12 +373,104 @@ export const OrchestrationReadModel = Schema.Struct({
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
 
+export const OrchestrationProjectShell = Schema.Struct({
+  id: ProjectId,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  defaultModelSelection: Schema.NullOr(ModelSelection),
+  scripts: Schema.Array(ProjectScript),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
+
+export const OrchestrationThreadShell = Schema.Struct({
+  id: ThreadId,
+  projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  session: Schema.NullOr(OrchestrationSession),
+  latestUserMessageAt: Schema.NullOr(IsoDateTime),
+  hasPendingApprovals: Schema.Boolean,
+  hasPendingUserInput: Schema.Boolean,
+  hasActionableProposedPlan: Schema.Boolean,
+});
+export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
+
+export const OrchestrationShellSnapshot = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  projects: Schema.Array(OrchestrationProjectShell),
+  threads: Schema.Array(OrchestrationThreadShell),
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
+
+export const OrchestrationShellStreamEvent = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("project-upserted"),
+    sequence: NonNegativeInt,
+    project: OrchestrationProjectShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("project-removed"),
+    sequence: NonNegativeInt,
+    projectId: ProjectId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("thread-upserted"),
+    sequence: NonNegativeInt,
+    thread: OrchestrationThreadShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("thread-removed"),
+    sequence: NonNegativeInt,
+    threadId: ThreadId,
+  }),
+]);
+export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
+
+export const OrchestrationShellStreamItem = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    snapshot: OrchestrationShellSnapshot,
+  }),
+  OrchestrationShellStreamEvent,
+]);
+export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
+
+export const OrchestrationSubscribeThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
+
+export const OrchestrationThreadDetailSnapshot = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  thread: OrchestrationThread,
+});
+export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
+
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
   commandId: CommandId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   createdAt: IsoDateTime,
 });
@@ -332,6 +489,7 @@ const ProjectDeleteCommand = Schema.Struct({
   type: Schema.Literal("project.delete"),
   commandId: CommandId,
   projectId: ProjectId,
+  force: Schema.optional(Schema.Boolean),
 });
 
 const ThreadCreateCommand = Schema.Struct({
@@ -339,6 +497,8 @@ const ThreadCreateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -347,6 +507,55 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ThreadStandaloneCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.promote-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  createdAt: IsoDateTime,
+});
+
+export const StandaloneThreadMoveMemoryMigrationMode = Schema.Literals(["none", "copy", "move"]);
+export type StandaloneThreadMoveMemoryMigrationMode =
+  typeof StandaloneThreadMoveMemoryMigrationMode.Type;
+
+export const StandaloneThreadMoveMemoryMigration = Schema.Struct({
+  mode: StandaloneThreadMoveMemoryMigrationMode,
+  memoryIds: Schema.optional(Schema.Array(ProjectMemoryId)),
+});
+export type StandaloneThreadMoveMemoryMigration = typeof StandaloneThreadMoveMemoryMigration.Type;
+
+export const StandaloneThreadMoveRuntimeHandling = Schema.Struct({
+  filesystem: Schema.Literal("no-merge"),
+});
+export type StandaloneThreadMoveRuntimeHandling = typeof StandaloneThreadMoveRuntimeHandling.Type;
+
+const ThreadStandaloneMoveToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.move-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
+  runtimeHandling: Schema.optional(StandaloneThreadMoveRuntimeHandling),
   createdAt: IsoDateTime,
 });
 
@@ -373,6 +582,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -397,6 +608,8 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -506,6 +719,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadStandaloneCreateCommand,
+  ThreadStandalonePromoteToProjectCommand,
+  ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -527,6 +743,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadStandaloneCreateCommand,
+  ThreadStandalonePromoteToProjectCommand,
+  ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -659,6 +878,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
@@ -670,6 +890,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
@@ -683,6 +904,8 @@ export const ProjectDeletedPayload = Schema.Struct({
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -714,6 +937,8 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -957,6 +1182,18 @@ export const OrchestrationEvent = Schema.Union([
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
+export const OrchestrationThreadStreamItem = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    snapshot: OrchestrationThreadDetailSnapshot,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("event"),
+    event: OrchestrationEvent,
+  }),
+]);
+export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
+
 export const OrchestrationCommandReceiptStatus = Schema.Literals(["accepted", "rejected"]);
 export type OrchestrationCommandReceiptStatus = typeof OrchestrationCommandReceiptStatus.Type;
 
@@ -1021,13 +1258,11 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
-export const OrchestrationGetSnapshotInput = Schema.Struct({});
-export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
-const OrchestrationGetSnapshotResult = OrchestrationReadModel;
-export type OrchestrationGetSnapshotResult = typeof OrchestrationGetSnapshotResult.Type;
-
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
-  Struct.assign({ threadId: ThreadId }),
+  Struct.assign({
+    threadId: ThreadId,
+    ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  }),
   { unsafePreserveChecks: true },
 );
 export type OrchestrationGetTurnDiffInput = typeof OrchestrationGetTurnDiffInput.Type;
@@ -1038,6 +1273,7 @@ export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResu
 export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
+  ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationGetFullThreadDiffInput = typeof OrchestrationGetFullThreadDiffInput.Type;
 
@@ -1052,10 +1288,13 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
 
+export const OrchestrationGetSnapshotInput = Schema.Struct({});
+export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
+
 export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
-    output: OrchestrationGetSnapshotResult,
+    output: OrchestrationReadModel,
   },
   dispatchCommand: {
     input: ClientOrchestrationCommand,
@@ -1072,6 +1311,18 @@ export const OrchestrationRpcSchemas = {
   replayEvents: {
     input: OrchestrationReplayEventsInput,
     output: OrchestrationReplayEventsResult,
+  },
+  getArchivedShellSnapshot: {
+    input: Schema.Struct({}),
+    output: OrchestrationShellSnapshot,
+  },
+  subscribeThread: {
+    input: OrchestrationSubscribeThreadInput,
+    output: OrchestrationThreadStreamItem,
+  },
+  subscribeShell: {
+    input: Schema.Struct({}),
+    output: OrchestrationShellStreamItem,
   },
 } as const;
 

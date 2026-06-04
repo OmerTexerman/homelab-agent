@@ -1,8 +1,11 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import nodeFs from "node:fs";
 import nodeOs from "node:os";
 import nodePath from "node:path";
 
 import {
+  AuthAccessWriteScope,
+  AuthAdministrativeScopes,
   ProviderKind,
   RuntimeMode,
   RuntimeSessionId,
@@ -12,29 +15,50 @@ import {
   type RuntimeSessionId as RuntimeSessionIdModel,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
-import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { SessionCredentialService } from "../../auth/Services/SessionCredentialService.ts";
+import { SessionStore } from "../../auth/SessionStore.ts";
+import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
 import { ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
-import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
-import { normalizeRuntimeImageRef, resolveLocalRuntimeImageBuildSpec } from "../image.ts";
+import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
+import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
+import { resolveLocalRuntimeImageBuildSpec } from "../image.ts";
 import {
-  CODEX_RUNTIME_WRAPPER,
-  CLAUDE_RUNTIME_WRAPPER,
-  SHELL_RUNTIME_WRAPPER,
-} from "../launchers.ts";
+  homePathForThread,
+  hostWorkspacePathForContainerPath,
+  isWithinContainerWorkspace,
+  managedWorkspacePath,
+  runtimeRootPath,
+} from "./ThreadRuntimePaths.ts";
+import {
+  buildRuntimeControlEnvironment,
+  buildRuntimeAuthSyncEntries,
+  buildRuntimeMountSpecs,
+  buildRuntimeShellInitFileSpecs,
+  buildRuntimeStorageLayoutForRuntime,
+  buildRuntimeWrapperScriptSpecs,
+  buildThreadRuntimeDescriptor,
+  OPENCODE_MANAGED_SERVER_CONTAINER_PORT,
+  type DockerMountSpec,
+  renderSecretEnvFile,
+  type RuntimeAuthSyncEntry,
+  runtimeAccessTokenPath,
+  runtimeHomelabBinPath,
+  runtimeStorageIdFor,
+  runtimeSecretEnvPath,
+  type RuntimeHostBindings,
+  toExecutionContext,
+  toLaunchContext,
+} from "./RuntimeExecutionContext.ts";
 import {
   ThreadRuntime,
   ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
-  type ThreadExecutionContext,
-  type ThreadRuntimeLaunchContext,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
@@ -52,22 +76,6 @@ export interface ThreadRuntimeLiveOptions {
   ) => Effect.Effect<ProcessRunResult, ThreadRuntimeError>;
 }
 
-interface DockerMountSpec {
-  readonly source: string;
-  readonly target: string;
-  readonly readOnly?: boolean;
-}
-
-interface RuntimeAuthBindings {
-  readonly codexHostAuthPath?: string;
-  readonly claudeHostAuthPath?: string;
-  readonly claudeHostAuthJsonPath?: string;
-  readonly sshAuthSockPath?: string;
-  readonly dockerSocketPath?: string;
-}
-
-interface RuntimeHostBindings extends RuntimeAuthBindings {}
-
 interface DockerContainerInspectMount {
   readonly Source?: string;
   readonly Destination?: string;
@@ -82,8 +90,25 @@ interface DockerContainerInspectResult {
   readonly Config?: {
     readonly Image?: string;
     readonly WorkingDir?: string;
+    readonly Labels?: Record<string, string> | null;
   };
   readonly Mounts?: ReadonlyArray<DockerContainerInspectMount>;
+  readonly NetworkSettings?: {
+    readonly Ports?: Record<
+      string,
+      null | ReadonlyArray<{
+        readonly HostIp?: string;
+        readonly HostPort?: string;
+      }>
+    >;
+    readonly Networks?: Record<
+      string,
+      {
+        readonly IPAddress?: string;
+        readonly GlobalIPv6Address?: string;
+      }
+    >;
+  };
 }
 
 interface PersistedRuntimeImageBuildState {
@@ -95,14 +120,6 @@ interface PersistedRuntimeImageBuildState {
 interface PersistedRuntimeAccessTokenState {
   readonly version: 1;
   readonly token: string;
-}
-
-type RuntimeAuthSyncMode = "overwrite" | "if-missing";
-
-interface RuntimeAuthSyncEntry {
-  readonly sourcePath: string;
-  readonly targetPath: string;
-  readonly mode: RuntimeAuthSyncMode;
 }
 
 const ThreadRuntimeBackendSchema = Schema.Literal("docker");
@@ -133,7 +150,15 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   homePath: Schema.String,
   cwd: Schema.String,
   shell: Schema.String,
+  bootstrapVersion: Schema.optional(Schema.String),
   env: RuntimeEnvSchema,
+  managedOpenCodeServer: Schema.optional(
+    Schema.Struct({
+      containerPort: Schema.Number,
+      hostIp: Schema.String,
+      hostPort: Schema.Number,
+    }),
+  ),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   lastStartedAt: Schema.NullOr(Schema.String),
@@ -161,194 +186,102 @@ const DEFAULT_RUNTIME_NETWORK = process.env.HOMELAB_AGENT_RUNTIME_NETWORK?.trim(
 const DEFAULT_CONTAINER_SHELL_PATH = process.env.HOMELAB_AGENT_RUNTIME_SHELL?.trim() || "/bin/bash";
 const DEFAULT_RUNTIME_IDLE_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_RUNTIME_IDLE_POLL_INTERVAL_MS = 60_000;
-const CONTAINER_RUNTIME_ROOT = "/runtime";
-const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
-const CONTAINER_WORKSPACE_PATH = "/workspace";
-const CONTAINER_HOMELAB_BIN_PATH = `${CONTAINER_HOME_PATH}/.homelab/bin`;
-const CONTAINER_TOOL_BIN_PATH = "/opt/homelab/bin";
-const DEFAULT_CONTAINER_PATH = `${CONTAINER_HOMELAB_BIN_PATH}:${CONTAINER_TOOL_BIN_PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
-const RUNTIME_SECRET_ENV_BASENAME = ".homelab-runtime.env";
-const RUNTIME_ACCESS_TOKEN_BASENAME = ".homelab-runtime-token";
+const RUNTIME_IMAGE_FINGERPRINT_LABEL = "homelab.runtime.fingerprint";
 const RUNTIME_SERVER_HOST_ALIAS = "host.docker.internal";
+const RUNTIME_SERVER_URL_ENV = "HOMELAB_AGENT_RUNTIME_SERVER_URL";
 const RUNTIME_AGENTS_FILENAME = "AGENTS.md";
 const RUNTIME_CLAUDE_FILENAME = "CLAUDE.md";
 const KEEPALIVE_COMMAND = "trap : TERM INT; while sleep 3600; do :; done";
-const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
-const CODEX_AUTH_IF_MISSING_RELATIVE_PATHS = ["config.toml", "rules"];
-const CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS = [".credentials.json"];
-const CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS = [
-  "settings.json",
-  "settings.local.json",
-  "plugins/installed_plugins.json",
-  "plugins/known_marketplaces.json",
-];
-const FORWARDED_ENV_DENYLIST = new Set([
-  "_",
-  "BASH_ENV",
-  "BASHOPTS",
-  "BASHPID",
-  "CODEX_HOME",
-  "ENV",
-  "EUID",
-  "GROUPS",
-  "HOME",
-  "HOSTNAME",
-  "IFS",
-  "OLDPWD",
-  "OPTERR",
-  "OPTIND",
-  "PATH",
-  "PIPESTATUS",
-  "POSIXLY_CORRECT",
-  "PPID",
-  "PS4",
-  "PWD",
-  "SHELLOPTS",
-  "SHLVL",
-  "UID",
-  "WORKSPACE",
-]);
 
-function encodeThreadSegment(threadId: string): string {
-  return Buffer.from(threadId, "utf8").toString("base64url");
+interface CurrentContainerNetwork {
+  readonly networkName: string;
+  readonly ipAddress: string;
 }
 
-function runtimeName(threadId: ThreadIdModel): string {
-  return `runtime-${encodeThreadSegment(String(threadId))}`;
-}
-
-function makeRuntimeId(threadId: ThreadIdModel): RuntimeSessionIdModel {
-  return RuntimeSessionId.make(runtimeName(threadId));
-}
-
-function runtimeRootPath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(threadRuntimesDir, encodeThreadSegment(String(threadId)));
-}
-
-function runtimeBinDirForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "bin");
-}
-
-function managedWorkspacePath(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "workspace");
-}
-
-function homePathForThread(threadRuntimesDir: string, threadId: ThreadIdModel): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, threadId), "home");
-}
-
-function runtimeCodexAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".codex");
-}
-
-function runtimeClaudeAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude");
-}
-
-function runtimeClaudeAuthJsonPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude.json");
-}
-
-function runtimeSecretEnvPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_SECRET_ENV_BASENAME);
-}
-
-function runtimeAccessTokenPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_ACCESS_TOKEN_BASENAME);
-}
-
-function runtimeHomelabRootPath(homePath: string): string {
-  return nodePath.join(homePath, ".homelab");
-}
-
-function runtimeHomelabBinPath(homePath: string): string {
-  return nodePath.join(runtimeHomelabRootPath(homePath), "bin");
-}
-
-function runtimeBashProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".bash_profile");
-}
-
-function runtimeBashRcPath(homePath: string): string {
-  return nodePath.join(homePath, ".bashrc");
-}
-
-function runtimeProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".profile");
-}
-
-function runtimeZshEnvPath(homePath: string): string {
-  return nodePath.join(homePath, ".zshenv");
-}
-
-function normalizeRequestedCwd(
-  threadRuntimesDir: string,
-  threadId: ThreadIdModel,
-  requestedCwd: string | undefined,
-): string | undefined {
-  const normalized = requestedCwd?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const logicalProjectPath = parseLogicalProjectWorkspacePath(normalized);
-  if (logicalProjectPath) {
-    if (!logicalProjectPath.relativePath) {
-      return CONTAINER_WORKSPACE_PATH;
-    }
-    const mappedPath = nodePath.posix.normalize(
-      nodePath.posix.join(CONTAINER_WORKSPACE_PATH, logicalProjectPath.relativePath),
-    );
-    return isWithinContainerWorkspace(mappedPath) ? mappedPath : CONTAINER_WORKSPACE_PATH;
-  }
-
-  const normalizedContainerPath = nodePath.posix.normalize(normalized.replace(/\\/g, "/"));
-  const managedWorkspace = managedWorkspacePath(threadRuntimesDir, threadId);
-  const normalizedHostPath = nodePath.normalize(normalized);
-
-  if (
-    normalizedHostPath === managedWorkspace ||
-    normalizedHostPath.startsWith(`${managedWorkspace}${nodePath.sep}`)
-  ) {
-    const relativePath = nodePath.relative(managedWorkspace, normalizedHostPath);
-    return relativePath
-      ? nodePath.posix.join(CONTAINER_WORKSPACE_PATH, ...relativePath.split(nodePath.sep))
-      : CONTAINER_WORKSPACE_PATH;
-  }
-
-  if (nodePath.isAbsolute(normalized)) {
-    if (
-      normalizedContainerPath === CONTAINER_WORKSPACE_PATH ||
-      normalizedContainerPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)
-    ) {
-      return normalizedContainerPath;
-    }
-    return CONTAINER_WORKSPACE_PATH;
-  }
-
-  return nodePath.posix.join(CONTAINER_WORKSPACE_PATH, normalized.replace(/\\/g, "/"));
-}
-
-function isWithinContainerWorkspace(targetPath: string): boolean {
-  return (
-    targetPath === CONTAINER_WORKSPACE_PATH || targetPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)
-  );
-}
-
-function hostWorkspacePathForContainerPath(
-  managedWorkspace: string,
-  containerPath: string,
-): string {
-  if (containerPath === CONTAINER_WORKSPACE_PATH) {
-    return managedWorkspace;
-  }
-
-  const relativePath = nodePath.posix.relative(CONTAINER_WORKSPACE_PATH, containerPath);
-  return nodePath.join(managedWorkspace, ...relativePath.split("/"));
+interface RuntimeDockerNetworkPlan {
+  readonly dockerNetwork: string;
+  readonly serverUrl: string;
+  readonly addHostGatewayAlias: boolean;
 }
 
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function urlHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function isLikelyRunningInsideContainer(): boolean {
+  if (
+    process.env.DEVCONTAINER ||
+    process.env.REMOTE_CONTAINERS ||
+    process.env.CODESPACES ||
+    process.env.container
+  ) {
+    return true;
+  }
+  if (nodeFs.existsSync("/.dockerenv")) {
+    return true;
+  }
+  try {
+    return /docker|containerd|kubepods|libpod/i.test(nodeFs.readFileSync("/proc/1/cgroup", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function currentContainerNameCandidates(): ReadonlyArray<string> {
+  return [
+    trimToUndefined(process.env.HOSTNAME),
+    trimToUndefined(nodeOs.hostname()),
+    trimToUndefined(process.env.CONTAINER_NAME),
+  ].filter(
+    (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
+  );
+}
+
+function selectCurrentContainerNetwork(
+  inspect: DockerContainerInspectResult,
+  preferredNetwork: string,
+): CurrentContainerNetwork | undefined {
+  const networks = inspect.NetworkSettings?.Networks;
+  if (!networks) {
+    return undefined;
+  }
+
+  const candidates = Object.entries(networks)
+    .map(([networkName, endpoint]) => ({
+      networkName,
+      ipAddress: trimToUndefined(endpoint.IPAddress) ?? trimToUndefined(endpoint.GlobalIPv6Address),
+    }))
+    .filter(
+      (candidate): candidate is CurrentContainerNetwork =>
+        candidate.ipAddress !== undefined && candidate.networkName !== "host",
+    );
+
+  return (
+    candidates.find((candidate) => candidate.networkName === preferredNetwork) ??
+    candidates.find((candidate) => candidate.networkName !== "bridge") ??
+    candidates[0]
+  );
+}
+
+function parseCurrentContainerNetwork(
+  output: string,
+  preferredNetwork: string,
+): CurrentContainerNetwork | undefined {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const inspect = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!inspect || typeof inspect !== "object") {
+      return undefined;
+    }
+    return selectCurrentContainerNetwork(inspect as DockerContainerInspectResult, preferredNetwork);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseDurationMs(value: string | undefined, fallback: number): number {
@@ -384,122 +317,6 @@ function syncRuntimeAuthEntry(entry: RuntimeAuthSyncEntry): void {
   copyPathSync(entry.sourcePath, entry.targetPath);
 }
 
-function addRuntimeAuthSyncEntries(
-  entries: RuntimeAuthSyncEntry[],
-  input: {
-    readonly sourceRoot: string;
-    readonly targetRoot: string;
-    readonly overwriteRelativePaths: ReadonlyArray<string>;
-    readonly ifMissingRelativePaths: ReadonlyArray<string>;
-  },
-): void {
-  for (const relativePath of input.overwriteRelativePaths) {
-    entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
-      mode: "overwrite",
-    });
-  }
-
-  for (const relativePath of input.ifMissingRelativePaths) {
-    entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
-      mode: "if-missing",
-    });
-  }
-}
-
-function buildRuntimeAuthSyncEntries(
-  runtime: ThreadRuntimeDescriptor,
-  hostBindings: RuntimeHostBindings,
-  runtimeHomePath: string,
-): ReadonlyArray<RuntimeAuthSyncEntry> {
-  const entries: RuntimeAuthSyncEntry[] = [];
-
-  if (hostBindings.codexHostAuthPath) {
-    addRuntimeAuthSyncEntries(entries, {
-      sourceRoot: hostBindings.codexHostAuthPath,
-      targetRoot: runtimeCodexAuthPath(runtimeHomePath),
-      overwriteRelativePaths: CODEX_AUTH_OVERWRITE_RELATIVE_PATHS,
-      ifMissingRelativePaths: CODEX_AUTH_IF_MISSING_RELATIVE_PATHS,
-    });
-  }
-
-  if (hostBindings.claudeHostAuthPath) {
-    addRuntimeAuthSyncEntries(entries, {
-      sourceRoot: hostBindings.claudeHostAuthPath,
-      targetRoot: runtimeClaudeAuthPath(runtimeHomePath),
-      overwriteRelativePaths: CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS,
-      ifMissingRelativePaths: CLAUDE_AUTH_IF_MISSING_RELATIVE_PATHS,
-    });
-  }
-
-  if (hostBindings.claudeHostAuthJsonPath) {
-    entries.push({
-      sourcePath: hostBindings.claudeHostAuthJsonPath,
-      targetPath: runtimeClaudeAuthJsonPath(runtimeHomePath),
-      mode: "overwrite",
-    });
-  }
-
-  return entries;
-}
-
-function buildRuntimeEnvironment(input: {
-  readonly cwd: string;
-  readonly workspacePath: string;
-  readonly homePath: string;
-  readonly threadId: ThreadIdModel;
-  readonly runtimeId: RuntimeSessionIdModel;
-  readonly materializedEnv: Readonly<Record<string, string>>;
-  readonly baseEnvironment?: Readonly<Record<string, string>>;
-  readonly containerShellPath: string;
-}): Readonly<Record<string, string>> {
-  const runtimeEnvPath = runtimeSecretEnvPath(input.homePath);
-  return {
-    BASH_ENV: runtimeEnvPath,
-    ENV: runtimeEnvPath,
-    HOME: input.homePath,
-    PWD: input.cwd,
-    SHELL: input.containerShellPath,
-    T3_THREAD_ID: String(input.threadId),
-    T3_RUNTIME_ID: String(input.runtimeId),
-    WORKSPACE: input.workspacePath,
-    ...input.materializedEnv,
-    ...input.baseEnvironment,
-    CODEX_HOME: runtimeCodexAuthPath(input.homePath),
-  };
-}
-
-function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExecutionContext {
-  return {
-    threadId: runtime.threadId,
-    runtimeId: runtime.runtimeId,
-    backend: runtime.backend,
-    containerId: runtime.containerId,
-    workspacePath: runtime.workspacePath,
-    homePath: runtime.homePath,
-    cwd: runtime.cwd,
-    shell: runtime.shell,
-    env: runtime.env,
-  };
-}
-
-function toLaunchContext(
-  threadRuntimesDir: string,
-  runtime: ThreadRuntimeDescriptor,
-): ThreadRuntimeLaunchContext {
-  return {
-    execution: toExecutionContext(runtime),
-    hostRuntimePath: runtimeRootPath(threadRuntimesDir, runtime.threadId),
-    hostWorkspacePath: managedWorkspacePath(threadRuntimesDir, runtime.threadId),
-    hostHomePath: homePathForThread(threadRuntimesDir, runtime.threadId),
-    hostBinDir: runtimeBinDirForThread(threadRuntimesDir, runtime.threadId),
-    shellWrapperPath: runtime.shell,
-  };
-}
-
 function upsertRuntimeDescriptor(
   runtimes: ReadonlyArray<ThreadRuntimeDescriptor>,
   nextRuntime: ThreadRuntimeDescriptor,
@@ -512,67 +329,6 @@ function upsertRuntimeDescriptor(
   const nextRuntimes = runtimes.slice();
   nextRuntimes[existingIndex] = nextRuntime;
   return nextRuntimes;
-}
-
-function shQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function renderSecretEnvFile(env: Readonly<Record<string, string>>): string {
-  const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
-  if (entries.length === 0) {
-    return "# managed by homelab-agent\n";
-  }
-  return [
-    "# managed by homelab-agent",
-    ...entries.map(([key, value]) => `export ${key}=${shQuote(value)}`),
-    "",
-  ].join("\n");
-}
-
-function renderShellInitFile(input: {
-  readonly homePath: string;
-  readonly shell: "bash" | "profile" | "zsh";
-}): string {
-  const envPath = runtimeSecretEnvPath(input.homePath);
-  if (input.shell === "profile") {
-    return [
-      "# managed by homelab-agent",
-      `[ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
-      "",
-    ].join("\n");
-  }
-
-  if (input.shell === "bash") {
-    return [
-      "# managed by homelab-agent",
-      "__homelab_runtime_refresh_env() {",
-      `  [ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
-      "}",
-      "__homelab_runtime_refresh_env",
-      'case ";${PROMPT_COMMAND:-};" in',
-      '  *";__homelab_runtime_refresh_env;"*) ;;',
-      '  "") PROMPT_COMMAND="__homelab_runtime_refresh_env" ;;',
-      '  *) PROMPT_COMMAND="__homelab_runtime_refresh_env;${PROMPT_COMMAND}" ;;',
-      "esac",
-      "",
-    ].join("\n");
-  }
-
-  return [
-    "# managed by homelab-agent",
-    "function __homelab_runtime_refresh_env() {",
-    `  [[ -f ${shQuote(envPath)} ]] && source ${shQuote(envPath)}`,
-    "}",
-    "__homelab_runtime_refresh_env",
-    "if [[ -o interactive ]]; then",
-    "  typeset -ga precmd_functions",
-    "  if (( ${precmd_functions[(Ie)__homelab_runtime_refresh_env]} == 0 )); then",
-    "    precmd_functions+=(__homelab_runtime_refresh_env)",
-    "  fi",
-    "fi",
-    "",
-  ].join("\n");
 }
 
 function renderHomelabSecretToFileScript(): string {
@@ -676,7 +432,7 @@ print(str(target_path))
 `;
 }
 
-function renderHomelabCliScript(): string {
+export function renderHomelabCliScript(): string {
   return `#!/usr/bin/env python3
 import argparse
 import json
@@ -747,6 +503,27 @@ def read_json_input(path: str | None, use_stdin: bool):
     if use_stdin:
         return json.load(sys.stdin)
     fail("Provide --file or --stdin for the promotion payload.")
+
+
+def read_text_input(path: str | None, use_stdin: bool, inline: str | None):
+    if inline is not None:
+        return inline
+    if path:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    if use_stdin:
+        return sys.stdin.read()
+    return ""
+
+
+def runtime_thread_query(args=None):
+    query = {}
+    project_id = getattr(args, "project_id", None) if args is not None else None
+    if project_id:
+        query["projectId"] = project_id
+    elif THREAD_ID:
+        query["threadId"] = THREAD_ID
+    return query
 
 
 PROMOTION_ENTITY_KINDS = [
@@ -854,7 +631,7 @@ def promotion_example_payload():
                     "id": "observation-grafana-http-check",
                     "sourceKind": "manual",
                     "summary": "Grafana responded successfully on port 3000",
-                    "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+                    "detail": "Verified from the Project Runtime after probing the HTTP endpoint.",
                     "threadId": thread_id,
                     "entityIds": ["service-grafana", "host-truenas"],
                     "createdAt": now,
@@ -1059,6 +836,79 @@ def cmd_bootstrap(_args):
     print_json(request_json("GET", "/api/homelab/runtime-bootstrap"))
 
 
+def cmd_memory_search(args):
+    payload = runtime_thread_query(args)
+    payload["query"] = args.query
+    payload["includeTranscripts"] = not args.no_transcripts
+    if args.limit is not None:
+        payload["limit"] = args.limit
+    print_json(request_json("POST", "/api/homelab/project-memory/search", payload=payload))
+
+
+def cmd_memory_list(args):
+    query = runtime_thread_query(args)
+    if args.promotion_status:
+        query["promotionStatus"] = args.promotion_status
+    if args.limit is not None:
+        query["limit"] = args.limit
+    print_json(request_json("GET", "/api/homelab/project-memory", query=query))
+
+
+def build_memory_payload(args, promotion_status):
+    payload = runtime_thread_query(args)
+    if args.id:
+        payload["id"] = args.id
+    if args.runtime_id:
+        payload["runtimeId"] = args.runtime_id
+    if THREAD_ID:
+        payload["sourceThreadId"] = THREAD_ID
+    if args.source_thread_id:
+        payload["sourceThreadId"] = args.source_thread_id
+    if args.source_message_id:
+        payload["sourceMessageId"] = args.source_message_id
+    if args.source_file:
+        payload["sourceFilePath"] = args.source_file
+    payload["summary"] = args.summary
+    body = read_text_input(args.body_file, args.stdin, args.body)
+    if body:
+        payload["body"] = body
+    if args.tag:
+        payload["tags"] = args.tag
+    if args.supersedes:
+        payload["supersedes"] = args.supersedes
+    if args.replaces:
+        payload["replaces"] = args.replaces
+    payload["promotionStatus"] = promotion_status
+    return payload
+
+
+def cmd_memory_add(args):
+    print_json(
+        request_json(
+            "POST",
+            "/api/homelab/project-memory",
+            payload=build_memory_payload(args, "none"),
+        )
+    )
+
+
+def cmd_memory_propose(args):
+    print_json(
+        request_json(
+            "POST",
+            "/api/homelab/project-memory",
+            payload=build_memory_payload(args, "proposed"),
+        )
+    )
+
+
+def cmd_memory_promote(args):
+    payload = runtime_thread_query(args)
+    payload["memoryId"] = args.memory_id
+    payload["promotion"] = prepare_promotion_payload(read_json_input(args.file, args.stdin))
+    print_json(request_json("POST", "/api/homelab/project-memory/promote", payload=payload))
+
+
 def cmd_promote(args):
     if args.example:
         print_json(promotion_example_payload())
@@ -1131,9 +981,78 @@ def build_parser():
     secret_request_parser.set_defaults(func=cmd_secret_request)
 
     bootstrap_parser = subparsers.add_parser(
-        "bootstrap", help="Inspect the shared runtime bootstrap descriptor for future threads."
+        "bootstrap",
+        help="Inspect active and historical Project Runtime bootstrap materializations.",
     )
     bootstrap_parser.set_defaults(func=cmd_bootstrap)
+
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Search, list, and write project-local memory.",
+    )
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+
+    memory_search_parser = memory_subparsers.add_parser(
+        "search", help="Search project memory and transcript indexes."
+    )
+    memory_search_parser.add_argument("query", help="Search query.")
+    memory_search_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_search_parser.add_argument("--limit", type=int, default=None, help="Max result count.")
+    memory_search_parser.add_argument(
+        "--no-transcripts",
+        action="store_true",
+        help="Search durable memory only, without raw transcript indexes.",
+    )
+    memory_search_parser.set_defaults(func=cmd_memory_search)
+
+    memory_list_parser = memory_subparsers.add_parser(
+        "list", help="List durable project memory entries."
+    )
+    memory_list_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_list_parser.add_argument("--limit", type=int, default=None, help="Max entry count.")
+    memory_list_parser.add_argument(
+        "--promotion-status",
+        choices=["none", "proposed", "promoted", "rejected"],
+        help="Filter by promotion status.",
+    )
+    memory_list_parser.set_defaults(func=cmd_memory_list)
+
+    def add_memory_write_arguments(target_parser):
+        target_parser.add_argument("--id", help="Stable memory id. Generated when omitted.")
+        target_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+        target_parser.add_argument("--runtime-id", help="Runtime id this memory applies to.")
+        target_parser.add_argument("--source-thread-id", help="Source thread id. Defaults to this runtime thread.")
+        target_parser.add_argument("--source-message-id", help="Source message id.")
+        target_parser.add_argument("--source-file", help="Source file path.")
+        target_parser.add_argument("--summary", required=True, help="Short memory summary.")
+        target_parser.add_argument("--body", help="Memory body text.")
+        target_parser.add_argument("--body-file", help="Read memory body text from a file.")
+        target_parser.add_argument("--stdin", action="store_true", help="Read memory body text from stdin.")
+        target_parser.add_argument("--tag", action="append", help="Tag. Can be repeated.")
+        target_parser.add_argument("--supersedes", action="append", help="Memory id superseded by this entry.")
+        target_parser.add_argument("--replaces", action="append", help="Memory id replaced by this entry.")
+
+    memory_add_parser = memory_subparsers.add_parser("add", help="Add a durable project memory entry.")
+    add_memory_write_arguments(memory_add_parser)
+    memory_add_parser.set_defaults(func=cmd_memory_add)
+
+    memory_propose_parser = memory_subparsers.add_parser(
+        "propose", help="Add a project memory entry flagged for explicit promotion review."
+    )
+    add_memory_write_arguments(memory_propose_parser)
+    memory_propose_parser.set_defaults(func=cmd_memory_propose)
+
+    memory_promote_parser = memory_subparsers.add_parser(
+        "promote",
+        help="Apply a promotion envelope for a proposed memory entry and mark it promoted.",
+    )
+    memory_promote_parser.add_argument("memory_id", help="Project memory id.")
+    memory_promote_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    memory_promote_parser.add_argument("--file", help="Path to a JSON promotion envelope.")
+    memory_promote_parser.add_argument(
+        "--stdin", action="store_true", help="Read the promotion envelope from stdin."
+    )
+    memory_promote_parser.set_defaults(func=cmd_memory_promote)
 
     promote_parser = subparsers.add_parser(
         "promote",
@@ -1231,8 +1150,11 @@ Run this before doing anything else:
 \`\`\`bash
 homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
+homelab memory list     # See durable project-local memory
 homelab secrets         # See what credentials are available
-homelab bootstrap       # See inherited tools, packages, and runtime bootstrap data
+homelab bootstrap       # See active and historical runtime bootstrap data
+find .homelab -maxdepth 3 -type f | sort
+rg -n "query-or-host-or-service" .homelab || true
 pwd && ls -la           # See the runtime workspace you can use freely
 \`\`\`
 
@@ -1240,12 +1162,30 @@ This tells you what hosts, services, networks, and secrets the user has
 registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
 
-\`/workspace\` is this thread's scratch area inside the container. It is useful
-for notes, probes, temporary scripts, and exported artifacts. It is not
-guaranteed to be a checked-out app repository.
+\`/workspace\` is the project runtime workspace inside the container. Threads in
+the same project normally share this runtime and filesystem, with turns queued
+by the app so there is one active writer at a time. Use it for notes, probes,
+temporary scripts, and exported artifacts. It is not guaranteed to be a checked-
+out app repository.
 
 If the browser shows a "Thread Workspace" panel, it is a view into this same
 \`/workspace\` directory.
+
+## Project-local memory and transcripts
+
+Generated project context lives under \`.homelab/\`. These files are views over
+durable app state, not the source of truth. Search them with normal tools:
+
+- \`.homelab/memory/index.jsonl\` has project-local memory and durable notes.
+- \`.homelab/memory/latest/\` has readable generated files for current entries.
+- \`.homelab/threads/index.jsonl\` lists discoverable threads in this project.
+- \`.homelab/threads/thread_*/summary.md\` summarizes each thread.
+- \`.homelab/threads/thread_*/messages.jsonl\` and \`transcript.md\` expose raw
+  thread transcripts where safe.
+
+Do not dump all of \`.homelab\` into prompts. Search it for the current task and
+open only the relevant files. Secret values are redacted; use placeholders and
+\`homelab secret-request\` when a real value is needed.
 
 ## The homelab CLI
 
@@ -1264,10 +1204,12 @@ source code or wrapper scripts before using it.
 | \`homelab snapshot\` | Full dump of all entities, relations, and metadata |
 | \`homelab search <query>\` | Search entities by name, kind, or description |
 | \`homelab search <query> --kind host\` | Filter search to a specific entity kind |
+| \`homelab memory search <query>\` | Search project memory and thread transcript indexes |
+| \`homelab memory list\` | List durable project memory entries |
 | \`homelab entity <id>\` | Get one entity with all its details |
 | \`homelab relations <id>\` | Show all relations connected to an entity |
 | \`homelab secrets\` | List secret references and whether values exist |
-| \`homelab bootstrap\` | Show what tooling/packages future threads inherit |
+| \`homelab bootstrap\` | Show active bootstrap data and historical materializations |
 
 Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 \`network\`, \`domain\`, \`endpoint\`, \`secret_ref\`, \`tool\`, \`artifact\`,
@@ -1275,15 +1217,28 @@ Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 
 ### Writing back (promotions)
 
-When you discover something about the homelab that should persist — a new
-service, a dependency, a finding, a useful tool — promote it so future threads
-see it immediately.
+When you discover project-local context that future threads should find, add it
+to project memory:
+
+\`\`\`bash
+homelab memory add --summary "Backups run from nas01" \\
+  --tag backups \\
+  --body "Verified from the scheduler config in /workspace/notes."
+\`\`\`
+
+Use \`homelab memory propose\` when the entry should be reviewed for global
+promotion. Promotion from project memory to the global graph is explicit.
+
+When you discover something about the homelab that should persist globally — a
+new service, a dependency, a finding, a useful tool — promote it so future
+threads see it immediately.
 
 Use these first if you are unsure about the payload shape:
 
 \`\`\`bash
 homelab promote --schema
 homelab promote --example
+homelab memory promote <memory-id> --file promotion.json
 \`\`\`
 
 \`\`\`bash
@@ -1337,7 +1292,7 @@ cat <<'EOF' | homelab promote --stdin
         "id": "observation-example-service-http-check",
         "sourceKind": "manual",
         "summary": "The service responded successfully",
-        "detail": "Verified from the thread runtime after probing the HTTP endpoint.",
+        "detail": "Verified from the Project Runtime after probing the HTTP endpoint.",
         "entityIds": ["service-example", "host-main"],
         "createdAt": "2026-04-13T20:00:00.000Z"
       }
@@ -1443,116 +1398,15 @@ through the best available interface. If you discover something new, promote it.
 
 ## Thread model
 
-- This container is yours alone. Other threads can't see your files.
-- The knowledge graph, secrets, and bootstrap registry are shared across all threads.
-- When this thread ends, the container is destroyed. Only promoted state survives.
+- This project runtime may be shared by multiple threads in the same project.
+- Shared-runtime turns are queued by default. Explicit isolated runtimes are
+  used for containment or concurrent work.
+- Provider sessions are still per-thread. Running multiple threads should feel
+  like running \`codex\`, \`claude\`, or another provider CLI multiple times in
+  the same project directory, not like installing a separate provider per thread.
+- The knowledge graph, secrets, bootstrap registry, and project-local
+  \`.homelab\` views are shared context. Global homelab promotion is explicit.
 `;
-}
-
-function renderEnvForwardingSnippet(): string {
-  return [
-    "while IFS='=' read -r key _; do",
-    '  case "$key" in',
-    ...[...FORWARDED_ENV_DENYLIST]
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((entry) => `    ${entry}) continue ;;`),
-    "  esac",
-    '  docker_args+=(-e "$key")',
-    "done < <(env)",
-  ].join("\n");
-}
-
-function renderDockerExecWrapper(input: {
-  readonly dockerBinaryPath: string;
-  readonly containerName: string;
-  readonly runtime: ThreadRuntimeDescriptor;
-  readonly hostWorkspacePath: string;
-  readonly command: string;
-  readonly interactive: boolean;
-  readonly pathValue?: string;
-  readonly sourceEnvFilePath?: string;
-}): string {
-  const staticEnvEntries = Object.entries(input.runtime.env)
-    .filter(
-      ([key]) => key !== "HOME" && key !== "PWD" && key !== "WORKSPACE" && key !== "CODEX_HOME",
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right));
-  const dockerExecFlags = input.interactive
-    ? [
-        "if [ -t 0 ] && [ -t 1 ]; then",
-        '  docker_args=(exec -i -t -w "$workdir")',
-        "else",
-        '  docker_args=(exec -i -w "$workdir")',
-        "fi",
-      ].join("\n")
-    : 'docker_args=(exec -i -w "$workdir")';
-  const explicitEnvLines = [
-    `docker_args+=(-e "HOME=${input.runtime.homePath}")`,
-    'docker_args+=(-e "PWD=$workdir")',
-    `docker_args+=(-e "WORKSPACE=${input.runtime.workspacePath}")`,
-    `docker_args+=(-e "CODEX_HOME=${runtimeCodexAuthPath(input.runtime.homePath)}")`,
-    ...(input.pathValue ? [`docker_args+=(-e "PATH=${input.pathValue}")`] : []),
-    ...staticEnvEntries.map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
-  ];
-
-  const commandLine = input.sourceEnvFilePath
-    ? `docker_args+=(${shQuote(input.containerName)} /bin/sh -lc ${shQuote(
-        [
-          'env_file="$1"',
-          "shift",
-          'if [ -f "$env_file" ]; then',
-          "  set -a",
-          '  . "$env_file"',
-          "  set +a",
-          "fi",
-          'exec "$@"',
-        ].join("\n"),
-      )} sh ${shQuote(input.sourceEnvFilePath)} ${shQuote(input.command)})`
-    : `docker_args+=(${shQuote(input.containerName)} ${shQuote(input.command)})`;
-
-  return [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    `docker_bin=${shQuote(input.dockerBinaryPath)}`,
-    `host_workspace=${shQuote(input.hostWorkspacePath)}`,
-    `container_workspace=${shQuote(input.runtime.workspacePath)}`,
-    `workdir=${shQuote(input.runtime.cwd)}`,
-    'current_pwd="${PWD:-$host_workspace}"',
-    'case "$current_pwd" in',
-    '  "$host_workspace")',
-    '    workdir="$container_workspace"',
-    "    ;;",
-    '  "$host_workspace"/*)',
-    '    relative_path="${current_pwd#"$host_workspace"/}"',
-    '    workdir="$container_workspace/$relative_path"',
-    "    ;;",
-    '  "$container_workspace"|"$container_workspace"/*)',
-    '    workdir="$current_pwd"',
-    "    ;;",
-    "esac",
-    dockerExecFlags,
-    renderEnvForwardingSnippet(),
-    ...explicitEnvLines,
-    commandLine,
-    'exec "$docker_bin" "${docker_args[@]}" "$@"',
-    "",
-  ].join("\n");
-}
-
-function normalizeMountSpecs(
-  mounts: ReadonlyArray<DockerMountSpec>,
-): ReadonlyArray<DockerMountSpec> {
-  const seen = new Set<string>();
-  const normalized: DockerMountSpec[] = [];
-  for (const mount of mounts) {
-    const key = `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    normalized.push(mount);
-  }
-  return normalized;
 }
 
 function toDockerMountFlag(mount: DockerMountSpec): string {
@@ -1615,11 +1469,18 @@ function isContainerCompatible(
   inspect: DockerContainerInspectResult,
   runtime: ThreadRuntimeDescriptor,
   mounts: ReadonlyArray<DockerMountSpec>,
+  expectedImageFingerprint?: string,
 ): boolean {
   if (inspect.Config?.Image !== runtime.imageRef) {
     return false;
   }
   if (inspect.Config?.WorkingDir !== runtime.cwd) {
+    return false;
+  }
+  if (
+    expectedImageFingerprint &&
+    inspect.Config?.Labels?.[RUNTIME_IMAGE_FINGERPRINT_LABEL] !== expectedImageFingerprint
+  ) {
     return false;
   }
 
@@ -1633,11 +1494,33 @@ function isContainerCompatible(
       .filter((value): value is string => value !== undefined),
   );
 
-  return mounts.every((mount) =>
-    actualMounts.has(
-      `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
-    ),
+  return (
+    mounts.every((mount) =>
+      actualMounts.has(
+        `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
+      ),
+    ) && readManagedOpenCodeServerEndpoint(inspect) !== undefined
   );
+}
+
+function readManagedOpenCodeServerEndpoint(
+  inspect: DockerContainerInspectResult,
+): ThreadRuntimeDescriptor["managedOpenCodeServer"] | undefined {
+  const bindings =
+    inspect.NetworkSettings?.Ports?.[`${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`];
+  const firstBinding = Array.isArray(bindings) ? bindings[0] : undefined;
+  if (!firstBinding?.HostPort) {
+    return undefined;
+  }
+  const hostPort = Number.parseInt(firstBinding.HostPort, 10);
+  if (!Number.isFinite(hostPort) || hostPort <= 0) {
+    return undefined;
+  }
+  return {
+    containerPort: OPENCODE_MANAGED_SERVER_CONTAINER_PORT,
+    hostIp: firstBinding.HostIp?.trim() || "127.0.0.1",
+    hostPort,
+  };
 }
 
 const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
@@ -1647,7 +1530,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const { cwd, stateDir } = serverConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const bootstrapRegistry = yield* RuntimeBootstrapRegistry;
+  const bootstrapResolver = yield* RuntimeBootstrapResolver;
   const serverSettings = yield* ServerSettingsService;
   const writeSemaphore = yield* Semaphore.make(1);
   const runtimeImageBuildSemaphore = yield* Semaphore.make(1);
@@ -1656,7 +1539,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const statePath = path.join(stateDir, "thread-runtimes.json");
   const runtimeImageBuildStatePath = path.join(stateDir, "runtime-image-build.json");
   const dockerBinaryPath = options?.dockerBinaryPath ?? DEFAULT_DOCKER_BINARY_PATH;
-  const runtimeNetwork = options?.dockerNetwork ?? DEFAULT_RUNTIME_NETWORK;
+  const configuredRuntimeNetwork = options?.dockerNetwork ?? DEFAULT_RUNTIME_NETWORK;
+  const runtimeNetworkWasExplicit =
+    options?.dockerNetwork !== undefined ||
+    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_NETWORK) !== undefined;
   const containerShellPath = options?.containerShellPath ?? DEFAULT_CONTAINER_SHELL_PATH;
   const runtimeIdleTimeoutMs =
     options?.idleTimeoutMs ??
@@ -1687,21 +1573,20 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             cause,
           }),
       }));
+  const runtimeDockerNetworkPlanRef = yield* Ref.make<RuntimeDockerNetworkPlan | null>(null);
 
   const writeStateAtomically = (runtimes: ReadonlyArray<ThreadRuntimeDescriptor>) => {
     const persistedState: PersistedThreadRuntimeState = {
       version: 1,
       runtimes: [...runtimes],
     };
-    const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
 
-    return Effect.succeed(`${JSON.stringify(persistedState, null, 2)}\n`).pipe(
-      Effect.tap(() => fileSystem.makeDirectory(path.dirname(statePath), { recursive: true })),
-      Effect.tap((encoded) => fileSystem.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fileSystem.rename(tempPath, statePath)),
-      Effect.ensuring(
-        fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true })),
-      ),
+    return writeFileStringAtomically({
+      filePath: statePath,
+      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1713,17 +1598,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   };
 
   const writeRuntimeImageBuildState = (buildState: PersistedRuntimeImageBuildState) => {
-    const tempPath = `${runtimeImageBuildStatePath}.${process.pid}.${Date.now()}.tmp`;
-
-    return Effect.succeed(`${JSON.stringify(buildState, null, 2)}\n`).pipe(
-      Effect.tap(() =>
-        fileSystem.makeDirectory(path.dirname(runtimeImageBuildStatePath), { recursive: true }),
-      ),
-      Effect.tap((encoded) => fileSystem.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fileSystem.rename(tempPath, runtimeImageBuildStatePath)),
-      Effect.ensuring(
-        fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true })),
-      ),
+    return writeFileStringAtomically({
+      filePath: runtimeImageBuildStatePath,
+      contents: `${JSON.stringify(buildState, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1864,21 +1744,17 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
   const ensureRuntimeDirectories = (runtime: ThreadRuntimeDescriptor) => {
-    const threadRoot = runtimeRootPath(threadRuntimesDir, runtime.threadId);
-    const managedWorkspace = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
-    const runtimeBinDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
-    const runtimeHomelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
+    const layout = buildRuntimeStorageLayoutForRuntime({ threadRuntimesDir, runtime });
 
     return Effect.gen(function* () {
-      yield* fileSystem.makeDirectory(threadRoot, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeHomePath, { recursive: true });
-      yield* fileSystem.makeDirectory(managedWorkspace, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeBinDir, { recursive: true });
-      yield* fileSystem.makeDirectory(runtimeHomelabBinDir, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostRuntimePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostHomePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostWorkspacePath, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostBinDir, { recursive: true });
+      yield* fileSystem.makeDirectory(layout.hostHomelabBinDir, { recursive: true });
       if (isWithinContainerWorkspace(runtime.cwd)) {
         yield* fileSystem.makeDirectory(
-          hostWorkspacePathForContainerPath(managedWorkspace, runtime.cwd),
+          hostWorkspacePathForContainerPath(layout.hostWorkspacePath, runtime.cwd),
           { recursive: true },
         );
       }
@@ -1911,6 +1787,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         nodePath.join(nodeOs.homedir(), ".codex");
       const hostClaudeAuthPath = nodePath.join(nodeOs.homedir(), ".claude");
       const hostClaudeAuthJsonPath = nodePath.join(nodeOs.homedir(), ".claude.json");
+      const hostOpenCodeDataPath = nodePath.join(
+        trimToUndefined(process.env.XDG_DATA_HOME) ??
+          nodePath.join(nodeOs.homedir(), ".local", "share"),
+        "opencode",
+      );
       const sshAuthSockPath = trimToUndefined(process.env.SSH_AUTH_SOCK);
       const dockerSocketPath = "/var/run/docker.sock";
       const codexExists = yield* fileSystem
@@ -1921,6 +1802,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         .pipe(Effect.orElseSucceed(() => false));
       const claudeJsonExists = yield* fileSystem
         .exists(hostClaudeAuthJsonPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      const openCodeDataExists = yield* fileSystem
+        .exists(hostOpenCodeDataPath)
         .pipe(Effect.orElseSucceed(() => false));
       const sshAuthSockExists = sshAuthSockPath
         ? yield* fileSystem.exists(sshAuthSockPath).pipe(Effect.orElseSucceed(() => false))
@@ -1933,6 +1817,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ...(codexExists ? { codexHostAuthPath: configuredCodexAuthPath } : {}),
         ...(claudeExists ? { claudeHostAuthPath: hostClaudeAuthPath } : {}),
         ...(claudeJsonExists ? { claudeHostAuthJsonPath: hostClaudeAuthJsonPath } : {}),
+        ...(openCodeDataExists ? { openCodeHostDataPath: hostOpenCodeDataPath } : {}),
         ...(sshAuthSockExists && sshAuthSockPath ? { sshAuthSockPath } : {}),
         ...(dockerSocketExists ? { dockerSocketPath } : {}),
       };
@@ -1940,41 +1825,22 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   );
 
   const buildMountSpecs = (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) =>
-    normalizeMountSpecs([
+    buildRuntimeMountSpecs(
       {
-        source: managedWorkspacePath(threadRuntimesDir, runtime.threadId),
-        target: runtime.workspacePath,
+        threadRuntimesDir,
+        runtimeStorageId: runtimeStorageIdFor(runtime),
+        workspacePath: runtime.workspacePath,
+        homePath: runtime.homePath,
       },
-      {
-        source: homePathForThread(threadRuntimesDir, runtime.threadId),
-        target: runtime.homePath,
-      },
-      ...(hostBindings.sshAuthSockPath
-        ? [
-            {
-              source: hostBindings.sshAuthSockPath,
-              target: hostBindings.sshAuthSockPath,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-      ...(hostBindings.dockerSocketPath
-        ? [
-            {
-              source: hostBindings.dockerSocketPath,
-              target: hostBindings.dockerSocketPath,
-            } satisfies DockerMountSpec,
-          ]
-        : []),
-    ]);
-
-  const buildContainerPathValue = (): string => DEFAULT_CONTAINER_PATH;
+      hostBindings,
+    );
 
   const readRuntimeAccessTokenState = Effect.fn("threadRuntime.readRuntimeAccessTokenState")(
     function* (
       runtime: ThreadRuntimeDescriptor,
     ): Effect.fn.Return<PersistedRuntimeAccessTokenState | undefined, ThreadRuntimeError> {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtime.threadId),
+        homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
       );
       const exists = yield* fileSystem.exists(tokenPath).pipe(Effect.orElseSucceed(() => false));
       if (!exists) {
@@ -2027,7 +1893,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeAccessTokenState = Effect.fn("threadRuntime.writeRuntimeAccessTokenState")(
     function* (runtime: ThreadRuntimeDescriptor, state: PersistedRuntimeAccessTokenState) {
       const tokenPath = runtimeAccessTokenPath(
-        homePathForThread(threadRuntimesDir, runtime.threadId),
+        homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
       );
       yield* fileSystem.writeFileString(tokenPath, `${JSON.stringify(state, null, 2)}\n`).pipe(
         Effect.tap(() => fileSystem.chmod(tokenPath, 0o600)),
@@ -2045,8 +1911,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const resolveRuntimeAccessToken = Effect.fn("threadRuntime.resolveRuntimeAccessToken")(function* (
     runtime: ThreadRuntimeDescriptor,
   ): Effect.fn.Return<string | undefined, ThreadRuntimeError> {
-    const sessionCredentialService = yield* Effect.serviceOption(SessionCredentialService);
-    if (sessionCredentialService._tag === "None") {
+    const sessionStore = yield* Effect.serviceOption(SessionStore);
+    if (sessionStore._tag === "None") {
       return undefined;
     }
 
@@ -2056,34 +1922,35 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
     if (persisted) {
-      const verified = yield* sessionCredentialService.value
-        .verify(persisted.token)
-        .pipe(Effect.catchTag("SessionCredentialError", () => Effect.as(Effect.void, undefined)));
+      const verified = yield* sessionStore.value.verify(persisted.token).pipe(
+        Effect.catchTags({
+          SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
+          SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
+        }),
+      );
       if (
         verified &&
         verified.subject === expectedSubject &&
-        verified.role === "owner" &&
-        verified.method === "bearer-session-token" &&
-        verified.visibility === "internal"
+        verified.method === "bearer-access-token" &&
+        verified.scopes.includes(AuthAccessWriteScope)
       ) {
         return persisted.token;
       }
 
       if (verified) {
-        yield* sessionCredentialService.value
+        yield* sessionStore.value
           .revoke(verified.sessionId)
-          .pipe(Effect.catchTag("SessionCredentialError", () => Effect.succeed(false)));
+          .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
       }
     }
 
-    const issued = yield* sessionCredentialService.value
+    const issued = yield* sessionStore.value
       .issue({
-        method: "bearer-session-token",
-        role: "owner",
-        visibility: "internal",
+        method: "bearer-access-token",
+        scopes: AuthAdministrativeScopes,
         subject: expectedSubject,
         client: {
-          deviceType: "unknown",
+          deviceType: "bot",
           label: `Thread runtime ${runtime.threadId}`,
         },
       })
@@ -2108,8 +1975,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const revokeRuntimeAccessToken = Effect.fn("threadRuntime.revokeRuntimeAccessToken")(function* (
     runtime: ThreadRuntimeDescriptor,
   ) {
-    const sessionCredentialService = yield* Effect.serviceOption(SessionCredentialService);
-    if (sessionCredentialService._tag === "None") {
+    const sessionStore = yield* Effect.serviceOption(SessionStore);
+    if (sessionStore._tag === "None") {
       return;
     }
 
@@ -2120,29 +1987,100 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       return;
     }
 
-    const verified = yield* sessionCredentialService.value
-      .verify(persisted.token)
-      .pipe(Effect.catchTag("SessionCredentialError", () => Effect.as(Effect.void, undefined)));
+    const verified = yield* sessionStore.value.verify(persisted.token).pipe(
+      Effect.catchTags({
+        SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
+        SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
+      }),
+    );
     if (!verified || verified.subject !== `thread-runtime:${runtime.threadId}`) {
       return;
     }
 
-    yield* sessionCredentialService.value
+    yield* sessionStore.value
       .revoke(verified.sessionId)
-      .pipe(Effect.catchTag("SessionCredentialError", () => Effect.succeed(false)));
+      .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
   });
 
-  const resolveRuntimeServerUrl = () =>
-    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_SERVER_URL) ??
+  const resolveHostGatewayRuntimeServerUrl = () =>
     `http://${RUNTIME_SERVER_HOST_ALIAS}:${serverConfig.port}`;
+
+  const inspectCurrentContainerNetwork = Effect.fn("threadRuntime.inspectCurrentContainerNetwork")(
+    function* (): Effect.fn.Return<CurrentContainerNetwork | undefined, ThreadRuntimeError> {
+      if (!isLikelyRunningInsideContainer() && process.env.HOSTNAME === undefined) {
+        return undefined;
+      }
+
+      for (const candidate of currentContainerNameCandidates()) {
+        const result = yield* dockerRunner(["container", "inspect", candidate], {
+          timeoutMs: 5_000,
+          maxBufferBytes: 512 * 1024,
+        });
+        if (result.code !== 0) {
+          continue;
+        }
+        const network = parseCurrentContainerNetwork(result.stdout, configuredRuntimeNetwork);
+        if (network) {
+          return network;
+        }
+      }
+
+      return undefined;
+    },
+  );
+
+  const resolveRuntimeDockerNetworkPlan = Effect.fn(
+    "threadRuntime.resolveRuntimeDockerNetworkPlan",
+  )(function* (): Effect.fn.Return<RuntimeDockerNetworkPlan, ThreadRuntimeError> {
+    const cached = yield* Ref.get(runtimeDockerNetworkPlanRef);
+    if (cached) {
+      return cached;
+    }
+
+    const overrideServerUrl = trimToUndefined(process.env[RUNTIME_SERVER_URL_ENV]);
+    if (overrideServerUrl) {
+      const plan: RuntimeDockerNetworkPlan = {
+        dockerNetwork: configuredRuntimeNetwork,
+        serverUrl: overrideServerUrl,
+        addHostGatewayAlias: overrideServerUrl.includes(RUNTIME_SERVER_HOST_ALIAS),
+      };
+      yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+      return plan;
+    }
+
+    const currentContainerNetwork = yield* inspectCurrentContainerNetwork().pipe(
+      Effect.catchTag("ThreadRuntimeError", () => Effect.void),
+    );
+    if (currentContainerNetwork) {
+      const dockerNetwork = runtimeNetworkWasExplicit
+        ? configuredRuntimeNetwork
+        : currentContainerNetwork.networkName;
+      if (currentContainerNetwork.networkName === dockerNetwork) {
+        const plan: RuntimeDockerNetworkPlan = {
+          dockerNetwork,
+          serverUrl: `http://${urlHost(currentContainerNetwork.ipAddress)}:${serverConfig.port}`,
+          addHostGatewayAlias: false,
+        };
+        yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+        return plan;
+      }
+    }
+
+    const plan: RuntimeDockerNetworkPlan = {
+      dockerNetwork: configuredRuntimeNetwork,
+      serverUrl: resolveHostGatewayRuntimeServerUrl(),
+      addHostGatewayAlias: true,
+    };
+    yield* Ref.set(runtimeDockerNetworkPlanRef, plan);
+    return plan;
+  });
 
   const syncHostAuthIntoRuntimeHome = Effect.fn("threadRuntime.syncHostAuthIntoRuntimeHome")(
     function* (runtime: ThreadRuntimeDescriptor, hostBindings: RuntimeHostBindings) {
-      const syncEntries = buildRuntimeAuthSyncEntries(
-        runtime,
+      const syncEntries = buildRuntimeAuthSyncEntries({
         hostBindings,
-        homePathForThread(threadRuntimesDir, runtime.threadId),
-      );
+        runtimeHomePath: homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime)),
+      });
       if (syncEntries.length === 0) {
         return;
       }
@@ -2179,14 +2117,15 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           )
         : {};
     const runtimeAccessToken = yield* resolveRuntimeAccessToken(runtime);
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const secretEnvPath = runtimeSecretEnvPath(runtimeHomePath);
-    const controlEnv = {
-      ...secretEnv,
-      HOMELAB_AGENT_SERVER_URL: resolveRuntimeServerUrl(),
-      HOMELAB_AGENT_THREAD_ID: String(runtime.threadId),
-      ...(runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: runtimeAccessToken } : {}),
-    } satisfies Readonly<Record<string, string>>;
+    const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
+    const controlEnv = buildRuntimeControlEnvironment({
+      secretEnv,
+      serverUrl: runtimeNetworkPlan.serverUrl,
+      threadId: runtime.threadId,
+      ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
+    });
 
     yield* fileSystem.writeFileString(secretEnvPath, renderSecretEnvFile(controlEnv)).pipe(
       Effect.tap(() => fileSystem.chmod(secretEnvPath, 0o600)),
@@ -2203,7 +2142,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeToolScripts = Effect.fn("threadRuntime.writeRuntimeToolScripts")(function* (
     runtime: ThreadRuntimeDescriptor,
   ) {
-    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
+    const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const homelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
     const homelabCliPath = nodePath.join(homelabBinDir, "homelab");
     const homelabSecretToFilePath = nodePath.join(homelabBinDir, "homelab-secret-to-file");
@@ -2242,7 +2181,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeInstructionFiles = Effect.fn("threadRuntime.writeRuntimeInstructionFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
+      const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
       const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
       const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
 
@@ -2269,7 +2208,6 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
-      const runtimeHomePath = homePathForThread(threadRuntimesDir, runtime.threadId);
       const writeFile = (filePath: string, contents: string) =>
         fileSystem.writeFileString(filePath, contents).pipe(
           Effect.mapError(
@@ -2281,37 +2219,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           ),
         );
 
-      yield* Effect.all([
-        writeFile(
-          runtimeProfilePath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
+      yield* Effect.all(
+        buildRuntimeShellInitFileSpecs({ threadRuntimesDir, runtime }).map((file) =>
+          writeFile(file.filePath, file.contents),
         ),
-        writeFile(
-          runtimeBashProfilePath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "profile" }),
-        ),
-        writeFile(
-          runtimeBashRcPath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "bash" }),
-        ),
-        writeFile(
-          runtimeZshEnvPath(runtimeHomePath),
-          renderShellInitFile({ homePath: runtime.homePath, shell: "zsh" }),
-        ),
-      ]);
+      );
     },
   );
 
   const writeRuntimeWrapperScripts = Effect.fn("threadRuntime.writeRuntimeWrapperScripts")(
     function* (runtime: ThreadRuntimeDescriptor, _hostBindings: RuntimeHostBindings) {
-      const binDir = runtimeBinDirForThread(threadRuntimesDir, runtime.threadId);
-      const hostWorkspacePath = managedWorkspacePath(threadRuntimesDir, runtime.threadId);
-      const codexWrapperPath = nodePath.join(binDir, CODEX_RUNTIME_WRAPPER);
-      const claudeWrapperPath = nodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER);
-      const shellWrapperPath = nodePath.join(binDir, SHELL_RUNTIME_WRAPPER);
-      const containerPathValue = buildContainerPathValue();
+      const layout = buildRuntimeStorageLayoutForRuntime({ threadRuntimesDir, runtime });
 
-      yield* fileSystem.makeDirectory(binDir, { recursive: true }).pipe(
+      yield* fileSystem.makeDirectory(layout.hostBinDir, { recursive: true }).pipe(
         Effect.mapError(
           (cause) =>
             new ThreadRuntimeError({
@@ -2321,40 +2241,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         ),
       );
 
-      const codexScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: CODEX_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const claudeScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: CLAUDE_RUNTIME_WRAPPER,
-        interactive: false,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-      const shellScript = renderDockerExecWrapper({
-        dockerBinaryPath,
-        containerName: runtime.containerName,
-        runtime,
-        hostWorkspacePath,
-        command: containerShellPath,
-        interactive: true,
-        sourceEnvFilePath: runtimeSecretEnvPath(runtime.homePath),
-        ...(containerPathValue ? { pathValue: containerPathValue } : {}),
-      });
-
-      const writeExecutable = (filePath: string, contents: string) =>
+      const writeExecutable = (filePath: string, contents: string, mode: number | undefined) =>
         fileSystem.writeFileString(filePath, contents).pipe(
-          Effect.tap(() => fileSystem.chmod(filePath, 0o755)),
+          Effect.tap(() => fileSystem.chmod(filePath, mode ?? 0o755)),
           Effect.mapError(
             (cause) =>
               new ThreadRuntimeError({
@@ -2364,11 +2253,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           ),
         );
 
-      yield* Effect.all([
-        writeExecutable(codexWrapperPath, codexScript),
-        writeExecutable(claudeWrapperPath, claudeScript),
-        writeExecutable(shellWrapperPath, shellScript),
-      ]);
+      yield* Effect.all(
+        buildRuntimeWrapperScriptSpecs({
+          threadRuntimesDir,
+          runtime,
+          dockerBinaryPath,
+          containerShellPath,
+        }).map((file) => writeExecutable(file.filePath, file.contents, file.mode)),
+      );
     },
   );
 
@@ -2448,15 +2340,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly runtime: ThreadRuntimeDescriptor;
     readonly mounts: ReadonlyArray<DockerMountSpec>;
   }) {
+    const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const args = [
       "run",
       "-d",
       "--name",
       input.runtime.containerName,
-      "--add-host",
-      `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`,
+      ...(runtimeNetworkPlan.addHostGatewayAlias
+        ? ["--add-host", `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`]
+        : []),
       "--network",
-      runtimeNetwork,
+      runtimeNetworkPlan.dockerNetwork,
+      "-p",
+      `127.0.0.1::${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`,
       "-w",
       input.runtime.cwd,
       ...input.mounts.flatMap((mount) => ["-v", toDockerMountFlag(mount)]),
@@ -2576,9 +2472,13 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     hostBindings: RuntimeHostBindings,
   ) {
     const mounts = buildMountSpecs(runtime, hostBindings);
+    const expectedImageFingerprint =
+      runtime.imageRef === localRuntimeImageBuildSpec.imageRef
+        ? localRuntimeImageBuildSpec.fingerprint
+        : undefined;
 
     let inspect = yield* inspectContainerByName(runtime.containerName);
-    if (inspect && !isContainerCompatible(inspect, runtime, mounts)) {
+    if (inspect && !isContainerCompatible(inspect, runtime, mounts, expectedImageFingerprint)) {
       yield* removeContainerIfPresent(runtime.containerName);
       inspect = undefined;
     }
@@ -2611,6 +2511,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const buildDescriptor = Effect.fn("threadRuntime.buildDescriptor")(function* (input: {
     readonly threadId: ThreadIdModel;
+    readonly runtimeId?: RuntimeSessionIdModel;
     readonly provider: ProviderKindModel | null;
     readonly runtimeMode: RuntimeModeModel;
     readonly imageRef?: string;
@@ -2619,61 +2520,40 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly bootstrapVersion?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {
-    const materialized = yield* bootstrapRegistry.materializeForThread(input.threadId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadRuntimeError({
-            message: "Failed to materialize thread runtime bootstrap.",
-            cause,
-          }),
-      ),
-    );
-    const runtimeId = input.existing?.runtimeId ?? makeRuntimeId(input.threadId);
-    const cwd =
-      normalizeRequestedCwd(threadRuntimesDir, input.threadId, input.requestedCwd) ??
-      normalizeRequestedCwd(threadRuntimesDir, input.threadId, input.existing?.cwd) ??
-      CONTAINER_WORKSPACE_PATH;
-    const workspacePath = CONTAINER_WORKSPACE_PATH;
-    const imageRef = normalizeRuntimeImageRef(
-      input.imageRef?.trim() || input.existing?.imageRef || materialized.imageRef,
-    );
-    const now = new Date().toISOString();
-    const runtimeShellPath = nodePath.join(
-      runtimeBinDirForThread(threadRuntimesDir, input.threadId),
-      SHELL_RUNTIME_WRAPPER,
-    );
+    const requestedBootstrapVersion = input.bootstrapVersion ?? input.existing?.bootstrapVersion;
+    const bootstrap = yield* bootstrapResolver
+      .resolveForRuntime({
+        threadId: input.threadId,
+        ...(requestedBootstrapVersion !== undefined
+          ? { bootstrapVersion: requestedBootstrapVersion }
+          : {}),
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: "Failed to resolve thread runtime bootstrap.",
+              cause,
+            }),
+        ),
+      );
 
-    return {
+    return buildThreadRuntimeDescriptor({
+      threadRuntimesDir,
       threadId: input.threadId,
-      runtimeId,
-      backend: "docker",
-      status: input.existing?.status ?? "ready",
-      health: input.existing?.health ?? "unknown",
+      ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
       provider: input.provider,
       runtimeMode: input.runtimeMode,
-      imageRef,
-      containerName: input.existing?.containerName ?? runtimeName(input.threadId),
-      containerId: input.existing?.containerId ?? null,
-      workspacePath,
-      homePath: CONTAINER_HOME_PATH,
-      cwd,
-      shell: runtimeShellPath,
-      env: buildRuntimeEnvironment({
-        cwd,
-        workspacePath,
-        homePath: CONTAINER_HOME_PATH,
-        threadId: input.threadId,
-        runtimeId,
-        materializedEnv: materialized.env,
-        containerShellPath,
-        ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
-      }),
-      createdAt: input.existing?.createdAt ?? now,
-      updatedAt: now,
-      lastStartedAt: input.existing?.lastStartedAt ?? null,
-      lastStoppedAt: input.existing?.lastStoppedAt ?? null,
-      lastError: input.existing?.lastError ?? null,
-    } satisfies ThreadRuntimeDescriptor;
+      ...(input.imageRef !== undefined ? { imageRef: input.imageRef } : {}),
+      ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
+      ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
+      bootstrapImageRef: bootstrap.materialization.imageRef,
+      bootstrapVersion: bootstrap.materialization.bootstrapVersion,
+      bootstrapEnv: bootstrap.materialization.env,
+      containerShellPath,
+      now: new Date().toISOString(),
+      ...(input.existing !== undefined ? { existing: input.existing } : {}),
+    });
   });
 
   const touchRuntime = Effect.fn("threadRuntime.touchRuntime")(function* (threadId: ThreadIdModel) {
@@ -2693,10 +2573,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   ) {
     const rebuilt = yield* buildDescriptor({
       threadId: runtime.threadId,
+      runtimeId: runtime.runtimeId,
       provider: runtime.provider,
       runtimeMode: runtime.runtimeMode,
       imageRef: runtime.imageRef,
       requestedCwd: runtime.cwd,
+      ...(runtime.bootstrapVersion !== undefined
+        ? { bootstrapVersion: runtime.bootstrapVersion }
+        : {}),
       existing: runtime,
     });
 
@@ -2841,6 +2725,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* ensureRuntimeImageReady(normalizedRuntime);
 
         const inspect = yield* ensureRunningContainer(normalizedRuntime, hostBindings);
+        const managedOpenCodeServer = readManagedOpenCodeServerEndpoint(inspect);
+        if (!managedOpenCodeServer) {
+          return yield* new ThreadRuntimeError({
+            message: `Docker container '${normalizedRuntime.containerName}' did not report a published OpenCode server port.`,
+          });
+        }
         const now = new Date().toISOString();
         const startedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime: ThreadRuntimeDescriptor = {
@@ -2848,6 +2738,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             status: "running",
             health: "healthy",
             containerId: inspect.Id?.trim() || normalizedRuntime.containerId,
+            managedOpenCodeServer,
             updatedAt: now,
             lastStartedAt: now,
             lastError: null,
@@ -2872,16 +2763,25 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     destroyRuntime: (threadId) =>
       Effect.gen(function* () {
         const runtime = yield* getRuntimeOrNotFound(threadId);
-        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtime.threadId);
+        const runtimeRoot = runtimeRootPath(threadRuntimesDir, runtimeStorageIdFor(runtime));
+        const remainingBindings = yield* Ref.get(runtimesRef).pipe(
+          Effect.map((current) =>
+            current.filter(
+              (entry) => entry.threadId !== threadId && entry.runtimeId === runtime.runtimeId,
+            ),
+          ),
+        );
 
-        yield* removeContainerIfPresent(runtime.containerName);
-        yield* revokeRuntimeAccessToken(runtime);
         yield* updateRuntimes(
           (current) => [undefined, current.filter((entry) => entry.threadId !== threadId)] as const,
         );
-        yield* fileSystem
-          .remove(runtimeRoot, { recursive: true, force: true })
-          .pipe(Effect.ignore({ log: true }));
+        if (remainingBindings.length === 0) {
+          yield* removeContainerIfPresent(runtime.containerName);
+          yield* revokeRuntimeAccessToken(runtime);
+          yield* fileSystem
+            .remove(runtimeRoot, { recursive: true, force: true })
+            .pipe(Effect.ignore({ log: true }));
+        }
         yield* publishEvent({
           kind: "runtime.destroyed",
           threadId: runtime.threadId,
@@ -2894,19 +2794,21 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       getRuntimeOrNotFound(threadId).pipe(Effect.map(toExecutionContext)),
     resolveLaunchContext: (threadId) =>
       getRuntimeOrNotFound(threadId).pipe(
-        Effect.map((runtime) => toLaunchContext(threadRuntimesDir, runtime)),
+        Effect.map((runtime) => toLaunchContext({ threadRuntimesDir, runtime })),
       ),
     streamEvents: Stream.fromPubSub(events),
   } satisfies ThreadRuntimeShape;
 });
 
 export const ThreadRuntimeLive = Layer.effect(ThreadRuntime, makeThreadRuntime()).pipe(
+  Layer.provideMerge(RuntimeBootstrapResolverLive),
   Layer.provideMerge(RuntimeBootstrapRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
 );
 
 export function makeThreadRuntimeLive(options?: ThreadRuntimeLiveOptions) {
   return Layer.effect(ThreadRuntime, makeThreadRuntime(options)).pipe(
+    Layer.provideMerge(RuntimeBootstrapResolverLive),
     Layer.provideMerge(RuntimeBootstrapRegistryLive),
   );
 }

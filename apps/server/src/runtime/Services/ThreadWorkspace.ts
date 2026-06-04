@@ -7,8 +7,9 @@ import {
   ThreadWorkspaceWriteFileInput,
   ThreadWorkspaceWriteFileResult,
 } from "@t3tools/contracts";
-import { Context, Schema } from "effect";
-import type { Effect } from "effect";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 export class ThreadWorkspaceServiceError extends Schema.TaggedErrorClass<ThreadWorkspaceServiceError>()(
   "ThreadWorkspaceServiceError",
@@ -41,5 +42,5 @@ export interface ThreadWorkspaceShape {
 }
 
 export class ThreadWorkspace extends Context.Service<ThreadWorkspace, ThreadWorkspaceShape>()(
-  "runtime/Services/ThreadWorkspace",
+  "t3/runtime/Services/ThreadWorkspace",
 ) {}

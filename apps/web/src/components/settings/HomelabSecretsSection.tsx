@@ -43,7 +43,7 @@ export function HomelabSecretsSection() {
       toastManager.add({
         type: "success",
         title: `Saved ${secret.placeholder}`,
-        description: "This secret is now available to new and existing thread runtimes.",
+        description: "This secret is now available to new and existing Project Runtimes.",
       });
     },
     onError: (error: unknown) => {
@@ -70,7 +70,7 @@ export function HomelabSecretsSection() {
       toastManager.add({
         type: "success",
         title: `Removed $${secretKey}`,
-        description: "Future thread launches will no longer receive this secret.",
+        description: "Future Project Runtime launches will no longer receive this secret.",
       });
     },
     onError: (error: unknown) => {
@@ -142,7 +142,7 @@ export function HomelabSecretsSection() {
     <SettingsSection title="Secrets" icon={<KeyRoundIcon className="size-3.5" />}>
       <SettingsRow
         title="Runtime secrets"
-        description="Store API keys, SSH tokens, and other values once, then inject them into every thread runtime as environment variables."
+        description="Store API keys, SSH tokens, and other values once, then inject them into every Project Runtime as environment variables."
         status="Agents and terminals receive these as env vars like $API_KEY. The raw values stay out of chat history."
       >
         <div className="mt-4 grid gap-3 border-t border-border/60 py-4 sm:grid-cols-2">

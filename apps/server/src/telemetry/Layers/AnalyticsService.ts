@@ -7,13 +7,17 @@
  * @module AnalyticsServiceLive
  */
 
-import { Config, DateTime, Effect, Layer, Ref } from "effect";
+import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../../config.ts";
 import { AnalyticsService, type AnalyticsServiceShape } from "../Services/AnalyticsService.ts";
 import { getTelemetryIdentifier } from "../Identify.ts";
-import { version } from "../../../package.json" with { type: "json" };
+import packageJson from "../../../package.json" with { type: "json" };
 
 interface BufferedAnalyticsEvent {
   readonly event: string;
@@ -36,7 +40,7 @@ const TelemetryEnvConfig = Config.all({
 });
 
 const makeAnalyticsService = Effect.gen(function* () {
-  const telemetryConfig = yield* TelemetryEnvConfig.asEffect();
+  const telemetryConfig = yield* TelemetryEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig;
   const identifier = yield* getTelemetryIdentifier;
@@ -86,7 +90,7 @@ const makeAnalyticsService = Effect.gen(function* () {
           platform: process.platform,
           wsl: process.env.WSL_DISTRO_NAME,
           arch: process.arch,
-          t3CodeVersion: version,
+          t3CodeVersion: packageJson.version,
           clientType,
         },
         timestamp: event.capturedAt,

@@ -15,8 +15,9 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
-import { Context } from "effect";
-import type { Effect, Stream } from "effect";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
@@ -25,13 +26,6 @@ import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
  */
 export interface OrchestrationEngineShape {
-  /**
-   * Read the current in-memory orchestration read model.
-   *
-   * @returns Effect containing the latest read model.
-   */
-  readonly getReadModel: () => Effect.Effect<OrchestrationReadModel, never, never>;
-
   /**
    * Replay persisted orchestration events from an exclusive sequence cursor.
    *
@@ -56,6 +50,14 @@ export interface OrchestrationEngineShape {
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**
+   * Read the in-memory command model maintained by the engine.
+   *
+   * Compatibility surface for reactors that need current orchestration state
+   * without hydrating the heavier projection query.
+   */
+  readonly getReadModel: () => Effect.Effect<OrchestrationReadModel>;
+
+  /**
    * Stream persisted domain events in dispatch order.
    *
    * This is a hot runtime stream (new events only), not a historical replay.
@@ -70,7 +72,7 @@ export interface OrchestrationEngineShape {
  * ```ts
  * const program = Effect.gen(function* () {
  *   const engine = yield* OrchestrationEngineService
- *   return yield* engine.getReadModel()
+ *   return yield* engine.dispatch(command)
  * })
  * ```
  */

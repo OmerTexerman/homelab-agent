@@ -7,7 +7,7 @@ import {
   resolveHeadlessConnectionHost,
   resolveHeadlessConnectionString,
   resolveListeningPort,
-} from "./startupAccess";
+} from "./startupAccess.ts";
 
 it("prefers localhost when no explicit host is configured", () => {
   expect(resolveHeadlessConnectionHost(undefined)).toBe("localhost");
@@ -75,5 +75,7 @@ it("formats headless serve output with the connection string, token, pairing url
   expect(output).toContain("Connection string: http://192.168.1.42:3773");
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
+  expect(output).toContain("Homelab Agent server is ready.");
+  expect(output).not.toContain("T3 Code server");
   assert.isTrue(output.includes("█") || output.includes("▀") || output.includes("▄"));
 });

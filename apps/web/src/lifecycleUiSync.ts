@@ -1,9 +1,4 @@
-import {
-  scopedProjectKey,
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 
 import { markPromotedDraftThreadsByRef, useComposerDraftStore } from "./composerDraftStore";
 import {
@@ -12,8 +7,10 @@ import {
   type AppState,
   useStore,
 } from "./store";
-import { collectActiveTerminalThreadIds } from "./lib/terminalStateCleanup";
-import { useTerminalStateStore } from "./terminalStateStore";
+import { collectActiveTerminalUiThreadKeys } from "./lib/terminalUiStateCleanup";
+import { getClientSettings } from "./hooks/useSettings";
+import { deriveLogicalProjectKeyFromSettings, derivePhysicalProjectKey } from "./logicalProject";
+import { useTerminalUiStateStore } from "./terminalUiStateStore";
 import { useThreadSelectionStore } from "./threadSelectionStore";
 import { useUiStateStore } from "./uiStateStore";
 import { useWorkspacePanelStateStore } from "./workspacePanelStateStore";
@@ -21,13 +18,15 @@ import { useWorkspacePanelStateStore } from "./workspacePanelStateStore";
 export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.getState()) {
   const projects = selectProjectsAcrossEnvironments(storeState);
   const threads = selectThreadsAcrossEnvironments(storeState);
+  const clientSettings = getClientSettings();
   const activeServerThreadKeys = threads.map((thread) =>
     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
   );
 
   useUiStateStore.getState().syncProjects(
     projects.map((project) => ({
-      key: scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),
+      key: derivePhysicalProjectKey(project),
+      logicalKey: deriveLogicalProjectKeyFromSettings(project, clientSettings),
       cwd: project.cwd,
     })),
   );
@@ -42,7 +41,7 @@ export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.ge
     threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
   );
 
-  const activeThreadKeys = collectActiveTerminalThreadIds({
+  const activeThreadKeys = collectActiveTerminalUiThreadKeys({
     snapshotThreads: threads.map((thread) => ({
       key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       deletedAt: null,
@@ -50,7 +49,7 @@ export function reconcileLifecycleUiFromStore(storeState: AppState = useStore.ge
     })),
     draftThreadKeys: useComposerDraftStore.getState().listDraftThreadKeys(),
   });
-  useTerminalStateStore.getState().removeOrphanedTerminalStates(activeThreadKeys);
+  useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(activeThreadKeys);
   useWorkspacePanelStateStore.getState().removeOrphanedWorkspacePanels(activeThreadKeys);
 
   return {

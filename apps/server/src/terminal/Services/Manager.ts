@@ -1,18 +1,21 @@
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
- * Owns terminal lifecycle operations, output fanout, and session state
- * transitions for thread-scoped terminals.
+ * Owns terminal lifecycle operations and output fanout for runtime-scoped
+ * terminals while preserving legacy thread-shaped inputs.
  *
  * @module TerminalManager
  */
 import {
+  TerminalAttachInput,
+  TerminalAttachStreamEvent,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
   TerminalCwdError,
   TerminalError,
   TerminalHistoryError,
+  TerminalMetadataStreamEvent,
   TerminalNotRunningError,
   TerminalOpenInput,
   TerminalResizeInput,
@@ -22,8 +25,9 @@ import {
   TerminalSessionStatus,
   TerminalWriteInput,
 } from "@t3tools/contracts";
-import { PtyProcess } from "./PTY";
-import { Effect, Context } from "effect";
+import type { PtyProcess } from "./PTY.ts";
+import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
 
 export {
   TerminalCwdError,
@@ -80,6 +84,16 @@ export interface TerminalManagerShape {
   ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
   /**
+   * Attach to a terminal and stream its initial snapshot followed by live events.
+   *
+   * Returns an unsubscribe function.
+   */
+  readonly attachStream: (
+    input: TerminalAttachInput,
+    listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
+  ) => Effect.Effect<() => void, TerminalError>;
+
+  /**
    * Write input bytes to a terminal session.
    */
   readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
@@ -117,6 +131,15 @@ export interface TerminalManagerShape {
    */
   readonly subscribe: (
     listener: (event: TerminalEvent) => Effect.Effect<void>,
+  ) => Effect.Effect<() => void>;
+
+  /**
+   * Subscribe to lightweight terminal metadata with an initial full snapshot.
+   *
+   * Returns an unsubscribe function.
+   */
+  readonly subscribeMetadata: (
+    listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>,
   ) => Effect.Effect<() => void>;
 }
 

@@ -1,5 +1,6 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 /**
- * RuntimeBootstrapRegistry - Shared runtime mutation catalog.
+ * RuntimeBootstrapRegistry - Project Runtime mutation catalog.
  *
  * Owns the durable bootstrap state that future thread runtimes inherit. This is
  * the server-side seam for "one thread learned we need this tool / file /
@@ -48,6 +49,15 @@ export interface RuntimeBootstrapMaterialization {
   readonly mutations: ReadonlyArray<RuntimeBootstrapMutation>;
 }
 
+export interface RuntimeBootstrapMaterializationRecord extends RuntimeBootstrapMaterialization {
+  readonly materializedAt: string;
+}
+
+export interface RuntimeBootstrapCatalog {
+  readonly activeBlueprint: RuntimeBlueprintDescriptor;
+  readonly materializations: ReadonlyArray<RuntimeBootstrapMaterializationRecord>;
+}
+
 export class RuntimeBootstrapRegistryError extends Data.TaggedError(
   "RuntimeBootstrapRegistryError",
 )<{
@@ -56,7 +66,7 @@ export class RuntimeBootstrapRegistryError extends Data.TaggedError(
 }> {}
 
 export interface RuntimeBootstrapRegistryShape {
-  /** Read the active shared runtime blueprint used for new threads. */
+  /** Read the active Project Runtime blueprint used for new threads. */
   readonly getActiveBlueprint: () => Effect.Effect<
     RuntimeBlueprintDescriptor,
     RuntimeBootstrapRegistryError
@@ -76,9 +86,23 @@ export interface RuntimeBootstrapRegistryShape {
   readonly materializeForThread: (
     threadId: ThreadId,
   ) => Effect.Effect<RuntimeBootstrapMaterialization, RuntimeBootstrapRegistryError>;
+
+  /** Read one immutable historical materialization by bootstrap version. */
+  readonly getMaterialization: (
+    bootstrapVersion: string,
+  ) => Effect.Effect<RuntimeBootstrapMaterializationRecord | null, RuntimeBootstrapRegistryError>;
+
+  /** List all durable bootstrap materializations known to the registry. */
+  readonly listMaterializations: () => Effect.Effect<
+    ReadonlyArray<RuntimeBootstrapMaterializationRecord>,
+    RuntimeBootstrapRegistryError
+  >;
+
+  /** Read the active blueprint and all historical materializations together. */
+  readonly getCatalog: () => Effect.Effect<RuntimeBootstrapCatalog, RuntimeBootstrapRegistryError>;
 }
 
 export class RuntimeBootstrapRegistry extends Context.Service<
   RuntimeBootstrapRegistry,
   RuntimeBootstrapRegistryShape
->()("homelab/runtime/Services/RuntimeBootstrapRegistry") {}
+>()("t3/runtime/Services/RuntimeBootstrapRegistry") {}

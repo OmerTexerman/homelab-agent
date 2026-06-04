@@ -11,10 +11,13 @@ import type {
   ProjectId,
   TurnId,
   MessageId,
-  ProviderKind,
+  ProviderDriverKind,
+  ProviderInstanceId,
   CheckpointRef,
   ProviderInteractionMode,
   RuntimeMode,
+  RuntimeSessionId,
+  ThreadRuntimeMode,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -22,7 +25,7 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
-export const DEFAULT_THREAD_TERMINAL_ID = "default";
+export const DEFAULT_THREAD_TERMINAL_ID = "term-1";
 export const MAX_TERMINALS_PER_GROUP = 4;
 export type ProjectScript = ContractProjectScript;
 
@@ -86,6 +89,7 @@ export interface Project {
   name: string;
   cwd: string;
   repositoryIdentity?: RepositoryIdentity | null;
+  defaultRuntimeId?: RuntimeSessionId | null;
   defaultModelSelection: ModelSelection | null;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
@@ -97,6 +101,8 @@ export interface Thread {
   environmentId: EnvironmentId;
   codexThreadId: string | null;
   projectId: ProjectId;
+  runtimeId?: RuntimeSessionId | null;
+  runtimeSelectionMode?: ThreadRuntimeMode;
   title: string;
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
@@ -121,6 +127,8 @@ export interface ThreadShell {
   environmentId: EnvironmentId;
   codexThreadId: string | null;
   projectId: ProjectId;
+  runtimeId?: RuntimeSessionId | null;
+  runtimeSelectionMode?: ThreadRuntimeMode;
   title: string;
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
@@ -142,6 +150,8 @@ export interface SidebarThreadSummary {
   id: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  runtimeId?: RuntimeSessionId | null;
+  runtimeSelectionMode?: ThreadRuntimeMode;
   title: string;
   interactionMode: ProviderInteractionMode;
   session: ThreadSession | null;
@@ -158,7 +168,8 @@ export interface SidebarThreadSummary {
 }
 
 export interface ThreadSession {
-  provider: ProviderKind;
+  provider: ProviderDriverKind;
+  providerInstanceId?: ProviderInstanceId | undefined;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

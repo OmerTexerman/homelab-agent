@@ -1,29 +1,28 @@
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import {
   CheckpointRef,
-  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_MODEL,
   EnvironmentId,
   EventId,
   MessageId,
   ProjectId,
+  ProviderInstanceId,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
-import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
 import {
   applyOrchestrationEvent,
   applyOrchestrationEvents,
+  removeEnvironmentState,
   selectEnvironmentState,
   selectProjectsAcrossEnvironments,
   selectThreadByRef,
   selectThreadExistsByRef,
   setThreadBranch,
   selectThreadsAcrossEnvironments,
-  syncServerReadModel,
   type AppState,
   type EnvironmentState,
 } from "./store";
@@ -68,7 +67,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     projectId: ProjectId.make("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -96,7 +95,7 @@ function makeState(thread: Thread): AppState {
     name: "Project",
     cwd: "/tmp/project",
     defaultModelSelection: {
-      provider: "codex" as const,
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
     },
     createdAt: "2026-02-13T00:00:00.000Z",
@@ -248,6 +247,39 @@ function makeEvent<T extends OrchestrationEvent["type"]>(
   } as Extract<OrchestrationEvent, { type: T }>;
 }
 
+describe("environment state removal", () => {
+  it("drops local state for removed environments", () => {
+    const removedThread = makeThread({
+      environmentId: remoteEnvironmentId,
+      id: ThreadId.make("thread-removed"),
+    });
+    const keptThread = makeThread({ id: ThreadId.make("thread-kept") });
+    const removedState = makeState(removedThread).environmentStateById[remoteEnvironmentId]!;
+    const keptState = makeState(keptThread).environmentStateById[localEnvironmentId]!;
+    const state: AppState = {
+      activeEnvironmentId: remoteEnvironmentId,
+      environmentStateById: {
+        [remoteEnvironmentId]: removedState,
+        [localEnvironmentId]: keptState,
+      },
+    };
+
+    const next = removeEnvironmentState(state, remoteEnvironmentId);
+
+    expect(next.activeEnvironmentId).toBeNull();
+    expect(next.environmentStateById[remoteEnvironmentId]).toBeUndefined();
+    expect(next.environmentStateById[localEnvironmentId]).toBe(keptState);
+  });
+
+  it("preserves active environment when removing a different environment", () => {
+    const state = makeState(makeThread());
+
+    const next = removeEnvironmentState(state, remoteEnvironmentId);
+
+    expect(next).toBe(state);
+  });
+});
+
 describe("thread selection memoization", () => {
   it("returns stable thread references for repeated reads of the same state", () => {
     const thread = makeThread({
@@ -370,75 +402,6 @@ describe("thread selection memoization", () => {
   });
 });
 
-function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"][number]>) {
-  return {
-    id: ThreadId.make("thread-1"),
-    projectId: ProjectId.make("project-1"),
-    title: "Thread",
-    modelSelection: {
-      provider: "codex",
-      model: "gpt-5.3-codex",
-    },
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-    branch: null,
-    worktreePath: null,
-    latestTurn: null,
-    createdAt: "2026-02-27T00:00:00.000Z",
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    archivedAt: null,
-    deletedAt: null,
-    messages: [],
-    activities: [],
-    proposedPlans: [],
-    checkpoints: [],
-    session: null,
-    ...overrides,
-  } satisfies OrchestrationReadModel["threads"][number];
-}
-
-function makeReadModel(thread: OrchestrationReadModel["threads"][number]): OrchestrationReadModel {
-  return {
-    snapshotSequence: 1,
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    projects: [
-      {
-        id: ProjectId.make("project-1"),
-        title: "Project",
-        workspaceRoot: "/tmp/project",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:00.000Z",
-        deletedAt: null,
-        scripts: [],
-      },
-    ],
-    threads: [thread],
-  };
-}
-
-function makeReadModelProject(
-  overrides: Partial<OrchestrationReadModel["projects"][number]>,
-): OrchestrationReadModel["projects"][number] {
-  return {
-    id: ProjectId.make("project-1"),
-    title: "Project",
-    workspaceRoot: "/tmp/project",
-    defaultModelSelection: {
-      provider: "codex",
-      model: "gpt-5.3-codex",
-    },
-    createdAt: "2026-02-27T00:00:00.000Z",
-    updatedAt: "2026-02-27T00:00:00.000Z",
-    deletedAt: null,
-    scripts: [],
-    ...overrides,
-  };
-}
-
 describe("setThreadBranch", () => {
   it("updates only the scoped thread environment", () => {
     const sharedThreadId = ThreadId.make("thread-shared");
@@ -476,159 +439,6 @@ describe("setThreadBranch", () => {
     expect(
       environmentStateOf(next, remoteEnvironmentId).threadShellById[sharedThreadId]?.worktreePath,
     ).toBe("/tmp/remote-worktree");
-  });
-});
-
-describe("store read model sync", () => {
-  it("marks bootstrap complete after snapshot sync", () => {
-    const initialState = withActiveEnvironmentState(
-      localEnvironmentStateOf(makeState(makeThread())),
-      {
-        bootstrapComplete: false,
-      },
-    );
-
-    const next = syncServerReadModel(
-      initialState,
-      makeReadModel(makeReadModelThread({})),
-      localEnvironmentId,
-    );
-
-    expect(localEnvironmentStateOf(next).bootstrapComplete).toBe(true);
-  });
-
-  it("preserves claude model slugs without an active session", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
-
-    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-opus-4-6");
-  });
-
-  it("resolves claude aliases when session provider is claudeAgent", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "sonnet",
-        },
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
-
-    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
-  });
-
-  it("preserves project and thread updatedAt timestamps from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
-
-    expect(projectsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:00:00.000Z");
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
-  });
-
-  it("maps archivedAt from the read model", () => {
-    const initialState = makeState(makeThread());
-    const archivedAt = "2026-02-28T00:00:00.000Z";
-    const next = syncServerReadModel(
-      initialState,
-      makeReadModel(
-        makeReadModelThread({
-          archivedAt,
-        }),
-      ),
-      localEnvironmentId,
-    );
-
-    expect(threadsOf(next)[0]?.archivedAt).toBe(archivedAt);
-  });
-
-  it("replaces projects using snapshot order during recovery", () => {
-    const project1 = ProjectId.make("project-1");
-    const project2 = ProjectId.make("project-2");
-    const project3 = ProjectId.make("project-3");
-    const initialState: AppState = makeEmptyState({
-      projectIds: [project2, project1],
-      projectById: {
-        [project2]: {
-          id: project2,
-          environmentId: localEnvironmentId,
-          name: "Project 2",
-          cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-          scripts: [],
-        },
-        [project1]: {
-          id: project1,
-          environmentId: localEnvironmentId,
-          name: "Project 1",
-          cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-          scripts: [],
-        },
-      },
-    });
-    const readModel: OrchestrationReadModel = {
-      snapshotSequence: 2,
-      updatedAt: "2026-02-27T00:00:00.000Z",
-      projects: [
-        makeReadModelProject({
-          id: project1,
-          title: "Project 1",
-          workspaceRoot: "/tmp/project-1",
-        }),
-        makeReadModelProject({
-          id: project2,
-          title: "Project 2",
-          workspaceRoot: "/tmp/project-2",
-        }),
-        makeReadModelProject({
-          id: project3,
-          title: "Project 3",
-          workspaceRoot: "/tmp/project-3",
-        }),
-      ],
-      threads: [],
-    };
-
-    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
-
-    expect(projectsOf(next).map((project) => project.id)).toEqual([project1, project2, project3]);
   });
 });
 
@@ -676,7 +486,7 @@ describe("incremental orchestration updates", () => {
     expect(nextAfterThreadDelete).toBe(state);
   });
 
-  it("keeps a recreated physical project distinct even when the cwd matches", () => {
+  it("reuses an existing project row when project.created arrives with a new id for the same cwd", () => {
     const originalProjectId = ProjectId.make("project-1");
     const recreatedProjectId = ProjectId.make("project-2");
     const state: AppState = makeEmptyState({
@@ -688,8 +498,8 @@ describe("incremental orchestration updates", () => {
           name: "Project",
           cwd: "/tmp/project",
           defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
@@ -705,8 +515,8 @@ describe("incremental orchestration updates", () => {
         title: "Project Recreated",
         workspaceRoot: "/tmp/project",
         defaultModelSelection: {
-          provider: "codex",
-          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
         },
         scripts: [],
         createdAt: "2026-02-27T00:00:01.000Z",
@@ -715,68 +525,12 @@ describe("incremental orchestration updates", () => {
       localEnvironmentId,
     );
 
-    expect(projectsOf(next)).toHaveLength(2);
-    expect(localEnvironmentStateOf(next).projectIds).toEqual([
-      originalProjectId,
-      recreatedProjectId,
-    ]);
-    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.id).toBe(
-      originalProjectId,
-    );
-    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.cwd).toBe("/tmp/project");
-    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.name).toBe("Project");
-    expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.id).toBe(
-      recreatedProjectId,
-    );
-    expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.name).toBe(
-      "Project Recreated",
-    );
-  });
-
-  it("does not reuse an existing project row for logical project workspace roots", () => {
-    const originalProjectId = ProjectId.make("project-logical-1");
-    const recreatedProjectId = ProjectId.make("project-logical-2");
-    const workspaceRoot = createLogicalProjectWorkspaceRoot("logical-project-alpha");
-    const state: AppState = makeEmptyState({
-      projectIds: [originalProjectId],
-      projectById: {
-        [originalProjectId]: {
-          id: originalProjectId,
-          environmentId: localEnvironmentId,
-          name: "Logical Project",
-          cwd: workspaceRoot,
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-          scripts: [],
-        },
-      },
-    });
-
-    const next = applyOrchestrationEvent(
-      state,
-      makeEvent("project.created", {
-        projectId: recreatedProjectId,
-        title: "Logical Project Recreated",
-        workspaceRoot,
-        defaultModelSelection: {
-          provider: "codex",
-          model: DEFAULT_MODEL_BY_PROVIDER.codex,
-        },
-        scripts: [],
-        createdAt: "2026-02-27T00:00:01.000Z",
-        updatedAt: "2026-02-27T00:00:01.000Z",
-      }),
-      localEnvironmentId,
-    );
-
-    expect(projectsOf(next)).toHaveLength(2);
-    expect(localEnvironmentStateOf(next).projectById[originalProjectId]?.id).toBe(
-      originalProjectId,
-    );
+    expect(projectsOf(next)).toHaveLength(1);
+    expect(projectsOf(next)[0]?.id).toBe(recreatedProjectId);
+    expect(projectsOf(next)[0]?.cwd).toBe("/tmp/project");
+    expect(projectsOf(next)[0]?.name).toBe("Project Recreated");
+    expect(localEnvironmentStateOf(next).projectIds).toEqual([recreatedProjectId]);
+    expect(localEnvironmentStateOf(next).projectById[originalProjectId]).toBeUndefined();
     expect(localEnvironmentStateOf(next).projectById[recreatedProjectId]?.id).toBe(
       recreatedProjectId,
     );
@@ -799,8 +553,8 @@ describe("incremental orchestration updates", () => {
           name: "Project 1",
           cwd: "/tmp/project-1",
           defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
@@ -812,8 +566,8 @@ describe("incremental orchestration updates", () => {
           name: "Project 2",
           cwd: "/tmp/project-2",
           defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
@@ -829,8 +583,8 @@ describe("incremental orchestration updates", () => {
         projectId: recreatedProjectId,
         title: "Recovered thread",
         modelSelection: {
-          provider: "codex",
-          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
@@ -848,137 +602,6 @@ describe("incremental orchestration updates", () => {
     expect(localEnvironmentStateOf(next).threadIdsByProjectId[recreatedProjectId]).toEqual([
       threadId,
     ]);
-  });
-
-  it("removes a deleted project's threads and thread projections", () => {
-    const deletedProjectId = ProjectId.make("project-delete");
-    const survivingProjectId = ProjectId.make("project-keep");
-    const deletedThreadId = ThreadId.make("thread-delete");
-    const survivingThreadId = ThreadId.make("thread-keep");
-    const deletedThread = makeThread({
-      id: deletedThreadId,
-      projectId: deletedProjectId,
-    });
-    const survivingThread = makeThread({
-      id: survivingThreadId,
-      projectId: survivingProjectId,
-    });
-    const baseState = localEnvironmentStateOf(makeState(deletedThread));
-    const state = withActiveEnvironmentState(baseState, {
-      projectIds: [deletedProjectId, survivingProjectId],
-      projectById: {
-        [deletedProjectId]: {
-          id: deletedProjectId,
-          environmentId: localEnvironmentId,
-          name: "Delete Me",
-          cwd: "/tmp/project-delete",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-          scripts: [],
-        },
-        [survivingProjectId]: {
-          id: survivingProjectId,
-          environmentId: localEnvironmentId,
-          name: "Keep Me",
-          cwd: "/tmp/project-keep",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-          scripts: [],
-        },
-      },
-      threadIds: [deletedThreadId, survivingThreadId],
-      threadIdsByProjectId: {
-        [deletedProjectId]: [deletedThreadId],
-        [survivingProjectId]: [survivingThreadId],
-      },
-      threadShellById: {
-        ...baseState.threadShellById,
-        [survivingThreadId]: {
-          id: survivingThreadId,
-          environmentId: localEnvironmentId,
-          codexThreadId: null,
-          projectId: survivingProjectId,
-          title: survivingThread.title,
-          modelSelection: survivingThread.modelSelection,
-          runtimeMode: survivingThread.runtimeMode,
-          interactionMode: survivingThread.interactionMode,
-          error: survivingThread.error,
-          createdAt: survivingThread.createdAt,
-          archivedAt: survivingThread.archivedAt,
-          updatedAt: survivingThread.updatedAt,
-          branch: survivingThread.branch,
-          worktreePath: survivingThread.worktreePath,
-        },
-      },
-      threadSessionById: {
-        ...baseState.threadSessionById,
-        [survivingThreadId]: survivingThread.session,
-      },
-      threadTurnStateById: {
-        ...baseState.threadTurnStateById,
-        [survivingThreadId]: {
-          latestTurn: survivingThread.latestTurn,
-        },
-      },
-      messageIdsByThreadId: {
-        ...baseState.messageIdsByThreadId,
-        [survivingThreadId]: [],
-      },
-      messageByThreadId: {
-        ...baseState.messageByThreadId,
-        [survivingThreadId]: {},
-      },
-      activityIdsByThreadId: {
-        ...baseState.activityIdsByThreadId,
-        [survivingThreadId]: [],
-      },
-      activityByThreadId: {
-        ...baseState.activityByThreadId,
-        [survivingThreadId]: {},
-      },
-      proposedPlanIdsByThreadId: {
-        ...baseState.proposedPlanIdsByThreadId,
-        [survivingThreadId]: [],
-      },
-      proposedPlanByThreadId: {
-        ...baseState.proposedPlanByThreadId,
-        [survivingThreadId]: {},
-      },
-      turnDiffIdsByThreadId: {
-        ...baseState.turnDiffIdsByThreadId,
-        [survivingThreadId]: [],
-      },
-      turnDiffSummaryByThreadId: {
-        ...baseState.turnDiffSummaryByThreadId,
-        [survivingThreadId]: {},
-      },
-      sidebarThreadSummaryById: {
-        ...baseState.sidebarThreadSummaryById,
-      },
-    });
-
-    const next = applyOrchestrationEvent(
-      state,
-      makeEvent("project.deleted", {
-        projectId: deletedProjectId,
-        deletedAt: "2026-02-27T00:00:01.000Z",
-      }),
-      localEnvironmentId,
-    );
-
-    expect(projectsOf(next).map((project) => project.id)).toEqual([survivingProjectId]);
-    expect(threadsOf(next).map((thread) => thread.id)).toEqual([survivingThreadId]);
-    expect(localEnvironmentStateOf(next).threadIdsByProjectId[deletedProjectId]).toBeUndefined();
-    expect(localEnvironmentStateOf(next).threadShellById[deletedThreadId]).toBeUndefined();
-    expect(localEnvironmentStateOf(next).sidebarThreadSummaryById[deletedThreadId]).toBeUndefined();
   });
 
   it("updates only the affected thread for message events", () => {

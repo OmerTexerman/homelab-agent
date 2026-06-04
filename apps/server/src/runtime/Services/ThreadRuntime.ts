@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 /**
  * ThreadRuntime - Container-first execution boundary for one thread.
  *
@@ -26,6 +27,12 @@ export type ThreadRuntimeStatus =
 
 export type ThreadRuntimeHealth = "unknown" | "healthy" | "degraded" | "unhealthy";
 
+export interface ThreadRuntimeManagedOpenCodeServerEndpoint {
+  readonly containerPort: number;
+  readonly hostIp: string;
+  readonly hostPort: number;
+}
+
 export interface ThreadRuntimeDescriptor {
   readonly threadId: ThreadId;
   readonly runtimeId: RuntimeSessionId;
@@ -41,7 +48,9 @@ export interface ThreadRuntimeDescriptor {
   readonly homePath: string;
   readonly cwd: string;
   readonly shell: string;
+  readonly bootstrapVersion?: string | undefined;
   readonly env: Readonly<Record<string, string>>;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly lastStartedAt: string | null;
@@ -51,6 +60,7 @@ export interface ThreadRuntimeDescriptor {
 
 export interface ThreadRuntimeLaunchInput {
   readonly threadId: ThreadId;
+  readonly runtimeId?: RuntimeSessionId;
   readonly provider: ProviderKind | null;
   readonly runtimeMode: RuntimeMode;
   readonly imageRef?: string;
@@ -69,6 +79,7 @@ export interface ThreadExecutionContext {
   readonly cwd: string;
   readonly shell: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 
 export interface ThreadRuntimeLaunchContext {
@@ -78,6 +89,7 @@ export interface ThreadRuntimeLaunchContext {
   readonly hostHomePath: string;
   readonly hostBinDir: string;
   readonly shellWrapperPath: string;
+  readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 
 export interface ThreadRuntimeEvent {
@@ -160,5 +172,5 @@ export interface ThreadRuntimeShape {
 }
 
 export class ThreadRuntime extends Context.Service<ThreadRuntime, ThreadRuntimeShape>()(
-  "homelab/runtime/Services/ThreadRuntime",
+  "t3/runtime/Services/ThreadRuntime",
 ) {}

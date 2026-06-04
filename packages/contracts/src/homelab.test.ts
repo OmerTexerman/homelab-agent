@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import {
   HomelabEntity,
   HomelabPromotionEnvelope,
   HomelabRelation,
   HomelabGraphSearchInput,
-} from "./homelab";
+} from "./homelab.ts";
 
 const decodeEntity = Schema.decodeUnknownSync(HomelabEntity);
 const decodeRelation = Schema.decodeUnknownSync(HomelabRelation);

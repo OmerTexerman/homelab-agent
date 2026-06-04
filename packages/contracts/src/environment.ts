@@ -1,6 +1,7 @@
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -51,6 +52,7 @@ export type RepositoryIdentityLocator = typeof RepositoryIdentityLocator.Type;
 export const RepositoryIdentity = Schema.Struct({
   canonicalKey: TrimmedNonEmptyString,
   locator: RepositoryIdentityLocator,
+  rootPath: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(TrimmedNonEmptyString),
   owner: Schema.optionalKey(TrimmedNonEmptyString),

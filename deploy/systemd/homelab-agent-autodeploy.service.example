@@ -1,0 +1,15 @@
+[Unit]
+Description=Deploy Homelab Agent from origin/main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/homelab-agent
+Environment=HOMELAB_AGENT_REPO_DIR=/opt/homelab-agent
+Environment=HOMELAB_AGENT_REMOTE=origin
+Environment=HOMELAB_AGENT_BRANCH=main
+Environment=HOMELAB_AGENT_SERVICE=homelab-agent.service
+Environment=HOMELAB_AGENT_SERVICE_MANAGER=user
+Environment=T3CODE_HOME=/var/lib/homelab-agent
+ExecStart=/opt/homelab-agent/scripts/deploy-main.sh

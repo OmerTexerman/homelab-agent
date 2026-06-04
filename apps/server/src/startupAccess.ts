@@ -1,11 +1,11 @@
 import { networkInterfaces } from "node:os";
 
 import { QrCode } from "@t3tools/shared/qrCode";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
-import { ServerConfig } from "./config";
-import { ServerAuth } from "./auth/Services/ServerAuth";
+import { ServerConfig } from "./config.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 
 export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
@@ -121,7 +121,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
-    "T3 Code server is ready.",
+    "Homelab Agent server is ready.",
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,
@@ -133,12 +133,12 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
 export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
   const serverConfig = yield* ServerConfig;
   const httpServer = yield* HttpServer.HttpServer;
-  const serverAuth = yield* ServerAuth;
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const connectionString = resolveHeadlessConnectionString(
     serverConfig.host,
     resolveListeningPort(httpServer.address, serverConfig.port),
   );
-  const issued = yield* serverAuth.issuePairingCredential({ role: "owner" });
+  const issued = yield* serverAuth.issueStartupPairingCredential();
 
   return {
     connectionString,

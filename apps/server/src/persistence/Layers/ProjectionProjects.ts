@@ -1,6 +1,9 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Struct } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 import { ModelSelection, ProjectScript } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
@@ -31,6 +34,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           project_id,
           title,
           workspace_root,
+          default_runtime_id,
           default_model_selection_json,
           scripts_json,
           created_at,
@@ -41,6 +45,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.projectId},
           ${row.title},
           ${row.workspaceRoot},
+          ${row.defaultRuntimeId ?? null},
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.scripts)},
           ${row.createdAt},
@@ -51,6 +56,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
         DO UPDATE SET
           title = excluded.title,
           workspace_root = excluded.workspace_root,
+          default_runtime_id = excluded.default_runtime_id,
           default_model_selection_json = excluded.default_model_selection_json,
           scripts_json = excluded.scripts_json,
           created_at = excluded.created_at,
@@ -68,6 +74,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          default_runtime_id AS "defaultRuntimeId",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           created_at AS "createdAt",
@@ -87,6 +94,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          default_runtime_id AS "defaultRuntimeId",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           created_at AS "createdAt",

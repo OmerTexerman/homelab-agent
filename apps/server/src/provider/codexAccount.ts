@@ -1,4 +1,4 @@
-import type { ServerProviderModel } from "@t3tools/contracts";
+import { DEFAULT_MODEL_BY_PROVIDER, type ServerProviderModel } from "@t3tools/contracts";
 
 export type CodexPlanType =
   | "free"
@@ -12,12 +12,12 @@ export type CodexPlanType =
   | "unknown";
 
 export interface CodexAccountSnapshot {
-  readonly type: "apiKey" | "chatgpt" | "unknown";
+  readonly type: "apiKey" | "amazonBedrock" | "chatgpt" | "unknown";
   readonly planType: CodexPlanType | null;
   readonly sparkEnabled: boolean;
 }
 
-export const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
+export const CODEX_DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_ENABLED_PLAN_TYPES = new Set<CodexPlanType>(["pro"]);
 
@@ -45,6 +45,14 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
     };
   }
 
+  if (accountType === "amazonBedrock") {
+    return {
+      type: "amazonBedrock",
+      planType: null,
+      sparkEnabled: false,
+    };
+  }
+
   if (accountType === "chatgpt") {
     const planType = (account?.planType as CodexPlanType | null) ?? "unknown";
     return {
@@ -66,6 +74,10 @@ export function codexAuthSubType(account: CodexAccountSnapshot | undefined): str
     return "apiKey";
   }
 
+  if (account?.type === "amazonBedrock") {
+    return "amazonBedrock";
+  }
+
   if (account?.type !== "chatgpt") {
     return undefined;
   }
@@ -77,6 +89,8 @@ export function codexAuthSubLabel(account: CodexAccountSnapshot | undefined): st
   switch (codexAuthSubType(account)) {
     case "apiKey":
       return "OpenAI API Key";
+    case "amazonBedrock":
+      return "Amazon Bedrock";
     case "chatgpt":
       return "ChatGPT Subscription";
     case "free":

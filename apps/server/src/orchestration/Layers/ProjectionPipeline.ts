@@ -1,9 +1,16 @@
 import {
   ApprovalRequestId,
+  DEFAULT_THREAD_RUNTIME_MODE,
   type ChatAttachment,
   type OrchestrationEvent,
+  ThreadId,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
@@ -88,6 +95,88 @@ function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
   }
   const requestId = (payload as Record<string, unknown>).requestId;
   return typeof requestId === "string" ? ApprovalRequestId.make(requestId) : null;
+}
+
+function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
+  if (detail === null) {
+    return false;
+  }
+  return (
+    detail.includes("stale pending approval request") ||
+    detail.includes("unknown pending approval request") ||
+    detail.includes("unknown pending permission request")
+  );
+}
+
+function derivePendingUserInputCountFromActivities(
+  activities: ReadonlyArray<ProjectionThreadActivity>,
+): number {
+  const openRequestIds = new Set<string>();
+  const ordered = [...activities].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.activityId.localeCompare(right.activityId),
+  );
+
+  for (const activity of ordered) {
+    const requestId = extractActivityRequestId(activity.payload);
+    if (requestId === null) {
+      continue;
+    }
+    const payload =
+      typeof activity.payload === "object" && activity.payload !== null
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
+
+    if (activity.kind === "user-input.requested") {
+      openRequestIds.add(requestId);
+      continue;
+    }
+
+    if (activity.kind === "user-input.resolved") {
+      openRequestIds.delete(requestId);
+      continue;
+    }
+
+    if (
+      activity.kind === "provider.user-input.respond.failed" &&
+      detail !== null &&
+      (detail.includes("stale pending user-input request") ||
+        detail.includes("unknown pending user-input request"))
+    ) {
+      openRequestIds.delete(requestId);
+    }
+  }
+
+  return openRequestIds.size;
+}
+
+function deriveHasActionableProposedPlan(input: {
+  readonly latestTurnId: string | null;
+  readonly proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>;
+}): boolean {
+  const sorted = [...input.proposedPlans].toSorted(
+    (left, right) =>
+      left.updatedAt.localeCompare(right.updatedAt) || left.planId.localeCompare(right.planId),
+  );
+
+  let latestForTurn: ProjectionThreadProposedPlan | null = null;
+  if (input.latestTurnId !== null) {
+    for (let index = sorted.length - 1; index >= 0; index -= 1) {
+      const plan = sorted[index];
+      if (plan?.turnId === input.latestTurnId) {
+        latestForTurn = plan;
+        break;
+      }
+    }
+  }
+  if (latestForTurn !== null) {
+    return latestForTurn.implementedAt === null;
+  }
+
+  const latestPlan = sorted.at(-1) ?? null;
+  return latestPlan !== null && latestPlan.implementedAt === null;
 }
 
 function retainProjectionMessagesAfterRevert(
@@ -383,6 +472,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             projectId: event.payload.projectId,
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
+            defaultRuntimeId: event.payload.defaultRuntimeId ?? null,
             defaultModelSelection: event.payload.defaultModelSelection,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
@@ -403,6 +493,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.workspaceRoot !== undefined
               ? { workspaceRoot: event.payload.workspaceRoot }
+              : {}),
+            ...(event.payload.defaultRuntimeId !== undefined
+              ? { defaultRuntimeId: event.payload.defaultRuntimeId }
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
@@ -433,6 +526,51 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const refreshThreadShellSummary = Effect.fn("refreshThreadShellSummary")(function* (
+      threadId: ThreadId,
+    ) {
+      const existingRow = yield* projectionThreadRepository.getById({
+        threadId,
+      });
+      if (Option.isNone(existingRow)) {
+        return;
+      }
+
+      const [messages, proposedPlans, activities, pendingApprovals] = yield* Effect.all([
+        projectionThreadMessageRepository.listByThreadId({ threadId }),
+        projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
+        projectionThreadActivityRepository.listByThreadId({ threadId }),
+        projectionPendingApprovalRepository.listByThreadId({ threadId }),
+      ]);
+
+      let latestUserMessageAt: string | null = null;
+      for (const message of messages) {
+        if (
+          message.role === "user" &&
+          (latestUserMessageAt === null || message.createdAt > latestUserMessageAt)
+        ) {
+          latestUserMessageAt = message.createdAt;
+        }
+      }
+
+      const pendingApprovalCount = pendingApprovals.filter(
+        (approval) => approval.status === "pending",
+      ).length;
+      const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
+      const hasActionableProposedPlan = deriveHasActionableProposedPlan({
+        latestTurnId: existingRow.value.latestTurnId,
+        proposedPlans,
+      });
+
+      yield* projectionThreadRepository.upsert({
+        ...existingRow.value,
+        latestUserMessageAt,
+        pendingApprovalCount,
+        pendingUserInputCount,
+        hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+      });
+    });
+
     const applyThreadsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadsProjection",
     )(function* (event, attachmentSideEffects) {
@@ -441,6 +579,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
+            runtimeId: event.payload.runtimeId ?? null,
+            runtimeSelectionMode: event.payload.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
             title: event.payload.title,
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
@@ -451,6 +591,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            latestUserMessageAt: null,
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            hasActionableProposedPlan: 0,
             deletedAt: null,
           });
           return;
@@ -494,7 +638,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            ...(event.payload.projectId !== undefined
+              ? { projectId: event.payload.projectId }
+              : {}),
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            ...(event.payload.runtimeId !== undefined
+              ? { runtimeId: event.payload.runtimeId }
+              : {}),
+            ...(event.payload.runtimeSelectionMode !== undefined
+              ? { runtimeSelectionMode: event.payload.runtimeSelectionMode }
+              : {}),
             ...(event.payload.modelSelection !== undefined
               ? { modelSelection: event.payload.modelSelection }
               : {}),
@@ -558,7 +711,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
-        case "thread.activity-appended": {
+        case "thread.activity-appended":
+        case "thread.approval-response-requested":
+        case "thread.user-input-response-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -569,6 +724,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -584,6 +740,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestTurnId: event.payload.session.activeTurnId,
             updatedAt: event.occurredAt,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -599,6 +756,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestTurnId: event.payload.turnId,
             updatedAt: event.occurredAt,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -609,11 +767,34 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+
+          const retainedTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          let latestTurnId: ProjectionTurn["turnId"] = null;
+          let latestCheckpointTurnCount = -1;
+          for (let index = 0; index < retainedTurns.length; index += 1) {
+            const turn = retainedTurns[index];
+            if (
+              !turn ||
+              turn.turnId === null ||
+              turn.checkpointTurnCount === null ||
+              turn.checkpointTurnCount > event.payload.turnCount
+            ) {
+              continue;
+            }
+            if (turn.checkpointTurnCount > latestCheckpointTurnCount) {
+              latestCheckpointTurnCount = turn.checkpointTurnCount;
+              latestTurnId = turn.turnId;
+            }
+          }
+
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: null,
+            latestTurnId,
             updatedAt: event.occurredAt,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -838,6 +1019,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         threadId: event.payload.threadId,
         status: event.payload.session.status,
         providerName: event.payload.session.providerName,
+        providerInstanceId: event.payload.session.providerInstanceId ?? null,
         runtimeMode: event.payload.session.runtimeMode,
         activeTurnId: event.payload.session.activeTurnId,
         lastError: event.payload.session.lastError,
@@ -1151,6 +1333,42 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                 : event.payload.activity.createdAt,
               resolvedAt: event.payload.activity.createdAt,
             });
+            return;
+          }
+          if (event.payload.activity.kind === "provider.approval.respond.failed") {
+            const payload =
+              typeof event.payload.activity.payload === "object" &&
+              event.payload.activity.payload !== null
+                ? (event.payload.activity.payload as Record<string, unknown>)
+                : null;
+            const detail =
+              typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
+            if (isStalePendingApprovalFailureDetail(detail)) {
+              if (Option.isNone(existingRow)) {
+                return;
+              }
+              if (existingRow.value.status === "resolved") {
+                return;
+              }
+              yield* projectionPendingApprovalRepository.upsert({
+                requestId,
+                threadId: existingRow.value.threadId,
+                turnId: existingRow.value.turnId,
+                status: "resolved",
+                decision: null,
+                createdAt: existingRow.value.createdAt,
+                resolvedAt: event.payload.activity.createdAt,
+              });
+              return;
+            }
+            return;
+          }
+          // Only approval-requested activities should create pending-approval
+          // rows.  Other activity kinds that happen to carry a requestId
+          // (e.g. user-input.requested / user-input.resolved) must not
+          // pollute this projection — they have their own accounting via
+          // derivePendingUserInputCountFromActivities.
+          if (event.payload.activity.kind !== "approval.requested") {
             return;
           }
           if (Option.isSome(existingRow) && existingRow.value.status === "resolved") {

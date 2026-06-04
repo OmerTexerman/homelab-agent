@@ -1,6 +1,5 @@
 import { memo, useState, useId } from "react";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
+import type { EnvironmentId } from "@t3tools/contracts";
 import {
   buildCollapsedProposedPlanPreviewMarkdown,
   buildProposedPlanMarkdownFilename,
@@ -25,20 +24,18 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { toastManager } from "../ui/toast";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { readEnvironmentApi } from "~/environmentApi";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 
 export const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   environmentId,
-  threadId,
   cwd,
   workspaceRoot,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
-  threadId: ThreadId;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
 }) {
@@ -48,11 +45,13 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard({
     onError: (error) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not copy plan",
-        description: error instanceof Error ? error.message : "An error occurred while copying.",
-      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not copy plan",
+          description: error instanceof Error ? error.message : "An error occurred while copying.",
+        }),
+      );
     },
   });
   const savePathInputId = useId();
@@ -65,12 +64,6 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     : null;
   const downloadFilename = buildProposedPlanMarkdownFilename(planMarkdown);
   const saveContents = normalizePlanMarkdownForExport(planMarkdown);
-  const usesThreadWorkspace = Boolean(
-    workspaceRoot && isLogicalProjectWorkspaceRoot(workspaceRoot),
-  );
-  const workspaceLabel = usesThreadWorkspace
-    ? "this thread workspace (/workspace)"
-    : (workspaceRoot ?? "the workspace");
 
   const handleDownload = () => {
     downloadPlanAsTextFile(downloadFilename, saveContents);
@@ -82,11 +75,13 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
 
   const openSaveDialog = () => {
     if (!workspaceRoot) {
-      toastManager.add({
-        type: "error",
-        title: "Workspace path is unavailable",
-        description: "This thread does not have a workspace path to save into.",
-      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Workspace path is unavailable",
+          description: "This thread does not have a workspace path to save into.",
+        }),
+      );
       return;
     }
     setSavePath((existing) => (existing.length > 0 ? existing : downloadFilename));
@@ -108,32 +103,28 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
     }
 
     setIsSavingToWorkspace(true);
-    const writeRequest = usesThreadWorkspace
-      ? api.threadWorkspace.writeFile({
-          threadId,
-          path: relativePath,
-          contents: saveContents,
-        })
-      : api.projects.writeFile({
-          cwd: workspaceRoot,
-          relativePath,
-          contents: saveContents,
-        });
-    void writeRequest
+    void api.projects
+      .writeFile({
+        cwd: workspaceRoot,
+        relativePath,
+        contents: saveContents,
+      })
       .then((result) => {
         setIsSaveDialogOpen(false);
         toastManager.add({
           type: "success",
           title: "Plan saved to workspace",
-          description: "relativePath" in result ? result.relativePath : result.path,
+          description: result.relativePath,
         });
       })
       .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not save plan",
-          description: error instanceof Error ? error.message : "An error occurred while saving.",
-        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not save plan",
+            description: error instanceof Error ? error.message : "An error occurred while saving.",
+          }),
+        );
       })
       .then(
         () => {
@@ -206,7 +197,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
           <DialogHeader>
             <DialogTitle>Save plan to workspace</DialogTitle>
             <DialogDescription>
-              Enter a path relative to <code>{workspaceLabel}</code>.
+              Enter a path relative to <code>{workspaceRoot ?? "the workspace"}</code>.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">

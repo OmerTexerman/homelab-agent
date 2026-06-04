@@ -9,8 +9,8 @@ on:
 jobs:
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -46,6 +46,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Ensure Electron runtime is installed
+        run: |
+          if ! node -e "require('./apps/desktop/node_modules/electron')" >/dev/null 2>&1; then
+            rm -rf apps/desktop/node_modules/electron/dist apps/desktop/node_modules/electron/path.txt
+            bun apps/desktop/node_modules/electron/install.js
+          fi
+          node -e "require('./apps/desktop/node_modules/electron')"
+
       - name: Format
         run: bun run fmt:check
 
@@ -58,21 +66,63 @@ jobs:
       - name: Test
         run: bun run test
 
-      - name: Install browser test runtime
+      - name: Verify browser test runtime
         run: |
-          cd apps/web
-          bunx playwright install --with-deps chromium
+          test -x /usr/bin/google-chrome
+          /usr/bin/google-chrome --version
 
       - name: Browser test
-        run: bun run --cwd apps/web test:browser
+        env:
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/google-chrome
+        run: |
+          # Keep CI on maintained Homelab-facing browser surfaces. The full browser
+          # suite still includes upstream repo/editor workflows that are not release gates.
+          bun run --cwd apps/web test:browser \
+            src/components/ProjectRuntimePanel.browser.tsx \
+            src/components/ChatMarkdown.browser.tsx \
+            src/components/NoActiveThreadState.browser.tsx \
+            src/components/ThreadWorkspacePanel.browser.tsx \
+            src/components/settings/SettingsPanels.browser.tsx \
+            src/components/ThreadTerminalDrawer.browser.tsx \
+            src/components/chat/MessagesTimeline.browser.tsx \
+            src/components/chat/CompactComposerControlsMenu.browser.tsx \
+            src/components/chat/ProviderModelPicker.browser.tsx \
+            src/components/chat/ChatHeader.browser.tsx
 
       - name: Build desktop pipeline
         run: bun run build:desktop
 
       - name: Verify preload bundle output
         run: |
-          test -f apps/desktop/dist-electron/preload.js
-          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
+          test -f apps/desktop/dist-electron/preload.cjs
+          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
+
+  mobile_native_static_analysis:
+    name: Mobile Native Static Analysis
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install mobile native static analysis tools
+        run: brew bundle install --file apps/mobile/Brewfile
+
+      - name: Lint mobile native sources
+        run: node scripts/mobile-native-static-check.ts
 
   release_smoke:
     name: Release Smoke
@@ -91,6 +141,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts

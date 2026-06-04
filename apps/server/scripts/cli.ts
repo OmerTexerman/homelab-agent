@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Data, Effect, FileSystem, Logger, Option, Path } from "effect";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -11,6 +16,7 @@ import {
   PUBLISH_ICON_OVERRIDES,
 } from "../../../scripts/lib/brand-assets.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import serverPackageJson from "../package.json" with { type: "json" };
 
@@ -29,6 +35,9 @@ interface PackageJson {
   dependencies: Record<string, string>;
   overrides: Record<string, string>;
 }
+
+const PackageJsonPrettyJson = fromJsonStringPretty(Schema.Unknown);
+const encodePackageJson = Schema.encodeEffect(PackageJsonPrettyJson);
 
 class CliError extends Data.TaggedError("CliError")<{
   readonly message: string;
@@ -147,13 +156,13 @@ const buildCmd = Command.make(
 
       yield* Effect.log("[cli] Running tsdown...");
       yield* runCommand(
-        ChildProcess.make({
+        ChildProcess.make(process.execPath, ["--run", "build:bundle"], {
           cwd: serverDir,
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
-          // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+          // Windows needs shell mode to resolve `.cmd` shims on PATH.
           shell: process.platform === "win32",
-        })`bun tsdown`,
+        }),
       );
 
       const webDist = path.join(repoRoot, "apps/web/dist");
@@ -203,10 +212,8 @@ const publishCmd = Command.make(
       }
 
       yield* Effect.acquireUseRelease(
-        // Acquire: backup package.json, resolve catalog: deps, strip devDependencies/scripts
+        // Acquire: backup package.json, resolve catalog dependencies, and strip devDependencies/scripts
         Effect.gen(function* () {
-          // Resolve catalog dependencies before any file mutations. If this throws,
-          // acquire fails and no release hook runs, so filesystem must still be untouched.
           const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
           const pkg: PackageJson = {
             name: serverPackageJson.name,
@@ -216,25 +223,23 @@ const publishCmd = Command.make(
             version,
             engines: serverPackageJson.engines,
             files: serverPackageJson.files,
-            dependencies: serverPackageJson.dependencies,
-            overrides: rootPackageJson.overrides,
+            dependencies: resolveCatalogDependencies(
+              serverPackageJson.dependencies,
+              rootPackageJson.workspaces.catalog,
+              "apps/server",
+            ),
+            overrides: resolveCatalogDependencies(
+              rootPackageJson.overrides,
+              rootPackageJson.workspaces.catalog,
+              "apps/server",
+            ),
           };
 
-          pkg.dependencies = resolveCatalogDependencies(
-            pkg.dependencies,
-            rootPackageJson.workspaces.catalog,
-            "apps/server dependencies",
-          );
-          pkg.overrides = resolveCatalogDependencies(
-            pkg.overrides,
-            rootPackageJson.workspaces.catalog,
-            "root overrides",
-          );
-
           const original = yield* fs.readFileString(packageJsonPath);
+          const packageJsonString = yield* encodePackageJson(pkg);
           yield* fs.writeFileString(backupPath, original);
-          yield* fs.writeFileString(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
-          yield* Effect.log("[cli] Resolved package.json for publish");
+          yield* fs.writeFileString(packageJsonPath, `${packageJsonString}\n`);
+          yield* Effect.log("[cli] Prepared package.json for publish");
 
           const iconBackups = yield* applyPublishIconOverrides(repoRoot, serverDir);
           return { iconBackups };

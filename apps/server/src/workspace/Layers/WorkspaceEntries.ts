@@ -1,9 +1,18 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as OS from "node:os";
 import fsPromises from "node:fs/promises";
 import type { Dirent } from "node:fs";
 
-import { Cache, Duration, Effect, Exit, Layer, Option, Path } from "effect";
+import * as Cache from "effect/Cache";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 
-import { type ProjectEntry } from "@t3tools/contracts";
+import { type FilesystemBrowseInput, type ProjectEntry } from "@t3tools/contracts";
+import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import {
   insertRankedSearchResult,
   normalizeSearchQuery,
@@ -11,9 +20,10 @@ import {
   type RankedSearchResult,
 } from "@t3tools/shared/searchRanking";
 
-import { GitCore } from "../../git/Services/GitCore.ts";
+import { VcsDriverRegistry } from "../../vcs/VcsDriverRegistry.ts";
 import {
   WorkspaceEntries,
+  WorkspaceEntriesBrowseError,
   WorkspaceEntriesError,
   type WorkspaceEntriesShape,
 } from "../Services/WorkspaceEntries.ts";
@@ -50,6 +60,16 @@ type RankedWorkspaceEntry = RankedSearchResult<SearchableWorkspaceEntry>;
 
 function toPosixPath(input: string): string {
   return input.replaceAll("\\", "/");
+}
+
+function expandHomePath(input: string, path: Path.Path): string {
+  if (input === "~") {
+    return OS.homedir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(OS.homedir(), input.slice(2));
+  }
+  return input;
 }
 
 function parentPathOf(input: string): string | undefined {
@@ -129,40 +149,71 @@ function directoryAncestorsOf(relativePath: string): string[] {
   return directories;
 }
 
+const resolveBrowseTarget = (
+  input: FilesystemBrowseInput,
+  pathService: Path.Path,
+): Effect.Effect<string, WorkspaceEntriesBrowseError> =>
+  Effect.gen(function* () {
+    if (process.platform !== "win32" && isWindowsAbsolutePath(input.partialPath)) {
+      return yield* new WorkspaceEntriesBrowseError({
+        cwd: input.cwd,
+        partialPath: input.partialPath,
+        operation: "workspaceEntries.resolveBrowseTarget",
+        detail: "Windows-style paths are only supported on Windows.",
+      });
+    }
+
+    if (!isExplicitRelativePath(input.partialPath)) {
+      return pathService.resolve(expandHomePath(input.partialPath, pathService));
+    }
+
+    if (!input.cwd) {
+      return yield* new WorkspaceEntriesBrowseError({
+        cwd: input.cwd,
+        partialPath: input.partialPath,
+        operation: "workspaceEntries.resolveBrowseTarget",
+        detail: "Relative filesystem browse paths require a current project.",
+      });
+    }
+
+    return pathService.resolve(expandHomePath(input.cwd, pathService), input.partialPath);
+  });
+
 export const makeWorkspaceEntries = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const gitOption = yield* Effect.serviceOption(GitCore);
+  const vcsRegistry = yield* VcsDriverRegistry;
   const workspacePaths = yield* WorkspacePaths;
 
-  const isInsideGitWorkTree = (cwd: string): Effect.Effect<boolean> =>
-    Option.match(gitOption, {
-      onSome: (git) => git.isInsideWorkTree(cwd).pipe(Effect.catch(() => Effect.succeed(false))),
-      onNone: () => Effect.succeed(false),
-    });
+  const isInsideVcsWorkTree = (cwd: string): Effect.Effect<boolean> =>
+    vcsRegistry.detect({ cwd }).pipe(
+      Effect.map((handle) => handle !== null),
+      Effect.catch(() => Effect.succeed(false)),
+    );
 
-  const filterGitIgnoredPaths = (
+  const filterVcsIgnoredPaths = (
     cwd: string,
     relativePaths: string[],
   ): Effect.Effect<string[], never> =>
-    Option.match(gitOption, {
-      onSome: (git) =>
-        git.filterIgnoredPaths(cwd, relativePaths).pipe(
-          Effect.map((paths) => [...paths]),
-          Effect.catch(() => Effect.succeed(relativePaths)),
-        ),
-      onNone: () => Effect.succeed(relativePaths),
-    });
+    vcsRegistry.detect({ cwd }).pipe(
+      Effect.flatMap((handle) =>
+        handle
+          ? handle.driver.filterIgnoredPaths(cwd, relativePaths).pipe(
+              Effect.map((paths) => [...paths]),
+              Effect.catch(() => Effect.succeed(relativePaths)),
+            )
+          : Effect.succeed(relativePaths),
+      ),
+      Effect.catch(() => Effect.succeed(relativePaths)),
+    );
 
-  const buildWorkspaceIndexFromGit = Effect.fn("WorkspaceEntries.buildWorkspaceIndexFromGit")(
+  const buildWorkspaceIndexFromVcs = Effect.fn("WorkspaceEntries.buildWorkspaceIndexFromVcs")(
     function* (cwd: string) {
-      if (Option.isNone(gitOption)) {
-        return null;
-      }
-      if (!(yield* isInsideGitWorkTree(cwd))) {
+      const vcs = yield* vcsRegistry.detect({ cwd }).pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!vcs) {
         return null;
       }
 
-      const listedFiles = yield* gitOption.value
+      const listedFiles = yield* vcs.driver
         .listWorkspaceFiles(cwd)
         .pipe(Effect.catch(() => Effect.succeed(null)));
 
@@ -170,10 +221,17 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
         return null;
       }
 
-      const listedPaths = [...listedFiles.paths]
-        .map((entry) => toPosixPath(entry))
-        .filter((entry) => entry.length > 0 && !isPathInIgnoredDirectory(entry));
-      const filePaths = yield* filterGitIgnoredPaths(cwd, listedPaths);
+      const listedPaths: Array<string> = [];
+      for (const rawEntry of listedFiles.paths) {
+        const entry = toPosixPath(rawEntry);
+        if (entry.length > 0 && !isPathInIgnoredDirectory(entry)) {
+          listedPaths.push(entry);
+        }
+      }
+      const filePaths = yield* vcs.driver.filterIgnoredPaths(cwd, listedPaths).pipe(
+        Effect.map((paths) => [...paths]),
+        Effect.catch(() => filterVcsIgnoredPaths(cwd, listedPaths)),
+      );
 
       const directorySet = new Set<string>();
       for (const filePath of filePaths) {
@@ -205,9 +263,10 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
         )
         .map(toSearchableWorkspaceEntry);
 
+      const now = yield* DateTime.now;
       const entries = [...directoryEntries, ...fileEntries];
       return {
-        scannedAt: Date.now(),
+        scannedAt: now.epochMilliseconds,
         entries: entries.slice(0, WORKSPACE_INDEX_MAX_ENTRIES),
         truncated: listedFiles.truncated || entries.length > WORKSPACE_INDEX_MAX_ENTRIES,
       };
@@ -245,7 +304,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
   const buildWorkspaceIndexFromFilesystem = Effect.fn(
     "WorkspaceEntries.buildWorkspaceIndexFromFilesystem",
   )(function* (cwd: string): Effect.fn.Return<WorkspaceIndex, WorkspaceEntriesError> {
-    const shouldFilterWithGitIgnore = yield* isInsideGitWorkTree(cwd);
+    const shouldFilterWithGitIgnore = yield* isInsideVcsWorkTree(cwd);
 
     let pendingDirectories: string[] = [""];
     const entries: SearchableWorkspaceEntry[] = [];
@@ -293,7 +352,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
         candidateEntries.map((entry) => entry.relativePath),
       );
       const allowedPathSet = shouldFilterWithGitIgnore
-        ? new Set(yield* filterGitIgnoredPaths(cwd, candidatePaths))
+        ? new Set(yield* filterVcsIgnoredPaths(cwd, candidatePaths))
         : null;
 
       for (const candidateEntries of candidateEntriesByDirectory) {
@@ -325,8 +384,9 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
       }
     }
 
+    const now = yield* DateTime.now;
     return {
-      scannedAt: Date.now(),
+      scannedAt: now.epochMilliseconds,
       entries,
       truncated,
     };
@@ -335,9 +395,9 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
   const buildWorkspaceIndex = Effect.fn("WorkspaceEntries.buildWorkspaceIndex")(function* (
     cwd: string,
   ): Effect.fn.Return<WorkspaceIndex, WorkspaceEntriesError> {
-    const gitIndexed = yield* buildWorkspaceIndexFromGit(cwd);
-    if (gitIndexed) {
-      return gitIndexed;
+    const vcsIndexed = yield* buildWorkspaceIndexFromVcs(cwd);
+    if (vcsIndexed) {
+      return vcsIndexed;
     }
     return yield* buildWorkspaceIndexFromFilesystem(cwd);
   });
@@ -379,6 +439,48 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
     },
   );
 
+  const browse: WorkspaceEntriesShape["browse"] = Effect.fn("WorkspaceEntries.browse")(
+    function* (input) {
+      const resolvedInputPath = yield* resolveBrowseTarget(input, path);
+      const endsWithSeparator = /[\\/]$/.test(input.partialPath) || input.partialPath === "~";
+      const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
+      const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
+
+      const dirents = yield* Effect.tryPromise({
+        try: () => fsPromises.readdir(parentPath, { withFileTypes: true }),
+        catch: (cause) =>
+          new WorkspaceEntriesBrowseError({
+            cwd: input.cwd,
+            partialPath: input.partialPath,
+            operation: "workspaceEntries.browse.readDirectory",
+            detail: `Unable to browse '${parentPath}': ${cause instanceof Error ? cause.message : String(cause)}`,
+            cause,
+          }),
+      });
+
+      const showHidden = endsWithSeparator || prefix.startsWith(".");
+      const lowerPrefix = prefix.toLowerCase();
+      const entries: Array<{ readonly name: string; readonly fullPath: string }> = [];
+      for (const dirent of dirents) {
+        if (
+          dirent.isDirectory() &&
+          dirent.name.toLowerCase().startsWith(lowerPrefix) &&
+          (showHidden || !dirent.name.startsWith("."))
+        ) {
+          entries.push({
+            name: dirent.name,
+            fullPath: path.join(parentPath, dirent.name),
+          });
+        }
+      }
+
+      return {
+        parentPath,
+        entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
+      };
+    },
+  );
+
   const search: WorkspaceEntriesShape["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* resolveFilesystemWorkspaceRoot(input.cwd);
@@ -415,6 +517,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
   );
 
   return {
+    browse,
     invalidate,
     search,
   } satisfies WorkspaceEntriesShape;

@@ -12,14 +12,18 @@ import {
 } from "@t3tools/contracts";
 import { isProviderInterruptionMessage } from "@t3tools/shared/providerInterruptions";
 
-import type {
-  ChatMessage,
-  ProposedPlan,
-  SessionPhase,
-  Thread,
-  ThreadSession,
-  TurnDiffSummary,
-} from "./types";
+import type { ProposedPlan, Thread } from "./types";
+
+export {
+  deriveActiveWorkStartedAt,
+  deriveCompletionDividerBeforeEntryId,
+  derivePhase,
+  deriveTimelineEntries,
+  hasToolActivityForTurn,
+  inferCheckpointTurnCountByTurnId,
+  isLatestTurnSettled,
+} from "./threadTimeline";
+export type { TimelineEntry } from "./threadTimeline";
 
 export type ProviderPickerKind = ProviderKind | "cursor";
 
@@ -85,26 +89,6 @@ export interface LatestProposedPlanState {
   implementationThreadId: ThreadId | null;
 }
 
-export type TimelineEntry =
-  | {
-      id: string;
-      kind: "message";
-      createdAt: string;
-      message: ChatMessage;
-    }
-  | {
-      id: string;
-      kind: "proposed-plan";
-      createdAt: string;
-      proposedPlan: ProposedPlan;
-    }
-  | {
-      id: string;
-      kind: "work";
-      createdAt: string;
-      entry: WorkLogEntry;
-    };
-
 export function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
@@ -127,35 +111,11 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
   return formatDuration(endedAt - startedAt);
 }
 
-type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
-type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
-
-export function isLatestTurnSettled(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
-): boolean {
-  if (!latestTurn?.startedAt) return false;
-  if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.orchestrationStatus === "running") return false;
-  return true;
-}
-
-export function deriveActiveWorkStartedAt(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
-  sendStartedAt: string | null,
-): string | null {
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
-  }
-  return sendStartedAt;
-}
-
 function requestKindFromRequestType(requestType: unknown): PendingApproval["requestKind"] | null {
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
+    case "dynamic_tool_call":
       return "command";
     case "file_read_approval":
       return "file-read";
@@ -341,16 +301,10 @@ export function deriveActivePlanState(
   latestTurnId: TurnId | undefined,
 ): ActivePlanState | null {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const candidates = ordered.filter((activity) => {
-    if (activity.kind !== "turn.plan.updated") {
-      return false;
-    }
-    if (!latestTurnId) {
-      return true;
-    }
-    return activity.turnId === latestTurnId;
-  });
-  const latest = candidates.at(-1);
+  const candidates = ordered.filter((activity) => activity.kind === "turn.plan.updated");
+  const latest =
+    (latestTurnId ? candidates.findLast((activity) => activity.turnId === latestTurnId) : null) ??
+    candidates.at(-1);
   if (!latest) {
     return null;
   }
@@ -362,28 +316,25 @@ export function deriveActivePlanState(
   if (!Array.isArray(rawPlan)) {
     return null;
   }
-  const steps = rawPlan
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const record = entry as Record<string, unknown>;
-      if (typeof record.step !== "string") {
-        return null;
-      }
-      const status =
-        record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
-      return {
-        step: record.step,
-        status,
-      };
-    })
-    .filter(
-      (
-        step,
-      ): step is {
-        step: string;
-        status: "pending" | "inProgress" | "completed";
-      } => step !== null,
-    );
+  const steps: Array<{
+    step: string;
+    status: "pending" | "inProgress" | "completed";
+  }> = [];
+  for (const entry of rawPlan) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.step !== "string") {
+      continue;
+    }
+    const status =
+      record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
+    steps.push({
+      step: record.step,
+      status,
+    });
+  }
   if (steps.length === 0) {
     return null;
   }
@@ -462,15 +413,17 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const entries = ordered
-    .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
-    .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
-    .filter((activity) => activity.kind !== "context-window.updated")
-    .filter((activity) => activity.summary !== "Checkpoint captured")
-    .filter((activity) => !isInterruptedRuntimeErrorActivity(activity))
-    .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .map(toDerivedWorkLogEntry);
+  const entries: DerivedWorkLogEntry[] = [];
+  for (const activity of ordered) {
+    if (latestTurnId && activity.turnId !== latestTurnId) continue;
+    if (activity.kind === "tool.started") continue;
+    if (activity.kind === "task.started") continue;
+    if (activity.kind === "context-window.updated") continue;
+    if (activity.summary === "Checkpoint captured") continue;
+    if (isInterruptedRuntimeErrorActivity(activity)) continue;
+    if (isPlanBoundaryToolActivity(activity)) continue;
+    entries.push(toDerivedWorkLogEntry(activity));
+  }
   return collapseDerivedWorkLogEntries(entries).map(
     ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
   );
@@ -500,6 +453,46 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
+function deriveWorkLogLabel(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown> | null,
+): string {
+  if (activity.kind === "task.progress") {
+    return asTrimmedString(payload?.summary) ?? activity.summary;
+  }
+  if (activity.kind === "task.completed") {
+    return (
+      asTrimmedString(payload?.detail) ?? asTrimmedString(payload?.summary) ?? activity.summary
+    );
+  }
+  return activity.summary;
+}
+
+function deriveWorkLogDetail(
+  payload: Record<string, unknown> | null,
+  title: string | null,
+  label: string,
+): string | undefined {
+  const payloadDetail =
+    typeof payload?.detail === "string" && payload.detail.length > 0
+      ? stripTrailingExitCode(payload.detail).output
+      : null;
+  const rawOutputSummary = extractRawOutputSummary(payload);
+  const normalizedDetail = normalizeComparableWorkLogText(payloadDetail);
+  const normalizedTitle = normalizeComparableWorkLogText(title);
+  const normalizedLabel = normalizeComparableWorkLogText(label);
+
+  if (
+    payloadDetail &&
+    ((normalizedTitle && normalizedDetail === normalizedTitle) ||
+      (normalizedLabel && normalizedDetail === normalizedLabel))
+  ) {
+    return rawOutputSummary ?? undefined;
+  }
+
+  return payloadDetail ?? rawOutputSummary ?? undefined;
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -508,20 +501,19 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
+  const label = deriveWorkLogLabel(activity, payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
-    label: activity.summary,
+    label,
     tone: activity.tone === "approval" ? "info" : activity.tone,
     activityKind: activity.kind,
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
-  if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
-    const detail = stripTrailingExitCode(payload.detail).output;
-    if (detail) {
-      entry.detail = detail;
-    }
+  const detail = deriveWorkLogDetail(payload, title, label);
+  if (detail) {
+    entry.detail = detail;
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
@@ -541,7 +533,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
-  const collapseKey = deriveToolLifecycleCollapseKey(entry);
+  const fallbackCollapseKey = deriveToolLifecycleCollapseKey(entry);
+  const toolCallCollapseKey = extractToolCallCollapseKey(payload);
+  const collapseKey =
+    shouldUseGenericToolUpdateCollapseKey(entry, payload) && fallbackCollapseKey
+      ? fallbackCollapseKey
+      : (toolCallCollapseKey ?? fallbackCollapseKey);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -575,6 +572,14 @@ function shouldCollapseToolLifecycleEntries(
   }
   if (previous.activityKind === "tool.completed") {
     return false;
+  }
+  if (
+    previous.detail === undefined &&
+    previous.itemType === next.itemType &&
+    normalizeComparableWorkLogText(previous.toolTitle ?? previous.label) ===
+      normalizeComparableWorkLogText(next.toolTitle ?? next.label)
+  ) {
+    return true;
   }
   return previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey;
 }
@@ -629,8 +634,36 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
   return [itemType, normalizedLabel, detail].join("\u001f");
 }
 
+function extractToolCallCollapseKey(payload: Record<string, unknown> | null): string | undefined {
+  const data = asRecord(payload?.data);
+  const toolCallId =
+    extractToolCallId(payload) ??
+    asTrimmedString(asRecord(data?.item)?.id) ??
+    asTrimmedString(payload?.toolCallId);
+  return toolCallId ? `tool-call:${toolCallId}` : undefined;
+}
+
+function shouldUseGenericToolUpdateCollapseKey(
+  entry: DerivedWorkLogEntry,
+  payload: Record<string, unknown> | null,
+): boolean {
+  return (
+    entry.activityKind === "tool.updated" &&
+    entry.detail === undefined &&
+    extractRawOutputSummary(payload) === null
+  );
+}
+
 function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
+}
+
+function normalizeComparableWorkLogText(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = normalizeCompactToolLabel(value).toLowerCase();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {
@@ -779,9 +812,13 @@ function formatCommandValue(value: unknown): string | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const parts = value
-    .map((entry) => asTrimmedString(entry))
-    .filter((entry): entry is string => entry !== null);
+  const parts: Array<string> = [];
+  for (const entry of value) {
+    const part = asTrimmedString(entry);
+    if (part !== null) {
+      parts.push(part);
+    }
+  }
   if (parts.length === 0) {
     return null;
   }
@@ -838,6 +875,86 @@ function extractToolCommand(payload: Record<string, unknown> | null): {
 
 function extractToolTitle(payload: Record<string, unknown> | null): string | null {
   return asTrimmedString(payload?.title);
+}
+
+function extractToolCallId(payload: Record<string, unknown> | null): string | null {
+  const data = asRecord(payload?.data);
+  return asTrimmedString(data?.toolCallId);
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeInlinePreview(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateInlinePreview(value: string, maxLength = 84): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function summarizeToolTextOutput(value: string): string | null {
+  const lines: Array<string> = [];
+  for (const rawLine of value.split(/\r?\n/u)) {
+    const line = normalizeInlinePreview(rawLine);
+    if (line.length > 0) {
+      lines.push(line);
+    }
+  }
+  const firstLine = lines.find((line) => line !== "```");
+  if (firstLine) {
+    return truncateInlinePreview(firstLine);
+  }
+  if (lines.length > 1) {
+    return `${lines.length.toLocaleString()} lines`;
+  }
+  return null;
+}
+
+function summarizeToolRawOutput(payload: Record<string, unknown> | null): string | null {
+  const data = asRecord(payload?.data);
+  const rawOutput = asRecord(data?.rawOutput);
+  if (!rawOutput) {
+    return null;
+  }
+
+  const totalFiles = asNumber(rawOutput.totalFiles);
+  if (totalFiles !== null) {
+    const suffix = rawOutput.truncated === true ? "+" : "";
+    return `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`;
+  }
+
+  if (asTrimmedString(payload?.itemType) === "command_execution") {
+    return null;
+  }
+
+  const content = asTrimmedString(rawOutput.content);
+  if (content) {
+    return summarizeToolTextOutput(content);
+  }
+
+  const stdout = asTrimmedString(rawOutput.stdout);
+  if (stdout) {
+    return summarizeToolTextOutput(stdout);
+  }
+
+  return null;
+}
+
+function extractRawOutputSummary(payload: Record<string, unknown> | null): string | null {
+  return summarizeToolRawOutput(payload);
+}
+
+function firstNonEmptyLine(value: string): string | null {
+  const line = value
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+  return line ?? null;
 }
 
 function stripTrailingExitCode(value: string): {
@@ -986,107 +1103,4 @@ function compareActivityLifecycleRank(kind: string): number {
     return 2;
   }
   return 1;
-}
-
-export function hasToolActivityForTurn(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  turnId: TurnId | null | undefined,
-): boolean {
-  if (!turnId) return false;
-  return activities.some((activity) => activity.turnId === turnId && activity.tone === "tool");
-}
-
-export function deriveTimelineEntries(
-  messages: ChatMessage[],
-  proposedPlans: ProposedPlan[],
-  workEntries: WorkLogEntry[],
-): TimelineEntry[] {
-  const messageRows: TimelineEntry[] = messages.map((message) => ({
-    id: message.id,
-    kind: "message",
-    createdAt: message.createdAt,
-    message,
-  }));
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
-    id: entry.id,
-    kind: "work",
-    createdAt: entry.createdAt,
-    entry,
-  }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
-}
-
-export function deriveCompletionDividerBeforeEntryId(
-  timelineEntries: ReadonlyArray<TimelineEntry>,
-  latestTurn: Pick<
-    OrchestrationLatestTurn,
-    "assistantMessageId" | "startedAt" | "completedAt"
-  > | null,
-): string | null {
-  if (!latestTurn?.startedAt || !latestTurn.completedAt) {
-    return null;
-  }
-
-  if (latestTurn.assistantMessageId) {
-    const exactMatch = timelineEntries.find(
-      (timelineEntry) =>
-        timelineEntry.kind === "message" &&
-        timelineEntry.message.role === "assistant" &&
-        timelineEntry.message.id === latestTurn.assistantMessageId,
-    );
-    if (exactMatch) {
-      return exactMatch.id;
-    }
-  }
-
-  const turnStartedAt = Date.parse(latestTurn.startedAt);
-  const turnCompletedAt = Date.parse(latestTurn.completedAt);
-  if (Number.isNaN(turnStartedAt) || Number.isNaN(turnCompletedAt)) {
-    return null;
-  }
-
-  let inRangeMatch: string | null = null;
-  let fallbackMatch: string | null = null;
-  for (const timelineEntry of timelineEntries) {
-    if (timelineEntry.kind !== "message" || timelineEntry.message.role !== "assistant") {
-      continue;
-    }
-    const messageAt = Date.parse(timelineEntry.message.createdAt);
-    if (Number.isNaN(messageAt) || messageAt < turnStartedAt) {
-      continue;
-    }
-    fallbackMatch = timelineEntry.id;
-    if (messageAt <= turnCompletedAt) {
-      inRangeMatch = timelineEntry.id;
-    }
-  }
-  return inRangeMatch ?? fallbackMatch;
-}
-
-export function inferCheckpointTurnCountByTurnId(
-  summaries: TurnDiffSummary[],
-): Record<TurnId, number> {
-  const sorted = [...summaries].toSorted((a, b) => a.completedAt.localeCompare(b.completedAt));
-  const result: Record<TurnId, number> = {};
-  for (let index = 0; index < sorted.length; index += 1) {
-    const summary = sorted[index];
-    if (!summary) continue;
-    result[summary.turnId] = index + 1;
-  }
-  return result;
-}
-
-export function derivePhase(session: ThreadSession | null): SessionPhase {
-  if (!session || session.status === "closed") return "disconnected";
-  if (session.status === "connecting") return "connecting";
-  if (session.status === "running") return "running";
-  return "ready";
 }

@@ -1,7 +1,16 @@
 import { createRequire } from "node:module";
 
-import { Effect, FileSystem, Layer, Path } from "effect";
-import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { PtyAdapter } from "../Services/PTY.ts";
+import {
+  PtySpawnError,
+  type PtyAdapterShape,
+  type PtyExitEvent,
+  type PtyProcess,
+} from "../Services/PTY.ts";
 
 let didEnsureSpawnHelperExecutable = false;
 
@@ -46,7 +55,11 @@ export const ensureNodePtySpawnHelperExecutable = Effect.fn(function* (explicitP
 });
 
 class NodePtyProcess implements PtyProcess {
-  constructor(private readonly process: import("node-pty").IPty) {}
+  private readonly process: import("node-pty").IPty;
+
+  constructor(process: import("node-pty").IPty) {
+    this.process = process;
+  }
 
   get pid(): number {
     return this.process.pid;
@@ -103,12 +116,21 @@ export const layer = Layer.effect(
     return {
       spawn: Effect.fn(function* (input) {
         yield* ensureNodePtySpawnHelperExecutableCached;
-        const ptyProcess = nodePty.spawn(input.shell, input.args ?? [], {
-          cwd: input.cwd,
-          cols: input.cols,
-          rows: input.rows,
-          env: input.env,
-          name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
+        const ptyProcess = yield* Effect.try({
+          try: () =>
+            nodePty.spawn(input.shell, input.args ?? [], {
+              cwd: input.cwd,
+              cols: input.cols,
+              rows: input.rows,
+              env: input.env,
+              name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
+            }),
+          catch: (cause) =>
+            new PtySpawnError({
+              adapter: "node-pty",
+              message: cause instanceof Error ? cause.message : "Failed to spawn PTY process",
+              cause,
+            }),
         });
         return new NodePtyProcess(ptyProcess);
       }),

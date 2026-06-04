@@ -1,3 +1,4 @@
+// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import {
   HomelabEntity,
   type HomelabEntityId,
@@ -47,5 +48,5 @@ export interface KnowledgeGraphShape {
 }
 
 export class KnowledgeGraph extends Context.Service<KnowledgeGraph, KnowledgeGraphShape>()(
-  "homelab/Services/KnowledgeGraph",
+  "t3/homelab/Services/KnowledgeGraph",
 ) {}

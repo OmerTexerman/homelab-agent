@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 
-import { homedir } from "node:os";
+import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { NetService } from "@t3tools/shared/Net";
-import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
+import * as NetService from "@t3tools/shared/Net";
+import * as Config from "effect/Config";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Hash from "effect/Hash";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
@@ -17,7 +25,7 @@ const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
 
 export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
-  path.join(homedir(), ".t3"),
+  path.join(NodeOS.homedir(), ".t3"),
 );
 
 const MODE_ARGS = {
@@ -116,6 +124,10 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
   });
 }
 
+function envBoolean(value: boolean): string {
+  return value ? "true" : "false";
+}
+
 interface CreateDevRunnerEnvInput {
   readonly mode: DevMode;
   readonly baseEnv: NodeJS.ProcessEnv;
@@ -176,19 +188,19 @@ export function createDevRunnerEnv({
     }
 
     if (!isDesktopMode && noBrowser !== undefined) {
-      output.T3CODE_NO_BROWSER = noBrowser ? "1" : "0";
+      output.T3CODE_NO_BROWSER = envBoolean(noBrowser);
     } else if (!isDesktopMode) {
       delete output.T3CODE_NO_BROWSER;
     }
 
     if (autoBootstrapProjectFromCwd !== undefined) {
-      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = autoBootstrapProjectFromCwd ? "1" : "0";
+      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = envBoolean(autoBootstrapProjectFromCwd);
     } else {
       delete output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD;
     }
 
     if (logWebSocketEvents !== undefined) {
-      output.T3CODE_LOG_WS_EVENTS = logWebSocketEvents ? "1" : "0";
+      output.T3CODE_LOG_WS_EVENTS = envBoolean(logWebSocketEvents);
     } else {
       delete output.T3CODE_LOG_WS_EVENTS;
     }
@@ -238,22 +250,22 @@ export function checkPortAvailabilityOnHosts<R>(
   });
 }
 
-const defaultCheckPortAvailability: PortAvailabilityCheck<NetService> = (port) =>
+const defaultCheckPortAvailability: PortAvailabilityCheck<NetService.NetService> = (port) =>
   Effect.gen(function* () {
-    const net = yield* NetService;
+    const net = yield* NetService.NetService;
     return yield* checkPortAvailabilityOnHosts(port, DEV_PORT_PROBE_HOSTS, (candidatePort, host) =>
       net.canListenOnHost(candidatePort, host),
     );
   });
 
-interface FindFirstAvailableOffsetInput<R = NetService> {
+interface FindFirstAvailableOffsetInput<R = NetService.NetService> {
   readonly startOffset: number;
   readonly requireServerPort: boolean;
   readonly requireWebPort: boolean;
   readonly checkPortAvailability?: PortAvailabilityCheck<R>;
 }
 
-export function findFirstAvailableOffset<R = NetService>({
+export function findFirstAvailableOffset<R = NetService.NetService>({
   startOffset,
   requireServerPort,
   requireWebPort,
@@ -300,7 +312,7 @@ export function findFirstAvailableOffset<R = NetService>({
   });
 }
 
-interface ResolveModePortOffsetsInput<R = NetService> {
+interface ResolveModePortOffsetsInput<R = NetService.NetService> {
   readonly mode: DevMode;
   readonly startOffset: number;
   readonly hasExplicitServerPort: boolean;
@@ -308,7 +320,7 @@ interface ResolveModePortOffsetsInput<R = NetService> {
   readonly checkPortAvailability?: PortAvailabilityCheck<R>;
 }
 
-export function resolveModePortOffsets<R = NetService>({
+export function resolveModePortOffsets<R = NetService.NetService>({
   mode,
   startOffset,
   hasExplicitServerPort,
@@ -377,7 +389,7 @@ interface DevRunnerCliInput {
 
 export function runDevRunnerWithInput(input: DevRunnerCliInput) {
   return Effect.gen(function* () {
-    const { portOffset, devInstance } = yield* OffsetConfig.asEffect().pipe(
+    const { portOffset, devInstance } = yield* OffsetConfig.pipe(
       Effect.mapError(
         (cause) =>
           new DevRunnerError({
@@ -523,11 +535,10 @@ const cliRuntimeLayer = Layer.mergeAll(
   NetService.layer,
 );
 
-const runtimeProgram = Command.run(devRunnerCli, { version: "0.0.0" }).pipe(
-  Effect.scoped,
-  Effect.provide(cliRuntimeLayer),
-);
-
 if (import.meta.main) {
-  NodeRuntime.runMain(runtimeProgram);
+  Command.run(devRunnerCli, { version: "0.0.0" }).pipe(
+    Effect.scoped,
+    Effect.provide(cliRuntimeLayer),
+    NodeRuntime.runMain,
+  );
 }

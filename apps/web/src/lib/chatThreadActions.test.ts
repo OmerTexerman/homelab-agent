@@ -1,8 +1,10 @@
 import { scopeProjectRef } from "@t3tools/client-runtime";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveThreadActionProjectRef,
+  startNewIsolatedThreadFromContext,
+  startNewIsolatedThreadInProjectFromContext,
   startNewLocalThreadFromContext,
   startNewThreadFromContext,
   type ChatThreadActionContext,
@@ -11,7 +13,6 @@ import {
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
 const FALLBACK_PROJECT_ID = ProjectId.make("project-2");
-const THREAD_ID = ThreadId.make("thread-1");
 
 function createContext(overrides: Partial<ChatThreadActionContext> = {}): ChatThreadActionContext {
   return {
@@ -19,7 +20,7 @@ function createContext(overrides: Partial<ChatThreadActionContext> = {}): ChatTh
     activeThread: undefined,
     defaultProjectRef: scopeProjectRef(ENVIRONMENT_ID, FALLBACK_PROJECT_ID),
     defaultThreadEnvMode: "local",
-    handleNewThread: async () => THREAD_ID,
+    handleNewThread: async () => {},
     ...overrides,
   };
 }
@@ -52,9 +53,7 @@ describe("chatThreadActions", () => {
   });
 
   it("starts a contextual new thread from the active draft thread", async () => {
-    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(
-      async () => THREAD_ID,
-    );
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
 
     const didStart = await startNewThreadFromContext(
       createContext({
@@ -77,10 +76,57 @@ describe("chatThreadActions", () => {
     });
   });
 
-  it("starts a local thread with the configured default env mode", async () => {
-    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(
-      async () => THREAD_ID,
+  it("starts a contextual isolated runtime thread from the active draft thread", async () => {
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
+
+    const didStart = await startNewIsolatedThreadFromContext(
+      createContext({
+        activeDraftThread: {
+          environmentId: ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          branch: "feature/refactor",
+          worktreePath: "/tmp/worktree",
+          envMode: "worktree",
+        },
+        handleNewThread,
+      }),
     );
+
+    expect(didStart).toBe(true);
+    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
+      branch: "feature/refactor",
+      worktreePath: "/tmp/worktree",
+      envMode: "worktree",
+      runtimeSelectionMode: "isolated",
+    });
+  });
+
+  it("starts an isolated runtime thread in a specific project", async () => {
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
+
+    await startNewIsolatedThreadInProjectFromContext(
+      createContext({
+        activeThread: {
+          environmentId: ENVIRONMENT_ID,
+          projectId: FALLBACK_PROJECT_ID,
+          branch: "feature/current",
+          worktreePath: null,
+        },
+        handleNewThread,
+      }),
+      scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID),
+    );
+
+    expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
+      branch: "feature/current",
+      worktreePath: null,
+      envMode: "local",
+      runtimeSelectionMode: "isolated",
+    });
+  });
+
+  it("starts a local thread with the configured default env mode", async () => {
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
 
     const didStart = await startNewLocalThreadFromContext(
       createContext({
@@ -97,9 +143,7 @@ describe("chatThreadActions", () => {
   });
 
   it("does not start a thread when there is no project context", async () => {
-    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(
-      async () => THREAD_ID,
-    );
+    const handleNewThread = vi.fn<ChatThreadActionContext["handleNewThread"]>(async () => {});
 
     const didStart = await startNewThreadFromContext(
       createContext({

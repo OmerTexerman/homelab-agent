@@ -9,7 +9,8 @@ yourself is to ignore most of the root and start from the active product slices.
   Browser UI. This is where the logical project/thread UX, settings, chat,
   workspace panel, and homelab surfaces live.
 - `apps/server/src`
-  Backend runtime. This owns provider processes, thread runtimes, terminals,
+  Backend runtime. This owns provider processes, current thread-runtime
+  plumbing, terminals,
   orchestration, homelab APIs, and runtime bootstrap state.
 - `packages/contracts/src`
   Shared schemas and wire contracts between the server and web app.
@@ -21,12 +22,14 @@ yourself is to ignore most of the root and start from the active product slices.
 ### Runtime
 
 - `apps/server/src/runtime/Layers/ThreadRuntime.ts`
-  Thread container lifecycle, auth sync, wrappers, runtime env, local image
-  builds, and sleep/wake behavior.
+  Current thread container lifecycle, auth sync, wrappers, runtime env, local
+  image builds, and sleep/wake behavior. The target architecture is shared
+  project runtimes; see `docs/project-runtime-architecture.md`.
 - `apps/server/src/runtime/Layers/ThreadWorkspace.ts`
-  Thread workspace file listing, reading, and writing.
+  Current thread workspace file listing, reading, and writing. This should move
+  toward runtime-scoped workspace behavior as project runtimes land.
 - `apps/server/src/runtime/Layers/RuntimeBootstrapRegistry.ts`
-  Shared bootstrap state that future thread runtimes inherit.
+  Shared bootstrap state that future runtimes inherit.
 
 ### Homelab
 
@@ -43,7 +46,8 @@ yourself is to ignore most of the root and start from the active product slices.
 - `apps/server/src/provider/Layers/ClaudeAdapter.ts`
   Provider-specific launch and event translation.
 - `apps/server/src/terminal/Layers/Manager.ts`
-  PTY lifecycle and thread terminal execution.
+  PTY lifecycle and current thread terminal execution. Target behavior is
+  runtime-scoped terminals.
 
 ### Orchestration
 

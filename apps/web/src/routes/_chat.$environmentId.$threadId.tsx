@@ -20,6 +20,7 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { Sheet, SheetPopup } from "../components/ui/sheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
@@ -173,7 +174,9 @@ function ChatThreadRouteView() {
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
-  const diffOpen = search.diff === "1";
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const routeDiffOpen = search.diff === "1";
+  const diffOpen = showSourceControlUi && routeDiffOpen;
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const redirectedMissingThreadKeyRef = useRef<string | null>(null);
@@ -207,7 +210,7 @@ function ChatThreadRouteView() {
     });
   }, [navigate, threadRef]);
   const openDiff = useCallback(() => {
-    if (!threadRef) {
+    if (!threadRef || !showSourceControlUi) {
       return;
     }
     markDiffOpened();
@@ -219,7 +222,20 @@ function ChatThreadRouteView() {
         return { ...rest, diff: "1" };
       },
     });
-  }, [markDiffOpened, navigate, threadRef]);
+  }, [markDiffOpened, navigate, showSourceControlUi, threadRef]);
+
+  useEffect(() => {
+    if (!routeDiffOpen || showSourceControlUi || !threadRef) {
+      return;
+    }
+
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(threadRef),
+      search: (previous) => stripDiffSearchParams(previous),
+      replace: true,
+    });
+  }, [navigate, routeDiffOpen, showSourceControlUi, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
@@ -252,7 +268,7 @@ function ChatThreadRouteView() {
     return null;
   }
 
-  const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
+  const shouldRenderDiffContent = showSourceControlUi && (diffOpen || hasOpenedDiff);
 
   if (!shouldUseDiffSheet) {
     return (

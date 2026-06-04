@@ -1,22 +1,26 @@
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off schemaSyncInEffect:off
 import { Buffer } from "node:buffer";
 import nodePath from "node:path";
 
 import {
   ThreadWorkspaceEntriesResult as ThreadWorkspaceEntriesResultSchema,
   ThreadWorkspaceReadFileResult as ThreadWorkspaceReadFileResultSchema,
+  type RuntimeSessionId,
   type ThreadWorkspaceReadFileResult,
   ThreadWorkspaceWriteFileResult as ThreadWorkspaceWriteFileResultSchema,
   type ThreadId,
 } from "@t3tools/contracts";
 import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
-import { Effect, Layer, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
-import { runProcess, type ProcessRunOptions } from "../../processRunner.ts";
+import { ProcessRunner } from "../../processRunner.ts";
 import {
-  ThreadRuntime,
   type ThreadExecutionContext,
   type ThreadRuntimeLaunchContext,
 } from "../Services/ThreadRuntime.ts";
+import { RuntimeWorkspace } from "../Services/RuntimeWorkspace.ts";
 import {
   ThreadWorkspace,
   ThreadWorkspaceServiceError,
@@ -266,19 +270,36 @@ function parseJsonOutput<T>(stdout: string, label: string, decode: (input: unkno
   }
 }
 
-export const makeThreadWorkspace = Effect.gen(function* () {
-  const threadRuntime = yield* ThreadRuntime;
+function runtimeWorkspaceInput(input: {
+  readonly threadId: ThreadId;
+  readonly runtimeId?: RuntimeSessionId | undefined;
+}): { readonly threadId: ThreadId; readonly runtimeId?: RuntimeSessionId } {
+  return {
+    threadId: input.threadId,
+    ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
+  };
+}
 
-  const resolveLaunchContext = Effect.fn("threadWorkspace.resolveLaunchContext")(function* (
-    threadId: ThreadId,
-  ) {
-    return yield* threadRuntime
-      .resolveLaunchContext(threadId)
-      .pipe(
-        Effect.mapError((cause) =>
-          toThreadWorkspaceError(`Thread runtime is unavailable for '${threadId}'.`, cause),
+export const makeThreadWorkspace = Effect.gen(function* () {
+  const runtimeWorkspace = yield* RuntimeWorkspace;
+  const processRunner = yield* ProcessRunner;
+
+  const resolveLaunchContext = Effect.fn("threadWorkspace.resolveLaunchContext")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runtimeId?: RuntimeSessionId;
+  }) {
+    const launchContext =
+      input.runtimeId !== undefined
+        ? runtimeWorkspace.resolveLaunchContextForRuntime(input.runtimeId)
+        : runtimeWorkspace.resolveLaunchContextForThread(input.threadId);
+    return yield* launchContext.pipe(
+      Effect.mapError((cause) =>
+        toThreadWorkspaceError(
+          `Runtime workspace is unavailable for thread '${input.threadId}'.`,
+          cause,
         ),
-      );
+      ),
+    );
   });
 
   const runInRuntime = Effect.fn("threadWorkspace.runInRuntime")(function* (input: {
@@ -291,29 +312,38 @@ export const makeThreadWorkspace = Effect.gen(function* () {
     readonly maxBufferBytes?: number;
   }) {
     const env = input.env ? { ...process.env, ...input.env } : process.env;
-    const options: ProcessRunOptions = {
-      cwd: input.launchContext.hostWorkspacePath,
-      env,
-      timeoutMs: input.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS,
-      maxBufferBytes: input.maxBufferBytes ?? DEFAULT_PROCESS_BUFFER_BYTES,
-      ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-    };
-
-    const result = yield* Effect.tryPromise({
-      try: () => runProcess(input.launchContext.shellWrapperPath, input.args, options),
-      catch: (cause) =>
-        toThreadWorkspaceError(
-          `Failed to execute '${input.args.join(" ")}' in thread '${input.threadId}'.`,
-          cause,
+    const result = yield* processRunner
+      .run({
+        command: input.launchContext.shellWrapperPath,
+        args: input.args,
+        cwd: input.launchContext.hostWorkspacePath,
+        env,
+        timeout: input.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS,
+        maxOutputBytes: input.maxBufferBytes ?? DEFAULT_PROCESS_BUFFER_BYTES,
+        ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          toThreadWorkspaceError(
+            `Failed to execute '${input.args.join(" ")}' in thread '${input.threadId}'.`,
+            cause,
+          ),
         ),
-    });
+      );
+
+    if (result.code !== 0) {
+      return yield* toThreadWorkspaceError(
+        `Command '${input.args.join(" ")}' failed in thread '${input.threadId}'.`,
+        { code: result.code, stderr: result.stderr },
+      );
+    }
 
     return result;
   });
 
   const listEntries: ThreadWorkspaceShape["listEntries"] = Effect.fn("threadWorkspace.listEntries")(
     function* (input) {
-      const launchContext = yield* resolveLaunchContext(input.threadId);
+      const launchContext = yield* resolveLaunchContext(runtimeWorkspaceInput(input));
       const basePath = normalizeContainerPath(input.basePath, launchContext.execution);
       const result = yield* runInRuntime({
         launchContext,
@@ -336,7 +366,7 @@ export const makeThreadWorkspace = Effect.gen(function* () {
 
   const readFile: ThreadWorkspaceShape["readFile"] = Effect.fn("threadWorkspace.readFile")(
     function* (input) {
-      const launchContext = yield* resolveLaunchContext(input.threadId);
+      const launchContext = yield* resolveLaunchContext(runtimeWorkspaceInput(input));
       const targetPath = normalizeContainerPath(input.path, launchContext.execution);
       const result = yield* runInRuntime({
         launchContext,
@@ -358,12 +388,13 @@ export const makeThreadWorkspace = Effect.gen(function* () {
 
   const writeFile: ThreadWorkspaceShape["writeFile"] = Effect.fn("threadWorkspace.writeFile")(
     function* (input) {
-      const launchContext = yield* resolveLaunchContext(input.threadId);
+      const launchContext = yield* resolveLaunchContext(runtimeWorkspaceInput(input));
       const targetPath = normalizeContainerPath(input.path, launchContext.execution);
       const result = yield* runInRuntime({
         launchContext,
         threadId: input.threadId,
         args: ["-lc", WRITE_THREAD_WORKSPACE_FILE_SCRIPT],
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - Payload is consumed by the runtime shell script.
         stdin: JSON.stringify({
           path: targetPath,
           contents: input.contents,
@@ -381,7 +412,7 @@ export const makeThreadWorkspace = Effect.gen(function* () {
   const downloadFile: ThreadWorkspaceShape["downloadFile"] = Effect.fn(
     "threadWorkspace.downloadFile",
   )(function* (input) {
-    const launchContext = yield* resolveLaunchContext(input.threadId);
+    const launchContext = yield* resolveLaunchContext({ threadId: input.threadId });
     const targetPath = normalizeContainerPath(input.path, launchContext.execution);
     const result = yield* runInRuntime({
       launchContext,

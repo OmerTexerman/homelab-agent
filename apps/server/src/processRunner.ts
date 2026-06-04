@@ -1,4 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -20,6 +26,71 @@ export interface ProcessRunResult {
   stderrTruncated?: boolean | undefined;
 }
 
+export interface ProcessRunInput {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly spawnCwd?: string | undefined;
+  readonly timeout?: number | undefined;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly stdin?: string | undefined;
+  readonly maxOutputBytes?: number | undefined;
+  readonly outputMode?: "error" | "truncate" | undefined;
+  readonly shell?: boolean | string | undefined;
+  readonly timeoutBehavior?: "error" | "timedOutResult" | undefined;
+}
+
+export interface ProcessRunOutput {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number | null;
+  readonly timedOut: boolean;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
+}
+
+export class ProcessSpawnError extends Data.TaggedError("ProcessSpawnError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly cause: unknown;
+}> {}
+
+export class ProcessStdinError extends Data.TaggedError("ProcessStdinError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly cause: unknown;
+}> {}
+
+export class ProcessOutputLimitError extends Data.TaggedError("ProcessOutputLimitError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly maxBytes: number;
+}> {}
+
+export class ProcessTimeoutError extends Data.TaggedError("ProcessTimeoutError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly timeoutMs: number;
+}> {}
+
+export type ProcessRunError =
+  | ProcessSpawnError
+  | ProcessStdinError
+  | ProcessOutputLimitError
+  | ProcessTimeoutError;
+
+export interface ProcessRunnerShape {
+  readonly run: (input: ProcessRunInput) => Effect.Effect<ProcessRunOutput, ProcessRunError>;
+}
+
+export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerShape>()(
+  "t3/processRunner",
+) {}
+
 function commandLabel(command: string, args: readonly string[]): string {
   return [command, ...args].join(" ");
 }
@@ -40,8 +111,17 @@ function normalizeSpawnError(command: string, args: readonly string[], error: un
 export function isWindowsCommandNotFound(code: number | null, stderr: string): boolean {
   if (process.platform !== "win32") return false;
   if (code === 9009) return true;
-  return /is not recognized as an internal or external command/i.test(stderr);
+  return WINDOWS_COMMAND_NOT_FOUND_PATTERNS.some((pattern) => pattern.test(stderr));
 }
+
+const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
+  /is not recognized as an internal or external command/i,
+  /n.o . reconhecido como um comando interno/i,
+  /non . riconosciuto come comando interno o esterno/i,
+  /n.est pas reconnu en tant que commande interne/i,
+  /no se reconoce como un comando interno o externo/i,
+  /wird nicht als interner oder externer befehl/i,
+] as const;
 
 function normalizeExitError(
   command: string,
@@ -268,3 +348,51 @@ export async function runProcess(
     child.stdin.end();
   });
 }
+
+export const make = Effect.fn("makeProcessRunner")(function* () {
+  const run: ProcessRunnerShape["run"] = (input) =>
+    Effect.tryPromise({
+      try: () =>
+        runProcess(input.command, input.args, {
+          ...((input.spawnCwd ?? input.cwd) ? { cwd: input.spawnCwd ?? input.cwd } : {}),
+          ...(input.env !== undefined ? { env: input.env } : {}),
+          ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+          timeoutMs: input.timeout,
+          allowNonZeroExit: true,
+          maxBufferBytes: input.maxOutputBytes,
+          outputMode: input.outputMode,
+        }),
+      catch: (cause) =>
+        new ProcessSpawnError({
+          command: input.command,
+          args: input.args,
+          cwd: input.cwd,
+          cause,
+        }),
+    }).pipe(
+      Effect.flatMap((result) => {
+        if (result.timedOut && input.timeoutBehavior !== "timedOutResult") {
+          return Effect.fail(
+            new ProcessTimeoutError({
+              command: input.command,
+              args: input.args,
+              cwd: input.cwd,
+              timeoutMs: input.timeout ?? 60_000,
+            }),
+          );
+        }
+        return Effect.succeed({
+          stdout: result.stdout,
+          stderr: result.stderr,
+          code: result.code,
+          timedOut: result.timedOut,
+          stdoutTruncated: result.stdoutTruncated ?? false,
+          stderrTruncated: result.stderrTruncated ?? false,
+        } satisfies ProcessRunOutput);
+      }),
+    );
+
+  return ProcessRunner.of({ run });
+});
+
+export const layer = Layer.effect(ProcessRunner, make());

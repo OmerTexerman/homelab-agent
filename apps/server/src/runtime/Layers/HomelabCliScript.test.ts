@@ -1,0 +1,192 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import { execFile as execFileCallback } from "node:child_process";
+import { promises as nodeFs } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import nodeOs from "node:os";
+import nodePath from "node:path";
+import { promisify } from "node:util";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { renderHomelabCliScript } from "./ThreadRuntime.ts";
+
+const execFile = promisify(execFileCallback);
+
+interface RecordedCliRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly authorization: string | undefined;
+  readonly bodyJson?: unknown;
+}
+
+let server: Server | null = null;
+let serverUrl = "";
+let tempDir = "";
+let cliPath = "";
+let requests: RecordedCliRequest[] = [];
+
+function respondJson(response: ServerResponse, payload: unknown): void {
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(payload));
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const body = Buffer.concat(chunks).toString("utf8").trim();
+  return body.length > 0 ? (JSON.parse(body) as unknown) : undefined;
+}
+
+function createCliTestServer(): Server {
+  return createServer((request: IncomingMessage, response: ServerResponse) => {
+    void handleCliTestRequest(request, response).catch((error) => {
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    });
+  });
+}
+
+async function handleCliTestRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const url = new URL(request.url ?? "/", serverUrl);
+  const bodyJson = await readJsonBody(request);
+  requests.push({
+    method: request.method ?? "GET",
+    path: `${url.pathname}${url.search}`,
+    authorization: request.headers.authorization,
+    ...(bodyJson === undefined ? {} : { bodyJson }),
+  });
+
+  switch (url.pathname) {
+    case "/api/homelab/snapshot":
+      respondJson(response, { entities: [], relations: [] });
+      return;
+    case "/api/homelab/project-memory":
+      respondJson(response, { entries: [] });
+      return;
+    case "/api/homelab/project-memory/search":
+      respondJson(response, { results: [] });
+      return;
+    case "/api/homelab/secrets":
+      respondJson(response, { secrets: [] });
+      return;
+    case "/api/homelab/runtime-bootstrap":
+      respondJson(response, {
+        activeBootstrapVersion: "bootstrap-cli",
+        availableMaterializations: [
+          {
+            bootstrapVersion: "bootstrap-cli",
+            imageRef: "runtime:test",
+            envKeys: [],
+            mutationCount: 0,
+            mutationKinds: [],
+            materializedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+      });
+      return;
+    default:
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "not found" }));
+  }
+}
+
+async function runHomelabCli(args: ReadonlyArray<string>): Promise<string> {
+  const result = await execFile("python3", [cliPath, ...args], {
+    env: {
+      ...process.env,
+      HOMELAB_AGENT_SERVER_URL: serverUrl,
+      HOMELAB_AGENT_RUNTIME_TOKEN: "test-runtime-token",
+      HOMELAB_AGENT_THREAD_ID: "thread-cli-connectivity",
+    },
+    timeout: 5_000,
+  });
+  return String(result.stdout);
+}
+
+describe("generated homelab CLI", () => {
+  beforeEach(async () => {
+    requests = [];
+    tempDir = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "homelab-cli-"));
+    cliPath = nodePath.join(tempDir, "homelab");
+    await nodeFs.writeFile(cliPath, renderHomelabCliScript(), { mode: 0o755 });
+
+    server = createCliTestServer();
+    await new Promise<void>((resolve) => {
+      server?.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    serverUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    server = null;
+    await nodeFs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reaches the server for snapshot, memory, secrets, and bootstrap commands", async () => {
+    await expect(runHomelabCli(["snapshot"])).resolves.toContain('"entities"');
+    await expect(runHomelabCli(["memory", "list"])).resolves.toContain('"entries"');
+    await expect(
+      runHomelabCli(["memory", "search", "router", "--limit", "3", "--no-transcripts"]),
+    ).resolves.toContain('"results"');
+    await expect(runHomelabCli(["secrets"])).resolves.toContain('"secrets"');
+    await expect(runHomelabCli(["bootstrap"])).resolves.toContain('"availableMaterializations"');
+
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        path: "/api/homelab/snapshot",
+        authorization: "Bearer test-runtime-token",
+      },
+      {
+        method: "GET",
+        path: "/api/homelab/project-memory?threadId=thread-cli-connectivity",
+        authorization: "Bearer test-runtime-token",
+      },
+      {
+        method: "POST",
+        path: "/api/homelab/project-memory/search",
+        authorization: "Bearer test-runtime-token",
+        bodyJson: {
+          threadId: "thread-cli-connectivity",
+          query: "router",
+          includeTranscripts: false,
+          limit: 3,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/homelab/secrets",
+        authorization: "Bearer test-runtime-token",
+      },
+      {
+        method: "GET",
+        path: "/api/homelab/runtime-bootstrap",
+        authorization: "Bearer test-runtime-token",
+      },
+    ]);
+  });
+});

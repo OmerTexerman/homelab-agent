@@ -1,23 +1,41 @@
 import {
-  ChevronDownIcon,
-  InfoIcon,
+  ArchiveIcon,
+  ArchiveX,
+  DatabaseIcon,
+  GitBranchIcon,
+  Globe2Icon,
   LoaderIcon,
   PlusIcon,
   RefreshCwIcon,
-  XIcon,
+  SearchIcon,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  defaultInstanceIdForDriver,
+  type DesktopUpdateChannel,
+  type HomelabEntityKind,
+  type HomelabEntityStatus,
   PROVIDER_DISPLAY_NAMES,
-  type ProviderKind,
-  type ServerProvider,
-  type ServerProviderModel,
+  ProviderDriverKind,
+  type ProviderInstanceConfig,
+  type ProviderInstanceId,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import { normalizeModelSlug } from "@t3tools/shared/model";
-import { Equal } from "effect";
-import { APP_BASE_NAME, APP_VERSION } from "../../branding";
+import { createModelSelection } from "@t3tools/shared/model";
+import * as Arr from "effect/Array";
+import * as Duration from "effect/Duration";
+import * as Equal from "effect/Equal";
+import * as Result from "effect/Result";
+import {
+  APP_BASE_NAME,
+  APP_VERSION,
+  HOSTED_APP_CHANNEL,
+  HOSTED_APP_CHANNEL_LABEL,
+} from "../../branding";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -25,24 +43,52 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
+import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
+import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopUpdateStateQueryData,
   useDesktopUpdateState,
 } from "../../lib/desktopUpdateReactQuery";
-import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import {
+  getCustomModelOptionsByInstance,
+  resolveAppModelSelectionState,
+} from "../../modelSelection";
+import {
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
-import { formatRelativeTime } from "../../timestampFormat";
-import { cn } from "../../lib/utils";
+import { useShallow } from "zustand/react/shallow";
+import { selectProjectsAcrossEnvironments, useStore } from "../../store";
+import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsibleContent } from "../ui/collapsible";
+import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { toastManager } from "../ui/toast";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { HomelabSecretsSection } from "./HomelabSecretsSection";
+import {
+  canOneClickUpdateProviderCandidate,
+  collectProviderUpdateCandidates,
+  hasOneClickUpdateProviderCandidate,
+  isProviderUpdateActive,
+  type ProviderUpdateCandidate,
+} from "../ProviderUpdateLaunchNotification.logic";
+import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import {
+  buildProviderInstanceUpdatePatch,
+  formatDiagnosticsDescription,
+} from "./SettingsPanels.logic";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -50,9 +96,27 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
-import { ConnectionsSettings } from "./ConnectionsSettings";
-import { HomelabSecretsSection } from "./HomelabSecretsSection";
-import { useServerProviders } from "../../rpc/serverState";
+import { ProjectFavicon } from "../ProjectFavicon";
+import { useServerObservability, useServerProviders } from "../../rpc/serverState";
+import { usePrimaryEnvironmentId } from "../../environments/primary";
+import {
+  homelabGraphSearchQueryOptions,
+  homelabSetupStatusQueryOptions,
+} from "../../lib/homelabReactQuery";
+import {
+  HOMELAB_PRODUCT_COPY,
+  shouldShowCompatibilityHostPathProjectUi,
+  shouldShowPrimarySourceControlUi,
+  shouldShowThreadRuntimeIsolationControls,
+} from "../../productCapabilities";
+import {
+  deriveProviderReadinessForInstance,
+  deriveSetupReadiness,
+} from "../../setupReadinessReadModel";
+import {
+  deriveMemoryKnowledgeReadModel,
+  type MemoryKnowledgeReadModel,
+} from "../../memoryKnowledgeReadModel";
 
 const THEME_OPTIONS = [
   {
@@ -75,106 +139,27 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-type InstallProviderSettings = {
-  provider: ProviderKind;
-  title: string;
-  binaryPlaceholder: string;
-  binaryDescription: ReactNode;
-  homePathKey?: "codexHomePath";
-  homePlaceholder?: string;
-  homeDescription?: ReactNode;
-};
+const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
-const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
-  {
-    provider: "codex",
-    title: "Codex",
-    binaryPlaceholder: "Codex binary path",
-    binaryDescription: "Path to the Codex binary",
-    homePathKey: "codexHomePath",
-    homePlaceholder: "CODEX_HOME",
-    homeDescription: "Optional custom Codex home and config directory.",
-  },
-  {
-    provider: "claudeAgent",
-    title: "Claude",
-    binaryPlaceholder: "Claude binary path",
-    binaryDescription: "Path to the Claude binary",
-  },
-] as const;
-
-const PROVIDER_STATUS_STYLES = {
-  disabled: {
-    dot: "bg-amber-400",
-  },
-  error: {
-    dot: "bg-destructive",
-  },
-  ready: {
-    dot: "bg-success",
-  },
-  warning: {
-    dot: "bg-warning",
-  },
-} as const;
-
-function getProviderSummary(provider: ServerProvider | undefined) {
-  if (!provider) {
-    return {
-      headline: "Checking provider status",
-      detail: "Waiting for the server to report installation and authentication details.",
-    };
-  }
-  if (!provider.enabled) {
-    return {
-      headline: "Disabled",
-      detail:
-        provider.message ??
-        `This provider is installed but disabled for new sessions in ${APP_BASE_NAME}.`,
-    };
-  }
-  if (!provider.installed) {
-    return {
-      headline: "Not found",
-      detail: provider.message ?? "CLI not detected on PATH.",
-    };
-  }
-  if (provider.auth.status === "authenticated") {
-    const authLabel = provider.auth.label ?? provider.auth.type;
-    return {
-      headline: authLabel ? `Authenticated · ${authLabel}` : "Authenticated",
-      detail: provider.message ?? null,
-    };
-  }
-  if (provider.auth.status === "unauthenticated") {
-    return {
-      headline: "Not authenticated",
-      detail: provider.message ?? null,
-    };
-  }
-  if (provider.status === "warning") {
-    return {
-      headline: "Needs attention",
-      detail:
-        provider.message ?? "The provider is installed, but the server could not fully verify it.",
-    };
-  }
-  if (provider.status === "error") {
-    return {
-      headline: "Unavailable",
-      detail: provider.message ?? "The provider failed its startup checks.",
-    };
-  }
-  return {
-    headline: "Available",
-    detail: provider.message ?? "Installed and ready, but authentication could not be verified.",
-  };
+function withoutProviderInstanceKey<V>(
+  record: Readonly<Record<ProviderInstanceId, V>> | undefined,
+  key: ProviderInstanceId,
+): Record<ProviderInstanceId, V> {
+  const next = { ...record } as Record<ProviderInstanceId, V>;
+  delete next[key];
+  return next;
 }
 
-function getProviderVersionLabel(version: string | null | undefined) {
-  if (!version) return null;
-  return version.startsWith("v") ? version : `v${version}`;
+function withoutProviderInstanceFavorites(
+  favorites: ReadonlyArray<{ readonly provider: ProviderInstanceId; readonly model: string }>,
+  instanceId: ProviderInstanceId,
+) {
+  return favorites.filter((favorite) => favorite.provider !== instanceId);
 }
+
+const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
+  provider: definition.value,
+}));
 
 function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }) {
   useRelativeTimeTick();
@@ -210,8 +195,45 @@ function AboutVersionTitle() {
 function AboutVersionSection() {
   const queryClient = useQueryClient();
   const updateStateQuery = useDesktopUpdateState();
+  const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
 
   const updateState = updateStateQuery.data ?? null;
+  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
+  const selectedUpdateChannel = updateState?.channel ?? "latest";
+  const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
+
+  const handleUpdateChannelChange = useCallback(
+    (channel: DesktopUpdateChannel) => {
+      const bridge = window.desktopBridge;
+      if (
+        !bridge ||
+        typeof bridge.setUpdateChannel !== "function" ||
+        channel === selectedUpdateChannel
+      ) {
+        return;
+      }
+
+      setIsChangingUpdateChannel(true);
+      void bridge
+        .setUpdateChannel(channel)
+        .then((state) => {
+          setDesktopUpdateStateQueryData(queryClient, state);
+        })
+        .catch((error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not change update track",
+              description: error instanceof Error ? error.message : "Update track change failed.",
+            }),
+          );
+        })
+        .finally(() => {
+          setIsChangingUpdateChannel(false);
+        });
+    },
+    [queryClient, selectedUpdateChannel],
+  );
 
   const handleButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -226,11 +248,13 @@ function AboutVersionSection() {
           setDesktopUpdateStateQueryData(queryClient, result.state);
         })
         .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not download update",
-            description: error instanceof Error ? error.message : "Download failed.",
-          });
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not download update",
+              description: error instanceof Error ? error.message : "Download failed.",
+            }),
+          );
         });
       return;
     }
@@ -248,11 +272,13 @@ function AboutVersionSection() {
           setDesktopUpdateStateQueryData(queryClient, result.state);
         })
         .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not install update",
-            description: error instanceof Error ? error.message : "Install failed.",
-          });
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not install update",
+              description: error instanceof Error ? error.message : "Install failed.",
+            }),
+          );
         });
       return;
     }
@@ -263,20 +289,24 @@ function AboutVersionSection() {
       .then((result) => {
         setDesktopUpdateStateQueryData(queryClient, result.state);
         if (!result.checked) {
-          toastManager.add({
-            type: "error",
-            title: "Could not check for updates",
-            description:
-              result.state.message ?? "Automatic updates are not available in this build.",
-          });
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not check for updates",
+              description:
+                result.state.message ?? "Automatic updates are not available in this build.",
+            }),
+          );
         }
       })
       .catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not check for updates",
-          description: error instanceof Error ? error.message : "Update check failed.",
-        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not check for updates",
+            description: error instanceof Error ? error.message : "Update check failed.",
+          }),
+        );
       });
   }, [queryClient, updateState]);
 
@@ -301,40 +331,103 @@ function AboutVersionSection() {
       : "Current version of the application.";
 
   return (
-    <SettingsRow
-      title={<AboutVersionTitle />}
-      description={description}
-      control={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="xs"
-                variant={action === "install" ? "default" : "outline"}
-                disabled={buttonDisabled}
-                onClick={handleButtonClick}
+    <>
+      <SettingsRow
+        title={<AboutVersionTitle />}
+        description={description}
+        control={
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant={action === "install" ? "default" : "outline"}
+                  disabled={buttonDisabled}
+                  onClick={handleButtonClick}
+                >
+                  {buttonLabel}
+                </Button>
+              }
+            />
+            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
+          </Tooltip>
+        }
+      />
+      {hasDesktopBridge ? (
+        <SettingsRow
+          title="Update track"
+          description="Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately."
+          control={
+            <Select
+              value={selectedUpdateChannel}
+              onValueChange={(value) => {
+                handleUpdateChannelChange(value as DesktopUpdateChannel);
+              }}
+            >
+              <SelectTrigger
+                className="w-full sm:w-40"
+                aria-label="Update track"
+                disabled={isChangingUpdateChannel}
               >
-                {buttonLabel}
-              </Button>
-            }
-          />
-          {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-        </Tooltip>
-      }
-    />
+                <SelectValue>
+                  {selectedUpdateChannel === "nightly" ? "Nightly" : "Stable"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="latest">
+                  Stable
+                </SelectItem>
+                <SelectItem hideIndicator value="nightly">
+                  Nightly
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+      ) : selectedHostedAppChannel ? (
+        <SettingsRow
+          title="Update track"
+          description="Switches the hosted app release channel."
+          control={
+            <Select
+              value={selectedHostedAppChannel}
+              onValueChange={(value) => {
+                if (value === selectedHostedAppChannel) return;
+                window.location.assign(
+                  buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel }),
+                );
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Update track">
+                <SelectValue>{HOSTED_APP_CHANNEL_LABEL}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="latest">
+                  Latest
+                </SelectItem>
+                <SelectItem hideIndicator value="nightly">
+                  Nightly
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+      ) : null}
+    </>
   );
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
-  const { resetSettings } = useUpdateSettings();
+  const { updateSettings } = useUpdateSettings();
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const showThreadRuntimeIsolationSettings = shouldShowThreadRuntimeIsolationControls();
 
-  const areProviderSettingsDirty = PROVIDER_SETTINGS.some((providerSettings) => {
-    const currentSettings = settings.providers[providerSettings.provider];
-    const defaultSettings = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
-    return !Equal.equals(currentSettings, defaultSettings);
-  });
+  const isGitWritingModelDirty = !Equal.equals(
+    settings.textGenerationModelSelection ?? null,
+    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
+  );
 
   const changedSettingLabels = useMemo(
     () => [
@@ -342,18 +435,56 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
+        ? ["Visible threads"]
+        : []),
+      ...(showSourceControlUi && settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
+        ? ["Diff line wrapping"]
+        : []),
+      ...(showSourceControlUi &&
+      settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
+        ? ["Diff whitespace changes"]
+        : []),
+      ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
+        ? ["Auto-open task panel"]
+        : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
+        : []),
+      ...(showSourceControlUi &&
+      Duration.toMillis(settings.automaticGitFetchInterval) !==
+        Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
+        ? ["Automatic Git fetch interval"]
+        : []),
+      ...(showThreadRuntimeIsolationSettings &&
+      settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
+        ? [HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle]
+        : []),
+      ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
+        ? ["Compatibility bootstrap path"]
+        : []),
+      ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
+        ? ["Archive confirmation"]
         : []),
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
-      ...(areProviderSettingsDirty ? ["Providers"] : []),
+      ...(showSourceControlUi && isGitWritingModelDirty ? ["Git writing model"] : []),
     ],
     [
-      areProviderSettingsDirty,
+      isGitWritingModelDirty,
+      showSourceControlUi,
+      showThreadRuntimeIsolationSettings,
+      settings.autoOpenPlanSidebar,
+      settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.addProjectBaseDirectory,
+      settings.defaultThreadEnvMode,
+      settings.diffIgnoreWhitespace,
+      settings.diffWordWrap,
+      settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
+      settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       theme,
     ],
@@ -370,9 +501,22 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (!confirmed) return;
 
     setTheme("system");
-    resetSettings();
+    updateSettings({
+      timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
+      diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
+      sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
+      autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+      enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
+      automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
+      defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
+      addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
+      confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+    });
     onRestored?.();
-  }, [changedSettingLabels, onRestored, resetSettings, setTheme]);
+  }, [changedSettingLabels, onRestored, setTheme, updateSettings]);
 
   return {
     changedSettingLabels,
@@ -384,182 +528,31 @@ export function GeneralSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
-  const [openProviderDetails, setOpenProviderDetails] = useState<Record<ProviderKind, boolean>>({
-    codex: Boolean(
-      settings.providers.codex.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.codex.binaryPath ||
-      settings.providers.codex.homePath !== DEFAULT_UNIFIED_SETTINGS.providers.codex.homePath ||
-      settings.providers.codex.customModels.length > 0,
-    ),
-    claudeAgent: Boolean(
-      settings.providers.claudeAgent.binaryPath !==
-        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
-      settings.providers.claudeAgent.customModels.length > 0,
-    ),
-  });
-  const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
-    Record<ProviderKind, string>
-  >({
-    codex: "",
-    claudeAgent: "",
-  });
-  const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
-    Partial<Record<ProviderKind, string | null>>
-  >({});
-  const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
-  const refreshingRef = useRef(false);
-  const modelListRefs = useRef<Partial<Record<ProviderKind, HTMLDivElement | null>>>({});
-  const refreshProviders = useCallback(() => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setIsRefreshingProviders(true);
-    void ensureLocalApi()
-      .server.refreshProviders()
-      .catch((error: unknown) => {
-        console.warn("Failed to refresh providers", error);
-      })
-      .finally(() => {
-        refreshingRef.current = false;
-        setIsRefreshingProviders(false);
-      });
-  }, []);
-
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
   const serverProviders = useServerProviders();
-  const codexHomePath = settings.providers.codex.homePath;
 
-  const addCustomModel = useCallback(
-    (provider: ProviderKind) => {
-      const customModelInput = customModelInputByProvider[provider];
-      const customModels = settings.providers[provider].customModels;
-      const normalized = normalizeModelSlug(customModelInput, provider);
-      if (!normalized) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "Enter a model slug.",
-        }));
-        return;
-      }
-      if (
-        serverProviders
-          .find((candidate) => candidate.provider === provider)
-          ?.models.some((option) => !option.isCustom && option.slug === normalized)
-      ) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That model is already built in.",
-        }));
-        return;
-      }
-      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-        }));
-        return;
-      }
-      if (customModels.includes(normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That custom model is already saved.",
-        }));
-        return;
-      }
-
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: [...customModels, normalized],
-          },
-        },
-      });
-      setCustomModelInputByProvider((existing) => ({
-        ...existing,
-        [provider]: "",
-      }));
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-
-      const el = modelListRefs.current[provider];
-      if (!el) return;
-      const scrollToEnd = () => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      requestAnimationFrame(scrollToEnd);
-      const observer = new MutationObserver(() => {
-        scrollToEnd();
-        observer.disconnect();
-      });
-      observer.observe(el, { childList: true, subtree: true });
-      setTimeout(() => observer.disconnect(), 2_000);
-    },
-    [customModelInputByProvider, serverProviders, settings, updateSettings],
+  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
+  const textGenInstanceId = textGenerationModelSelection.instanceId;
+  const textGenModel = textGenerationModelSelection.model;
+  const textGenModelOptions = textGenerationModelSelection.options;
+  const gitModelInstanceEntries = sortProviderInstanceEntries(
+    deriveProviderInstanceEntries(serverProviders),
   );
-
-  const removeCustomModel = useCallback(
-    (provider: ProviderKind, slug: string) => {
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: settings.providers[provider].customModels.filter(
-              (model) => model !== slug,
-            ),
-          },
-        },
-      });
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-    },
-    [settings, updateSettings],
+  const textGenInstanceEntry = gitModelInstanceEntries.find(
+    (entry) => entry.instanceId === textGenInstanceId,
   );
-
-  const providerCards = PROVIDER_SETTINGS.map((providerSettings) => {
-    const liveProvider = serverProviders.find(
-      (candidate) => candidate.provider === providerSettings.provider,
-    );
-    const providerConfig = settings.providers[providerSettings.provider];
-    const defaultProviderConfig = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
-    const statusKey = liveProvider?.status ?? (providerConfig.enabled ? "warning" : "disabled");
-    const summary = getProviderSummary(liveProvider);
-    const models: ReadonlyArray<ServerProviderModel> =
-      liveProvider?.models ??
-      providerConfig.customModels.map((slug) => ({
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      }));
-
-    return {
-      provider: providerSettings.provider,
-      title: providerSettings.title,
-      binaryPlaceholder: providerSettings.binaryPlaceholder,
-      binaryDescription: providerSettings.binaryDescription,
-      homePathKey: providerSettings.homePathKey,
-      homePlaceholder: providerSettings.homePlaceholder,
-      homeDescription: providerSettings.homeDescription,
-      binaryPathValue: providerConfig.binaryPath,
-      isDirty: !Equal.equals(providerConfig, defaultProviderConfig),
-      liveProvider,
-      models,
-      providerConfig,
-      statusStyle: PROVIDER_STATUS_STYLES[statusKey],
-      summary,
-      versionLabel: getProviderVersionLabel(liveProvider?.version),
-    };
-  });
-
-  const lastCheckedAt =
-    serverProviders.length > 0
-      ? serverProviders.reduce(
-          (latest, provider) => (provider.checkedAt > latest ? provider.checkedAt : latest),
-          serverProviders[0]!.checkedAt,
-        )
-      : null;
+  const textGenProvider: ProviderDriverKind =
+    textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const gitModelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    serverProviders,
+    textGenInstanceId,
+    textGenModel,
+  );
+  const isGitWritingModelDirty = !Equal.equals(
+    settings.textGenerationModelSelection ?? null,
+    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
+  );
 
   return (
     <SettingsPageContainer>
@@ -639,6 +632,60 @@ export function GeneralSettingsPanel() {
           }
         />
 
+        {showSourceControlUi ? (
+          <>
+            <SettingsRow
+              title="Diff line wrapping"
+              description="Set the default wrap state when the diff panel opens."
+              resetAction={
+                settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
+                  <SettingResetButton
+                    label="diff line wrapping"
+                    onClick={() =>
+                      updateSettings({
+                        diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <Switch
+                  checked={settings.diffWordWrap}
+                  onCheckedChange={(checked) => updateSettings({ diffWordWrap: Boolean(checked) })}
+                  aria-label="Wrap diff lines by default"
+                />
+              }
+            />
+
+            <SettingsRow
+              title="Hide whitespace changes"
+              description="Set whether the diff panel ignores whitespace-only edits by default."
+              resetAction={
+                settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
+                  <SettingResetButton
+                    label="diff whitespace changes"
+                    onClick={() =>
+                      updateSettings({
+                        diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <Switch
+                  checked={settings.diffIgnoreWhitespace}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
+                  }
+                  aria-label="Hide whitespace changes by default"
+                />
+              }
+            />
+          </>
+        ) : null}
+
         <SettingsRow
           title="Assistant output"
           description="Show token-by-token output while a response is in progress."
@@ -662,6 +709,58 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableAssistantStreaming: Boolean(checked) })
               }
               aria-label="Stream assistant messages"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Auto-open task panel"
+          description="Open the right-side plan and task panel automatically when steps appear."
+          resetAction={
+            settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar ? (
+              <SettingResetButton
+                label="auto-open task panel"
+                onClick={() =>
+                  updateSettings({
+                    autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoOpenPlanSidebar}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoOpenPlanSidebar: Boolean(checked) })
+              }
+              aria-label="Open the task panel automatically"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Archive confirmation"
+          description="Require a second click on the inline archive action before a thread is archived."
+          resetAction={
+            settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
+              <SettingResetButton
+                label="archive confirmation"
+                onClick={() =>
+                  updateSettings({
+                    confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmThreadArchive}
+              onCheckedChange={(checked) =>
+                updateSettings({ confirmThreadArchive: Boolean(checked) })
+              }
+              aria-label="Confirm thread archiving"
             />
           }
         />
@@ -691,15 +790,866 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {showSourceControlUi ? (
+          <SettingsRow
+            title="Text generation model"
+            description="Configure the model used for generated commit messages, PR titles, and similar Git text."
+            resetAction={
+              isGitWritingModelDirty ? (
+                <SettingResetButton
+                  label="text generation model"
+                  onClick={() =>
+                    updateSettings({
+                      textGenerationModelSelection:
+                        DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <ProviderModelPicker
+                  activeInstanceId={textGenInstanceId}
+                  model={textGenModel}
+                  lockedProvider={null}
+                  instanceEntries={gitModelInstanceEntries}
+                  modelOptionsByInstance={gitModelOptionsByInstance}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onInstanceModelChange={(instanceId, model) => {
+                    updateSettings({
+                      textGenerationModelSelection: resolveAppModelSelectionState(
+                        {
+                          ...settings,
+                          textGenerationModelSelection: createModelSelection(instanceId, model),
+                        },
+                        serverProviders,
+                      ),
+                    });
+                  }}
+                />
+                <TraitsPicker
+                  provider={textGenProvider}
+                  models={
+                    // Use the exact instance's models (rather than the
+                    // first-kind-match) so a custom text-gen instance like
+                    // `codex_personal` gets its own model list, not the
+                    // default Codex one.
+                    textGenInstanceEntry?.models ?? []
+                  }
+                  model={textGenModel}
+                  prompt=""
+                  onPromptChange={() => {}}
+                  modelOptions={textGenModelOptions}
+                  allowPromptInjectedEffort={false}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onModelOptionsChange={(nextOptions) => {
+                    updateSettings({
+                      textGenerationModelSelection: resolveAppModelSelectionState(
+                        {
+                          ...settings,
+                          textGenerationModelSelection: createModelSelection(
+                            textGenInstanceId,
+                            textGenModel,
+                            nextOptions,
+                          ),
+                        },
+                        serverProviders,
+                      ),
+                    });
+                  }}
+                />
+              </div>
+            }
+          />
+        ) : null}
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
+
+export function SecretsSettingsPanel() {
+  return (
+    <SettingsPageContainer>
+      <HomelabSecretsSection />
+    </SettingsPageContainer>
+  );
+}
+
+export function ProjectRuntimeSettingsPanel() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const showThreadRuntimeIsolationControls = shouldShowThreadRuntimeIsolationControls();
+
+  useEffect(() => {
+    if (showThreadRuntimeIsolationControls || settings.defaultThreadEnvMode === "local") {
+      return;
+    }
+
+    updateSettings({ defaultThreadEnvMode: "local" });
+  }, [settings.defaultThreadEnvMode, showThreadRuntimeIsolationControls, updateSettings]);
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.projectRuntime.title}>
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
+          description={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeDescription}
+          resetAction={
+            showThreadRuntimeIsolationControls &&
+            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
+              <SettingResetButton
+                label={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
+                onClick={() =>
+                  updateSettings({
+                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            showThreadRuntimeIsolationControls ? (
+              <Select
+                value={settings.defaultThreadEnvMode}
+                onValueChange={(value) => {
+                  if (value === "local" || value === "worktree") {
+                    updateSettings({ defaultThreadEnvMode: value });
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-64" aria-label="Default Project Runtime">
+                  <SelectValue>
+                    {settings.defaultThreadEnvMode === "worktree"
+                      ? HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue
+                      : HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="local">
+                    {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="worktree">
+                    {HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            ) : (
+              <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
+              </span>
+            )
+          }
+        />
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipTitle}
+          description={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipDescription}
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {HOMELAB_PRODUCT_COPY.projectRuntime.ownershipValue}
+            </span>
+          }
+        />
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
+
+function formatKnowledgeOption(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function formatKnowledgeTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function KnowledgeSearchResults(props: { readonly model: MemoryKnowledgeReadModel }) {
+  const state = props.model.search.state;
+  if (state.kind === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <LoaderIcon className="size-3.5 animate-spin" />
+        {state.title}
+      </div>
+    );
+  }
+  if (state.kind === "error") {
+    return <div className="text-xs text-destructive">{state.errorMessage ?? state.title}</div>;
+  }
+  if (state.kind === "empty") {
+    return <div className="text-xs text-muted-foreground">{state.description}</div>;
+  }
+  return (
+    <div className="space-y-2">
+      {props.model.search.results.map((result) => (
+        <div key={result.id} className="rounded-md border border-border px-3 py-2">
+          <div className="flex items-start gap-2">
+            <Globe2Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-foreground">{result.title}</div>
+              <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                <span>{result.source}</span>
+                <span>{result.scope}</span>
+                <span>{formatKnowledgeTimestamp(result.timestamp)}</span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                {result.snippet}
+              </div>
+              <div className="mt-2 text-[11px] text-muted-foreground">{result.actionLabel}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KnowledgeGraphExplorer(props: {
+  readonly model: MemoryKnowledgeReadModel;
+  readonly kindFilter: HomelabEntityKind | "all";
+  readonly statusFilter: HomelabEntityStatus | "unknown" | "all";
+  readonly onKindFilterChange: (value: HomelabEntityKind | "all") => void;
+  readonly onStatusFilterChange: (value: HomelabEntityStatus | "unknown" | "all") => void;
+}) {
+  const graph = props.model.graph;
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="space-y-1">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterKindLabel}
+          </span>
+          <select
+            value={props.kindFilter}
+            onChange={(event) =>
+              props.onKindFilterChange(event.target.value as HomelabEntityKind | "all")
+            }
+            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+            aria-label={HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterKindLabel}
+          >
+            {graph.kindGroups.map((group) => (
+              <option key={group.value} value={group.value}>
+                {group.label} ({group.count})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterStatusLabel}
+          </span>
+          <select
+            value={props.statusFilter}
+            onChange={(event) =>
+              props.onStatusFilterChange(
+                event.target.value as HomelabEntityStatus | "unknown" | "all",
+              )
+            }
+            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+            aria-label={HOMELAB_PRODUCT_COPY.memoryKnowledge.graphFilterStatusLabel}
+          >
+            {graph.statusGroups.map((group) => (
+              <option key={group.value} value={group.value}>
+                {group.label} ({group.count})
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {graph.state.kind === "loading" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderIcon className="size-3.5 animate-spin" />
+          {graph.state.title}
+        </div>
+      ) : graph.state.kind === "error" ? (
+        <div className="text-xs text-destructive">
+          {graph.state.errorMessage ?? graph.state.title}
+        </div>
+      ) : graph.state.kind === "empty" ? (
+        <div
+          data-testid="settings-knowledge-graph-empty"
+          className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground"
+        >
+          <div className="font-medium text-foreground">{graph.state.title}</div>
+          <div className="mt-1 leading-5">{graph.state.description}</div>
+        </div>
+      ) : (
+        <div data-testid="settings-knowledge-graph-populated" className="space-y-3">
+          <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1">
+              <DatabaseIcon className="size-3.5" />
+              {graph.filteredEntityCount} shown
+            </span>
+            <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1">
+              <GitBranchIcon className="size-3.5" />
+              {graph.filteredRelationCount} relations
+            </span>
+          </div>
+          <div className="grid gap-2">
+            {graph.entities.slice(0, 8).map((entity) => (
+              <div
+                key={entity.id}
+                className="grid gap-2 rounded-md border border-border px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground">{entity.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                    <span>{formatKnowledgeOption(entity.kind)}</span>
+                    <span>{formatKnowledgeOption(entity.status)}</span>
+                    <span>{formatKnowledgeTimestamp(entity.updatedAt)}</span>
+                  </div>
+                  {entity.summary ? (
+                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {entity.summary}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {entity.relationCount} relations
+                </div>
+              </div>
+            ))}
+          </div>
+          {graph.relations.length > 0 ? (
+            <div className="space-y-1 border-t border-border/60 pt-3">
+              <div className="text-[11px] font-medium text-muted-foreground">Visible relations</div>
+              {graph.relations.slice(0, 6).map((relation) => (
+                <div key={relation.id} className="truncate text-[11px] text-muted-foreground">
+                  {relation.fromLabel}
+                  {" -> "}
+                  {relation.label}
+                  {" -> "}
+                  {relation.toLabel}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MemoryKnowledgeSettingsPanel() {
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<HomelabEntityKind | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<HomelabEntityStatus | "unknown" | "all">("all");
+  const trimmedGlobalSearchQuery = globalSearchQuery.trim();
+  const homelabSetupStatusQuery = useQuery(
+    homelabSetupStatusQueryOptions({
+      environmentId: primaryEnvironmentId,
+      enabled: primaryEnvironmentId !== null,
+    }),
+  );
+  const homelabGraphSearchQuery = useQuery(
+    homelabGraphSearchQueryOptions({
+      environmentId: primaryEnvironmentId,
+      query: trimmedGlobalSearchQuery,
+      enabled: primaryEnvironmentId !== null && trimmedGlobalSearchQuery.length > 0,
+      limit: 25,
+    }),
+  );
+  const homelabSetupStatus = homelabSetupStatusQuery.data;
+  const entityCount = homelabSetupStatus?.snapshot.entities.length ?? 0;
+  const relationCount = homelabSetupStatus?.snapshot.relations.length ?? 0;
+  const bootstrapMutationCount = homelabSetupStatus?.runtimeBootstrap.mutations.length ?? 0;
+  const model = useMemo(
+    () =>
+      deriveMemoryKnowledgeReadModel({
+        setupStatus: homelabSetupStatus ?? null,
+        graphSearchResults: homelabGraphSearchQuery.data ?? [],
+        searchQuery: trimmedGlobalSearchQuery,
+        searchScope: "global",
+        graphFilters: {
+          kind: kindFilter,
+          status: statusFilter,
+        },
+        loading: {
+          graph: homelabSetupStatusQuery.isLoading,
+          graphSearch: homelabGraphSearchQuery.isFetching,
+        },
+        errors: {
+          graph: homelabSetupStatusQuery.isError ? homelabSetupStatusQuery.error : undefined,
+          graphSearch: homelabGraphSearchQuery.isError ? homelabGraphSearchQuery.error : undefined,
+        },
+      }),
+    [
+      homelabGraphSearchQuery.data,
+      homelabGraphSearchQuery.error,
+      homelabGraphSearchQuery.isError,
+      homelabGraphSearchQuery.isFetching,
+      homelabSetupStatus,
+      homelabSetupStatusQuery.error,
+      homelabSetupStatusQuery.isError,
+      homelabSetupStatusQuery.isLoading,
+      kindFilter,
+      statusFilter,
+      trimmedGlobalSearchQuery,
+    ],
+  );
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge}>
+        <SettingsRow
+          title="Shared knowledge graph"
+          description="Durable homelab entities and relations promoted from project work."
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {homelabSetupStatusQuery.isLoading
+                ? "Loading"
+                : `${entityCount} entities · ${relationCount} relations`}
+            </span>
+          }
+        >
+          <div className="mt-3 space-y-4 border-t border-border/60 py-3">
+            <div className="space-y-2">
+              <label className="relative block">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+                <Input
+                  value={globalSearchQuery}
+                  onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                  placeholder={HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder}
+                  className="h-8 pl-7 text-xs"
+                />
+              </label>
+              {trimmedGlobalSearchQuery.length > 0 ? (
+                <KnowledgeSearchResults model={model} />
+              ) : null}
+            </div>
+            <KnowledgeGraphExplorer
+              model={model}
+              kindFilter={kindFilter}
+              statusFilter={statusFilter}
+              onKindFilterChange={setKindFilter}
+              onStatusFilterChange={setStatusFilter}
+            />
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          title="Runtime bootstrap state"
+          description="Project Runtime bootstrap mutations available through homelab tools."
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {homelabSetupStatusQuery.isLoading ? "Loading" : `${bootstrapMutationCount} entries`}
+            </span>
+          }
+        />
+        {homelabSetupStatusQuery.isError ? (
+          <SettingsRow
+            title="Status"
+            description={
+              homelabSetupStatusQuery.error instanceof Error
+                ? homelabSetupStatusQuery.error.message
+                : "Unable to load memory and knowledge status."
+            }
+          />
+        ) : null}
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
+
+export function AdvancedSettingsPanel() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const observability = useServerObservability();
+  const showSourceControlUi = shouldShowPrimarySourceControlUi();
+  const showCompatibilityHostPathProjectUi = shouldShowCompatibilityHostPathProjectUi();
+  const diagnosticsDescription = formatDiagnosticsDescription({
+    localTracingEnabled: observability?.localTracingEnabled ?? false,
+    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
+    otlpTracesUrl: observability?.otlpTracesUrl,
+    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
+    otlpMetricsUrl: observability?.otlpMetricsUrl,
+  });
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.advanced}>
+        {showCompatibilityHostPathProjectUi ? (
+          <SettingsRow
+            title="Compatibility bootstrap path"
+            description="Used only by advanced host-path project imports."
+            resetAction={
+              settings.addProjectBaseDirectory !==
+              DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
+                <SettingResetButton
+                  label="compatibility bootstrap path"
+                  onClick={() =>
+                    updateSettings({
+                      addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <DraftInput
+                className="w-full sm:w-72"
+                value={settings.addProjectBaseDirectory}
+                onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
+                placeholder="~/"
+                spellCheck={false}
+                aria-label="Compatibility bootstrap path"
+              />
+            }
+          />
+        ) : null}
+        <SettingsRow
+          title="Diagnostics"
+          description={diagnosticsDescription}
+          control={
+            <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
+              View diagnostics
+            </Button>
+          }
+        />
+        <SettingsRow
+          title="Archived threads"
+          description="Review and restore archived project threads."
+          control={
+            <Button render={<Link to="/settings/archived" />} size="xs" variant="outline">
+              Open
+            </Button>
+          }
+        />
+        <SettingsRow
+          title="Keybindings"
+          description="Keyboard shortcuts for navigation and thread actions."
+          control={
+            <Button render={<Link to="/settings/keybindings" />} size="xs" variant="outline">
+              Open
+            </Button>
+          }
+        />
+        {showSourceControlUi ? (
+          <SettingsRow
+            title="Source control"
+            description="Advanced upstream source-control integration settings."
+            control={
+              <Button render={<Link to="/settings/source-control" />} size="xs" variant="outline">
+                Open
+              </Button>
+            }
+          />
+        ) : null}
       </SettingsSection>
 
-      <HomelabSecretsSection />
+      <SettingsSection title="About">
+        {isElectron || HOSTED_APP_CHANNEL ? (
+          <AboutVersionSection />
+        ) : (
+          <SettingsRow
+            title={<AboutVersionTitle />}
+            description="Current version of the application."
+          />
+        )}
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
+}
 
+export function ProviderSettingsPanel() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const serverProviders = useServerProviders();
+  const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
+  const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
+    ReadonlySet<ProviderDriverKind>
+  >(() => new Set());
+  const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
+  const refreshingRef = useRef(false);
+
+  const providerUpdateCandidates = useMemo(
+    () => collectProviderUpdateCandidates(serverProviders),
+    [serverProviders],
+  );
+  const setupReadiness = useMemo(
+    () => deriveSetupReadiness({ providers: serverProviders }),
+    [serverProviders],
+  );
+  const providerUpdateCandidateByInstanceId = useMemo(
+    () => new Map(providerUpdateCandidates.map((candidate) => [candidate.instanceId, candidate])),
+    [providerUpdateCandidates],
+  );
+  const visibleProviderSettings = PROVIDER_SETTINGS;
+  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
+  const textGenInstanceId = textGenerationModelSelection.instanceId;
+  const lastCheckedAt =
+    serverProviders.length > 0
+      ? serverProviders.reduce(
+          (latest, provider) => (provider.checkedAt > latest ? provider.checkedAt : latest),
+          serverProviders[0]!.checkedAt,
+        )
+      : null;
+
+  const refreshProviders = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setIsRefreshingProviders(true);
+    void ensureLocalApi()
+      .server.refreshProviders()
+      .catch((error: unknown) => {
+        console.warn("Failed to refresh providers", error);
+      })
+      .finally(() => {
+        refreshingRef.current = false;
+        setIsRefreshingProviders(false);
+      });
+  }, []);
+
+  const runProviderUpdate = useCallback(async (candidate: ProviderUpdateCandidate) => {
+    let started = false;
+    setUpdatingProviderDrivers((previous) => {
+      if (previous.has(candidate.driver)) {
+        return previous;
+      }
+      started = true;
+      const next = new Set(previous);
+      next.add(candidate.driver);
+      return next;
+    });
+    if (!started) {
+      return;
+    }
+
+    try {
+      await ensureLocalApi().server.updateProvider({
+        provider: candidate.driver,
+        instanceId: candidate.instanceId,
+      });
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
+          description:
+            error instanceof Error
+              ? error.message
+              : "The provider update command could not be started.",
+        }),
+      );
+    } finally {
+      setUpdatingProviderDrivers((previous) => {
+        if (!previous.has(candidate.driver)) {
+          return previous;
+        }
+        const next = new Set(previous);
+        next.delete(candidate.driver);
+        return next;
+      });
+    }
+  }, []);
+
+  interface InstanceRow {
+    readonly instanceId: ProviderInstanceId;
+    readonly instance: ProviderInstanceConfig;
+    readonly driver: ProviderDriverKind;
+    readonly isDefault: boolean;
+    readonly isDirty?: boolean;
+  }
+
+  const instancesByDriver = new Map<
+    ProviderDriverKind,
+    Array<[ProviderInstanceId, ProviderInstanceConfig]>
+  >();
+  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
+    const driver = instance.driver;
+    const list = instancesByDriver.get(driver) ?? [];
+    list.push([rawId as ProviderInstanceId, instance]);
+    instancesByDriver.set(driver, list);
+  }
+
+  const defaultSlotIdsBySource = new Set<string>(
+    visibleProviderSettings.map((providerSettings) =>
+      String(defaultInstanceIdForDriver(providerSettings.provider)),
+    ),
+  );
+
+  const rows: InstanceRow[] = [];
+  const visibleDriverKinds = new Set<ProviderDriverKind>(
+    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
+  );
+
+  for (const providerSettings of visibleProviderSettings) {
+    type LegacyProviderSettings = (typeof settings.providers)[keyof typeof settings.providers];
+    const legacyProviders = settings.providers as Record<string, LegacyProviderSettings>;
+    const defaultLegacyProviders = DEFAULT_UNIFIED_SETTINGS.providers as Record<
+      string,
+      LegacyProviderSettings
+    >;
+    const driver = providerSettings.provider;
+    const defaultInstanceId = defaultInstanceIdForDriver(driver);
+    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
+    const legacyConfig = legacyProviders[providerSettings.provider]!;
+    const defaultLegacyConfig = defaultLegacyProviders[providerSettings.provider]!;
+    const effectiveInstance: ProviderInstanceConfig =
+      explicitInstance ??
+      ({
+        driver,
+        enabled: legacyConfig.enabled,
+        config: legacyConfig,
+      } satisfies ProviderInstanceConfig);
+    const isDirty =
+      explicitInstance !== undefined || !Equal.equals(legacyConfig, defaultLegacyConfig);
+    rows.push({
+      instanceId: defaultInstanceId,
+      instance: effectiveInstance,
+      driver,
+      isDefault: true,
+      isDirty,
+    });
+    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
+      if (id === defaultInstanceId) continue;
+      rows.push({ instanceId: id, instance, driver: instance.driver, isDefault: false });
+    }
+  }
+  for (const [driver, list] of instancesByDriver) {
+    if (visibleDriverKinds.has(driver)) continue;
+    for (const [id, instance] of list) {
+      rows.push({
+        instanceId: id,
+        instance,
+        driver: instance.driver,
+        isDefault: defaultSlotIdsBySource.has(String(id)),
+      });
+    }
+  }
+
+  const updateProviderInstance = (
+    row: InstanceRow,
+    next: ProviderInstanceConfig,
+    options?: {
+      readonly textGenerationModelSelection?: Parameters<
+        typeof buildProviderInstanceUpdatePatch
+      >[0]["textGenerationModelSelection"];
+    },
+  ) => {
+    updateSettings(
+      buildProviderInstanceUpdatePatch({
+        settings,
+        instanceId: row.instanceId,
+        instance: next,
+        driver: row.driver,
+        isDefault: row.isDefault,
+        textGenerationModelSelection: options?.textGenerationModelSelection,
+      }),
+    );
+  };
+
+  const deleteProviderInstance = (id: ProviderInstanceId) => {
+    updateSettings({
+      providerInstances: withoutProviderInstanceKey(settings.providerInstances, id),
+      providerModelPreferences: withoutProviderInstanceKey(settings.providerModelPreferences, id),
+      favorites: withoutProviderInstanceFavorites(settings.favorites ?? [], id),
+    });
+  };
+
+  const updateProviderModelPreferences = (
+    instanceId: ProviderInstanceId,
+    next: {
+      readonly hiddenModels: ReadonlyArray<string>;
+      readonly modelOrder: ReadonlyArray<string>;
+    },
+  ) => {
+    const hiddenModels = [...new Set(next.hiddenModels.filter((slug) => slug.trim().length > 0))];
+    const modelOrder = [...new Set(next.modelOrder.filter((slug) => slug.trim().length > 0))];
+    const rest = withoutProviderInstanceKey(settings.providerModelPreferences, instanceId);
+    updateSettings({
+      providerModelPreferences:
+        hiddenModels.length === 0 && modelOrder.length === 0
+          ? rest
+          : {
+              ...rest,
+              [instanceId]: {
+                hiddenModels,
+                modelOrder,
+              },
+            },
+    });
+  };
+
+  const updateProviderFavoriteModels = (
+    instanceId: ProviderInstanceId,
+    nextFavoriteModels: ReadonlyArray<string>,
+  ) => {
+    const favoriteModels = [
+      ...new Set(
+        Arr.filterMap(nextFavoriteModels, (slug) => {
+          const trimmedSlug = slug.trim();
+          return trimmedSlug.length > 0 ? Result.succeed(trimmedSlug) : Result.failVoid;
+        }),
+      ),
+    ];
+    updateSettings({
+      favorites: [
+        ...withoutProviderInstanceFavorites(settings.favorites ?? [], instanceId),
+        ...favoriteModels.map((model) => ({ provider: instanceId, model })),
+      ],
+    });
+  };
+
+  const resetDefaultInstance = (driverKind: ProviderDriverKind) => {
+    type LegacyProviderSettings = (typeof settings.providers)[keyof typeof settings.providers];
+    const defaultLegacyProviders = DEFAULT_UNIFIED_SETTINGS.providers as Record<
+      string,
+      LegacyProviderSettings | undefined
+    >;
+    const defaultInstanceId = defaultInstanceIdForDriver(driverKind);
+    const defaultLegacyProvider = defaultLegacyProviders[driverKind];
+    if (defaultLegacyProvider === undefined) return;
+    updateSettings({
+      providers: {
+        ...settings.providers,
+        [driverKind]: defaultLegacyProvider,
+      } as typeof settings.providers,
+      providerInstances: withoutProviderInstanceKey(settings.providerInstances, defaultInstanceId),
+      providerModelPreferences: withoutProviderInstanceKey(
+        settings.providerModelPreferences,
+        defaultInstanceId,
+      ),
+      favorites: withoutProviderInstanceFavorites(settings.favorites ?? [], defaultInstanceId),
+    });
+  };
+
+  return (
+    <SettingsPageContainer>
       <SettingsSection
-        title="Providers"
+        title={HOMELAB_PRODUCT_COPY.providers.title}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => setIsAddInstanceDialogOpen(true)}
+                    aria-label="Add provider instance"
+                  >
+                    <PlusIcon className="size-3" />
+                  </Button>
+                }
+              />
+              <TooltipPopup side="top">Add provider instance</TooltipPopup>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -724,321 +1674,321 @@ export function GeneralSettingsPanel() {
           </div>
         }
       >
-        {providerCards.map((providerCard) => {
-          const customModelInput = customModelInputByProvider[providerCard.provider];
-          const customModelError = customModelErrorByProvider[providerCard.provider] ?? null;
-          const providerDisplayName =
-            PROVIDER_DISPLAY_NAMES[providerCard.provider] ?? providerCard.title;
-
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.providers.runtimeReadinessTitle}
+          description={
+            <>
+              {HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription}
+              <span className="mt-1 block">
+                {HOMELAB_PRODUCT_COPY.providers.runtimeVerificationDescription}
+              </span>
+            </>
+          }
+          control={
+            <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
+              {setupReadiness.providerSummary.runtimeUsableCount}/
+              {setupReadiness.providerSummary.totalCount} runtime ready
+            </span>
+          }
+        />
+        {rows.map((row) => {
+          const driverOption = getDriverOption(row.driver);
+          const liveProvider = serverProviders.find(
+            (candidate) => candidate.instanceId === row.instanceId,
+          );
+          const readiness = deriveProviderReadinessForInstance({
+            liveProvider,
+            instance: row.instance,
+            instanceId: row.instanceId,
+          });
+          const updateCandidate = liveProvider
+            ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
+            : undefined;
+          const isDriverUpdateRunning =
+            updateCandidate !== undefined &&
+            (updatingProviderDrivers.has(updateCandidate.driver) ||
+              serverProviders.some(
+                (provider) =>
+                  provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
+              ));
+          const showInlineUpdateButton =
+            updateCandidate !== undefined &&
+            hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
+          const canRunInlineUpdate =
+            updateCandidate !== undefined &&
+            canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
+            !updatingProviderDrivers.has(updateCandidate.driver);
+          const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
+            hiddenModels: [],
+            modelOrder: [],
+          };
+          const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
+            favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
+          );
+          const resetLabel = driverOption?.label ?? String(row.driver);
+          const headerAction =
+            row.isDefault && row.isDirty ? (
+              <SettingResetButton
+                label={`${resetLabel} provider settings`}
+                onClick={() => resetDefaultInstance(row.driver)}
+              />
+            ) : null;
           return (
-            <div key={providerCard.provider} className="border-t border-border first:border-t-0">
-              <div className="px-4 py-4 sm:px-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex min-h-5 items-center gap-1.5">
-                      <span
-                        className={cn("size-2 shrink-0 rounded-full", providerCard.statusStyle.dot)}
-                      />
-                      <h3 className="text-sm font-medium text-foreground">{providerDisplayName}</h3>
-                      {providerCard.versionLabel ? (
-                        <code className="text-xs text-muted-foreground">
-                          {providerCard.versionLabel}
-                        </code>
-                      ) : null}
-                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-                        {providerCard.isDirty ? (
-                          <SettingResetButton
-                            label={`${providerDisplayName} provider settings`}
-                            onClick={() => {
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  [providerCard.provider]:
-                                    DEFAULT_UNIFIED_SETTINGS.providers[providerCard.provider],
-                                },
-                              });
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {providerCard.summary.headline}
-                      {providerCard.summary.detail ? ` - ${providerCard.summary.detail}` : null}
-                    </p>
-                  </div>
-                  <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() =>
-                        setOpenProviderDetails((existing) => ({
-                          ...existing,
-                          [providerCard.provider]: !existing[providerCard.provider],
-                        }))
-                      }
-                      aria-label={`Toggle ${providerDisplayName} details`}
-                    >
-                      <ChevronDownIcon
-                        className={cn(
-                          "size-3.5 transition-transform",
-                          openProviderDetails[providerCard.provider] && "rotate-180",
-                        )}
-                      />
-                    </Button>
-                    <Switch
-                      checked={providerCard.providerConfig.enabled}
-                      onCheckedChange={(checked) => {
-                        updateSettings({
-                          providers: {
-                            ...settings.providers,
-                            [providerCard.provider]: {
-                              ...settings.providers[providerCard.provider],
-                              enabled: Boolean(checked),
-                            },
-                          },
-                        });
-                      }}
-                      aria-label={`Enable ${providerDisplayName}`}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <Collapsible
-                open={openProviderDetails[providerCard.provider]}
-                onOpenChange={(open) =>
-                  setOpenProviderDetails((existing) => ({
-                    ...existing,
-                    [providerCard.provider]: open,
-                  }))
+            <ProviderInstanceCard
+              key={row.instanceId}
+              instanceId={row.instanceId}
+              instance={row.instance}
+              driverOption={driverOption}
+              liveProvider={liveProvider}
+              readiness={readiness}
+              isExpanded={openInstanceDetails[row.instanceId] ?? false}
+              onExpandedChange={(open) =>
+                setOpenInstanceDetails((existing) => ({
+                  ...existing,
+                  [row.instanceId]: open,
+                }))
+              }
+              onUpdate={(next) => {
+                const wasEnabled = row.instance.enabled ?? true;
+                const isDisabling = next.enabled === false && wasEnabled;
+                const shouldClearTextGen = isDisabling && textGenInstanceId === row.instanceId;
+                if (shouldClearTextGen) {
+                  updateProviderInstance(row, next, {
+                    textGenerationModelSelection:
+                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+                  });
+                } else {
+                  updateProviderInstance(row, next);
                 }
-              >
-                <CollapsibleContent>
-                  <div className="space-y-0">
-                    <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                      <label
-                        htmlFor={`provider-install-${providerCard.provider}-binary-path`}
-                        className="block"
-                      >
-                        <span className="text-xs font-medium text-foreground">
-                          {providerDisplayName} binary path
-                        </span>
-                        <Input
-                          id={`provider-install-${providerCard.provider}-binary-path`}
-                          className="mt-1.5"
-                          value={providerCard.binaryPathValue}
-                          onChange={(event) =>
-                            updateSettings({
-                              providers: {
-                                ...settings.providers,
-                                [providerCard.provider]: {
-                                  ...settings.providers[providerCard.provider],
-                                  binaryPath: event.target.value,
-                                },
-                              },
-                            })
-                          }
-                          placeholder={providerCard.binaryPlaceholder}
-                          spellCheck={false}
-                        />
-                        <span className="mt-1 block text-xs text-muted-foreground">
-                          {providerCard.binaryDescription}
-                        </span>
-                      </label>
-                    </div>
-
-                    {providerCard.homePathKey ? (
-                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                        <label
-                          htmlFor={`provider-install-${providerCard.homePathKey}`}
-                          className="block"
-                        >
-                          <span className="text-xs font-medium text-foreground">
-                            CODEX_HOME path
-                          </span>
-                          <Input
-                            id={`provider-install-${providerCard.homePathKey}`}
-                            className="mt-1.5"
-                            value={codexHomePath}
-                            onChange={(event) =>
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  codex: {
-                                    ...settings.providers.codex,
-                                    homePath: event.target.value,
-                                  },
-                                },
-                              })
-                            }
-                            placeholder={providerCard.homePlaceholder}
-                            spellCheck={false}
-                          />
-                          {providerCard.homeDescription ? (
-                            <span className="mt-1 block text-xs text-muted-foreground">
-                              {providerCard.homeDescription}
-                            </span>
-                          ) : null}
-                        </label>
-                      </div>
-                    ) : null}
-
-                    <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                      <div className="text-xs font-medium text-foreground">Models</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {providerCard.models.length} model
-                        {providerCard.models.length === 1 ? "" : "s"} available.
-                      </div>
-                      <div
-                        ref={(el) => {
-                          modelListRefs.current[providerCard.provider] = el;
-                        }}
-                        className="mt-2 max-h-40 overflow-y-auto pb-1"
-                      >
-                        {providerCard.models.map((model) => {
-                          const caps = model.capabilities;
-                          const capLabels: string[] = [];
-                          if (caps?.supportsFastMode) capLabels.push("Fast mode");
-                          if (caps?.supportsThinkingToggle) capLabels.push("Thinking");
-                          if (
-                            caps?.reasoningEffortLevels &&
-                            caps.reasoningEffortLevels.length > 0
-                          ) {
-                            capLabels.push("Reasoning");
-                          }
-                          const hasDetails = capLabels.length > 0 || model.name !== model.slug;
-
-                          return (
-                            <div
-                              key={`${providerCard.provider}:${model.slug}`}
-                              className="flex items-center gap-2 py-1"
-                            >
-                              <span className="min-w-0 truncate text-xs text-foreground/90">
-                                {model.name}
-                              </span>
-                              {hasDetails ? (
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <button
-                                        type="button"
-                                        className="shrink-0 text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-                                        aria-label={`Details for ${model.name}`}
-                                      />
-                                    }
-                                  >
-                                    <InfoIcon className="size-3" />
-                                  </TooltipTrigger>
-                                  <TooltipPopup side="top" className="max-w-56">
-                                    <div className="space-y-1">
-                                      <code className="block text-[11px] text-foreground">
-                                        {model.slug}
-                                      </code>
-                                      {capLabels.length > 0 ? (
-                                        <div className="flex flex-wrap gap-x-2 gap-y-0.5">
-                                          {capLabels.map((label) => (
-                                            <span
-                                              key={label}
-                                              className="text-[10px] text-muted-foreground"
-                                            >
-                                              {label}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </TooltipPopup>
-                                </Tooltip>
-                              ) : null}
-                              {model.isCustom ? (
-                                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                                  <span className="text-[10px] text-muted-foreground">custom</span>
-                                  <button
-                                    type="button"
-                                    className="text-muted-foreground transition-colors hover:text-foreground"
-                                    aria-label={`Remove ${model.slug}`}
-                                    onClick={() =>
-                                      removeCustomModel(providerCard.provider, model.slug)
-                                    }
-                                  >
-                                    <XIcon className="size-3" />
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                        <Input
-                          id={`custom-model-${providerCard.provider}`}
-                          value={customModelInput}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setCustomModelInputByProvider((existing) => ({
-                              ...existing,
-                              [providerCard.provider]: value,
-                            }));
-                            if (customModelError) {
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter") return;
-                            event.preventDefault();
-                            addCustomModel(providerCard.provider);
-                          }}
-                          placeholder={
-                            providerCard.provider === "codex"
-                              ? "gpt-6.7-codex-ultra-preview"
-                              : "claude-sonnet-5-0"
-                          }
-                          spellCheck={false}
-                        />
-                        <Button
-                          className="shrink-0"
-                          variant="outline"
-                          onClick={() => addCustomModel(providerCard.provider)}
-                        >
-                          <PlusIcon className="size-3.5" />
-                          Add
-                        </Button>
-                      </div>
-
-                      {customModelError ? (
-                        <p className="mt-2 text-xs text-destructive">{customModelError}</p>
-                      ) : null}
-                    </div>
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            </div>
+              }}
+              onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
+              headerAction={headerAction}
+              hiddenModels={modelPreferences.hiddenModels}
+              favoriteModels={favoriteModels}
+              modelOrder={modelPreferences.modelOrder}
+              onHiddenModelsChange={(hiddenModels) =>
+                updateProviderModelPreferences(row.instanceId, {
+                  ...modelPreferences,
+                  hiddenModels,
+                })
+              }
+              onFavoriteModelsChange={(favoriteModels) =>
+                updateProviderFavoriteModels(row.instanceId, favoriteModels)
+              }
+              onModelOrderChange={(modelOrder) =>
+                updateProviderModelPreferences(row.instanceId, {
+                  ...modelPreferences,
+                  modelOrder,
+                })
+              }
+              onRunUpdate={
+                showInlineUpdateButton && updateCandidate
+                  ? () => {
+                      if (!canRunInlineUpdate) {
+                        return;
+                      }
+                      void runProviderUpdate(updateCandidate);
+                    }
+                  : undefined
+              }
+              isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
+            />
           );
         })}
       </SettingsSection>
 
-      <ConnectionsSettings />
+      <AddProviderInstanceDialog
+        open={isAddInstanceDialogOpen}
+        onOpenChange={setIsAddInstanceDialogOpen}
+      />
+    </SettingsPageContainer>
+  );
+}
 
-      <SettingsSection title="About">
-        {isElectron ? (
-          <AboutVersionSection />
-        ) : (
+export function ArchivedThreadsPanel() {
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const environmentIds = useMemo(
+    () => [...new Set(projects.map((project) => project.environmentId))],
+    [projects],
+  );
+  const {
+    snapshots: archivedSnapshots,
+    error: archiveError,
+    isLoading: isLoadingArchive,
+    refresh: refreshArchivedThreads,
+  } = useArchivedThreadSnapshots(environmentIds);
+
+  const archivedGroups = useMemo(() => {
+    const projectsByEnvironmentAndId = new Map(
+      archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+        snapshot.projects.map(
+          (project) =>
+            [
+              `${environmentId}:${project.id}`,
+              {
+                id: project.id,
+                environmentId,
+                name: project.title,
+                cwd: project.workspaceRoot,
+              },
+            ] as const,
+        ),
+      ),
+    );
+    const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+      snapshot.threads.map((thread) => ({
+        ...thread,
+        environmentId,
+      })),
+    );
+
+    const archivedProjects = Array.from(projectsByEnvironmentAndId.values());
+    const groups: Array<{
+      readonly project: (typeof archivedProjects)[number];
+      readonly threads: Array<(typeof threads)[number]>;
+    }> = [];
+    for (const project of archivedProjects) {
+      const projectThreads: Array<(typeof threads)[number]> = [];
+      for (const thread of threads) {
+        if (thread.projectId === project.id && thread.environmentId === project.environmentId) {
+          projectThreads.push(thread);
+        }
+      }
+      if (projectThreads.length > 0) {
+        groups.push({
+          project,
+          threads: projectThreads.toSorted((left, right) => {
+            const leftKey = left.archivedAt ?? left.createdAt;
+            const rightKey = right.archivedAt ?? right.createdAt;
+            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+          }),
+        });
+      }
+    }
+    return groups;
+  }, [archivedSnapshots]);
+
+  const handleArchivedThreadContextMenu = useCallback(
+    async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "unarchive", label: "Unarchive" },
+          { id: "delete", label: "Delete", destructive: true },
+        ],
+        position,
+      );
+
+      if (clicked === "unarchive") {
+        try {
+          await unarchiveThread(threadRef);
+          refreshArchivedThreads();
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to unarchive thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+
+      if (clicked === "delete") {
+        await confirmAndDeleteThread(threadRef);
+        refreshArchivedThreads();
+      }
+    },
+    [confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
+  );
+
+  return (
+    <SettingsPageContainer>
+      {archivedGroups.length === 0 ? (
+        <SettingsSection title="Archived threads">
           <SettingsRow
-            title={<AboutVersionTitle />}
-            description="Current version of the application."
+            title={
+              <span className="inline-flex items-center gap-2">
+                {isLoadingArchive ? (
+                  <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+                ) : (
+                  <ArchiveIcon className="size-3.5 text-muted-foreground" />
+                )}
+                {isLoadingArchive
+                  ? "Loading archived threads"
+                  : archiveError
+                    ? "Could not load archived threads"
+                    : "No archived threads"}
+              </span>
+            }
+            description={
+              isLoadingArchive
+                ? "Checking connected environments."
+                : (archiveError ?? "Archived threads will appear here.")
+            }
           />
-        )}
-      </SettingsSection>
+        </SettingsSection>
+      ) : (
+        archivedGroups.map(({ project, threads: projectThreads }) => (
+          <SettingsSection
+            key={project.id}
+            title={project.name}
+            icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
+          >
+            {projectThreads.map((thread) => (
+              <SettingsRow
+                key={thread.id}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  void handleArchivedThreadContextMenu(
+                    scopeThreadRef(thread.environmentId, thread.id),
+                    {
+                      x: event.clientX,
+                      y: event.clientY,
+                    },
+                  );
+                }}
+                title={thread.title}
+                description={
+                  <>
+                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                    {" \u00b7 Created "}
+                    {formatRelativeTimeLabel(thread.createdAt)}
+                  </>
+                }
+                control={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                    onClick={() =>
+                      void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
+                        .then(() => refreshArchivedThreads())
+                        .catch((error) => {
+                          toastManager.add(
+                            stackedThreadToast({
+                              type: "error",
+                              title: "Failed to unarchive thread",
+                              description:
+                                error instanceof Error ? error.message : "An error occurred.",
+                            }),
+                          );
+                        })
+                    }
+                  >
+                    <ArchiveX className="size-3.5" />
+                    <span>Unarchive</span>
+                  </Button>
+                }
+              />
+            ))}
+          </SettingsSection>
+        ))
+      )}
     </SettingsPageContainer>
   );
 }
