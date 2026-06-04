@@ -307,9 +307,6 @@ rm -f "$T3CODE_HOME/userdata/secrets/session-signing-key.bin"
 
 ## Unsupported Or Deferred Paths
 
-- Root `DEPLOY.md` is historical/host-specific and may mention stale variables
-  such as `T3CODE_DOCKER_ENABLED`; current runtime code does not read that
-  variable.
 - Desktop and mobile are secondary surfaces for this fork.
 - Cursor Project Runtime execution is deferred.
 - Isolated runtime merge/discard and partial snapshot restore are future work.

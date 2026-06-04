@@ -10,7 +10,6 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
-  type ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -1155,65 +1154,62 @@ function OpenCommandPaletteDialog() {
     openAddProjectFlow();
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
-  const createStandaloneThread = useCallback(
-    async (runtimeSelectionMode: ThreadRuntimeMode = "shared") => {
-      const environmentId = defaultAddProjectEnvironmentId;
-      if (!environmentId) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
-            description: HOMELAB_PRODUCT_COPY.serverConnection.noRuntimeServerDescription,
-          }),
-        );
-        return;
-      }
+  const createStandaloneThread = useCallback(async () => {
+    const environmentId = defaultAddProjectEnvironmentId;
+    if (!environmentId) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.noRuntimeServerDescription,
+        }),
+      );
+      return;
+    }
 
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
-            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
-          }),
-        );
-        return;
-      }
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
+        }),
+      );
+      return;
+    }
 
-      const threadId = newThreadId();
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.standalone.create",
-          commandId: newCommandId(),
-          threadId,
-          title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
-          },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          runtimeSelectionMode,
-          createdAt: new Date().toISOString(),
-        });
-        await navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
-        });
-        setOpen(false);
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to create standalone thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
-    },
-    [defaultAddProjectEnvironmentId, navigate, setOpen],
-  );
+    const threadId = newThreadId();
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.standalone.create",
+        commandId: newCommandId(),
+        threadId,
+        title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        runtimeSelectionMode: "isolated",
+        createdAt: new Date().toISOString(),
+      });
+      await navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+      });
+      setOpen(false);
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to create standalone thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [defaultAddProjectEnvironmentId, navigate, setOpen]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
@@ -1225,28 +1221,7 @@ function OpenCommandPaletteDialog() {
     description: HOMELAB_PRODUCT_COPY.standalone.newThreadDescription,
     icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
-      await createStandaloneThread("shared");
-    },
-  });
-
-  actionItems.push({
-    kind: "action",
-    value: "action:new-isolated-standalone-thread",
-    searchTerms: [
-      "new thread",
-      "standalone",
-      "scratch",
-      "one-off",
-      "isolated runtime",
-      "runtime clone",
-      "parallel",
-      "containment",
-    ],
-    title: HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction,
-    description: HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadDescription,
-    icon: <GitBranchPlusIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await createStandaloneThread("isolated");
+      await createStandaloneThread();
     },
   });
 

@@ -1728,7 +1728,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
 
   const createStandaloneThreadForMember = useCallback(
-    (member: SidebarProjectGroupMember, options?: { runtimeSelectionMode?: ThreadRuntimeMode }) => {
+    (member: SidebarProjectGroupMember) => {
       void (async () => {
         const api = readEnvironmentApi(member.environmentId);
         if (!api) {
@@ -1756,7 +1756,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             },
             runtimeMode: "full-access",
             interactionMode: "default",
-            runtimeSelectionMode: options?.runtimeSelectionMode ?? "shared",
+            runtimeSelectionMode: "isolated",
             createdAt: new Date().toISOString(),
           });
           if (isMobile) {
@@ -1790,32 +1790,25 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         if (project.isStandalone) {
           const actionHandlers = new Map<string, () => void>();
-          const buildRuntimeModeMenuItem = (
-            runtimeSelectionMode: ThreadRuntimeMode,
-          ): ContextMenuItem<string> => {
-            const label =
-              runtimeSelectionMode === "isolated"
-                ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
-                : HOMELAB_PRODUCT_COPY.standalone.newThreadAction;
-
+          const buildNewScratchThreadItem = (): ContextMenuItem<string> => {
             if (project.memberProjects.length === 1) {
               const member = project.memberProjects[0]!;
-              actionHandlers.set(runtimeSelectionMode, () => {
-                createStandaloneThreadForMember(member, { runtimeSelectionMode });
+              actionHandlers.set("new-scratch-thread", () => {
+                createStandaloneThreadForMember(member);
               });
               return {
-                id: runtimeSelectionMode,
-                label,
+                id: "new-scratch-thread",
+                label: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
               };
             }
 
             return {
-              id: `${runtimeSelectionMode}:submenu`,
-              label,
+              id: "new-scratch-thread:submenu",
+              label: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
               children: project.memberProjects.map((member) => {
-                const id = `${runtimeSelectionMode}:${member.physicalProjectKey}`;
+                const id = `new-scratch-thread:${member.physicalProjectKey}`;
                 actionHandlers.set(id, () => {
-                  createStandaloneThreadForMember(member, { runtimeSelectionMode });
+                  createStandaloneThreadForMember(member);
                 });
                 return {
                   id,
@@ -1825,13 +1818,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             };
           };
 
-          const clicked = await api.contextMenu.show(
-            [buildRuntimeModeMenuItem("shared"), buildRuntimeModeMenuItem("isolated")],
-            {
-              x: event.clientX,
-              y: event.clientY,
-            },
-          );
+          const clicked = await api.contextMenu.show([buildNewScratchThreadItem()], {
+            x: event.clientX,
+            y: event.clientY,
+          });
           if (!clicked) {
             return;
           }
@@ -2069,7 +2059,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const createThreadForProjectMember = useCallback(
     (member: SidebarProjectGroupMember, options?: { runtimeSelectionMode?: ThreadRuntimeMode }) => {
       if (member.isStandalone) {
-        createStandaloneThreadForMember(member, options);
+        createStandaloneThreadForMember(member);
         return;
       }
 
@@ -2498,8 +2488,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const isolatedThreadCopy = sidebarThreadCreationRuntimeCopy("isolated");
       const clicked = await api.contextMenu.show(
         [
-          { id: "new-shared-thread", label: sharedThreadCopy.label },
-          { id: "new-isolated-thread", label: isolatedThreadCopy.label },
+          ...(isStandaloneThread
+            ? [{ id: "new-scratch-thread", label: HOMELAB_PRODUCT_COPY.standalone.newThreadAction }]
+            : [
+                { id: "new-shared-thread", label: sharedThreadCopy.label },
+                { id: "new-isolated-thread", label: isolatedThreadCopy.label },
+              ]),
           ...(isStandaloneThread
             ? [
                 { id: "move-to-project", label: HOMELAB_PRODUCT_COPY.standalone.moveAction },
@@ -2517,13 +2511,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         position,
       );
 
+      if (clicked === "new-scratch-thread") {
+        if (threadProject) {
+          createStandaloneThreadForMember(threadProject);
+        }
+        return;
+      }
+
       if (clicked === "new-shared-thread" || clicked === "new-isolated-thread") {
         const runtimeSelectionMode: ThreadRuntimeMode =
           clicked === "new-isolated-thread" ? "isolated" : "shared";
-        if (isStandaloneThread && threadProject) {
-          createStandaloneThreadForMember(threadProject, { runtimeSelectionMode });
-          return;
-        }
         void handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
           branch: thread.branch,
           worktreePath: thread.worktreePath,
@@ -2770,31 +2767,27 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription}
             </TooltipPopup>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={
-                    project.isStandalone
-                      ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
-                      : `${HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction} in ${project.displayName}`
-                  }
-                  data-testid="new-parallel-thread-button"
-                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={(event) => handleCreateThreadClick(event, "isolated")}
-                  onContextMenu={handleCreateThreadContextMenu}
-                >
-                  <GitBranchPlusIcon className="size-3.5" />
-                </button>
-              }
-            />
-            <TooltipPopup side="top">
-              {project.isStandalone
-                ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadDescription
-                : HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription}
-            </TooltipPopup>
-          </Tooltip>
+          {!project.isStandalone ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`${HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction} in ${project.displayName}`}
+                    data-testid="new-parallel-thread-button"
+                    className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                    onClick={(event) => handleCreateThreadClick(event, "isolated")}
+                    onContextMenu={handleCreateThreadContextMenu}
+                  >
+                    <GitBranchPlusIcon className="size-3.5" />
+                  </button>
+                }
+              />
+              <TooltipPopup side="top">
+                {HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
       </div>
 
@@ -3555,69 +3548,63 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
-  const createScratchThread = useCallback(
-    async (runtimeSelectionMode: ThreadRuntimeMode) => {
-      if (primaryEnvironmentId === null) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
-            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
-          }),
-        );
-        return;
-      }
+  const createScratchThread = useCallback(async () => {
+    if (primaryEnvironmentId === null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
+        }),
+      );
+      return;
+    }
 
-      const api = readEnvironmentApi(primaryEnvironmentId);
-      if (!api) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
-            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
-          }),
-        );
-        return;
-      }
+    const api = readEnvironmentApi(primaryEnvironmentId);
+    if (!api) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
+        }),
+      );
+      return;
+    }
 
-      const threadId = newThreadId();
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.standalone.create",
-          commandId: newCommandId(),
-          threadId,
-          title:
-            runtimeSelectionMode === "isolated"
-              ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
-              : HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
-          },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          runtimeSelectionMode,
-          createdAt: new Date().toISOString(),
-        });
-        if (isMobile) {
-          setOpenMobile(false);
-        }
-        await navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
-        });
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to create scratch thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
+    const threadId = newThreadId();
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.standalone.create",
+        commandId: newCommandId(),
+        threadId,
+        title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        runtimeSelectionMode: "isolated",
+        createdAt: new Date().toISOString(),
+      });
+      if (isMobile) {
+        setOpenMobile(false);
       }
-    },
-    [isMobile, navigate, primaryEnvironmentId, setOpenMobile],
-  );
+      await navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
+      });
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to create scratch thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [isMobile, navigate, primaryEnvironmentId, setOpenMobile]);
 
   return (
     <SidebarContent className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
@@ -3692,7 +3679,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                     data-testid="sidebar-new-scratch-thread-trigger"
                     className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
                     onClick={() => {
-                      void createScratchThread("shared");
+                      void createScratchThread();
                     }}
                   >
                     <SquarePenIcon className="size-3.5" />
