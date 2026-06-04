@@ -15,6 +15,23 @@ interface HomelabViewFile {
   readonly contents: string;
 }
 
+/**
+ * Max project-memory entries pulled for rendering the `.homelab` context view.
+ *
+ * The render and reconcile-and-prune paths both operate on the SAME listed
+ * `memoryEntries` (the prune keep-set is derived from the rendered `files`), so
+ * they are always mutually consistent: prune never deletes a file the view
+ * rendered, and the view never references a file prune would remove — regardless
+ * of this bound. The only effect of the cap is silent truncation of the OLDEST
+ * entries once a project exceeds it (rows come back `ORDER BY updated_at DESC`).
+ *
+ * Callers must use this shared constant so every render site truncates
+ * identically. It is intentionally a generous bound (not full pagination, which
+ * would be a larger change) that still keeps list/render work bounded; raise it
+ * here if real projects approach the limit.
+ */
+export const HOMELAB_MEMORY_VIEW_ENTRY_LIMIT = 10_000;
+
 export interface HomelabBootstrapMaterializationView {
   readonly bootstrapVersion: string;
   readonly imageRef: string;
