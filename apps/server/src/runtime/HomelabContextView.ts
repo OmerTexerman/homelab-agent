@@ -226,9 +226,9 @@ const HOMELAB_MEMORY_LATEST_README = [
  * instructions never point at missing paths. The data-driven {@link renderHomelabContextViewFiles}
  * produces the same relative paths (with content) and overwrites these once durable state exists.
  */
-export function renderHomelabBaselineViewFiles(): HomelabViewFile[] {
+export function renderHomelabBaselineViewFiles(title = "Project Runtime"): HomelabViewFile[] {
   return [
-    { relativePath: ".homelab/README.md", contents: renderHomelabReadme("Project Runtime") },
+    { relativePath: ".homelab/README.md", contents: renderHomelabReadme(title) },
     { relativePath: ".homelab/threads/index.jsonl", contents: "" },
     { relativePath: ".homelab/memory/index.jsonl", contents: "" },
     { relativePath: ".homelab/memory/latest/README.md", contents: HOMELAB_MEMORY_LATEST_README },

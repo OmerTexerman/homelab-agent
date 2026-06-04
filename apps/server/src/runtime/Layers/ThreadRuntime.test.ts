@@ -8,6 +8,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
+import { standaloneProjectDefaultRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { type ProcessRunResult } from "../../processRunner.ts";
@@ -692,6 +693,150 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(yield* fileSystem.readFileString(homelabReadmePath), richReadmeContents);
       assert.equal(yield* fileSystem.readFileString(homelabMemoryIndexPath), richMemoryEntry);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "renders a project-thread persona for a normal project runtime and a distinct standalone persona for the standalone runtime",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const projectDescriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-persona-project"),
+          runtimeId: RuntimeSessionId.make("project-runtime:project-persona"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const standaloneDescriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-persona-standalone"),
+          runtimeId: standaloneProjectDefaultRuntimeId(),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+
+        const projectLaunch = yield* runtime.resolveLaunchContext(projectDescriptor.threadId);
+        const standaloneLaunch = yield* runtime.resolveLaunchContext(
+          standaloneDescriptor.threadId,
+        );
+
+        const projectAgents = yield* fileSystem.readFileString(
+          path.join(projectLaunch.hostWorkspacePath, "AGENTS.md"),
+        );
+        const projectClaude = yield* fileSystem.readFileString(
+          path.join(projectLaunch.hostWorkspacePath, "CLAUDE.md"),
+        );
+        const standaloneAgents = yield* fileSystem.readFileString(
+          path.join(standaloneLaunch.hostWorkspacePath, "AGENTS.md"),
+        );
+        const standaloneClaude = yield* fileSystem.readFileString(
+          path.join(standaloneLaunch.hostWorkspacePath, "CLAUDE.md"),
+        );
+
+        // The two personas must actually differ in their framing.
+        assert.notEqual(projectAgents, standaloneAgents);
+        // CLAUDE.md and AGENTS.md only differ by their one-line preamble.
+        assert.match(projectClaude, /Claude Code reads this file automatically\./);
+        assert.match(standaloneClaude, /Claude Code reads this file automatically\./);
+
+        // Top-of-persona orientation line distinguishes the two without reading .homelab.
+        assert.match(projectAgents, /This is a thread inside (?:the .* project|a project)\./);
+        assert.match(
+          standaloneAgents,
+          /This is a one-off standalone \(scratch\) thread\./,
+        );
+        assert.doesNotMatch(standaloneAgents, /This is a thread inside (?:the .* project|a project)\./);
+        assert.doesNotMatch(projectAgents, /one-off standalone \(scratch\) thread/);
+
+        // Project persona keeps the shared-runtime + cross-thread + promotion framing.
+        assert.match(
+          projectAgents,
+          /This project runtime may be shared by multiple threads in the same project\./,
+        );
+        assert.match(projectAgents, /Project-local memory and transcripts/);
+        assert.match(
+          projectAgents,
+          /lists discoverable threads in this project/,
+        );
+        assert.match(projectAgents, /Promotion from project memory to the global graph is explicit\./);
+        assert.match(projectAgents, /so the next thread has it\./);
+
+        // Standalone persona removes the shared-runtime / cross-thread / project-promotion framing.
+        assert.doesNotMatch(
+          standaloneAgents,
+          /may be shared by multiple threads in the same project/,
+        );
+        assert.doesNotMatch(standaloneAgents, /Project-local memory and transcripts/);
+        assert.doesNotMatch(standaloneAgents, /lists discoverable threads in this project/);
+        assert.doesNotMatch(standaloneAgents, /Promotion from project memory to the global graph/);
+        assert.doesNotMatch(standaloneAgents, /the project runtime workspace/);
+        assert.doesNotMatch(standaloneAgents, /Project Runtime/);
+
+        // Standalone persona reframes around an isolated, thread-local scratch runtime.
+        assert.match(standaloneAgents, /Thread-local memory and transcripts/);
+        assert.match(
+          standaloneAgents,
+          /This is a one-off standalone thread with its own isolated runtime and filesystem\./,
+        );
+        assert.match(standaloneAgents, /There is no project to promote into\./);
+
+        // Both personas keep the still-correct orientation: workspace, .homelab distinction, CLI, secrets.
+        for (const persona of [projectAgents, standaloneAgents]) {
+          assert.match(persona, /\/workspace\/\.homelab/);
+          assert.match(persona, /~\/\.homelab/);
+          assert.match(persona, /homelab --help/);
+          assert.match(persona, /homelab secret-request/);
+          assert.match(persona, /Always verify before acting\./);
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "titles the baseline .homelab README per runtime: 'Project Runtime' for projects, scratch title for standalone",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        const projectDescriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-baseline-title-project"),
+          runtimeId: RuntimeSessionId.make("project-runtime:baseline-title-project"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const standaloneDescriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-baseline-title-standalone"),
+          runtimeId: standaloneProjectDefaultRuntimeId(),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+
+        const projectLaunch = yield* runtime.resolveLaunchContext(projectDescriptor.threadId);
+        const standaloneLaunch = yield* runtime.resolveLaunchContext(
+          standaloneDescriptor.threadId,
+        );
+
+        const projectReadme = yield* fileSystem.readFileString(
+          path.join(projectLaunch.hostWorkspacePath, ".homelab", "README.md"),
+        );
+        const standaloneReadme = yield* fileSystem.readFileString(
+          path.join(standaloneLaunch.hostWorkspacePath, ".homelab", "README.md"),
+        );
+
+        assert.match(projectReadme, /^# Project Runtime Homelab Context/);
+        assert.match(standaloneReadme, /^# Scratch Homelab Context/);
+        assert.doesNotMatch(standaloneReadme, /Project Runtime/);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("maps logical project roots back to /workspace for runtime cwd", () =>
