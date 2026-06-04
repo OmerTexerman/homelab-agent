@@ -1296,9 +1296,11 @@ homelab memory add --summary "Backups run from nas01" \\
 
 ${
     isStandalone
-      ? `Thread-local memory stays with this scratch thread. Use \`homelab memory propose\` when an
-entry should be reviewed for promotion into the global homelab graph — that promotion is
-explicit and is how anything you learn here outlives this one-off thread.`
+      ? `Thread-local memory stays with this scratch thread. There is no project to promote
+into, so when a finding should outlive this one-off thread, promote it straight into the
+global homelab graph with \`homelab promote\` (see \`homelab promote --schema\` /
+\`homelab promote --example\`). That promotion is explicit and is how anything you learn
+here persists.`
       : `Use \`homelab memory propose\` when the entry should be reviewed for global
 promotion. Promotion from project memory to the global graph is explicit.`
   }

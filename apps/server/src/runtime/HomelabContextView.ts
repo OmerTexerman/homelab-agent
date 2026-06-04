@@ -68,12 +68,6 @@ export function redactHomelabViewText(
     redacted = redacted.replace(pattern, "[REDACTED_SECRET]");
   }
 
-  for (const secret of secrets) {
-    const key = String(secret.key);
-    if (!key) continue;
-    redacted = redacted.replaceAll(`{${key}}`, `{${key}}`);
-  }
-
   return redacted;
 }
 
@@ -478,4 +472,54 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true });
     yield* fileSystem.writeFileString(targetPath, file.contents);
   }
+
+  // Reconcile-and-prune: the two subtrees below are fully generated and owned by this writer,
+  // and `renderHomelabContextViewFiles` deliberately drops deleted threads and superseded
+  // memory. Without pruning, those leave orphaned files on disk that the agent's `find`/`rg`
+  // still surfaces as stale context. Expected sets are derived from the SAME `files` we just
+  // wrote (single source of truth), so pruning can never delete a file this render produced.
+  // All callers pass the COMPLETE authoritative thread + memory set for the workspace, so the
+  // remaining entries are genuine orphans. Each readDirectory/remove tolerates a missing path,
+  // making the first run (no pre-existing `.homelab`) a no-op.
+  const expectedThreadDirs = new Set<string>();
+  const expectedMemoryFiles = new Set<string>();
+  for (const file of files) {
+    const threadMatch = /^\.homelab\/threads\/(thread_[^/]+)\//.exec(file.relativePath);
+    if (threadMatch?.[1]) {
+      expectedThreadDirs.add(threadMatch[1]);
+      continue;
+    }
+    const memoryMatch = /^\.homelab\/memory\/latest\/([^/]+\.md)$/.exec(file.relativePath);
+    if (memoryMatch?.[1]) {
+      expectedMemoryFiles.add(memoryMatch[1]);
+    }
+  }
+
+  const threadsDir = nodePath.join(input.hostWorkspacePath, ".homelab", "threads");
+  const threadEntries = yield* fileSystem
+    .readDirectory(threadsDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    threadEntries.filter(
+      (name) => name.startsWith("thread_") && !expectedThreadDirs.has(name),
+    ),
+    (name) =>
+      fileSystem
+        .remove(nodePath.join(threadsDir, name), { recursive: true })
+        .pipe(Effect.ignore),
+    { discard: true },
+  );
+
+  const memoryLatestDir = nodePath.join(input.hostWorkspacePath, ".homelab", "memory", "latest");
+  const memoryEntries = yield* fileSystem
+    .readDirectory(memoryLatestDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    memoryEntries.filter(
+      (name) =>
+        name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
+    ),
+    (name) => fileSystem.remove(nodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
+    { discard: true },
+  );
 });
