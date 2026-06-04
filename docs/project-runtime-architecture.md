@@ -233,10 +233,27 @@ The goal is to let models use familiar tools such as `rg`, `grep`, `jq`, and
 shell scripts. Structured APIs and CLI commands should still exist for validated
 writes and richer UI operations.
 
-The current generated view is implemented by
-`apps/server/src/runtime/HomelabContextView.ts` and written into the runtime
-workspace before provider turn execution and after project-memory writes when a
-runtime is already active. It includes:
+`.homelab` lives in the runtime **workspace** at `/workspace/.homelab` (the
+agent's working directory). It is deliberately distinct from `~/.homelab`, which
+only holds the `homelab` CLI on `PATH`. The CLI queries live/durable server
+state; the `.homelab` files are a cached, grep-able view of that same state. An
+agent (or operator) that inspects `~/.homelab` instead of `./.homelab` sees only
+`bin/` — that is expected, not an empty project.
+
+Generation happens in two layers, both in
+`apps/server/src/runtime/HomelabContextView.ts`:
+
+- **Baseline** (`renderHomelabBaselineViewFiles`): written by `ThreadRuntime`
+  whenever a runtime is materialized (`startRuntime`/`ensureRuntime`), for every
+  runtime mode (shared project, isolated/parallel, and scratch/standalone). This
+  guarantees a `.homelab` (README + empty indexes + `tools/`) always exists, so
+  the generated `AGENTS.md`/`CLAUDE.md` — which unconditionally tell the agent to
+  search `.homelab/` — never point at missing paths. Baseline files are written
+  only when absent, so a restart never clobbers richer content.
+- **Data-driven** (`renderHomelabContextViewFiles` via `writeHomelabContextView`):
+  written into the workspace before provider turn execution, on project-runtime
+  wake, and after project-memory writes (create/promote) when a runtime is
+  active. It overwrites the baseline with the full view, which includes:
 
 - `.homelab/README.md` with usage notes and redaction expectations.
 - `.homelab/threads/index.jsonl` for searchable thread discovery.

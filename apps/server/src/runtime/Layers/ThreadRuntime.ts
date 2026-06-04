@@ -27,6 +27,7 @@ import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegis
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
 import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
+import { renderHomelabBaselineViewFiles } from "../HomelabContextView.ts";
 import { resolveLocalRuntimeImageBuildSpec } from "../image.ts";
 import {
   homePathForThread,
@@ -1173,8 +1174,12 @@ If the browser shows a "Thread Workspace" panel, it is a view into this same
 
 ## Project-local memory and transcripts
 
-Generated project context lives under \`.homelab/\`. These files are views over
-durable app state, not the source of truth. Search them with normal tools:
+Generated project context lives under \`.homelab/\` in this workspace
+(\`/workspace/.homelab\`). These files are views over durable app state, not the
+source of truth, and are regenerated before each turn and after memory changes —
+so expect them to be sparse early in a project and fill in over time. (\`~/.homelab\`
+is a different directory that only holds the \`homelab\` CLI on your \`PATH\`; project
+context lives here in the workspace, not there.) Search them with normal tools:
 
 - \`.homelab/memory/index.jsonl\` has project-local memory and durable notes.
 - \`.homelab/memory/latest/\` has readable generated files for current entries.
@@ -2206,6 +2211,48 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
+  /**
+   * Seed the baseline `.homelab` workspace view (README + empty indexes + tool placeholders).
+   * The generated AGENTS.md/CLAUDE.md unconditionally tell the agent to search `.homelab/`, so
+   * every materialized runtime must expose it — otherwise the instructions point at missing
+   * paths and `.homelab` "looks empty" while only the home `~/.homelab/bin` CLI is present.
+   *
+   * Files are written only when absent so a restart never clobbers the richer, data-driven
+   * view that {@link writeHomelabContextView} regenerates on turn start, wake, and memory writes.
+   */
+  const writeRuntimeHomelabBaselineView = Effect.fn(
+    "threadRuntime.writeRuntimeHomelabBaselineView",
+  )(function* (runtime: ThreadRuntimeDescriptor) {
+    const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
+    for (const file of renderHomelabBaselineViewFiles()) {
+      const targetPath = nodePath.join(workspaceRoot, file.relativePath);
+      const alreadyExists = yield* fileSystem
+        .exists(targetPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      if (alreadyExists) {
+        continue;
+      }
+      yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: `Failed to create .homelab baseline directory for runtime '${runtime.threadId}'.`,
+              cause,
+            }),
+        ),
+      );
+      yield* fileSystem.writeFileString(targetPath, file.contents).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: `Failed to write .homelab baseline file '${file.relativePath}' for runtime '${runtime.threadId}'.`,
+              cause,
+            }),
+        ),
+      );
+    }
+  });
+
   const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
       const writeFile = (filePath: string, contents: string) =>
@@ -2685,6 +2732,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
         yield* ensureRuntimeDirectories(runtime);
         yield* writeRuntimeInstructionFiles(runtime);
+        yield* writeRuntimeHomelabBaselineView(runtime);
         const persistedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime = {
             ...runtime,
@@ -2720,6 +2768,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* syncRuntimeControlEnvIntoRuntimeHome(normalizedRuntime);
         yield* writeRuntimeShellInitFiles(normalizedRuntime);
         yield* writeRuntimeInstructionFiles(normalizedRuntime);
+        yield* writeRuntimeHomelabBaselineView(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
         yield* ensureRuntimeImageReady(normalizedRuntime);

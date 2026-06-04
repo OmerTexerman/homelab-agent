@@ -5,12 +5,14 @@ import nodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProjectId,
+  ProjectMemoryId,
   ProviderInstanceId,
   RuntimeSessionId,
   ThreadId,
   type OrchestrationProject,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type ProjectMemoryEntry,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,6 +22,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
+import { ProjectMemory, type ProjectMemoryShape } from "../../homelab/Services/ProjectMemory.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
@@ -94,6 +97,32 @@ function makeReadModel(workspaceRoot: string): OrchestrationReadModel {
   };
 }
 
+function makeMemoryEntry(input: {
+  readonly id: string;
+  readonly summary: string;
+  readonly body: string;
+}): ProjectMemoryEntry {
+  return {
+    id: ProjectMemoryId.make(input.id),
+    projectId,
+    runtimeId,
+    sourceThreadId: threadId,
+    sourceMessageId: null,
+    sourceFilePath: null,
+    summary: input.summary,
+    body: input.body,
+    tags: ["smoke"],
+    supersedes: [],
+    replaces: [],
+    promotionStatus: "none",
+    promotionId: null,
+    promotionSummary: null,
+    promotedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function makeDescriptor(input: {
   readonly threadId: ThreadId;
   readonly status?: ThreadRuntimeDescriptor["status"];
@@ -161,7 +190,11 @@ function makeSnapshotArchivePath(baseDir: string, snapshotId: string): string {
   );
 }
 
-function makeHarness(input: { readonly baseDir: string; readonly hostWorkspacePath: string }) {
+function makeHarness(input: {
+  readonly baseDir: string;
+  readonly hostWorkspacePath: string;
+  readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
+}) {
   const descriptors = new Map<string, ThreadRuntimeDescriptor>([
     [String(threadId), makeDescriptor({ threadId, status: "stopped" })],
   ]);
@@ -291,11 +324,22 @@ function makeHarness(input: { readonly baseDir: string; readonly hostWorkspacePa
     subscribeMetadata: () => Effect.succeed(() => undefined),
   } satisfies TerminalManagerShape;
 
+  const memoryEntries = input.memoryEntries ?? [];
+  const projectMemory = {
+    create: () => Effect.die("unused"),
+    getById: () => Effect.die("unused"),
+    list: () => Effect.succeed(memoryEntries),
+    search: () => Effect.die("unused"),
+    markPromoted: () => Effect.die("unused"),
+    migrateStandaloneThreadEntries: () => Effect.die("unused"),
+  } satisfies ProjectMemoryShape;
+
   const layer = Layer.mergeAll(
     ServerConfig.layerTest(process.cwd(), input.baseDir),
     Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery),
     Layer.succeed(ThreadRuntime, threadRuntime),
     Layer.succeed(TerminalManager, terminalManager),
+    Layer.succeed(ProjectMemory, projectMemory),
     Layer.effect(ProjectRuntimeQueue, makeProjectRuntimeQueue),
   ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -325,6 +369,65 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
 
         assert.equal(result.runtime.runtime.lifecycleState, "running");
         assert.isTrue(nodeFs.existsSync(nodePath.join(hostWorkspacePath, ".homelab", "README.md")));
+        // The README documents the two `.homelab` roots so agents don't mistake the
+        // bin-only `~/.homelab` for missing project context.
+        const readme = nodeFs.readFileSync(
+          nodePath.join(hostWorkspacePath, ".homelab", "README.md"),
+          "utf8",
+        );
+        assert.match(readme, /~\/\.homelab\/bin/);
+      }),
+    ),
+  );
+
+  it.effect("regenerates .homelab memory views from durable project memory on wake", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-memory-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          memoryEntries: [
+            makeMemoryEntry({
+              id: "memory-nas-backups",
+              summary: "Backups run nightly from nas01",
+              body: "Verified from the scheduler config; retention is 30 days.",
+            }),
+          ],
+        });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        // ProjectMemory is read via Effect.serviceOption at wake time (it is optional), so it
+        // must be in the ambient context when wake runs — mirroring the server's global wiring.
+        yield* lifecycle.wake({ projectId, threadId }).pipe(Effect.provide(harness.layer));
+
+        const memoryIndex = nodeFs.readFileSync(
+          nodePath.join(hostWorkspacePath, ".homelab", "memory", "index.jsonl"),
+          "utf8",
+        );
+        assert.match(memoryIndex, /Backups run nightly from nas01/);
+        assert.match(memoryIndex, /memory-nas-backups/);
+
+        const detailPath = nodePath.join(
+          hostWorkspacePath,
+          ".homelab",
+          "memory",
+          "latest",
+          "memory-nas-backups.md",
+        );
+        assert.isTrue(nodeFs.existsSync(detailPath));
+        assert.match(nodeFs.readFileSync(detailPath, "utf8"), /retention is 30 days/);
+
+        // Thread discovery indexes are populated from the project read model.
+        const threadsIndex = nodeFs.readFileSync(
+          nodePath.join(hostWorkspacePath, ".homelab", "threads", "index.jsonl"),
+          "utf8",
+        );
+        assert.match(threadsIndex, new RegExp(String(threadId)));
       }),
     ),
   );

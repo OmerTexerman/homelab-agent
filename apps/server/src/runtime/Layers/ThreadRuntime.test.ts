@@ -601,6 +601,51 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("materializes a baseline .homelab workspace view alongside AGENTS.md", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-homelab-baseline"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const runtimeWorkspace = launchContext.hostWorkspacePath;
+
+      // AGENTS.md/CLAUDE.md unconditionally tell the agent to search `.homelab/` from
+      // /workspace. A materialized runtime must therefore expose a baseline `.homelab`
+      // workspace view, not only the home `~/.homelab/bin` CLI. Without it the generated
+      // instructions point at files that do not exist and `.homelab` "looks empty".
+      const homelabReadmePath = path.join(runtimeWorkspace, ".homelab", "README.md");
+      const homelabThreadsIndexPath = path.join(
+        runtimeWorkspace,
+        ".homelab",
+        "threads",
+        "index.jsonl",
+      );
+      const homelabMemoryIndexPath = path.join(
+        runtimeWorkspace,
+        ".homelab",
+        "memory",
+        "index.jsonl",
+      );
+      assert.equal(yield* fileSystem.exists(homelabReadmePath), true);
+      assert.equal(yield* fileSystem.exists(homelabThreadsIndexPath), true);
+      assert.equal(yield* fileSystem.exists(homelabMemoryIndexPath), true);
+
+      const homelabReadmeContents = yield* fileSystem.readFileString(homelabReadmePath);
+      assert.match(homelabReadmeContents, /homelab/i);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("maps logical project roots back to /workspace for runtime cwd", () =>
     Effect.gen(function* () {
       docker.calls.length = 0;

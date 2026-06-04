@@ -186,6 +186,60 @@ function renderMemoryMarkdown(input: {
   return lines.join("\n");
 }
 
+/**
+ * The `.homelab` README. Lives at `/workspace/.homelab/README.md` (the agent's cwd is
+ * `/workspace`). This is intentionally distinct from `~/.homelab/`, which only holds the
+ * `homelab` CLI on `PATH` — agents that inspect `~/.homelab` instead of `./.homelab` see
+ * only `bin/`. Keep both the baseline and data-driven renderers pointed at the same text so
+ * the contract reads the same whether or not durable content has been generated yet.
+ */
+function renderHomelabReadme(title: string): string {
+  return [
+    `# ${title} Homelab Context`,
+    "",
+    "This directory (`/workspace/.homelab`) is a generated, searchable view over durable",
+    "Homelab Agent state. It is regenerated before each turn and after memory changes, so it",
+    "may be sparse early in a project and fill in as memory and thread transcripts accrue.",
+    "",
+    "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and",
+    "thread transcripts here. For live or durable server state that is not mirrored into these",
+    "files, use the `homelab` CLI — it is installed on your `PATH` (under `~/.homelab/bin`) and",
+    "talks to the app server. `~/.homelab` only contains that CLI; project context lives here.",
+    "",
+    "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server",
+    "exposes it. Secret values are redacted; secret references appear as placeholders.",
+    "",
+  ].join("\n");
+}
+
+const HOMELAB_MEMORY_LATEST_README = [
+  "# Latest Project Memory",
+  "",
+  "Project-local memory entries are generated from durable app state.",
+  "Use `memory/index.jsonl` for structured search and the files in this directory for readable details.",
+  "",
+].join("\n");
+
+/**
+ * The always-present `.homelab` skeleton: README, empty indexes, and tool placeholders. These
+ * files must exist in every materialized runtime so the generated AGENTS.md/CLAUDE.md
+ * instructions never point at missing paths. The data-driven {@link renderHomelabContextViewFiles}
+ * produces the same relative paths (with content) and overwrites these once durable state exists.
+ */
+export function renderHomelabBaselineViewFiles(): HomelabViewFile[] {
+  return [
+    { relativePath: ".homelab/README.md", contents: renderHomelabReadme("Project Runtime") },
+    { relativePath: ".homelab/threads/index.jsonl", contents: "" },
+    { relativePath: ".homelab/memory/index.jsonl", contents: "" },
+    { relativePath: ".homelab/memory/latest/README.md", contents: HOMELAB_MEMORY_LATEST_README },
+    { relativePath: ".homelab/index/threads.jsonl", contents: "" },
+    { relativePath: ".homelab/index/memory.jsonl", contents: "" },
+    { relativePath: ".homelab/index/transcripts.jsonl", contents: "" },
+    { relativePath: ".homelab/index/tools.jsonl", contents: "" },
+    { relativePath: ".homelab/tools/README.md", contents: "# Runtime Tools\n\n" },
+  ];
+}
+
 function renderBootstrapMarkdown(input: HomelabRuntimeBootstrapView): string {
   const lines = [
     "# Runtime Bootstrap",
@@ -244,15 +298,7 @@ export function renderHomelabContextViewFiles(
 
   files.push({
     relativePath: ".homelab/README.md",
-    contents: [
-      `# ${input.project.title} Homelab Context`,
-      "",
-      "This directory is a generated view over durable Homelab Agent state.",
-      "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and thread transcripts.",
-      "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server exposes it.",
-      "Secret values are redacted; secret references appear as placeholders.",
-      "",
-    ].join("\n"),
+    contents: renderHomelabReadme(input.project.title),
   });
 
   files.push({
@@ -317,13 +363,7 @@ export function renderHomelabContextViewFiles(
 
   files.push({
     relativePath: ".homelab/memory/latest/README.md",
-    contents: [
-      "# Latest Project Memory",
-      "",
-      "Project-local memory entries are generated from durable app state.",
-      "Use `memory/index.jsonl` for structured search and the files in this directory for readable details.",
-      "",
-    ].join("\n"),
+    contents: HOMELAB_MEMORY_LATEST_README,
   });
 
   files.push({
