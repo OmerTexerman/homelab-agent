@@ -724,9 +724,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         });
 
         const projectLaunch = yield* runtime.resolveLaunchContext(projectDescriptor.threadId);
-        const standaloneLaunch = yield* runtime.resolveLaunchContext(
-          standaloneDescriptor.threadId,
-        );
+        const standaloneLaunch = yield* runtime.resolveLaunchContext(standaloneDescriptor.threadId);
 
         const projectAgents = yield* fileSystem.readFileString(
           path.join(projectLaunch.hostWorkspacePath, "AGENTS.md"),
@@ -749,11 +747,11 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 
         // Top-of-persona orientation line distinguishes the two without reading .homelab.
         assert.match(projectAgents, /This is a thread inside (?:the .* project|a project)\./);
-        assert.match(
+        assert.match(standaloneAgents, /This is a one-off standalone \(scratch\) thread\./);
+        assert.doesNotMatch(
           standaloneAgents,
-          /This is a one-off standalone \(scratch\) thread\./,
+          /This is a thread inside (?:the .* project|a project)\./,
         );
-        assert.doesNotMatch(standaloneAgents, /This is a thread inside (?:the .* project|a project)\./);
         assert.doesNotMatch(projectAgents, /one-off standalone \(scratch\) thread/);
 
         // Project persona keeps the shared-runtime + cross-thread + promotion framing.
@@ -762,11 +760,11 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
           /This project runtime may be shared by multiple threads in the same project\./,
         );
         assert.match(projectAgents, /Project-local memory and transcripts/);
+        assert.match(projectAgents, /lists discoverable threads in this project/);
         assert.match(
           projectAgents,
-          /lists discoverable threads in this project/,
+          /Promotion from project memory to the global graph is explicit\./,
         );
-        assert.match(projectAgents, /Promotion from project memory to the global graph is explicit\./);
         assert.match(projectAgents, /so the next thread has it\./);
 
         // Standalone persona removes the shared-runtime / cross-thread / project-promotion framing.
@@ -884,9 +882,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         });
 
         const projectLaunch = yield* runtime.resolveLaunchContext(projectDescriptor.threadId);
-        const standaloneLaunch = yield* runtime.resolveLaunchContext(
-          standaloneDescriptor.threadId,
-        );
+        const standaloneLaunch = yield* runtime.resolveLaunchContext(standaloneDescriptor.threadId);
 
         const projectReadme = yield* fileSystem.readFileString(
           path.join(projectLaunch.hostWorkspacePath, ".homelab", "README.md"),

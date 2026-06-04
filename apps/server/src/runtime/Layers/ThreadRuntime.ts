@@ -1195,24 +1195,24 @@ registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
 
 ${
-    isStandalone
-      ? `\`/workspace\` is this thread's runtime workspace inside the container. It belongs to this
+  isStandalone
+    ? `\`/workspace\` is this thread's runtime workspace inside the container. It belongs to this
 standalone thread alone — it is not shared with other threads. Use it for notes, probes,
 temporary scripts, and exported artifacts. It is not guaranteed to be a checked-out app
 repository.`
-      : `\`/workspace\` is the project runtime workspace inside the container. Threads in
+    : `\`/workspace\` is the project runtime workspace inside the container. Threads in
 the same project normally share this runtime and filesystem, with turns queued
 by the app so there is one active writer at a time. Use it for notes, probes,
 temporary scripts, and exported artifacts. It is not guaranteed to be a checked-
 out app repository.`
-  }
+}
 
 If the browser shows a "Thread Workspace" panel, it is a view into this same
 \`/workspace\` directory.
 
 ${
-    isStandalone
-      ? `## Thread-local memory and transcripts
+  isStandalone
+    ? `## Thread-local memory and transcripts
 
 Generated context lives under \`.homelab/\` in this workspace (\`/workspace/.homelab\`).
 For a standalone thread this is your own scratch memory and transcript — it is not shared
@@ -1230,7 +1230,7 @@ them with normal tools:
 Do not dump all of \`.homelab\` into prompts. Search it for the current task and
 open only the relevant files. Secret values are redacted; use placeholders and
 \`homelab secret-request\` when a real value is needed.`
-      : `## Project-local memory and transcripts
+    : `## Project-local memory and transcripts
 
 Generated project context lives under \`.homelab/\` in this workspace
 (\`/workspace/.homelab\`). These files are views over durable app state, not the
@@ -1249,7 +1249,7 @@ context lives here in the workspace, not there.) Search them with normal tools:
 Do not dump all of \`.homelab\` into prompts. Search it for the current task and
 open only the relevant files. Secret values are redacted; use placeholders and
 \`homelab secret-request\` when a real value is needed.`
-  }
+}
 
 ## The homelab CLI
 
@@ -1282,11 +1282,11 @@ Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 ### Writing back (promotions)
 
 ${
-    isStandalone
-      ? `When you want to keep a note for the rest of this thread, add it to thread-local memory:`
-      : `When you discover project-local context that future threads should find, add it
+  isStandalone
+    ? `When you want to keep a note for the rest of this thread, add it to thread-local memory:`
+    : `When you discover project-local context that future threads should find, add it
 to project memory:`
-  }
+}
 
 \`\`\`bash
 homelab memory add --summary "Backups run from nas01" \\
@@ -1295,15 +1295,15 @@ homelab memory add --summary "Backups run from nas01" \\
 \`\`\`
 
 ${
-    isStandalone
-      ? `Thread-local memory stays with this scratch thread. There is no project to promote
+  isStandalone
+    ? `Thread-local memory stays with this scratch thread. There is no project to promote
 into, so when a finding should outlive this one-off thread, promote it straight into the
 global homelab graph with \`homelab promote\` (see \`homelab promote --schema\` /
 \`homelab promote --example\`). That promotion is explicit and is how anything you learn
 here persists.`
-      : `Use \`homelab memory propose\` when the entry should be reviewed for global
+    : `Use \`homelab memory propose\` when the entry should be reviewed for global
 promotion. Promotion from project memory to the global graph is explicit.`
-  }
+}
 
 When you discover something about the homelab that should persist globally — a
 new service, a dependency, a finding, a useful tool — promote it so future
@@ -1477,8 +1477,8 @@ through the best available interface. If you discover something new, promote it.
   \`homelab entity\`, \`homelab relations\`, live probes, or ask.
 
 ${
-    isStandalone
-      ? `## Thread model
+  isStandalone
+    ? `## Thread model
 
 - This is a one-off standalone thread with its own isolated runtime and filesystem.
   Nothing in \`/workspace\` or thread-local \`.homelab\` memory is shared with other threads.
@@ -1486,7 +1486,7 @@ ${
   Read from them freely; write back to the global graph through explicit promotion.
 - There is no project to promote into. To make anything you learn here persist beyond this
   thread, promote it into the global homelab graph.`
-      : `## Thread model
+    : `## Thread model
 
 - This project runtime may be shared by multiple threads in the same project.
 - Shared-runtime turns are queued by default. Explicit isolated runtimes are
@@ -1496,7 +1496,7 @@ ${
   the same project directory, not like installing a separate provider per thread.
 - The knowledge graph, secrets, bootstrap registry, and project-local
   \`.homelab\` views are shared context. Global homelab promotion is explicit.`
-  }
+}
 `;
 }
 
@@ -2291,14 +2291,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             }),
           )
           .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ThreadRuntimeError({
-                message: `Failed to write runtime instruction file '${filePath}'.`,
-                cause,
-              }),
-          ),
-        );
+            Effect.mapError(
+              (cause) =>
+                new ThreadRuntimeError({
+                  message: `Failed to write runtime instruction file '${filePath}'.`,
+                  cause,
+                }),
+            ),
+          );
 
       yield* Effect.all([
         writeInstructionFile(agentsPath, RUNTIME_AGENTS_FILENAME),

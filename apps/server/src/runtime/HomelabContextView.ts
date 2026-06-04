@@ -500,13 +500,9 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     .readDirectory(threadsDir, { recursive: false })
     .pipe(Effect.orElseSucceed(() => [] as Array<string>));
   yield* Effect.forEach(
-    threadEntries.filter(
-      (name) => name.startsWith("thread_") && !expectedThreadDirs.has(name),
-    ),
+    threadEntries.filter((name) => name.startsWith("thread_") && !expectedThreadDirs.has(name)),
     (name) =>
-      fileSystem
-        .remove(nodePath.join(threadsDir, name), { recursive: true })
-        .pipe(Effect.ignore),
+      fileSystem.remove(nodePath.join(threadsDir, name), { recursive: true }).pipe(Effect.ignore),
     { discard: true },
   );
 
@@ -516,8 +512,7 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     .pipe(Effect.orElseSucceed(() => [] as Array<string>));
   yield* Effect.forEach(
     memoryEntries.filter(
-      (name) =>
-        name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
+      (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
     ),
     (name) => fileSystem.remove(nodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
     { discard: true },
