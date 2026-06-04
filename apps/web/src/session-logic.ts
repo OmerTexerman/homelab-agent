@@ -949,14 +949,6 @@ function extractRawOutputSummary(payload: Record<string, unknown> | null): strin
   return summarizeToolRawOutput(payload);
 }
 
-function firstNonEmptyLine(value: string): string | null {
-  const line = value
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .find((entry) => entry.length > 0);
-  return line ?? null;
-}
-
 function stripTrailingExitCode(value: string): {
   output: string | null;
   exitCode?: number | undefined;
