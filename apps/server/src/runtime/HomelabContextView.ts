@@ -289,6 +289,14 @@ export function renderHomelabContextViewFiles(
   const latestMemoryEntries = memoryEntries.filter(
     (entry) => !supersededMemoryIds.has(String(entry.id)),
   );
+  // Only non-superseded entries get a `latest/<id>.md` written below (see the
+  // `latestMemoryEntries` loop). Superseded entries still get an `index.jsonl`
+  // line, so their `sourcePath` would point at a `.md` that was never written
+  // (and would be pruned) — a dangling reference. Track the IDs that actually
+  // get a file so the index `sourcePath` is only emitted when the target exists.
+  const renderedMemoryFileIds = new Set<string>(
+    latestMemoryEntries.map((entry) => String(entry.id)),
+  );
 
   files.push({
     relativePath: ".homelab/README.md",
@@ -331,7 +339,12 @@ export function renderHomelabContextViewFiles(
           tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
           promotionStatus: entry.promotionStatus,
           promotionId: entry.promotionId,
-          sourcePath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
+          // Only emit `sourcePath` when the `latest/<id>.md` is actually rendered.
+          // Superseded entries have no file on disk, so emitting the path would
+          // dangle; `JSON.stringify` drops the key when the value is `undefined`.
+          sourcePath: renderedMemoryFileIds.has(String(entry.id))
+            ? `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`
+            : undefined,
           supersedes: entry.supersedes,
           replaces: entry.replaces,
           createdAt: entry.createdAt,
@@ -383,7 +396,11 @@ export function renderHomelabContextViewFiles(
           tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
           sourceThreadId: entry.sourceThreadId,
           sourceFilePath: entry.sourceFilePath,
-          detailPath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
+          // Same dangling-reference guard as `memory/index.jsonl`: only point at
+          // `latest/<id>.md` when that file was actually rendered for this entry.
+          detailPath: renderedMemoryFileIds.has(String(entry.id))
+            ? `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`
+            : undefined,
           promotionStatus: entry.promotionStatus,
           updatedAt: entry.updatedAt,
         }),
