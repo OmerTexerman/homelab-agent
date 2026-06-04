@@ -1,5 +1,10 @@
 import * as React from "react";
-import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
+import {
+  scopedProjectKey,
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime";
 import type {
   CommandId,
   EnvironmentId,
@@ -80,6 +85,74 @@ export function standaloneThreadMoveMemoryDescription(
   }
 
   return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are moved to the target project.`;
+}
+
+function firstDraftPromptLine(prompt: string | undefined): string | null {
+  const line = prompt
+    ?.split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate.length > 0);
+  if (!line) {
+    return null;
+  }
+  return line.length > 64 ? `${line.slice(0, 61)}...` : line;
+}
+
+export function buildSidebarDraftThreadSummaries(input: {
+  readonly draftThreadsByThreadKey: Record<string, DraftThreadState>;
+  readonly draftsByThreadKey: Record<string, ComposerThreadDraftState | undefined>;
+  readonly existingThreadKeys?: ReadonlySet<string>;
+  readonly memberProjectRefs?: readonly ScopedProjectRef[];
+}): SidebarThreadSummary[] {
+  const memberProjectKeys =
+    input.memberProjectRefs === undefined
+      ? null
+      : new Set(input.memberProjectRefs.map((projectRef) => scopedProjectKey(projectRef)));
+  const result: SidebarThreadSummary[] = [];
+
+  for (const [draftId, draftThread] of Object.entries(input.draftThreadsByThreadKey)) {
+    const threadRef = scopeThreadRef(draftThread.environmentId, draftThread.threadId);
+    const threadKey = scopedThreadKey(threadRef);
+    if (input.existingThreadKeys?.has(threadKey)) {
+      continue;
+    }
+    const projectKey = scopedProjectKey(
+      scopeProjectRef(draftThread.environmentId, draftThread.projectId),
+    );
+    if (memberProjectKeys !== null && !memberProjectKeys.has(projectKey)) {
+      continue;
+    }
+
+    const title =
+      firstDraftPromptLine(input.draftsByThreadKey[draftId]?.prompt) ??
+      (draftThread.runtimeSelectionMode === "isolated"
+        ? HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction
+        : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction);
+
+    result.push({
+      id: draftThread.threadId,
+      environmentId: draftThread.environmentId,
+      projectId: draftThread.projectId,
+      draftId,
+      isDraft: true,
+      runtimeId: null,
+      runtimeSelectionMode: draftThread.runtimeSelectionMode ?? "shared",
+      title,
+      interactionMode: draftThread.interactionMode,
+      session: null,
+      createdAt: draftThread.createdAt,
+      archivedAt: null,
+      branch: draftThread.branch,
+      worktreePath: draftThread.worktreePath,
+      latestTurn: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+  }
+
+  return result;
 }
 
 export function buildStandaloneThreadMoveMemoryMigration(input: {

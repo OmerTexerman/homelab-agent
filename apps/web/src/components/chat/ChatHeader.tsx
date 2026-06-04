@@ -3,7 +3,9 @@ import {
   type EditorId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
+  type RuntimeSessionId,
   type ThreadId,
+  type ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
@@ -16,6 +18,7 @@ import {
   FileJsonIcon,
   FileTextIcon,
   FolderTreeIcon,
+  GitBranchPlusIcon,
   PrinterIcon,
   TerminalSquareIcon,
   TextIcon,
@@ -50,6 +53,8 @@ interface ChatHeaderProps {
   draftId?: DraftId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  runtimeSelectionMode?: ThreadRuntimeMode | undefined;
+  projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -126,12 +131,33 @@ export function shouldShowOpenInPicker(input: {
   );
 }
 
+export function describeActiveThreadRuntimeMode(input: {
+  readonly runtimeSelectionMode?: ThreadRuntimeMode | undefined;
+  readonly activeProjectName?: string | undefined;
+  readonly projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
+}): string | null {
+  if (input.runtimeSelectionMode !== "isolated") {
+    return null;
+  }
+
+  const sourceRuntime = input.activeProjectName
+    ? `${input.activeProjectName}'s Project Runtime`
+    : "the Project Runtime";
+  const sourceId = input.projectDefaultRuntimeId
+    ? ` Source runtime: ${input.projectDefaultRuntimeId}.`
+    : "";
+
+  return `This thread uses an isolated clone of ${sourceRuntime}. Shared runtime files stay separate unless you explicitly promote or copy work back.${sourceId}`;
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
   draftId,
   activeThreadTitle,
   activeProjectName,
+  runtimeSelectionMode,
+  projectDefaultRuntimeId,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -164,6 +190,11 @@ export const ChatHeader = memo(function ChatHeader({
     primaryEnvironmentId,
     editorOpenInControls: shouldShowEditorOpenInControls(),
   });
+  const isolatedRuntimeDescription = describeActiveThreadRuntimeMode({
+    runtimeSelectionMode,
+    activeProjectName,
+    projectDefaultRuntimeId,
+  });
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -183,6 +214,24 @@ export const ChatHeader = memo(function ChatHeader({
             <span className="min-w-0 truncate">{activeProjectName}</span>
           </Badge>
         )}
+        {isolatedRuntimeDescription ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge
+                  variant="outline"
+                  className="shrink-0 gap-1 border-info/35 bg-info/10 text-info-foreground"
+                >
+                  <GitBranchPlusIcon className="size-3" />
+                  <span>{HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel}</span>
+                </Badge>
+              }
+            />
+            <TooltipPopup side="bottom" className="max-w-80 leading-tight">
+              {isolatedRuntimeDescription}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
         {showSourceControlUi && activeProjectName && !isGitRepo && (
           <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
             No Git

@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { shouldShowOpenInPicker } from "./ChatHeader";
+import { describeActiveThreadRuntimeMode, shouldShowOpenInPicker } from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -55,5 +55,33 @@ describe("shouldShowOpenInPicker", () => {
         editorOpenInControls: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("describeActiveThreadRuntimeMode", () => {
+  it("describes the project runtime source for isolated thread clones", () => {
+    expect(
+      describeActiveThreadRuntimeMode({
+        runtimeSelectionMode: "isolated",
+        activeProjectName: "Router migration",
+        projectDefaultRuntimeId: "project-runtime:router" as never,
+      }),
+    ).toContain("isolated clone of Router migration's Project Runtime");
+    expect(
+      describeActiveThreadRuntimeMode({
+        runtimeSelectionMode: "isolated",
+        activeProjectName: "Router migration",
+        projectDefaultRuntimeId: "project-runtime:router" as never,
+      }),
+    ).toContain("Source runtime: project-runtime:router");
+  });
+
+  it("stays quiet for normal shared Project Runtime threads", () => {
+    expect(
+      describeActiveThreadRuntimeMode({
+        runtimeSelectionMode: "shared",
+        activeProjectName: "Router migration",
+      }),
+    ).toBeNull();
   });
 });

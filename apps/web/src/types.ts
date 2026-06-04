@@ -150,6 +150,8 @@ export interface SidebarThreadSummary {
   id: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  draftId?: string;
+  isDraft?: boolean;
   runtimeId?: RuntimeSessionId | null;
   runtimeSelectionMode?: ThreadRuntimeMode;
   title: string;

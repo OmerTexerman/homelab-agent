@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
+import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 
 import {
   createThreadJumpHintVisibilityController,
+  buildSidebarDraftThreadSummaries,
   buildStandaloneThreadMoveMemoryMigration,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -40,6 +42,7 @@ import {
   type Project,
   type Thread,
 } from "../types";
+import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -93,6 +96,106 @@ describe("standalone thread move helpers", () => {
     expect(standaloneThreadMoveRuntimeDescription("isolated")).toContain(
       "keeps its isolated runtime",
     );
+  });
+});
+
+function makeDraftThread(overrides: Partial<DraftThreadState> = {}): DraftThreadState {
+  return {
+    threadId: ThreadId.make("thread-draft"),
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-main"),
+    logicalProjectKey: "environment-local:project-main",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    runtimeMode: "full-access",
+    runtimeSelectionMode: "shared",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    envMode: "local",
+    promotedTo: null,
+    ...overrides,
+  };
+}
+
+function makeComposerDraft(
+  overrides: Partial<ComposerThreadDraftState> = {},
+): ComposerThreadDraftState {
+  return {
+    prompt: "",
+    images: [],
+    terminalContexts: [],
+    nonPersistedImageIds: [],
+    persistedAttachments: [],
+    modelSelectionByProvider: {},
+    activeProvider: null,
+    runtimeMode: null,
+    interactionMode: null,
+    ...overrides,
+  };
+}
+
+describe("buildSidebarDraftThreadSummaries", () => {
+  it("projects an empty project draft into a sidebar row before the first message", () => {
+    const summaries = buildSidebarDraftThreadSummaries({
+      draftThreadsByThreadKey: {
+        "draft-project-thread": makeDraftThread(),
+      },
+      draftsByThreadKey: {
+        "draft-project-thread": makeComposerDraft(),
+      },
+      memberProjectRefs: [scopeProjectRef(localEnvironmentId, ProjectId.make("project-main"))],
+    });
+
+    expect(summaries).toEqual([
+      expect.objectContaining({
+        id: ThreadId.make("thread-draft"),
+        draftId: "draft-project-thread",
+        isDraft: true,
+        projectId: ProjectId.make("project-main"),
+        title: "New thread",
+        runtimeSelectionMode: "shared",
+      }),
+    ]);
+  });
+
+  it("labels isolated draft rows as parallel runtime work and preserves typed prompt titles", () => {
+    const summaries = buildSidebarDraftThreadSummaries({
+      draftThreadsByThreadKey: {
+        "draft-isolated-thread": makeDraftThread({
+          threadId: ThreadId.make("thread-isolated-draft"),
+          runtimeSelectionMode: "isolated",
+        }),
+      },
+      draftsByThreadKey: {
+        "draft-isolated-thread": makeComposerDraft({
+          prompt: "check the backup topology\nthen compare snapshots",
+        }),
+      },
+    });
+
+    expect(summaries).toEqual([
+      expect.objectContaining({
+        id: ThreadId.make("thread-isolated-draft"),
+        draftId: "draft-isolated-thread",
+        isDraft: true,
+        title: "check the backup topology",
+        runtimeSelectionMode: "isolated",
+      }),
+    ]);
+  });
+
+  it("omits draft rows once the matching server thread exists", () => {
+    const summaries = buildSidebarDraftThreadSummaries({
+      draftThreadsByThreadKey: {
+        "draft-materialized": makeDraftThread(),
+      },
+      draftsByThreadKey: {},
+      existingThreadKeys: new Set([
+        scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("thread-draft"))),
+      ]),
+    });
+
+    expect(summaries).toEqual([]);
   });
 });
 

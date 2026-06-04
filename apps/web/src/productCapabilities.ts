@@ -53,7 +53,10 @@ export const HOMELAB_PRODUCT_COPY = {
     newIsolatedThreadDescription:
       "Clones this Project Runtime so the thread can run separately; merge back explicitly.",
     sidebarProjectBadgeLabel: "Runtime",
-    isolatedThreadBadgeLabel: "Isolated runtime clone",
+    isolatedThreadBadgeLabel: "Clone",
+    activeIsolatedThreadBadgeLabel: "Parallel runtime",
+    isolatedThreadBadgeDescription:
+      "This thread uses an isolated clone of the Project Runtime. Shared runtime files stay separate unless you explicitly promote or copy work back.",
     waitingThreadDescription: "This thread is queued behind another turn in the Project Runtime.",
     terminalUnavailableDescription:
       "Terminal is unavailable until this thread has a Project Runtime.",

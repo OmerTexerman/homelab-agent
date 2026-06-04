@@ -1,6 +1,11 @@
 import "../../index.css";
 
-import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ProjectScript,
+  type ThreadRuntimeMode,
+} from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -13,13 +18,20 @@ import { ChatHeader } from "./ChatHeader";
 import type { ChatExportFormat } from "../../chatExport";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
-function renderHeader(onExportChat: (format: ChatExportFormat) => void) {
+function renderHeader(
+  onExportChat: (format: ChatExportFormat) => void,
+  options: {
+    readonly activeProjectName?: string | undefined;
+    readonly runtimeSelectionMode?: ThreadRuntimeMode | undefined;
+  } = {},
+) {
   return render(
     <ChatHeader
       activeThreadEnvironmentId={EnvironmentId.make("environment-local")}
       activeThreadId={ThreadId.make("thread-export-dialog")}
       activeThreadTitle="Map My Homelab"
-      activeProjectName={undefined}
+      activeProjectName={options.activeProjectName}
+      runtimeSelectionMode={options.runtimeSelectionMode}
       isGitRepo={false}
       openInCwd={null}
       activeProjectScripts={undefined as ProjectScript[] | undefined}
@@ -75,6 +87,21 @@ describe("ChatHeader export popover", () => {
       await page.getByText("Plain text").click();
 
       expect(onExportChat).toHaveBeenCalledWith("text");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows the parallel runtime badge for isolated thread clones", async () => {
+    const screen = await renderHeader(vi.fn(), {
+      activeProjectName: "Router migration",
+      runtimeSelectionMode: "isolated",
+    });
+
+    try {
+      await expect
+        .element(page.getByText(HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel))
+        .toBeVisible();
     } finally {
       await screen.unmount();
     }
