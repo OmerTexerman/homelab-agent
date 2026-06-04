@@ -33,7 +33,7 @@ import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegis
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
-import { writeHomelabContextView } from "../HomelabContextView.ts";
+import { HOMELAB_MEMORY_VIEW_ENTRY_LIMIT, writeHomelabContextView } from "../HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../RuntimeBootstrapCatalogView.ts";
 import { defaultProjectRuntimeId, isStandaloneProjectId } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
@@ -532,7 +532,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       const projectMemory = yield* Effect.serviceOption(ProjectMemory);
       const memoryEntries = Option.isSome(projectMemory)
         ? yield* projectMemory.value
-            .list({ projectId: input.project.id, limit: 1_000 })
+            .list({ projectId: input.project.id, limit: HOMELAB_MEMORY_VIEW_ENTRY_LIMIT })
             .pipe(Effect.catch(() => Effect.succeed([])))
         : [];
       const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);

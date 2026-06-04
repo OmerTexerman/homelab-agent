@@ -14,7 +14,11 @@ import * as Option from "effect/Option";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { ProjectMemory } from "./Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { redactHomelabViewText, writeHomelabContextView } from "../runtime/HomelabContextView.ts";
+import {
+  HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
+  redactHomelabViewText,
+  writeHomelabContextView,
+} from "../runtime/HomelabContextView.ts";
 import { resolveProjectRuntimeAssignment } from "../runtime/ProjectRuntimePolicy.ts";
 import { homelabRuntimeBootstrapView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
@@ -133,7 +137,7 @@ export const refreshActiveProjectContextViews = (
 
     const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
     const [memoryEntries, secrets, bootstrap] = yield* Effect.all([
-      projectMemory.value.list({ projectId, limit: 1_000 }).pipe(
+      projectMemory.value.list({ projectId, limit: HOMELAB_MEMORY_VIEW_ENTRY_LIMIT }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("failed to list project memory for view refresh", {
             projectId,

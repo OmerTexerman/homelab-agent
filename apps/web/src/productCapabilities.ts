@@ -1,4 +1,13 @@
 export const HOMELAB_PRODUCT_CAPABILITIES = {
+  // Gates the hidden branch / diff / worktree (primary source-control) UI
+  // scaffolding inherited from upstream. The codebase audit (Priority 3:
+  // "decide whether hidden branch/diff/worktree code should remain as upstream
+  // compatibility scaffolding or be fully removed") deferred that decision.
+  // This flag is INTENTIONALLY RETAINED and load-bearing: it is read via
+  // `shouldShowPrimarySourceControlUi()` across ChatView, the chat header,
+  // Sidebar, settings, and routes to keep that scaffolding compiled but hidden.
+  // It is NOT dead code — do not remove it (or the scaffolding it gates)
+  // without an explicit decision to drop upstream source-control compatibility.
   primarySourceControlUi: false,
   editorOpenInControls: false,
   remoteProjectCloneUi: false,
