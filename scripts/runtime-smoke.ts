@@ -438,6 +438,29 @@ async function dispatchCommand(input: {
   log(`Dispatched ${commandType}`);
 }
 
+async function createProjectMemory(input: {
+  readonly serverBaseUrl: string;
+  readonly bearerToken: string;
+  readonly projectId: string;
+  readonly summary: string;
+  readonly body: string;
+}): Promise<string> {
+  const entry = await apiJson<{ readonly id: string }>({
+    serverBaseUrl: input.serverBaseUrl,
+    bearerToken: input.bearerToken,
+    path: "/api/homelab/project-memory",
+    method: "POST",
+    body: {
+      projectId: input.projectId,
+      summary: input.summary,
+      body: input.body,
+      tags: ["smoke"],
+    },
+  });
+  log(`Created project memory ${entry.id}`);
+  return entry.id;
+}
+
 async function getSnapshot(
   serverBaseUrl: string,
   bearerToken: string,
@@ -628,6 +651,7 @@ async function verifyRuntimeRpc(input: {
             "HOMELAB_SMOKE_SNAPSHOT_OK",
             "HOMELAB_SMOKE_MEMORY_LIST_OK",
             "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
+            "HOMELAB_SMOKE_MEMORY_CONTENT_OK",
             "HOMELAB_SMOKE_SECRETS_OK",
             "HOMELAB_SMOKE_BOOTSTRAP_OK",
             "HOMELAB_SMOKE_DONE",
@@ -669,6 +693,7 @@ async function verifyRuntimeRpc(input: {
                 "homelab snapshot >/tmp/homelab-smoke-snapshot.json && echo HOMELAB_SMOKE_SNAPSHOT_OK || echo HOMELAB_SMOKE_SNAPSHOT_FAIL:$?",
                 "homelab memory list >/tmp/homelab-smoke-memory-list.json && echo HOMELAB_SMOKE_MEMORY_LIST_OK || echo HOMELAB_SMOKE_MEMORY_LIST_FAIL:$?",
                 "homelab memory search smoke >/tmp/homelab-smoke-memory-search.json && echo HOMELAB_SMOKE_MEMORY_SEARCH_OK || echo HOMELAB_SMOKE_MEMORY_SEARCH_FAIL:$?",
+                "grep -q nas01 /tmp/homelab-smoke-memory-list.json && echo HOMELAB_SMOKE_MEMORY_CONTENT_OK || echo HOMELAB_SMOKE_MEMORY_CONTENT_FAIL",
                 "homelab secrets >/tmp/homelab-smoke-secrets.json && echo HOMELAB_SMOKE_SECRETS_OK || echo HOMELAB_SMOKE_SECRETS_FAIL:$?",
                 "homelab bootstrap >/tmp/homelab-smoke-bootstrap.json && echo HOMELAB_SMOKE_BOOTSTRAP_OK || echo HOMELAB_SMOKE_BOOTSTRAP_FAIL:$?",
                 "echo HOMELAB_SMOKE_DONE",
@@ -1059,6 +1084,17 @@ async function main(): Promise<void> {
       "Standalone shared thread runtime id mismatch",
     );
 
+    // Seed a durable project-memory entry so the generated `.homelab/memory` view and the
+    // `homelab memory list`/`search` CLI calls in the runtime probe exercise real content
+    // rather than empty indexes.
+    const projectMemoryId = await createProjectMemory({
+      serverBaseUrl,
+      bearerToken,
+      projectId,
+      summary: "Smoke memory: backups run nightly from nas01",
+      body: "Seeded by runtime-smoke to validate .homelab/memory generation and CLI memory search.",
+    });
+
     await dispatchCommand({
       serverBaseUrl,
       bearerToken,
@@ -1167,6 +1203,7 @@ async function main(): Promise<void> {
           "HOMELAB_SMOKE_SNAPSHOT_OK",
           "HOMELAB_SMOKE_MEMORY_LIST_OK",
           "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
+          "HOMELAB_SMOKE_MEMORY_CONTENT_OK",
           "HOMELAB_SMOKE_SECRETS_OK",
           "HOMELAB_SMOKE_BOOTSTRAP_OK",
           "HOMELAB_SMOKE_DONE",
@@ -1193,6 +1230,7 @@ async function main(): Promise<void> {
           sharedThreadId,
           isolatedThreadId,
           standaloneThreadId,
+          projectMemoryId,
           verified: {
             projectDefaultRuntimeId: project.defaultRuntimeId,
             sharedThreadRuntimeId: sharedThread.runtimeId,

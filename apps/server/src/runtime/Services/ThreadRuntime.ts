@@ -49,6 +49,16 @@ export interface ThreadRuntimeDescriptor {
   readonly cwd: string;
   readonly shell: string;
   readonly bootstrapVersion?: string | undefined;
+  /**
+   * Authoritative signal that this runtime backs a standalone (scratch) thread rather than a real
+   * project, set by callers that know the thread's owning project (via {@link isStandaloneProjectId}).
+   * Persisted so reads-from-disk paths like `startRuntime` (which only receive a `threadId`) can
+   * recover it. When absent, the persona/baseline writers fall back to inferring it from the
+   * runtimeId, so the shared-standalone-runtime case still works without the flag.
+   */
+  readonly isStandalone?: boolean | undefined;
+  /** Human-readable owning project title, when the caller knows it. Used only for the persona copy. */
+  readonly projectTitle?: string | undefined;
   readonly env: Readonly<Record<string, string>>;
   readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
   readonly createdAt: string;
@@ -67,6 +77,15 @@ export interface ThreadRuntimeLaunchInput {
   readonly requestedCwd?: string;
   readonly baseEnvironment?: Readonly<Record<string, string>>;
   readonly bootstrapVersion?: string;
+  /**
+   * Whether the owning thread belongs to the synthetic standalone project. Callers that know the
+   * thread's project should set this (via {@link isStandaloneProjectId}); it is persisted onto the
+   * descriptor so the persona/baseline writers can read it on later reads. Omit it when the project
+   * is not in scope — the writers then fall back to inferring standalone-ness from the runtimeId.
+   */
+  readonly isStandalone?: boolean;
+  /** Human-readable owning project title, when known. Used only for the persona copy. */
+  readonly projectTitle?: string;
 }
 
 export interface ThreadExecutionContext {

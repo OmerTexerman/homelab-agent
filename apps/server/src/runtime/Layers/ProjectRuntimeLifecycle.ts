@@ -35,7 +35,7 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
 import { writeHomelabContextView } from "../HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../RuntimeBootstrapCatalogView.ts";
-import { defaultProjectRuntimeId } from "../ProjectRuntimePolicy.ts";
+import { defaultProjectRuntimeId, isStandaloneProjectId } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime, type ThreadRuntimeDescriptor } from "../Services/ThreadRuntime.ts";
@@ -677,6 +677,8 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         runtimeId: resolved.runtimeId,
         provider: null,
         runtimeMode: resolved.bindingThread.runtimeMode,
+        isStandalone: isStandaloneProjectId(resolved.project.id),
+        projectTitle: resolved.project.title,
       })
       .pipe(
         Effect.mapError((cause) =>
@@ -771,6 +773,8 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
           runtimeId: resolved.runtimeId,
           provider: null,
           runtimeMode: resolved.bindingThread.runtimeMode,
+          isStandalone: isStandaloneProjectId(resolved.project.id),
+          projectTitle: resolved.project.title,
         })
         .pipe(
           Effect.mapError((cause) =>

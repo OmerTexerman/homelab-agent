@@ -27,6 +27,8 @@ import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegis
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
 import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
+import { renderHomelabBaselineViewFiles } from "../HomelabContextView.ts";
+import { isStandaloneRuntimeId, standaloneProjectShortTitle } from "../ProjectRuntimePolicy.ts";
 import { resolveLocalRuntimeImageBuildSpec } from "../image.ts";
 import {
   homePathForThread,
@@ -151,6 +153,8 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   cwd: Schema.String,
   shell: Schema.String,
   bootstrapVersion: Schema.optional(Schema.String),
+  isStandalone: Schema.optional(Schema.Boolean),
+  projectTitle: Schema.optional(Schema.String),
   env: RuntimeEnvSchema,
   managedOpenCodeServer: Schema.optional(
     Schema.Struct({
@@ -1105,11 +1109,39 @@ if __name__ == "__main__":
 `;
 }
 
-function renderRuntimeInstructionMarkdown(
-  filename: typeof RUNTIME_AGENTS_FILENAME | typeof RUNTIME_CLAUDE_FILENAME,
-): string {
+interface RuntimeInstructionContext {
+  readonly filename: typeof RUNTIME_AGENTS_FILENAME | typeof RUNTIME_CLAUDE_FILENAME;
+  /**
+   * Whether this runtime backs a one-off standalone (scratch) thread rather than a real project.
+   * Standalone threads get an isolated runtime and thread-local memory, so the project-aware
+   * framing (shared runtime, cross-thread discovery, project-memory promotion) is noise for them.
+   */
+  readonly isStandalone: boolean;
+  /** Human-readable project title, when known, used for the orientation line. */
+  readonly projectTitle?: string | undefined;
+}
+
+/**
+ * Resolve whether a runtime should render the standalone (scratch) persona. Prefers the explicit,
+ * authoritative {@link ThreadRuntimeDescriptor.isStandalone} signal threaded down from callers that
+ * know the thread's owning project. Falls back to inferring from the runtimeId so the shared
+ * standalone runtime (`project-runtime:system:standalone`) is still recognised when a caller did not
+ * supply the flag (e.g. internal/terminal paths without a projectId in scope). Isolated standalone
+ * runtimes (`isolated-runtime:<threadId>`) do not encode the project, so they rely on the flag.
+ */
+function resolveRuntimeIsStandalone(runtime: ThreadRuntimeDescriptor): boolean {
+  return runtime.isStandalone ?? isStandaloneRuntimeId(runtime.runtimeId);
+}
+
+function renderRuntimeInstructionMarkdown(context: RuntimeInstructionContext): string {
+  const { filename, isStandalone } = context;
+  const orientationLine = isStandalone
+    ? "**This is a one-off standalone (scratch) thread.** It has its own isolated runtime and thread-local memory; nothing here is shared with other threads or projects, and there is no project to promote into."
+    : `**This is a thread inside ${context.projectTitle ? `the "${context.projectTitle}" project` : "a project"}.** This runtime and its project-local memory are shared with the other threads in this project.`;
   return `# Homelab Agent Runtime
 ${filename === RUNTIME_CLAUDE_FILENAME ? "\nClaude Code reads this file automatically." : "\nThis file is the runtime guide for this agent session."}
+
+${orientationLine}
 
 You are an infrastructure operations agent. You run inside an isolated Linux
 container with shell access, outbound network access, the \`homelab\` CLI, and
@@ -1150,7 +1182,7 @@ Run this before doing anything else:
 \`\`\`bash
 homelab --help           # Confirm the installed CLI surface
 homelab snapshot        # See all known infrastructure at a glance
-homelab memory list     # See durable project-local memory
+homelab memory list     # See durable ${isStandalone ? "thread-local" : "project-local"} memory
 homelab secrets         # See what credentials are available
 homelab bootstrap       # See active and historical runtime bootstrap data
 find .homelab -maxdepth 3 -type f | sort
@@ -1162,19 +1194,50 @@ This tells you what hosts, services, networks, and secrets the user has
 registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
 
-\`/workspace\` is the project runtime workspace inside the container. Threads in
+${
+  isStandalone
+    ? `\`/workspace\` is this thread's runtime workspace inside the container. It belongs to this
+standalone thread alone — it is not shared with other threads. Use it for notes, probes,
+temporary scripts, and exported artifacts. It is not guaranteed to be a checked-out app
+repository.`
+    : `\`/workspace\` is the project runtime workspace inside the container. Threads in
 the same project normally share this runtime and filesystem, with turns queued
 by the app so there is one active writer at a time. Use it for notes, probes,
 temporary scripts, and exported artifacts. It is not guaranteed to be a checked-
-out app repository.
+out app repository.`
+}
 
 If the browser shows a "Thread Workspace" panel, it is a view into this same
 \`/workspace\` directory.
 
-## Project-local memory and transcripts
+${
+  isStandalone
+    ? `## Thread-local memory and transcripts
 
-Generated project context lives under \`.homelab/\`. These files are views over
-durable app state, not the source of truth. Search them with normal tools:
+Generated context lives under \`.homelab/\` in this workspace (\`/workspace/.homelab\`).
+For a standalone thread this is your own scratch memory and transcript — it is not shared
+with other threads. These files are views over durable app state, not the source of truth,
+and are regenerated before each turn and after memory changes, so expect them to be sparse
+early on and fill in as you work. (\`~/.homelab\` is a different directory that only holds the
+\`homelab\` CLI on your \`PATH\`; thread context lives here in the workspace, not there.) Search
+them with normal tools:
+
+- \`.homelab/memory/index.jsonl\` has this thread's memory and durable notes.
+- \`.homelab/memory/latest/\` has readable generated files for current entries.
+- \`.homelab/threads/\` holds this thread's own transcript views (\`summary.md\`,
+  \`messages.jsonl\`, \`transcript.md\`) where safe.
+
+Do not dump all of \`.homelab\` into prompts. Search it for the current task and
+open only the relevant files. Secret values are redacted; use placeholders and
+\`homelab secret-request\` when a real value is needed.`
+    : `## Project-local memory and transcripts
+
+Generated project context lives under \`.homelab/\` in this workspace
+(\`/workspace/.homelab\`). These files are views over durable app state, not the
+source of truth, and are regenerated before each turn and after memory changes —
+so expect them to be sparse early in a project and fill in over time. (\`~/.homelab\`
+is a different directory that only holds the \`homelab\` CLI on your \`PATH\`; project
+context lives here in the workspace, not there.) Search them with normal tools:
 
 - \`.homelab/memory/index.jsonl\` has project-local memory and durable notes.
 - \`.homelab/memory/latest/\` has readable generated files for current entries.
@@ -1185,7 +1248,8 @@ durable app state, not the source of truth. Search them with normal tools:
 
 Do not dump all of \`.homelab\` into prompts. Search it for the current task and
 open only the relevant files. Secret values are redacted; use placeholders and
-\`homelab secret-request\` when a real value is needed.
+\`homelab secret-request\` when a real value is needed.`
+}
 
 ## The homelab CLI
 
@@ -1204,8 +1268,8 @@ source code or wrapper scripts before using it.
 | \`homelab snapshot\` | Full dump of all entities, relations, and metadata |
 | \`homelab search <query>\` | Search entities by name, kind, or description |
 | \`homelab search <query> --kind host\` | Filter search to a specific entity kind |
-| \`homelab memory search <query>\` | Search project memory and thread transcript indexes |
-| \`homelab memory list\` | List durable project memory entries |
+| \`homelab memory search <query>\` | Search ${isStandalone ? "this thread's" : "project"} memory and transcript indexes |
+| \`homelab memory list\` | List durable ${isStandalone ? "thread-local" : "project"} memory entries |
 | \`homelab entity <id>\` | Get one entity with all its details |
 | \`homelab relations <id>\` | Show all relations connected to an entity |
 | \`homelab secrets\` | List secret references and whether values exist |
@@ -1217,8 +1281,12 @@ Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
 
 ### Writing back (promotions)
 
-When you discover project-local context that future threads should find, add it
-to project memory:
+${
+  isStandalone
+    ? `When you want to keep a note for the rest of this thread, add it to thread-local memory:`
+    : `When you discover project-local context that future threads should find, add it
+to project memory:`
+}
 
 \`\`\`bash
 homelab memory add --summary "Backups run from nas01" \\
@@ -1226,8 +1294,16 @@ homelab memory add --summary "Backups run from nas01" \\
   --body "Verified from the scheduler config in /workspace/notes."
 \`\`\`
 
-Use \`homelab memory propose\` when the entry should be reviewed for global
-promotion. Promotion from project memory to the global graph is explicit.
+${
+  isStandalone
+    ? `Thread-local memory stays with this scratch thread. There is no project to promote
+into, so when a finding should outlive this one-off thread, promote it straight into the
+global homelab graph with \`homelab promote\` (see \`homelab promote --schema\` /
+\`homelab promote --example\`). That promotion is explicit and is how anything you learn
+here persists.`
+    : `Use \`homelab memory propose\` when the entry should be reviewed for global
+promotion. Promotion from project memory to the global graph is explicit.`
+}
 
 When you discover something about the homelab that should persist globally — a
 new service, a dependency, a finding, a useful tool — promote it so future
@@ -1292,7 +1368,7 @@ cat <<'EOF' | homelab promote --stdin
         "id": "observation-example-service-http-check",
         "sourceKind": "manual",
         "summary": "The service responded successfully",
-        "detail": "Verified from the Project Runtime after probing the HTTP endpoint.",
+        "detail": "Verified from this runtime after probing the HTTP endpoint.",
         "entityIds": ["service-example", "host-main"],
         "createdAt": "2026-04-13T20:00:00.000Z"
       }
@@ -1392,11 +1468,25 @@ through the best available interface. If you discover something new, promote it.
 - **Don't avoid searching when current external information matters.** Use the internet.
 - **Don't avoid writing quick scratch code when it would clarify the problem.**
 - **Don't paste credentials in chat.** Use \`homelab secret-request\`.
-- **Don't hoard knowledge.** Promote what you learn so the next thread has it.
+- **Don't hoard knowledge.** ${
+    isStandalone
+      ? "Promote what you learn into the global graph so it outlives this scratch thread."
+      : "Promote what you learn so the next thread has it."
+  }
 - **Don't guess at IPs, ports, configs, or access methods.** Use \`homelab snapshot\`,
   \`homelab entity\`, \`homelab relations\`, live probes, or ask.
 
-## Thread model
+${
+  isStandalone
+    ? `## Thread model
+
+- This is a one-off standalone thread with its own isolated runtime and filesystem.
+  Nothing in \`/workspace\` or thread-local \`.homelab\` memory is shared with other threads.
+- The knowledge graph and secrets registry are still the shared, durable homelab state.
+  Read from them freely; write back to the global graph through explicit promotion.
+- There is no project to promote into. To make anything you learn here persist beyond this
+  thread, promote it into the global homelab graph.`
+    : `## Thread model
 
 - This project runtime may be shared by multiple threads in the same project.
 - Shared-runtime turns are queued by default. Explicit isolated runtimes are
@@ -1405,7 +1495,8 @@ through the best available interface. If you discover something new, promote it.
   like running \`codex\`, \`claude\`, or another provider CLI multiple times in
   the same project directory, not like installing a separate provider per thread.
 - The knowledge graph, secrets, bootstrap registry, and project-local
-  \`.homelab\` views are shared context. Global homelab promotion is explicit.
+  \`.homelab\` views are shared context. Global homelab promotion is explicit.`
+}
 `;
 }
 
@@ -2184,20 +2275,30 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
       const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
       const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
+      const isStandalone = resolveRuntimeIsStandalone(runtime);
 
       const writeInstructionFile = (
         filePath: string,
         filename: typeof RUNTIME_AGENTS_FILENAME | typeof RUNTIME_CLAUDE_FILENAME,
       ) =>
-        fileSystem.writeFileString(filePath, renderRuntimeInstructionMarkdown(filename)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ThreadRuntimeError({
-                message: `Failed to write runtime instruction file '${filePath}'.`,
-                cause,
-              }),
-          ),
-        );
+        fileSystem
+          .writeFileString(
+            filePath,
+            renderRuntimeInstructionMarkdown({
+              filename,
+              isStandalone,
+              ...(runtime.projectTitle !== undefined ? { projectTitle: runtime.projectTitle } : {}),
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ThreadRuntimeError({
+                  message: `Failed to write runtime instruction file '${filePath}'.`,
+                  cause,
+                }),
+            ),
+          );
 
       yield* Effect.all([
         writeInstructionFile(agentsPath, RUNTIME_AGENTS_FILENAME),
@@ -2205,6 +2306,51 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ]);
     },
   );
+
+  /**
+   * Seed the baseline `.homelab` workspace view (README + empty indexes + tool placeholders).
+   * The generated AGENTS.md/CLAUDE.md unconditionally tell the agent to search `.homelab/`, so
+   * every materialized runtime must expose it — otherwise the instructions point at missing
+   * paths and `.homelab` "looks empty" while only the home `~/.homelab/bin` CLI is present.
+   *
+   * Files are written only when absent so a restart never clobbers the richer, data-driven
+   * view that {@link writeHomelabContextView} regenerates on turn start, wake, and memory writes.
+   */
+  const writeRuntimeHomelabBaselineView = Effect.fn(
+    "threadRuntime.writeRuntimeHomelabBaselineView",
+  )(function* (runtime: ThreadRuntimeDescriptor) {
+    const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
+    const baselineTitle = resolveRuntimeIsStandalone(runtime)
+      ? standaloneProjectShortTitle()
+      : "Project Runtime";
+    for (const file of renderHomelabBaselineViewFiles(baselineTitle)) {
+      const targetPath = nodePath.join(workspaceRoot, file.relativePath);
+      const alreadyExists = yield* fileSystem
+        .exists(targetPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      if (alreadyExists) {
+        continue;
+      }
+      yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: `Failed to create .homelab baseline directory for runtime '${runtime.threadId}'.`,
+              cause,
+            }),
+        ),
+      );
+      yield* fileSystem.writeFileString(targetPath, file.contents).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadRuntimeError({
+              message: `Failed to write .homelab baseline file '${file.relativePath}' for runtime '${runtime.threadId}'.`,
+              cause,
+            }),
+        ),
+      );
+    }
+  });
 
   const writeRuntimeShellInitFiles = Effect.fn("threadRuntime.writeRuntimeShellInitFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
@@ -2518,6 +2664,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly requestedCwd?: string;
     readonly baseEnvironment?: Readonly<Record<string, string>>;
     readonly bootstrapVersion?: string;
+    readonly isStandalone?: boolean;
+    readonly projectTitle?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {
     const requestedBootstrapVersion = input.bootstrapVersion ?? input.existing?.bootstrapVersion;
@@ -2547,6 +2695,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ...(input.imageRef !== undefined ? { imageRef: input.imageRef } : {}),
       ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
       ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
+      ...(input.isStandalone !== undefined ? { isStandalone: input.isStandalone } : {}),
+      ...(input.projectTitle !== undefined ? { projectTitle: input.projectTitle } : {}),
       bootstrapImageRef: bootstrap.materialization.imageRef,
       bootstrapVersion: bootstrap.materialization.bootstrapVersion,
       bootstrapEnv: bootstrap.materialization.env,
@@ -2685,6 +2835,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
         yield* ensureRuntimeDirectories(runtime);
         yield* writeRuntimeInstructionFiles(runtime);
+        yield* writeRuntimeHomelabBaselineView(runtime);
         const persistedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime = {
             ...runtime,
@@ -2720,6 +2871,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* syncRuntimeControlEnvIntoRuntimeHome(normalizedRuntime);
         yield* writeRuntimeShellInitFiles(normalizedRuntime);
         yield* writeRuntimeInstructionFiles(normalizedRuntime);
+        yield* writeRuntimeHomelabBaselineView(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
         yield* ensureRuntimeImageReady(normalizedRuntime);

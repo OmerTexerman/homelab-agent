@@ -198,6 +198,37 @@ Runtime containers receive a generated `.homelab-runtime.env` containing:
 They also receive generated `AGENTS.md`, `CLAUDE.md`, shell init files, provider
 wrappers, and the `homelab` CLI.
 
+### The two `.homelab` directories
+
+There are two distinct `.homelab` paths in a runtime, and conflating them is the
+usual cause of "`.homelab` looks empty":
+
+- **`/workspace/.homelab`** (the agent's working directory) holds the generated,
+  grep-able project context: `README.md`, `memory/`, `threads/`, `index/`,
+  `tools/`, and `bootstrap/`. This is what `AGENTS.md`/`CLAUDE.md` tell the agent
+  to search.
+- **`~/.homelab`** (i.e. `/runtime/home/.homelab`) holds _only_ `bin/` — the
+  `homelab` CLI and `homelab-secret-to-file`, added to `PATH`. It is not project
+  context. Looking here instead of `/workspace/.homelab` shows only the CLI.
+
+`/workspace/.homelab` is generated in two layers:
+
+- A **baseline** view (README + empty indexes + `tools/`) is written when the
+  runtime is materialized, for every runtime mode, so the directory the
+  instructions reference always exists. Baseline files are written only when
+  absent.
+- The **data-driven** view (project memory, thread transcripts, bootstrap
+  history) is regenerated before each provider turn, on project-runtime wake, and
+  after project-memory create/promote. It overwrites the baseline. Secret values
+  are redacted; the `homelab` CLI is the source of truth for live/durable state.
+
+After upgrading the server, existing runtime workspaces keep whatever
+`.homelab` they last generated. The data-driven view refreshes on the next turn
+or wake, and the baseline is reconciled (without clobbering richer content) on
+the next runtime start. To force a clean regeneration for a project runtime,
+restart it from the UI (Reset/Wake) or send a turn; nothing needs to be deleted
+by hand.
+
 ## Runtime Networking
 
 The server preserves `HOMELAB_AGENT_RUNTIME_SERVER_URL` when set. Use it when

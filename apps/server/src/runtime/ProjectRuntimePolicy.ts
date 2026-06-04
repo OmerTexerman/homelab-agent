@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import {
   STANDALONE_PROJECT_ID,
+  STANDALONE_PROJECT_SHORT_TITLE,
   STANDALONE_PROJECT_TITLE,
   createStandaloneProjectWorkspaceRoot,
   isStandaloneProjectId as isStandaloneProjectIdValue,
@@ -39,12 +40,28 @@ export function standaloneProjectTitle(): string {
   return STANDALONE_PROJECT_TITLE;
 }
 
+export function standaloneProjectShortTitle(): string {
+  return STANDALONE_PROJECT_SHORT_TITLE;
+}
+
 export function standaloneProjectWorkspaceRoot(): string {
   return createStandaloneProjectWorkspaceRoot();
 }
 
 export function isStandaloneProjectId(projectId: ProjectId | string): boolean {
   return isStandaloneProjectIdValue(String(projectId));
+}
+
+/**
+ * Detect whether a runtime session id belongs to the synthetic standalone project. Used where
+ * only the runtime descriptor is in scope (no projectId), e.g. when rendering the runtime persona.
+ * Standalone threads default to the shared standalone project runtime
+ * (`project-runtime:system:standalone`); this recognises that id regardless of the thread bound to
+ * it. Isolated runtimes (`isolated-runtime:<threadId>`) do not encode the project, so they are not
+ * matched here and fall back to the project persona.
+ */
+export function isStandaloneRuntimeId(runtimeId: RuntimeSessionId | string): boolean {
+  return String(runtimeId) === String(standaloneProjectDefaultRuntimeId());
 }
 
 export function standaloneProjectDefaultRuntimeId(): RuntimeSessionId {

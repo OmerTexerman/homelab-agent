@@ -47,7 +47,10 @@ import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../../runtime/RuntimeBootstrapCatalogView.ts";
 import { RuntimeBootstrapRegistry } from "../../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
-import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
+import {
+  isStandaloneProjectId,
+  resolveProjectRuntimeAssignment,
+} from "../../runtime/ProjectRuntimePolicy.ts";
 import {
   buildGeneratedWorktreeBranchName,
   canReplaceThreadTitle,
@@ -584,6 +587,8 @@ const make = Effect.gen(function* () {
       provider: runtimeProvider,
       runtimeMode: input.runtimeMode,
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
+      isStandalone: isStandaloneProjectId(project.id),
+      projectTitle: project.title,
     });
     yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);

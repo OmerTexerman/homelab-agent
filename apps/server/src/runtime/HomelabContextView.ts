@@ -68,12 +68,6 @@ export function redactHomelabViewText(
     redacted = redacted.replace(pattern, "[REDACTED_SECRET]");
   }
 
-  for (const secret of secrets) {
-    const key = String(secret.key);
-    if (!key) continue;
-    redacted = redacted.replaceAll(`{${key}}`, `{${key}}`);
-  }
-
   return redacted;
 }
 
@@ -186,6 +180,60 @@ function renderMemoryMarkdown(input: {
   return lines.join("\n");
 }
 
+/**
+ * The `.homelab` README. Lives at `/workspace/.homelab/README.md` (the agent's cwd is
+ * `/workspace`). This is intentionally distinct from `~/.homelab/`, which only holds the
+ * `homelab` CLI on `PATH` — agents that inspect `~/.homelab` instead of `./.homelab` see
+ * only `bin/`. Keep both the baseline and data-driven renderers pointed at the same text so
+ * the contract reads the same whether or not durable content has been generated yet.
+ */
+function renderHomelabReadme(title: string): string {
+  return [
+    `# ${title} Homelab Context`,
+    "",
+    "This directory (`/workspace/.homelab`) is a generated, searchable view over durable",
+    "Homelab Agent state. It is regenerated before each turn and after memory changes, so it",
+    "may be sparse early in a project and fill in as memory and thread transcripts accrue.",
+    "",
+    "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and",
+    "thread transcripts here. For live or durable server state that is not mirrored into these",
+    "files, use the `homelab` CLI — it is installed on your `PATH` (under `~/.homelab/bin`) and",
+    "talks to the app server. `~/.homelab` only contains that CLI; project context lives here.",
+    "",
+    "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server",
+    "exposes it. Secret values are redacted; secret references appear as placeholders.",
+    "",
+  ].join("\n");
+}
+
+const HOMELAB_MEMORY_LATEST_README = [
+  "# Latest Project Memory",
+  "",
+  "Project-local memory entries are generated from durable app state.",
+  "Use `memory/index.jsonl` for structured search and the files in this directory for readable details.",
+  "",
+].join("\n");
+
+/**
+ * The always-present `.homelab` skeleton: README, empty indexes, and tool placeholders. These
+ * files must exist in every materialized runtime so the generated AGENTS.md/CLAUDE.md
+ * instructions never point at missing paths. The data-driven {@link renderHomelabContextViewFiles}
+ * produces the same relative paths (with content) and overwrites these once durable state exists.
+ */
+export function renderHomelabBaselineViewFiles(title = "Project Runtime"): HomelabViewFile[] {
+  return [
+    { relativePath: ".homelab/README.md", contents: renderHomelabReadme(title) },
+    { relativePath: ".homelab/threads/index.jsonl", contents: "" },
+    { relativePath: ".homelab/memory/index.jsonl", contents: "" },
+    { relativePath: ".homelab/memory/latest/README.md", contents: HOMELAB_MEMORY_LATEST_README },
+    { relativePath: ".homelab/index/threads.jsonl", contents: "" },
+    { relativePath: ".homelab/index/memory.jsonl", contents: "" },
+    { relativePath: ".homelab/index/transcripts.jsonl", contents: "" },
+    { relativePath: ".homelab/index/tools.jsonl", contents: "" },
+    { relativePath: ".homelab/tools/README.md", contents: "# Runtime Tools\n\n" },
+  ];
+}
+
 function renderBootstrapMarkdown(input: HomelabRuntimeBootstrapView): string {
   const lines = [
     "# Runtime Bootstrap",
@@ -244,15 +292,7 @@ export function renderHomelabContextViewFiles(
 
   files.push({
     relativePath: ".homelab/README.md",
-    contents: [
-      `# ${input.project.title} Homelab Context`,
-      "",
-      "This directory is a generated view over durable Homelab Agent state.",
-      "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and thread transcripts.",
-      "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server exposes it.",
-      "Secret values are redacted; secret references appear as placeholders.",
-      "",
-    ].join("\n"),
+    contents: renderHomelabReadme(input.project.title),
   });
 
   files.push({
@@ -317,13 +357,7 @@ export function renderHomelabContextViewFiles(
 
   files.push({
     relativePath: ".homelab/memory/latest/README.md",
-    contents: [
-      "# Latest Project Memory",
-      "",
-      "Project-local memory entries are generated from durable app state.",
-      "Use `memory/index.jsonl` for structured search and the files in this directory for readable details.",
-      "",
-    ].join("\n"),
+    contents: HOMELAB_MEMORY_LATEST_README,
   });
 
   files.push({
@@ -438,4 +472,49 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true });
     yield* fileSystem.writeFileString(targetPath, file.contents);
   }
+
+  // Reconcile-and-prune: the two subtrees below are fully generated and owned by this writer,
+  // and `renderHomelabContextViewFiles` deliberately drops deleted threads and superseded
+  // memory. Without pruning, those leave orphaned files on disk that the agent's `find`/`rg`
+  // still surfaces as stale context. Expected sets are derived from the SAME `files` we just
+  // wrote (single source of truth), so pruning can never delete a file this render produced.
+  // All callers pass the COMPLETE authoritative thread + memory set for the workspace, so the
+  // remaining entries are genuine orphans. Each readDirectory/remove tolerates a missing path,
+  // making the first run (no pre-existing `.homelab`) a no-op.
+  const expectedThreadDirs = new Set<string>();
+  const expectedMemoryFiles = new Set<string>();
+  for (const file of files) {
+    const threadMatch = /^\.homelab\/threads\/(thread_[^/]+)\//.exec(file.relativePath);
+    if (threadMatch?.[1]) {
+      expectedThreadDirs.add(threadMatch[1]);
+      continue;
+    }
+    const memoryMatch = /^\.homelab\/memory\/latest\/([^/]+\.md)$/.exec(file.relativePath);
+    if (memoryMatch?.[1]) {
+      expectedMemoryFiles.add(memoryMatch[1]);
+    }
+  }
+
+  const threadsDir = nodePath.join(input.hostWorkspacePath, ".homelab", "threads");
+  const threadEntries = yield* fileSystem
+    .readDirectory(threadsDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    threadEntries.filter((name) => name.startsWith("thread_") && !expectedThreadDirs.has(name)),
+    (name) =>
+      fileSystem.remove(nodePath.join(threadsDir, name), { recursive: true }).pipe(Effect.ignore),
+    { discard: true },
+  );
+
+  const memoryLatestDir = nodePath.join(input.hostWorkspacePath, ".homelab", "memory", "latest");
+  const memoryEntries = yield* fileSystem
+    .readDirectory(memoryLatestDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    memoryEntries.filter(
+      (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
+    ),
+    (name) => fileSystem.remove(nodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
+    { discard: true },
+  );
 });

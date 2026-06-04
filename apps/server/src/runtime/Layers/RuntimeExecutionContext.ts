@@ -126,6 +126,8 @@ export interface RuntimeDescriptorInput {
   readonly imageRef?: string;
   readonly requestedCwd?: string;
   readonly baseEnvironment?: Readonly<Record<string, string>>;
+  readonly isStandalone?: boolean;
+  readonly projectTitle?: string;
   readonly bootstrapImageRef: string;
   readonly bootstrapVersion: string;
   readonly bootstrapEnv: Readonly<Record<string, string>>;
@@ -233,6 +235,8 @@ export function buildThreadRuntimeDescriptor(
       (shouldPreserveExistingImage ? input.existing?.imageRef : undefined) ||
       input.bootstrapImageRef,
   );
+  const isStandalone = input.isStandalone ?? input.existing?.isStandalone;
+  const projectTitle = input.projectTitle ?? input.existing?.projectTitle;
 
   return {
     threadId: input.threadId,
@@ -253,6 +257,8 @@ export function buildThreadRuntimeDescriptor(
       SHELL_RUNTIME_WRAPPER,
     ),
     bootstrapVersion: input.bootstrapVersion,
+    ...(isStandalone !== undefined ? { isStandalone } : {}),
+    ...(projectTitle !== undefined ? { projectTitle } : {}),
     env: buildRuntimeEnvironment({
       cwd,
       workspacePath,

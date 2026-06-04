@@ -71,6 +71,7 @@ import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
+import { isStandaloneProjectId } from "./runtime/ProjectRuntimePolicy.ts";
 import { ProjectRuntimeLifecycle } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry.ts";
@@ -392,6 +393,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 ...(thread.runtimeId != null ? { runtimeId: thread.runtimeId } : {}),
                 provider: null,
                 runtimeMode: thread.runtimeMode,
+                isStandalone: isStandaloneProjectId(thread.projectId),
               })
               .pipe(Effect.catch(() => Effect.void));
           }

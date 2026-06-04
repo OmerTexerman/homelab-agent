@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import nodePath from "node:path";
+
 import {
   MessageId,
   ProjectId,
@@ -7,6 +10,7 @@ import {
   ThreadId,
   type HomelabSecretDescriptor,
   type OrchestrationProject,
+  type ProjectMemoryEntry,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import {
@@ -14,9 +18,16 @@ import {
   STANDALONE_PROJECT_TITLE,
   createStandaloneProjectWorkspaceRoot,
 } from "@t3tools/shared/standaloneProject";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import { describe, expect, it } from "vitest";
 
-import { redactHomelabViewText, renderHomelabContextViewFiles } from "./HomelabContextView.ts";
+import {
+  redactHomelabViewText,
+  renderHomelabContextViewFiles,
+  writeHomelabContextView,
+} from "./HomelabContextView.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-1");
@@ -250,5 +261,77 @@ describe("HomelabContextView", () => {
     expect(
       redactHomelabViewText("token sk-abcdefghijklmnopqrstuvwxyz123456 and $GITHUB_TOKEN", secrets),
     ).toBe("token [REDACTED_SECRET] and $GITHUB_TOKEN");
+  });
+
+  it("prunes orphaned thread dirs and superseded memory files on re-write while preserving owned files", async () => {
+    const makeMemoryEntry = (id: string, summary: string): ProjectMemoryEntry => ({
+      id: ProjectMemoryId.make(id),
+      projectId,
+      runtimeId,
+      sourceThreadId: null,
+      sourceMessageId: null,
+      sourceFilePath: null,
+      summary,
+      body: summary,
+      tags: [],
+      supersedes: [],
+      replaces: [],
+      promotionStatus: "proposed",
+      promotionId: null,
+      promotionSummary: null,
+      promotedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "homelab-context-view-prune-",
+      });
+
+      const join = (...segments: ReadonlyArray<string>) => nodePath.join(tempDir, ...segments);
+      const exists = (relative: string) =>
+        fileSystem.exists(join(relative)).pipe(Effect.orElseSucceed(() => false));
+
+      // First run against an empty workspace (no pre-existing `.homelab`) must not error.
+      const threadA = makeThread({ id: ThreadId.make("thread-a"), title: "Keep me" });
+      const threadB = makeThread({ id: ThreadId.make("thread-b"), title: "Drop me" });
+      yield* writeHomelabContextView({
+        hostWorkspacePath: tempDir,
+        project,
+        threads: [threadA, threadB],
+        memoryEntries: [
+          makeMemoryEntry("memory-keep", "Keep this memory"),
+          makeMemoryEntry("memory-drop", "Drop this memory"),
+        ],
+      });
+
+      expect(yield* exists(".homelab/threads/thread_thread-a/summary.md")).toBe(true);
+      expect(yield* exists(".homelab/threads/thread_thread-b/summary.md")).toBe(true);
+      expect(yield* exists(".homelab/memory/latest/memory-keep.md")).toBe(true);
+      expect(yield* exists(".homelab/memory/latest/memory-drop.md")).toBe(true);
+
+      // Re-write with only thread A and only the kept memory entry: the dropped thread dir and
+      // the dropped memory file must be pruned, while owned scaffolding survives.
+      yield* writeHomelabContextView({
+        hostWorkspacePath: tempDir,
+        project,
+        threads: [threadA],
+        memoryEntries: [makeMemoryEntry("memory-keep", "Keep this memory")],
+      });
+
+      expect(yield* exists(".homelab/threads/thread_thread-b/summary.md")).toBe(false);
+      expect(yield* exists(".homelab/threads/thread_thread-b")).toBe(false);
+      expect(yield* exists(".homelab/memory/latest/memory-drop.md")).toBe(false);
+
+      // Owned, non-orphan files remain untouched.
+      expect(yield* exists(".homelab/threads/thread_thread-a/summary.md")).toBe(true);
+      expect(yield* exists(".homelab/memory/latest/memory-keep.md")).toBe(true);
+      expect(yield* exists(".homelab/README.md")).toBe(true);
+      expect(yield* exists(".homelab/memory/latest/README.md")).toBe(true);
+      expect(yield* exists(".homelab/threads/index.jsonl")).toBe(true);
+      expect(yield* exists(".homelab/memory/index.jsonl")).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
   });
 });
