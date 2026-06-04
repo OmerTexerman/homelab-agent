@@ -76,6 +76,16 @@ describe("describeActiveThreadRuntimeMode", () => {
     ).toContain("Source runtime: project-runtime:router");
   });
 
+  it("describes isolated standalone threads as Scratch runtime work", () => {
+    expect(
+      describeActiveThreadRuntimeMode({
+        runtimeSelectionMode: "isolated",
+        isStandaloneThread: true,
+        activeProjectName: "Standalone Threads",
+      }),
+    ).toBe("This standalone thread uses its own Scratch runtime outside any Project.");
+  });
+
   it("stays quiet for normal shared Project Runtime threads", () => {
     expect(
       describeActiveThreadRuntimeMode({

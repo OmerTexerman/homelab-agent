@@ -26,6 +26,9 @@ export const HOMELAB_PRODUCT_COPY = {
     newThreadAction: "New scratch thread",
     newThreadDescription:
       "One-off isolated work outside a Project, using its own Scratch runtime. Move it into a Project later.",
+    activeThreadBadgeLabel: "Scratch runtime",
+    activeThreadBadgeDescription:
+      "This standalone thread uses its own Scratch runtime outside any Project.",
     promoteAction: "Promote to project",
     promoteDescription: "Move this thread into a new named logical project.",
     moveAction: "Move to project",

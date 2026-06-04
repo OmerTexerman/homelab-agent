@@ -63,6 +63,7 @@ describe("Homelab product copy", () => {
     );
     expect(HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionGuidedMode).toBe("Guided");
     expect(HOMELAB_PRODUCT_COPY.standalone.newThreadDescription).toContain("Scratch runtime");
+    expect(HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel).toBe("Scratch runtime");
     expect(HOMELAB_PRODUCT_COPY.composer.defaultPlaceholder).not.toMatch(
       /repo|files\/folders|\$use skills/i,
     );

@@ -53,6 +53,7 @@ interface ChatHeaderProps {
   draftId?: DraftId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  isStandaloneThread?: boolean | undefined;
   runtimeSelectionMode?: ThreadRuntimeMode | undefined;
   projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
   isGitRepo: boolean;
@@ -133,9 +134,16 @@ export function shouldShowOpenInPicker(input: {
 
 export function describeActiveThreadRuntimeMode(input: {
   readonly runtimeSelectionMode?: ThreadRuntimeMode | undefined;
+  readonly isStandaloneThread?: boolean | undefined;
   readonly activeProjectName?: string | undefined;
   readonly projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
 }): string | null {
+  if (input.isStandaloneThread) {
+    return input.runtimeSelectionMode === "isolated"
+      ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeDescription
+      : null;
+  }
+
   if (input.runtimeSelectionMode !== "isolated") {
     return null;
   }
@@ -156,6 +164,7 @@ export const ChatHeader = memo(function ChatHeader({
   draftId,
   activeThreadTitle,
   activeProjectName,
+  isStandaloneThread,
   runtimeSelectionMode,
   projectDefaultRuntimeId,
   isGitRepo,
@@ -192,9 +201,13 @@ export const ChatHeader = memo(function ChatHeader({
   });
   const isolatedRuntimeDescription = describeActiveThreadRuntimeMode({
     runtimeSelectionMode,
+    isStandaloneThread,
     activeProjectName,
     projectDefaultRuntimeId,
   });
+  const runtimeModeBadgeLabel = isStandaloneThread
+    ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
+    : HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel;
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -223,7 +236,7 @@ export const ChatHeader = memo(function ChatHeader({
                   className="shrink-0 gap-1 border-info/35 bg-info/10 text-info-foreground"
                 >
                   <GitBranchPlusIcon className="size-3" />
-                  <span>{HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel}</span>
+                  <span>{runtimeModeBadgeLabel}</span>
                 </Badge>
               }
             />

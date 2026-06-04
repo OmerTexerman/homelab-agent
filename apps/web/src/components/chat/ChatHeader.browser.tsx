@@ -22,6 +22,7 @@ function renderHeader(
   onExportChat: (format: ChatExportFormat) => void,
   options: {
     readonly activeProjectName?: string | undefined;
+    readonly isStandaloneThread?: boolean | undefined;
     readonly runtimeSelectionMode?: ThreadRuntimeMode | undefined;
   } = {},
 ) {
@@ -31,6 +32,7 @@ function renderHeader(
       activeThreadId={ThreadId.make("thread-export-dialog")}
       activeThreadTitle="Map My Homelab"
       activeProjectName={options.activeProjectName}
+      isStandaloneThread={options.isStandaloneThread}
       runtimeSelectionMode={options.runtimeSelectionMode}
       isGitRepo={false}
       openInCwd={null}
@@ -102,6 +104,25 @@ describe("ChatHeader export popover", () => {
       await expect
         .element(page.getByText(HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel))
         .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows Scratch runtime copy for standalone isolated threads", async () => {
+    const screen = await renderHeader(vi.fn(), {
+      activeProjectName: "Standalone Threads",
+      isStandaloneThread: true,
+      runtimeSelectionMode: "isolated",
+    });
+
+    try {
+      await expect
+        .element(page.getByText(HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel))
+        .toBeVisible();
+      await expect
+        .element(page.getByText(HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel))
+        .not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }

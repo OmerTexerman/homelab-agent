@@ -364,6 +364,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const threadKey = scopedThreadKey(threadRef);
   const draftId = thread.isDraft === true && thread.draftId ? (thread.draftId as DraftId) : null;
   const isDraftThread = draftId !== null;
+  const isStandaloneThread = isStandaloneProjectId(thread.projectId);
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -697,16 +698,30 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               <TooltipTrigger
                 render={
                   <span
-                    aria-label={HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel}
+                    aria-label={
+                      isStandaloneThread
+                        ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
+                        : HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel
+                    }
                     className="inline-flex h-4 shrink-0 items-center gap-0.5 rounded border border-info/25 bg-info/10 px-1 text-[9px] font-medium uppercase leading-none text-info-foreground/90"
                   >
-                    <GitBranchPlusIcon className="size-2.5" />
-                    <span>{HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeLabel}</span>
+                    {isStandaloneThread ? (
+                      <SquarePenIcon className="size-2.5" />
+                    ) : (
+                      <GitBranchPlusIcon className="size-2.5" />
+                    )}
+                    <span>
+                      {isStandaloneThread
+                        ? HOMELAB_PRODUCT_COPY.standalone.shortTitle
+                        : HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeLabel}
+                    </span>
                   </span>
                 }
               />
               <TooltipPopup side="top" className="max-w-72 leading-tight">
-                {HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeDescription}
+                {isStandaloneThread
+                  ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeDescription
+                  : HOMELAB_PRODUCT_COPY.projectRuntime.isolatedThreadBadgeDescription}
               </TooltipPopup>
             </Tooltip>
           ) : null}

@@ -34,6 +34,7 @@ import { ProjectRuntimePanel } from "./ProjectRuntimePanel";
 const NOW = "2026-05-17T12:00:00.000Z";
 const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-media");
+const STANDALONE_PROJECT_ID = ProjectId.make("system:standalone");
 const RUNTIME_ID = RuntimeSessionId.make("project-runtime:project-media");
 const THREAD_ID = ThreadId.make("thread-queued");
 
@@ -123,6 +124,27 @@ async function renderPanel(detail: ProjectRuntimeDetail) {
   );
 }
 
+async function renderStandalonePanel(detail: ProjectRuntimeDetail) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  environmentApiById.set(ENVIRONMENT_ID, { projectRuntime: createProjectRuntimeApi(detail) });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ProjectRuntimePanel
+        environmentId={ENVIRONMENT_ID}
+        projectId={STANDALONE_PROJECT_ID}
+        threadId={THREAD_ID}
+        runtimeId={RuntimeSessionId.make("project-runtime:system:standalone")}
+      />
+    </QueryClientProvider>,
+  );
+}
+
 describe("ProjectRuntimePanel", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -141,6 +163,18 @@ describe("ProjectRuntimePanel", () => {
       await expect.element(page.getByText("Active: Running provider turn")).toBeVisible();
       await expect.element(page.getByText("Queued: 1")).toBeVisible();
       await expect.element(page.getByRole("button", { name: "Snapshot" })).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("labels standalone runtime state as Scratch runtime", async () => {
+    const screen = await renderStandalonePanel(runtimeDetail());
+
+    try {
+      await expect
+        .element(page.getByText(HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel))
+        .toBeVisible();
     } finally {
       await screen.unmount();
     }

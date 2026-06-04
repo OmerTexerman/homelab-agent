@@ -32,6 +32,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
@@ -3755,6 +3756,10 @@ export default function ChatView(props: ChatViewProps) {
   if (!activeThread) {
     return <NoActiveThreadState />;
   }
+  const activeThreadIsStandalone = isStandaloneProject({
+    id: activeThread.projectId,
+    cwd: activeProject?.cwd ?? null,
+  });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
@@ -3777,6 +3782,7 @@ export default function ChatView(props: ChatViewProps) {
           {...(routeKind === "draft" && draftId ? { draftId } : {})}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          isStandaloneThread={activeThreadIsStandalone}
           runtimeSelectionMode={activeThread.runtimeSelectionMode ?? "shared"}
           projectDefaultRuntimeId={activeProject?.defaultRuntimeId ?? null}
           isGitRepo={isGitRepo}

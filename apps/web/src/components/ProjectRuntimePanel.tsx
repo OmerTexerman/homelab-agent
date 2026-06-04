@@ -5,6 +5,7 @@ import type {
   RuntimeSessionId,
   ThreadId,
 } from "@t3tools/contracts";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArchiveIcon,
@@ -93,6 +94,10 @@ export function ProjectRuntimePanel({
   threadId,
   runtimeId,
 }: ProjectRuntimePanelProps) {
+  const isStandaloneRuntime = isStandaloneProjectId(projectId);
+  const runtimeTitle = isStandaloneRuntime
+    ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
+    : HOMELAB_PRODUCT_COPY.projectRuntime.title;
   const queryClient = useQueryClient();
   const operationInput = useMemo(
     () => ({
@@ -265,7 +270,7 @@ export function ProjectRuntimePanel({
 
   return (
     <section
-      aria-label={HOMELAB_PRODUCT_COPY.projectRuntime.title}
+      aria-label={runtimeTitle}
       className="border-b border-border/80 bg-muted/20 px-3 py-2 sm:px-5"
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -279,9 +284,7 @@ export function ProjectRuntimePanel({
                 runtimeQuery.isFetching && "animate-pulse",
               )}
             />
-            <span className="text-xs font-semibold text-foreground">
-              {HOMELAB_PRODUCT_COPY.projectRuntime.title}
-            </span>
+            <span className="text-xs font-semibold text-foreground">{runtimeTitle}</span>
             <span className="text-xs text-muted-foreground">
               {lifecycleState ? projectRuntimeStatusLabel(lifecycleState) : "Loading"}
             </span>
