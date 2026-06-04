@@ -8,7 +8,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
-import { standaloneProjectDefaultRuntimeId } from "../ProjectRuntimePolicy.ts";
+import {
+  isolatedThreadRuntimeId,
+  standaloneProjectDefaultRuntimeId,
+} from "../ProjectRuntimePolicy.ts";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { type ProcessRunResult } from "../../processRunner.ts";
@@ -793,6 +796,65 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
           assert.match(persona, /homelab secret-request/);
           assert.match(persona, /Always verify before acting\./);
         }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "applies the standalone persona to an isolated standalone thread (runtimeId does not encode the project)",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+
+        // An isolated standalone thread is assigned an `isolated-runtime:<threadId>` runtime, which
+        // does NOT encode the project. The runtimeId fallback therefore cannot tell it is
+        // standalone — only the explicit `isStandalone` signal threaded down from the caller can.
+        const isolatedThreadId = ThreadId.make("thread-isolated-standalone-persona");
+        const isolatedDescriptor = yield* runtime.ensureRuntime({
+          threadId: isolatedThreadId,
+          runtimeId: isolatedThreadRuntimeId(isolatedThreadId),
+          provider: "codex",
+          runtimeMode: "full-access",
+          isStandalone: true,
+        });
+
+        // Guard: the runtimeId really is the isolated form (so the fallback would say "project").
+        assert.match(String(isolatedDescriptor.runtimeId), /^isolated-runtime:/);
+
+        const isolatedLaunch = yield* runtime.resolveLaunchContext(isolatedDescriptor.threadId);
+        const isolatedAgents = yield* fileSystem.readFileString(
+          path.join(isolatedLaunch.hostWorkspacePath, "AGENTS.md"),
+        );
+
+        // It must render the STANDALONE persona, not the project persona.
+        assert.match(isolatedAgents, /This is a one-off standalone \(scratch\) thread\./);
+        assert.match(
+          isolatedAgents,
+          /This is a one-off standalone thread with its own isolated runtime and filesystem\./,
+        );
+        assert.match(isolatedAgents, /Thread-local memory and transcripts/);
+        assert.match(isolatedAgents, /There is no project to promote into\./);
+        assert.doesNotMatch(
+          isolatedAgents,
+          /This is a thread inside (?:the .* project|a project)\./,
+        );
+        assert.doesNotMatch(
+          isolatedAgents,
+          /may be shared by multiple threads in the same project/,
+        );
+        assert.doesNotMatch(isolatedAgents, /Project-local memory and transcripts/);
+
+        // The baseline .homelab README is titled with the scratch title, not "Project Runtime".
+        const isolatedReadme = yield* fileSystem.readFileString(
+          path.join(isolatedLaunch.hostWorkspacePath, ".homelab", "README.md"),
+        );
+        assert.match(isolatedReadme, /^# Scratch Homelab Context/);
+        assert.doesNotMatch(isolatedReadme, /Project Runtime/);
       }).pipe(Effect.scoped),
   );
 

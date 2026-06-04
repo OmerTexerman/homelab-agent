@@ -153,6 +153,8 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   cwd: Schema.String,
   shell: Schema.String,
   bootstrapVersion: Schema.optional(Schema.String),
+  isStandalone: Schema.optional(Schema.Boolean),
+  projectTitle: Schema.optional(Schema.String),
   env: RuntimeEnvSchema,
   managedOpenCodeServer: Schema.optional(
     Schema.Struct({
@@ -1117,6 +1119,18 @@ interface RuntimeInstructionContext {
   readonly isStandalone: boolean;
   /** Human-readable project title, when known, used for the orientation line. */
   readonly projectTitle?: string | undefined;
+}
+
+/**
+ * Resolve whether a runtime should render the standalone (scratch) persona. Prefers the explicit,
+ * authoritative {@link ThreadRuntimeDescriptor.isStandalone} signal threaded down from callers that
+ * know the thread's owning project. Falls back to inferring from the runtimeId so the shared
+ * standalone runtime (`project-runtime:system:standalone`) is still recognised when a caller did not
+ * supply the flag (e.g. internal/terminal paths without a projectId in scope). Isolated standalone
+ * runtimes (`isolated-runtime:<threadId>`) do not encode the project, so they rely on the flag.
+ */
+function resolveRuntimeIsStandalone(runtime: ThreadRuntimeDescriptor): boolean {
+  return runtime.isStandalone ?? isStandaloneRuntimeId(runtime.runtimeId);
 }
 
 function renderRuntimeInstructionMarkdown(context: RuntimeInstructionContext): string {
@@ -2259,7 +2273,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
       const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
       const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
-      const isStandalone = isStandaloneRuntimeId(runtime.runtimeId);
+      const isStandalone = resolveRuntimeIsStandalone(runtime);
 
       const writeInstructionFile = (
         filePath: string,
@@ -2268,7 +2282,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         fileSystem
           .writeFileString(
             filePath,
-            renderRuntimeInstructionMarkdown({ filename, isStandalone }),
+            renderRuntimeInstructionMarkdown({
+              filename,
+              isStandalone,
+              ...(runtime.projectTitle !== undefined ? { projectTitle: runtime.projectTitle } : {}),
+            }),
           )
           .pipe(
           Effect.mapError(
@@ -2300,7 +2318,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     "threadRuntime.writeRuntimeHomelabBaselineView",
   )(function* (runtime: ThreadRuntimeDescriptor) {
     const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
-    const baselineTitle = isStandaloneRuntimeId(runtime.runtimeId)
+    const baselineTitle = resolveRuntimeIsStandalone(runtime)
       ? standaloneProjectShortTitle()
       : "Project Runtime";
     for (const file of renderHomelabBaselineViewFiles(baselineTitle)) {
@@ -2644,6 +2662,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly requestedCwd?: string;
     readonly baseEnvironment?: Readonly<Record<string, string>>;
     readonly bootstrapVersion?: string;
+    readonly isStandalone?: boolean;
+    readonly projectTitle?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {
     const requestedBootstrapVersion = input.bootstrapVersion ?? input.existing?.bootstrapVersion;
@@ -2673,6 +2693,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ...(input.imageRef !== undefined ? { imageRef: input.imageRef } : {}),
       ...(input.requestedCwd !== undefined ? { requestedCwd: input.requestedCwd } : {}),
       ...(input.baseEnvironment !== undefined ? { baseEnvironment: input.baseEnvironment } : {}),
+      ...(input.isStandalone !== undefined ? { isStandalone: input.isStandalone } : {}),
+      ...(input.projectTitle !== undefined ? { projectTitle: input.projectTitle } : {}),
       bootstrapImageRef: bootstrap.materialization.imageRef,
       bootstrapVersion: bootstrap.materialization.bootstrapVersion,
       bootstrapEnv: bootstrap.materialization.env,
