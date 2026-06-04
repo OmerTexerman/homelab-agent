@@ -8,6 +8,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -15,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
+  type EnvironmentId,
   type HomelabEntityKind,
   type HomelabEntityStatus,
   PROVIDER_DISPLAY_NAMES,
@@ -22,6 +24,7 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -1807,7 +1810,7 @@ export function ProviderSettingsPanel() {
 
 export function ArchivedThreadsPanel() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const { unarchiveThread, confirmAndDeleteThread, deleteThread } = useThreadActions();
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
     [projects],
@@ -1904,6 +1907,53 @@ export function ArchivedThreadsPanel() {
     },
     [confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
   );
+  const handleDeleteArchivedProjectThreads = useCallback(
+    async (
+      project: { readonly name: string; readonly environmentId: EnvironmentId },
+      threads: ReadonlyArray<{ readonly id: ThreadId; readonly environmentId: EnvironmentId }>,
+    ) => {
+      const api = readLocalApi();
+      const confirmed = api
+        ? await api.dialogs.confirm(
+            [
+              `Delete ${threads.length} archived thread${threads.length === 1 ? "" : "s"} from "${project.name}"?`,
+              "This permanently clears their conversation history and terminal history.",
+            ].join("\n"),
+          )
+        : window.confirm(
+            `Delete ${threads.length} archived thread${threads.length === 1 ? "" : "s"} from "${project.name}"?`,
+          );
+      if (!confirmed) {
+        return;
+      }
+
+      const failures: string[] = [];
+      for (const thread of threads) {
+        try {
+          await deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      refreshArchivedThreads();
+      if (failures.length > 0) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Some archived threads were not deleted",
+            description: failures[0] ?? "An error occurred.",
+          }),
+        );
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Archived threads deleted",
+        description: `${threads.length} thread${threads.length === 1 ? "" : "s"} removed.`,
+      });
+    },
+    [deleteThread, refreshArchivedThreads],
+  );
 
   return (
     <SettingsPageContainer>
@@ -1937,6 +1987,20 @@ export function ArchivedThreadsPanel() {
             key={project.id}
             title={project.name}
             icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
+            headerAction={
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="h-6 gap-1.5 px-2 text-destructive hover:text-destructive"
+                onClick={() => {
+                  void handleDeleteArchivedProjectThreads(project, projectThreads);
+                }}
+              >
+                <Trash2Icon className="size-3.5" />
+                <span>Delete all archived</span>
+              </Button>
+            }
           >
             {projectThreads.map((thread) => (
               <SettingsRow
