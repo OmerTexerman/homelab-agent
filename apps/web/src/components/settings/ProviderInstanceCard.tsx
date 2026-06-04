@@ -516,6 +516,7 @@ export function ProviderInstanceCard({
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
+  const updateState = liveProvider?.updateState;
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
   const displayName =
@@ -714,6 +715,35 @@ export function ProviderInstanceCard({
     </div>
   ) : null;
 
+  const updateStateNode =
+    updateState?.status === "failed" || updateState?.status === "unchanged" ? (
+      <div
+        className={cn(
+          "rounded-md border px-2.5 py-2 text-xs leading-5",
+          updateState.status === "failed"
+            ? "border-destructive/30 bg-destructive/8 text-destructive"
+            : "border-warning/30 bg-warning/8 text-warning-foreground",
+        )}
+      >
+        <p className="font-medium">
+          {updateState.status === "failed"
+            ? "Provider update failed"
+            : "Provider update could not be verified"}
+        </p>
+        {updateState.message ? <p>{updateState.message}</p> : null}
+        {updateState.output ? (
+          <details className="mt-1.5">
+            <summary className="cursor-pointer select-none font-medium text-foreground/80">
+              Command output
+            </summary>
+            <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-2 font-mono text-[11px] leading-4 text-foreground">
+              {updateState.output}
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    ) : null;
+
   const versionCodeNode = versionLabel ? (
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
@@ -825,6 +855,7 @@ export function ProviderInstanceCard({
             </div>
             {authRowNode}
             {readinessNode}
+            {updateStateNode}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             <Button

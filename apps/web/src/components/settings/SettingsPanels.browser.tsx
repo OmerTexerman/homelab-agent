@@ -1524,6 +1524,40 @@ describe("GeneralSettingsPanel observability", () => {
       expect(scrollViewport!.scrollWidth).toBeGreaterThan(scrollViewport!.clientWidth);
     });
   });
+
+  it("shows provider update failure output on the provider card", async () => {
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [
+        {
+          ...createOutdatedProvider("codex"),
+          updateState: {
+            status: "failed",
+            startedAt: "2026-05-04T10:00:00.000Z",
+            finishedAt: "2026-05-04T10:01:00.000Z",
+            message: "Update command exited with code 243.",
+            output: "error: Permission denied writing to global install directory",
+          },
+        },
+      ],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Provider update failed")).toBeInTheDocument();
+    await expect
+      .element(page.getByText("Update command exited with code 243."))
+      .toBeInTheDocument();
+
+    await page.getByText("Command output").click();
+    await expect
+      .element(page.getByText("error: Permission denied writing to global install directory"))
+      .toBeInTheDocument();
+  });
 });
 
 describe("SourceControlSettingsPanel discovery states", () => {

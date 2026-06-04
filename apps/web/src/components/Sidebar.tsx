@@ -2007,46 +2007,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     ],
   );
 
-  const handleCreateThreadClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (project.memberProjects.length === 1) {
-        createThreadForProjectMember(project.memberProjects[0]!);
-        return;
-      }
-
-      void (async () => {
-        const api = readLocalApi();
-        if (!api) {
-          return;
-        }
-        const clicked = await api.contextMenu.show(
-          project.memberProjects.map((member) => ({
-            id: member.physicalProjectKey,
-            label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
-          })),
-          {
-            x: event.clientX,
-            y: event.clientY,
-          },
-        );
-        if (!clicked) {
-          return;
-        }
-        const targetMember = project.memberProjects.find(
-          (member) => member.physicalProjectKey === clicked,
-        );
-        if (!targetMember) {
-          return;
-        }
-        createThreadForProjectMember(targetMember);
-      })();
-    },
-    [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
-  );
-
   const handleCreateThreadContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -2103,6 +2063,51 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         }
 
         actionHandlers.get(clicked)?.();
+      })();
+    },
+    [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
+  );
+
+  const handleCreateThreadClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, runtimeSelectionMode: ThreadRuntimeMode) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (project.memberProjects.length === 1) {
+        createThreadForProjectMember(project.memberProjects[0]!, {
+          runtimeSelectionMode,
+        });
+        return;
+      }
+
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) {
+          createThreadForProjectMember(project.memberProjects[0]!, {
+            runtimeSelectionMode,
+          });
+          return;
+        }
+        const clicked = await api.contextMenu.show(
+          project.memberProjects.map((member) => ({
+            id: member.physicalProjectKey,
+            label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+          })),
+          {
+            x: event.clientX,
+            y: event.clientY,
+          },
+        );
+        if (!clicked) {
+          return;
+        }
+        const targetMember = project.memberProjects.find(
+          (member) => member.physicalProjectKey === clicked,
+        );
+        if (!targetMember) {
+          return;
+        }
+        createThreadForProjectMember(targetMember, { runtimeSelectionMode });
       })();
     },
     [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
@@ -2530,7 +2535,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
           size="sm"
-          className={`gap-2 px-2 py-1.5 pr-8 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground max-sm:pr-14 ${
+          className={`gap-2 px-2 py-1.5 pr-14 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground ${
             isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
           }`}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -2612,10 +2617,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             </TooltipPopup>
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <div className="pointer-events-none absolute top-1 right-1.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
+        <div className="pointer-events-none absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
+          <Tooltip>
+            <TooltipTrigger
+              render={
                 <button
                   type="button"
                   aria-label={
@@ -2625,22 +2630,47 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   }
                   data-testid="new-thread-button"
                   className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={handleCreateThreadClick}
+                  onClick={(event) => handleCreateThreadClick(event, "shared")}
                   onContextMenu={handleCreateThreadContextMenu}
                 >
                   <SquarePenIcon className="size-3.5" />
                 </button>
-              </div>
-            }
-          />
-          <TooltipPopup side="top">
-            {project.isStandalone
-              ? HOMELAB_PRODUCT_COPY.standalone.newThreadDescription
-              : newThreadShortcutLabel
-                ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription} (${newThreadShortcutLabel})`
-                : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription}
-          </TooltipPopup>
-        </Tooltip>
+              }
+            />
+            <TooltipPopup side="top">
+              {project.isStandalone
+                ? HOMELAB_PRODUCT_COPY.standalone.newThreadDescription
+                : newThreadShortcutLabel
+                  ? `${HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription} (${newThreadShortcutLabel})`
+                  : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription}
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={
+                    project.isStandalone
+                      ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
+                      : `${HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction} in ${project.displayName}`
+                  }
+                  data-testid="new-parallel-thread-button"
+                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={(event) => handleCreateThreadClick(event, "isolated")}
+                  onContextMenu={handleCreateThreadContextMenu}
+                >
+                  <GitBranchPlusIcon className="size-3.5" />
+                </button>
+              }
+            />
+            <TooltipPopup side="top">
+              {project.isStandalone
+                ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadDescription
+                : HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
       </div>
 
       <SidebarProjectThreadList
@@ -3372,6 +3402,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -3396,6 +3429,69 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       updateSettings({ sidebarThreadPreviewCount: count });
     },
     [updateSettings],
+  );
+  const createScratchThread = useCallback(
+    async (runtimeSelectionMode: ThreadRuntimeMode) => {
+      if (primaryEnvironmentId === null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
+          }),
+        );
+        return;
+      }
+
+      const api = readEnvironmentApi(primaryEnvironmentId);
+      if (!api) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+            description: HOMELAB_PRODUCT_COPY.serverConnection.standaloneThreadCreationDescription,
+          }),
+        );
+        return;
+      }
+
+      const threadId = newThreadId();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.standalone.create",
+          commandId: newCommandId(),
+          threadId,
+          title:
+            runtimeSelectionMode === "isolated"
+              ? HOMELAB_PRODUCT_COPY.standalone.newIsolatedThreadAction
+              : HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          runtimeSelectionMode,
+          createdAt: new Date().toISOString(),
+        });
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to create scratch thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [isMobile, navigate, primaryEnvironmentId, setOpenMobile],
   );
 
   return (
@@ -3462,6 +3558,26 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               onProjectGroupingModeChange={handleProjectGroupingModeChange}
               onThreadPreviewCountChange={handleThreadPreviewCountChange}
             />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={HOMELAB_PRODUCT_COPY.standalone.newThreadAction}
+                    data-testid="sidebar-new-scratch-thread-trigger"
+                    className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => {
+                      void createScratchThread("shared");
+                    }}
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </button>
+                }
+              />
+              <TooltipPopup side="right">
+                {HOMELAB_PRODUCT_COPY.standalone.newThreadDescription}
+              </TooltipPopup>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger
                 render={

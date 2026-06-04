@@ -6,6 +6,7 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
+import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadRuntimeReactor } from "../Services/ThreadRuntimeReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 
@@ -19,7 +20,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and runtime reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, deletion, and runtime reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -52,6 +53,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(ThreadDeletionReactor, {
+            start: () => {
+              started.push("thread-deletion-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(ThreadRuntimeReactor, {
             start: () => {
               started.push("thread-runtime-reactor");
@@ -71,6 +81,7 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "thread-deletion-reactor",
       "thread-runtime-reactor",
     ]);
 

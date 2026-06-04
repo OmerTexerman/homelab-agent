@@ -33,17 +33,13 @@ describe("Homelab product copy", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue).toBe(
       "Use Project Runtime",
     );
-    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction).toBe(
-      "New thread in Project Runtime",
-    );
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction).toBe("New thread");
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription).toContain(
       "Project Runtime",
     );
-    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction).toBe(
-      "New isolated runtime thread",
-    );
+    expect(HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction).toBe("New parallel thread");
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription).toContain(
-      "isolated runtime clone",
+      "Clones this Project Runtime",
     );
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.sidebarProjectBadgeLabel).toBe("Runtime");
     expect(HOMELAB_PRODUCT_COPY.project.searchDescription).toBe(
@@ -66,9 +62,7 @@ describe("Homelab product copy", () => {
       "Search memory, transcripts, or global knowledge",
     );
     expect(HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionGuidedMode).toBe("Guided");
-    expect(HOMELAB_PRODUCT_COPY.standalone.newThreadDescription).toContain(
-      "Scratch Project Runtime",
-    );
+    expect(HOMELAB_PRODUCT_COPY.standalone.newThreadDescription).toContain("Scratch runtime");
     expect(HOMELAB_PRODUCT_COPY.composer.defaultPlaceholder).not.toMatch(
       /repo|files\/folders|\$use skills/i,
     );

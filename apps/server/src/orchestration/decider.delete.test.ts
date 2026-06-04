@@ -14,6 +14,10 @@ import { expect, it } from "@effect/vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
+import {
+  defaultProjectRuntimeId,
+  isolatedThreadRuntimeId,
+} from "../runtime/ProjectRuntimePolicy.ts";
 
 const asCommandId = (value: string): CommandId => CommandId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
@@ -212,6 +216,86 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
       }
 
       expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
+    }),
+  );
+
+  it.effect("emits runtime cleanup metadata when deleting a thread", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: asCommandId("cmd-thread-delete-runtime-metadata"),
+          threadId: asThreadId("thread-delete-1"),
+        },
+        readModel,
+      });
+
+      expect(result).toMatchObject({
+        type: "thread.deleted",
+        payload: {
+          threadId: asThreadId("thread-delete-1"),
+          projectId: asProjectId("project-delete"),
+          runtimeId: defaultProjectRuntimeId(asProjectId("project-delete")),
+          runtimeSelectionMode: "shared",
+        },
+      });
+    }),
+  );
+
+  it.effect("emits isolated runtime cleanup metadata when deleting an isolated thread", () =>
+    Effect.gen(function* () {
+      const isolatedThreadId = asThreadId("thread-delete-isolated");
+      const projectId = asProjectId("project-delete");
+      const base = yield* seedReadModel;
+      const readModel = yield* projectEvent(base, {
+        sequence: 4,
+        eventId: asEventId("evt-thread-create-isolated"),
+        aggregateKind: "thread",
+        aggregateId: isolatedThreadId,
+        type: "thread.created",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        commandId: asCommandId("cmd-thread-create-isolated"),
+        causationEventId: null,
+        correlationId: asCommandId("cmd-thread-create-isolated"),
+        metadata: {},
+        payload: {
+          threadId: isolatedThreadId,
+          projectId,
+          runtimeId: isolatedThreadRuntimeId(isolatedThreadId),
+          runtimeSelectionMode: "isolated",
+          title: "Thread Delete Isolated",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: asCommandId("cmd-thread-delete-isolated"),
+          threadId: isolatedThreadId,
+        },
+        readModel,
+      });
+
+      expect(result).toMatchObject({
+        type: "thread.deleted",
+        payload: {
+          threadId: isolatedThreadId,
+          projectId,
+          runtimeId: isolatedThreadRuntimeId(isolatedThreadId),
+          runtimeSelectionMode: "isolated",
+        },
+      });
     }),
   );
 });

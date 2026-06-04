@@ -252,15 +252,15 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 describe("sidebarThreadCreationRuntimeCopy", () => {
   it("labels the default project runtime thread action as queued on the Project Runtime", () => {
     expect(sidebarThreadCreationRuntimeCopy("shared")).toMatchObject({
-      label: "New thread in Project Runtime",
+      label: "New thread",
       description: expect.stringContaining("Project Runtime"),
     });
   });
 
   it("labels isolated runtime thread creation as a runtime clone", () => {
     expect(sidebarThreadCreationRuntimeCopy("isolated")).toMatchObject({
-      label: "New isolated runtime thread",
-      description: expect.stringContaining("runtime clone"),
+      label: "New parallel thread",
+      description: expect.stringContaining("Clones this Project Runtime"),
     });
   });
 });

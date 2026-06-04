@@ -21,14 +21,14 @@ export const HOMELAB_PRODUCT_COPY = {
       "A logical project owns one Project Runtime. Threads inside that project use it by default; isolated clones are explicit.",
   },
   standalone: {
-    title: "Standalone Threads",
+    title: "Scratch Threads",
     shortTitle: "Scratch",
-    newThreadAction: "New standalone thread",
+    newThreadAction: "New scratch thread",
     newThreadDescription:
-      "One-off work in the Scratch Project Runtime and memory scope; promote it into a Project later.",
-    newIsolatedThreadAction: "New isolated standalone thread",
+      "One-off work outside a Project, using the Scratch runtime. Move it into a Project later.",
+    newIsolatedThreadAction: "New scratch thread in a runtime clone",
     newIsolatedThreadDescription:
-      "One-off work in an isolated Scratch runtime clone for containment or parallel work.",
+      "One-off work outside a Project, using a private runtime clone so it can run separately.",
     promoteAction: "Promote to project",
     promoteDescription: "Move this thread into a new named logical project.",
     moveAction: "Move to project",
@@ -46,12 +46,12 @@ export const HOMELAB_PRODUCT_COPY = {
       "New threads use their project's Project Runtime unless isolation is selected explicitly.",
     defaultThreadRuntimeValue: "Use Project Runtime",
     isolatedRuntimeValue: "Use isolated runtime clones by default",
-    newSharedThreadAction: "New thread in Project Runtime",
+    newSharedThreadAction: "New thread",
     newSharedThreadDescription:
       "Uses this project's Project Runtime and queues with other shared turns.",
-    newIsolatedThreadAction: "New isolated runtime thread",
+    newIsolatedThreadAction: "New parallel thread",
     newIsolatedThreadDescription:
-      "Runs in an isolated runtime clone for parallel work or containment; merge back explicitly.",
+      "Clones this Project Runtime so the thread can run separately; merge back explicitly.",
     sidebarProjectBadgeLabel: "Runtime",
     isolatedThreadBadgeLabel: "Isolated runtime clone",
     waitingThreadDescription: "This thread is queued behind another turn in the Project Runtime.",

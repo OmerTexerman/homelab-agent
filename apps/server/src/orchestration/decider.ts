@@ -25,6 +25,7 @@ import {
 import { projectEvent } from "./projector.ts";
 import {
   defaultProjectRuntimeId,
+  defaultRuntimeIdForProject,
   isStandaloneProjectId,
   isolatedThreadRuntimeId,
   standaloneProjectDefaultRuntimeId,
@@ -176,7 +177,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.delete": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -221,6 +222,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.deleted" as const,
         payload: {
           projectId: command.projectId,
+          defaultRuntimeId: defaultRuntimeIdForProject(project),
           deletedAt: occurredAt,
         },
       };
@@ -462,11 +464,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: thread.projectId,
+      });
+      const runtimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      const runtimeId =
+        thread.runtimeId ??
+        (runtimeSelectionMode === "isolated"
+          ? isolatedThreadRuntimeId(thread.id)
+          : defaultRuntimeIdForProject(project));
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -478,6 +491,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.deleted",
         payload: {
           threadId: command.threadId,
+          projectId: thread.projectId,
+          runtimeId,
+          runtimeSelectionMode,
           deletedAt: occurredAt,
         },
       };

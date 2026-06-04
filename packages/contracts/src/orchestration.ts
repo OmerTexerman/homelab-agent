@@ -898,6 +898,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
 
 export const ProjectDeletedPayload = Schema.Struct({
   projectId: ProjectId,
+  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   deletedAt: IsoDateTime,
 });
 
@@ -920,6 +921,9 @@ export const ThreadCreatedPayload = Schema.Struct({
 
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   deletedAt: IsoDateTime,
 });
 
