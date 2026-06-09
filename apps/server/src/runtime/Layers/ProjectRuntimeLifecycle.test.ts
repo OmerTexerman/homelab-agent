@@ -28,6 +28,7 @@ import {
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager.ts";
+import { isolatedThreadRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { makeProjectRuntimeQueue, ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import {
   ThreadRuntime,
@@ -88,11 +89,15 @@ function makeThread(id: ThreadId): OrchestrationThread {
   };
 }
 
-function makeReadModel(workspaceRoot: string): OrchestrationReadModel {
+function makeReadModel(
+  workspaceRoot: string,
+  threads: ReadonlyArray<OrchestrationThread> = [makeThread(threadId), makeThread(secondThreadId)],
+  project: OrchestrationProject = makeProject(workspaceRoot),
+): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
-    projects: [makeProject(workspaceRoot)],
-    threads: [makeThread(threadId), makeThread(secondThreadId)],
+    projects: [project],
+    threads: [...threads],
     updatedAt: now,
   };
 }
@@ -194,15 +199,21 @@ function makeHarness(input: {
   readonly baseDir: string;
   readonly hostWorkspacePath: string;
   readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
+  readonly threads?: ReadonlyArray<OrchestrationThread>;
+  readonly descriptors?: ReadonlyArray<ThreadRuntimeDescriptor>;
+  readonly project?: OrchestrationProject;
 }) {
-  const descriptors = new Map<string, ThreadRuntimeDescriptor>([
-    [String(threadId), makeDescriptor({ threadId, status: "stopped" })],
-  ]);
+  const descriptors = new Map<string, ThreadRuntimeDescriptor>(
+    (input.descriptors ?? [makeDescriptor({ threadId, status: "stopped" })]).map((descriptor) => [
+      String(descriptor.threadId),
+      descriptor,
+    ]),
+  );
   const closedTerminalThreadIds: string[] = [];
   const stoppedThreadIds: ThreadId[] = [];
   const destroyedThreadIds: ThreadId[] = [];
 
-  const readModel = makeReadModel(input.hostWorkspacePath);
+  const readModel = makeReadModel(input.hostWorkspacePath, input.threads, input.project);
   const projectionSnapshotQuery = {
     getCommandReadModel: () => Effect.succeed(readModel),
     getSnapshot: () => Effect.succeed(readModel),
@@ -680,5 +691,78 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.include(failure.message, "does not have a restorable filesystem archive");
       }),
     ),
+  );
+
+  it.effect("reports a project runtime with no bound thread as idle instead of failing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-unbound-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        // No threads are bound to the project runtime, and nothing has been
+        // provisioned for it yet.
+        const harness = makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          threads: [],
+          descriptors: [],
+        });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        // A status read (used by the home overview poller) must not fail just
+        // because the runtime has no bound thread — it reports as idle instead.
+        const detail = yield* lifecycle.get({ projectId });
+
+        assert.equal(detail.runtime.runtime.projectId, projectId);
+        assert.equal(detail.runtime.runtime.lifecycleState, "unprovisioned");
+      }),
+    ),
+  );
+
+  it.effect(
+    "classifies a promoted scratch runtime (isolated id adopted as the project's default) as the project runtime",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "project-runtime-adopted-",
+          });
+          const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+
+          // A promoted scratch thread keeps its own `isolated-runtime:<thread>` id, and the
+          // new project adopts it as its default runtime (reuse-in-place). The status panel
+          // must still classify it as the *project* runtime, not an isolated clone.
+          const adoptedRuntimeId = isolatedThreadRuntimeId(threadId);
+          const project: OrchestrationProject = {
+            ...makeProject(hostWorkspacePath),
+            defaultRuntimeId: adoptedRuntimeId,
+          };
+          const thread: OrchestrationThread = {
+            ...makeThread(threadId),
+            runtimeId: adoptedRuntimeId,
+            runtimeSelectionMode: "shared",
+          };
+          const descriptor: ThreadRuntimeDescriptor = {
+            ...makeDescriptor({ threadId, status: "stopped" }),
+            runtimeId: adoptedRuntimeId,
+          };
+          const harness = makeHarness({
+            baseDir: tempDir,
+            hostWorkspacePath,
+            project,
+            threads: [thread],
+            descriptors: [descriptor],
+          });
+          const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+          const detail = yield* lifecycle.get({ projectId });
+
+          assert.equal(detail.runtime.runtime.kind, "project");
+          assert.equal(detail.runtime.runtime.parentRuntimeId, null);
+        }),
+      ),
   );
 });

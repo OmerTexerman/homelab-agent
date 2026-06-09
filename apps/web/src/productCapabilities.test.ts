@@ -4,6 +4,7 @@ import {
   HOMELAB_PRODUCT_COPY,
   shouldShowCompatibilityHostPathProjectUi,
   shouldShowEditorOpenInControls,
+  shouldShowMultiBackendConnectionsUi,
   shouldShowPrimarySourceControlUi,
   shouldShowRemoteProjectCloneUi,
 } from "./productCapabilities";
@@ -82,6 +83,7 @@ describe("Homelab product copy", () => {
     expect(shouldShowRemoteProjectCloneUi()).toBe(false);
     expect(shouldShowCompatibilityHostPathProjectUi()).toBe(false);
     expect(shouldShowEditorOpenInControls()).toBe(false);
+    expect(shouldShowMultiBackendConnectionsUi()).toBe(false);
   });
 });
 

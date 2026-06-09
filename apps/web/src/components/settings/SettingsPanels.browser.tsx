@@ -630,9 +630,77 @@ describe("GeneralSettingsPanel observability", () => {
     await expect
       .element(page.getByText(/^Chrome on Mac is the current Homelab Agent session\./))
       .toBeInTheDocument();
+    // The multi-backend "Connected servers" UI is flag-gated off for the cloud fork.
     await expect
       .element(page.getByRole("heading", { name: "Connected servers", exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  it("exposes device pairing on a remotely reachable hosted server without a desktop bridge", async () => {
+    Reflect.deleteProperty(window, "desktopBridge");
+    authAccessHarness.setSnapshot({
+      pairingLinks: [],
+      clientSessions: [
+        makeClientSession({
+          sessionId: "session-owner",
+          subject: "browser-owner",
+          scopes: ["orchestration:read", "access:write"],
+          method: "browser-session-cookie",
+          client: {
+            label: "Chrome on Mac",
+            deviceType: "desktop",
+            os: "macOS",
+            browser: "Chrome",
+            ipAddress: "203.0.113.7",
+          },
+          issuedAt: "2036-04-07T00:00:00.000Z",
+          expiresAt: "2036-05-07T00:00:00.000Z",
+          connected: true,
+          current: true,
+        }),
+      ],
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            auth: { ...createBaseServerConfig().auth, policy: "remote-reachable" },
+            scopes: ["orchestration:read", "access:write"],
+            sessionMethod: "browser-session-cookie",
+            expiresAt: "2036-05-07T00:00:00.000Z",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`Unhandled fetch GET ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ConnectionsSettings />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Devices & Sessions")).toBeInTheDocument();
+    // Pairing/device management is server-driven and must be available in the
+    // hosted cloud app even though there is no desktop bridge.
+    await expect
+      .element(page.getByRole("heading", { name: "Paired devices", exact: true, level: 2 }))
       .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Pair device", exact: true }))
+      .toBeInTheDocument();
+    // The multi-backend "Connected servers" UI stays flag-gated off for the cloud fork.
+    await expect
+      .element(page.getByRole("heading", { name: "Connected servers", exact: true }))
+      .not.toBeInTheDocument();
   });
 
   it("hides advertised endpoint rows when desktop network access is disabled", async () => {

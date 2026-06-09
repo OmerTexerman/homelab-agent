@@ -363,12 +363,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
 
-      const defaultRuntimeId = defaultProjectRuntimeId(command.projectId);
-      const runtimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      // Promotion turns the scratch thread into the project's primary (shared) thread so all
+      // future threads in the project share its runtime. We reuse the thread's own isolated
+      // runtime in place — the new project simply adopts it as its default runtime, so the
+      // existing workspace/container is kept (no copy, no move). A shared standalone thread
+      // runs on the global standalone runtime (shared by every scratch thread), which can't be
+      // handed to a single project, so it falls back to a fresh project runtime instead.
+      const threadRuntimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
       const runtimeId =
-        runtimeSelectionMode === "isolated"
+        threadRuntimeSelectionMode === "isolated"
           ? (thread.runtimeId ?? isolatedThreadRuntimeId(thread.id))
-          : defaultRuntimeId;
+          : defaultProjectRuntimeId(command.projectId);
+      const defaultRuntimeId = runtimeId;
+      const runtimeSelectionMode = "shared" as const;
       const projectCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "project",

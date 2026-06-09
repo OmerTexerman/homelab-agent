@@ -15,6 +15,15 @@ export const HOMELAB_PRODUCT_CAPABILITIES = {
   runtimeWorkspaceExplorer: true,
   sidebarProjectGroupingControls: false,
   threadRuntimeIsolationControls: true,
+  // Gates the multi-backend "Connected servers" UI (pairing this client to
+  // additional Homelab Agent backends via remote link or SSH) in the HOSTED /
+  // cloud web build. The desktop app genuinely uses multi-backend connections,
+  // so it always shows that section (see ConnectionsSettings, which ORs this
+  // flag with the presence of the desktop bridge). The cloud fork is
+  // single-tenant — one hosted server — so this stays false there. The
+  // SavedBackend list / add-server dialog / SSH-discovery scaffolding is
+  // load-bearing for desktop; do not remove it.
+  multiBackendConnectionsUi: false,
 } as const;
 
 export const HOMELAB_PRODUCT_COPY = {
@@ -264,4 +273,8 @@ export function shouldShowSidebarProjectGroupingControls(): boolean {
 
 export function shouldShowThreadRuntimeIsolationControls(): boolean {
   return HOMELAB_PRODUCT_CAPABILITIES.threadRuntimeIsolationControls;
+}
+
+export function shouldShowMultiBackendConnectionsUi(): boolean {
+  return HOMELAB_PRODUCT_CAPABILITIES.multiBackendConnectionsUi;
 }

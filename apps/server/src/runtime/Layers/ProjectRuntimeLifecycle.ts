@@ -125,10 +125,6 @@ function toProjectRuntimeError(input: {
   return new ProjectRuntimeError(input);
 }
 
-function isProjectRuntimeId(runtimeId: RuntimeSessionIdModel): boolean {
-  return String(runtimeId).startsWith("project-runtime:");
-}
-
 function snapshotRootForRuntime(
   stateDir: string,
   runtimeId: RuntimeSessionIdModel,
@@ -434,63 +430,82 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       }),
     );
 
+  // Resolves the project + target runtime + its threads WITHOUT requiring a
+  // thread to be bound to the runtime. Read-only operations (status reads) can
+  // describe an unbound runtime as idle; mutating operations go through
+  // `resolveRuntime`, which additionally enforces a binding thread.
+  const resolveRuntimeContext = Effect.fn("projectRuntimeLifecycle.resolveRuntimeContext")(
+    function* (input: ProjectRuntimeOperationInput) {
+      const readModel = yield* projectionSnapshotQuery.getSnapshot().pipe(
+        Effect.mapError((cause) =>
+          toProjectRuntimeError({
+            message: "Failed to read project runtime projection state.",
+            projectId: input.projectId,
+            cause,
+          }),
+        ),
+      );
+      const project = readModel.projects.find(
+        (entry) => entry.id === input.projectId && entry.deletedAt === null,
+      );
+      if (!project) {
+        return yield* toProjectRuntimeError({
+          message: `Project '${input.projectId}' was not found.`,
+          projectId: input.projectId,
+        });
+      }
+
+      const runtimeId =
+        input.runtimeId ?? project.defaultRuntimeId ?? defaultProjectRuntimeId(project.id);
+      const projectThreads = readModel.threads.filter(
+        (thread) => thread.projectId === project.id && thread.deletedAt === null,
+      );
+      const runtimeThreads = projectThreads.filter(
+        (thread) =>
+          (thread.runtimeId ?? project.defaultRuntimeId ?? defaultProjectRuntimeId(project.id)) ===
+          runtimeId,
+      );
+      const requestedThread = input.threadId
+        ? projectThreads.find((thread) => thread.id === input.threadId)
+        : undefined;
+      const bindingThread =
+        requestedThread &&
+        (requestedThread.runtimeId ??
+          project.defaultRuntimeId ??
+          defaultProjectRuntimeId(project.id)) === runtimeId
+          ? requestedThread
+          : runtimeThreads[0];
+
+      return {
+        readModel,
+        project,
+        runtimeId,
+        bindingThread,
+        runtimeThreads,
+      };
+    },
+  );
+
   const resolveRuntime = Effect.fn("projectRuntimeLifecycle.resolveRuntime")(function* (
     input: ProjectRuntimeOperationInput,
   ) {
-    const readModel = yield* projectionSnapshotQuery.getSnapshot().pipe(
-      Effect.mapError((cause) =>
-        toProjectRuntimeError({
-          message: "Failed to read project runtime projection state.",
-          projectId: input.projectId,
-          cause,
-        }),
-      ),
-    );
-    const project = readModel.projects.find(
-      (entry) => entry.id === input.projectId && entry.deletedAt === null,
-    );
-    if (!project) {
-      return yield* toProjectRuntimeError({
-        message: `Project '${input.projectId}' was not found.`,
-        projectId: input.projectId,
-      });
-    }
-
-    const runtimeId =
-      input.runtimeId ?? project.defaultRuntimeId ?? defaultProjectRuntimeId(project.id);
-    const projectThreads = readModel.threads.filter(
-      (thread) => thread.projectId === project.id && thread.deletedAt === null,
-    );
-    const runtimeThreads = projectThreads.filter(
-      (thread) =>
-        (thread.runtimeId ?? project.defaultRuntimeId ?? defaultProjectRuntimeId(project.id)) ===
-        runtimeId,
-    );
-    const requestedThread = input.threadId
-      ? projectThreads.find((thread) => thread.id === input.threadId)
-      : undefined;
-    const bindingThread =
-      requestedThread &&
-      (requestedThread.runtimeId ??
-        project.defaultRuntimeId ??
-        defaultProjectRuntimeId(project.id)) === runtimeId
-        ? requestedThread
-        : runtimeThreads[0];
+    const resolved = yield* resolveRuntimeContext(input);
+    const bindingThread = resolved.bindingThread;
     if (!bindingThread) {
       return yield* toProjectRuntimeError({
         message: "Project runtime operations require at least one thread bound to this runtime.",
-        projectId: project.id,
-        runtimeId,
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
         ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       });
     }
 
     return {
-      readModel,
-      project,
-      runtimeId,
+      readModel: resolved.readModel,
+      project: resolved.project,
+      runtimeId: resolved.runtimeId,
       bindingThread,
-      runtimeThreads,
+      runtimeThreads: resolved.runtimeThreads,
     };
   });
 
@@ -567,7 +582,10 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   const describeRuntime = Effect.fn("projectRuntimeLifecycle.describeRuntime")(function* (
     input: ProjectRuntimeOperationInput,
   ) {
-    const resolved = yield* resolveRuntime(input);
+    // Status reads tolerate a runtime with no bound thread: an unused project
+    // runtime is reported as idle ("unprovisioned") rather than surfacing an
+    // error to status pollers (e.g. the home overview refresh).
+    const resolved = yield* resolveRuntimeContext(input);
     const [metadata, descriptors, queueState] = yield* Effect.all([
       metadataForRuntime(resolved.runtimeId),
       listRuntimeDescriptors(resolved.runtimeId),
@@ -596,13 +614,19 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         note: restoreAvailable ? snapshot.note : MISSING_ARCHIVE_SNAPSHOT_NOTE,
       } satisfies ProjectRuntimeSnapshotRecord;
     });
+    // The project's default runtime IS the project runtime, regardless of its id string. A
+    // promoted scratch thread keeps its `isolated-runtime:<thread>` id as the project's default
+    // runtime, so classify by membership (is this the project's default runtime?) rather than by
+    // the id prefix — otherwise the project's own runtime would be mislabelled as an isolated
+    // clone. Any other runtime bound under the project is a genuine isolated clone of it.
+    const projectRuntimeId =
+      resolved.project.defaultRuntimeId ?? defaultProjectRuntimeId(resolved.project.id);
+    const isProjectScopedRuntime = resolved.runtimeId === projectRuntimeId;
     const statusView: ProjectRuntimeStatusView = {
       id: resolved.runtimeId,
       projectId: resolved.project.id,
-      kind: isProjectRuntimeId(resolved.runtimeId) ? "project" : "isolated",
-      parentRuntimeId: isProjectRuntimeId(resolved.runtimeId)
-        ? null
-        : (resolved.project.defaultRuntimeId ?? defaultProjectRuntimeId(resolved.project.id)),
+      kind: isProjectScopedRuntime ? "project" : "isolated",
+      parentRuntimeId: isProjectScopedRuntime ? null : projectRuntimeId,
       lifecycleState,
       executionLock: queueState.executionLock,
       filesystemRoot: descriptor?.workspacePath ?? null,

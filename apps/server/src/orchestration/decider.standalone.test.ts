@@ -221,8 +221,9 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("preserves isolated runtime identity when promoting an isolated standalone thread", async () => {
+  it("promotes an isolated standalone thread into the project runtime as a shared member", async () => {
     const threadId = asThreadId("thread-promoted-isolated");
+    const promotedProjectId = asProjectId("project-promoted-isolated");
     const initial = createEmptyReadModel(now);
     const withStandalone = await applyPlannedEvents(
       initial,
@@ -240,7 +241,7 @@ describe("standalone thread orchestration", () => {
         type: "thread.standalone.promote-to-project",
         commandId: asCommandId("cmd-promote-isolated"),
         threadId,
-        projectId: asProjectId("project-promoted-isolated"),
+        projectId: promotedProjectId,
         title: "Promoted isolated project",
         createdAt: now,
       },
@@ -248,12 +249,24 @@ describe("standalone thread orchestration", () => {
     );
     const events = Array.isArray(result) ? result : [result];
 
+    // Promotion turns the scratch thread into the project's primary (shared) thread so future
+    // threads share its runtime. The thread's own isolated runtime is reused in place: the new
+    // project adopts it as its default runtime, and the thread keeps that runtime id (now in
+    // shared mode) — no copy, no move, the existing container/workspace is kept.
+    expect(events[0]).toMatchObject({
+      type: "project.created",
+      payload: {
+        projectId: promotedProjectId,
+        defaultRuntimeId: isolatedThreadRuntimeId(threadId),
+      },
+    });
     expect(events[1]).toMatchObject({
       type: "thread.meta-updated",
       payload: {
         threadId,
+        projectId: promotedProjectId,
         runtimeId: isolatedThreadRuntimeId(threadId),
-        runtimeSelectionMode: "isolated",
+        runtimeSelectionMode: "shared",
       },
     });
   });

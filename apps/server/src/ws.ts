@@ -27,6 +27,7 @@ import {
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
+  type OrchestrationProjectShell,
   type OrchestrationThread,
   type OrchestrationShellStreamEvent,
   OrchestrationGetFullThreadDiffError,
@@ -65,6 +66,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { layer as runtimeProviderVersionManifestLayer } from "./provider/RuntimeProviderVersionManifest.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -524,7 +526,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
         switch (event.type) {
-          case "project.created":
           case "project.meta-updated":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
@@ -536,6 +537,34 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               ),
               Effect.catch(() => Effect.succeed(Option.none())),
             );
+          case "project.created": {
+            // A newly created project must always reach connected clients; otherwise the
+            // sidebar only shows it after a page reload. Prefer the projection, but never
+            // silently drop the event — fall back to a shell built from the event payload,
+            // which already carries every project-shell field.
+            const fallbackProject: OrchestrationProjectShell = {
+              id: event.payload.projectId,
+              title: event.payload.title,
+              workspaceRoot: event.payload.workspaceRoot,
+              repositoryIdentity: event.payload.repositoryIdentity ?? null,
+              defaultRuntimeId: event.payload.defaultRuntimeId ?? null,
+              defaultModelSelection: event.payload.defaultModelSelection,
+              scripts: event.payload.scripts,
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            };
+            return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
+              Effect.map((project) => Option.getOrElse(project, () => fallbackProject)),
+              Effect.catch(() => Effect.succeed(fallbackProject)),
+              Effect.map((project) =>
+                Option.some({
+                  kind: "project-upserted" as const,
+                  sequence: event.sequence,
+                  project,
+                }),
+              ),
+            );
+          }
           case "project.deleted":
             return Effect.succeed(
               Option.some({
@@ -1893,7 +1922,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(
+                ProviderMaintenanceRunner.layer.pipe(
+                  Layer.provide(runtimeProviderVersionManifestLayer),
+                ),
+              ),
               Layer.provide(
                 SourceControlDiscoveryLayer.layer.pipe(
                   Layer.provide(

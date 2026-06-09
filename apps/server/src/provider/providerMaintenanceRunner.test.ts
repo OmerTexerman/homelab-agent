@@ -20,6 +20,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
 import type { ProviderReadiness } from "./ProviderSelectionPolicy.ts";
+import { RuntimeProviderVersionManifest } from "./RuntimeProviderVersionManifest.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import {
   clearLatestProviderVersionCacheForTests,
@@ -37,8 +38,20 @@ const OPENCODE_INSTANCE_ID = ProviderInstanceId.make("opencode");
 const encoder = new TextEncoder();
 const noProviderReadiness: ProviderReadiness | undefined = undefined;
 
+const manifestWrites: Array<{ readonly packageName: string; readonly version: string }> = [];
+const recordingManifestLayer = Layer.succeed(
+  RuntimeProviderVersionManifest,
+  RuntimeProviderVersionManifest.of({
+    recordInstalledVersion: (input) =>
+      Effect.sync(() => {
+        manifestWrites.push({ packageName: input.packageName, version: input.version });
+      }),
+  }),
+);
+
 afterEach(() => {
   clearLatestProviderVersionCacheForTests();
+  manifestWrites.length = 0;
 });
 
 function lifecycleFor(provider: ProviderDriverKind): ProviderMaintenanceCapabilities {
@@ -212,6 +225,7 @@ const makeTestRunner = (registry: ProviderRegistryShape) =>
     Effect.provide(
       ProviderMaintenanceRunner.layer.pipe(
         Layer.provide(Layer.succeed(ProviderRegistry, registry)),
+        Layer.provide(recordingManifestLayer),
       ),
     ),
   );
@@ -235,6 +249,9 @@ describe("providerMaintenanceRunner", () => {
         (yield* Ref.get(updateStatesRef)).map((state) => state.status),
         ["queued", "running", "succeeded"],
       );
+      // Cursor has no npm package baked into the runtime image, so nothing is
+      // pinned into the version manifest.
+      assert.deepStrictEqual(manifestWrites, []);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -326,6 +343,54 @@ describe("providerMaintenanceRunner", () => {
         ),
       );
     },
+  );
+
+  it.effect("pins the resolved version into the runtime image manifest on success", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry({
+        ...baseOpenCodeProvider,
+        version: "1.2.3",
+      });
+      const updater = yield* makeTestRunner(registry);
+
+      const result = yield* updater.updateProvider(OPENCODE_DRIVER);
+
+      assert.strictEqual(result.providers[0]?.updateState?.status, "succeeded");
+      // The host CLI is now on 1.2.3; the same version is pinned into the
+      // shared manifest so the runtime image rebuilds onto it.
+      assert.deepStrictEqual(manifestWrites, [{ packageName: "opencode-ai", version: "1.2.3" }]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          latestVersionHttpClient("1.2.3"),
+          mockSpawnerLayer(() => ({ stdout: "updated" })),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("does not touch the version manifest when the update leaves it outdated", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry({
+        ...baseOpenCodeProvider,
+        version: "1.0.0",
+      });
+      const updater = yield* makeTestRunner(registry);
+
+      const result = yield* updater.updateProvider(OPENCODE_DRIVER);
+
+      // Command ran but the provider is still behind latest, so we must not
+      // pin a stale version into the image.
+      assert.strictEqual(result.providers[0]?.updateState?.status, "unchanged");
+      assert.deepStrictEqual(manifestWrites, []);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          latestVersionHttpClient("1.2.3"),
+          mockSpawnerLayer(() => ({ stdout: "noop" })),
+        ),
+      ),
+    ),
   );
 
   it.effect("updates a single provider instance without touching sibling instances", () => {

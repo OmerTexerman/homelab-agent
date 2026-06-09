@@ -34,7 +34,13 @@ interface FakeDockerContainer {
   image: string;
   workdir: string;
   mounts: FakeDockerMount[];
+  // Live publication (docker inspect .NetworkSettings.Ports): only present while
+  // running. Cleared on stop and reassigned a fresh ephemeral host port on start,
+  // mirroring real Docker/Podman.
   ports: Record<string, Array<{ HostIp: string; HostPort: string }>>;
+  // Configured mapping (docker inspect .HostConfig.PortBindings): set at create
+  // time and persists across stop. HostPort is "" for an ephemeral publish.
+  portBindings?: Record<string, Array<{ HostIp: string; HostPort: string }>>;
   networks: Record<string, { IPAddress: string }>;
   labels: Record<string, string>;
   running: boolean;
@@ -90,6 +96,9 @@ class FakeDockerRunner {
                 Destination: mount.target,
                 RW: !mount.readOnly,
               })),
+              HostConfig: {
+                PortBindings: container.portBindings ?? {},
+              },
               NetworkSettings: {
                 Ports: container.ports,
                 Networks: container.networks,
@@ -131,6 +140,7 @@ class FakeDockerRunner {
         let networkName = "bridge";
         const mounts: FakeDockerMount[] = [];
         const ports: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
+        const portBindings: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
         let index = 1;
 
         while (index < input.length) {
@@ -161,12 +171,15 @@ class FakeDockerRunner {
             const rawPort = input[index + 1] ?? "";
             const match = rawPort.match(/^([^:]+)::(\d+)\/tcp$/);
             if (match) {
+              const hostIp = match[1] ?? "127.0.0.1";
               ports[`${match[2]}/tcp`] = [
                 {
-                  HostIp: match[1] ?? "127.0.0.1",
+                  HostIp: hostIp,
                   HostPort: String(32_000 + this.nextId),
                 },
               ];
+              // An ephemeral publish records the binding without a fixed host port.
+              portBindings[`${match[2]}/tcp`] = [{ HostIp: hostIp, HostPort: "" }];
             }
             index += 2;
             continue;
@@ -211,6 +224,7 @@ class FakeDockerRunner {
           workdir,
           mounts,
           ports,
+          portBindings,
           networks: {
             [networkName]: {
               IPAddress: `172.30.0.${this.nextId}`,
@@ -228,6 +242,16 @@ class FakeDockerRunner {
         if (!container) {
           return okResult({ code: 1, stderr: `No such container: ${name}` });
         }
+        // Real Docker reassigns a fresh ephemeral host port on start, so the live
+        // publication is rebuilt from the configured bindings rather than reused.
+        const republished: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
+        for (const [portKey, bindings] of Object.entries(container.portBindings ?? {})) {
+          republished[portKey] = bindings.map((binding) => ({
+            HostIp: binding.HostIp || "127.0.0.1",
+            HostPort: String(32_000 + this.nextId++),
+          }));
+        }
+        container.ports = republished;
         container.running = true;
         return okResult({ stdout: `${container.id}\n` });
       }
@@ -238,6 +262,9 @@ class FakeDockerRunner {
         if (!container) {
           return okResult({ code: 1, stderr: `No such container: ${name}` });
         }
+        // A stopped container has no live publication; only the configured
+        // bindings (`portBindings`) survive, mirroring real Docker/Podman.
+        container.ports = {};
         container.running = false;
         return okResult({ stdout: `${container.name}\n` });
       }
@@ -1175,7 +1202,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         provider: "codex",
         runtimeMode: "full-access",
       });
-      yield* runtime.startRuntime(descriptor.threadId);
+      const firstStart = yield* runtime.startRuntime(descriptor.threadId);
       yield* runtime.stopRuntime(descriptor.threadId);
 
       docker.calls.length = 0;
@@ -1189,6 +1216,15 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       assert.equal(
         docker.calls.some((call) => call[0] === "start"),
         true,
+      );
+      // The stopped container has no live published port, so the runtime must
+      // re-read the freshly assigned host port after `docker start` rather than
+      // treating the absence as an incompatibility and recreating the container.
+      assert.ok(restarted.managedOpenCodeServer);
+      assert.equal(restarted.managedOpenCodeServer?.containerPort, 4096);
+      assert.notEqual(
+        restarted.managedOpenCodeServer?.hostPort,
+        firstStart.managedOpenCodeServer?.hostPort,
       );
     }),
   );

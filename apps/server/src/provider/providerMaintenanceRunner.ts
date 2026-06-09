@@ -21,6 +21,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
+import { RuntimeProviderVersionManifest } from "./RuntimeProviderVersionManifest.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
@@ -194,6 +195,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const runtimeProviderVersionManifest = yield* RuntimeProviderVersionManifest;
   const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
@@ -355,6 +357,24 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             const stillOutdated =
               couldNotVerify ||
               verifiedProviders.some((verifiedProvider) => isOutdatedProvider(verifiedProvider));
+
+            // The host CLI is now genuinely on the latest version. Pin that same
+            // resolved version into the shared runtime manifest so the Docker
+            // image rebuilds onto it and sessions stay in sync (best-effort —
+            // this never fails the update). Skip providers that aren't baked
+            // into the runtime image (no npm package) or that we couldn't verify.
+            if (!stillOutdated && capabilities.packageName) {
+              const resolvedVersion =
+                verifiedProviders.find((verifiedProvider) => verifiedProvider.version)?.version ??
+                null;
+              if (resolvedVersion) {
+                yield* runtimeProviderVersionManifest.recordInstalledVersion({
+                  packageName: capabilities.packageName,
+                  version: resolvedVersion,
+                });
+              }
+            }
+
             return yield* finish(
               makeUpdateState({
                 status: stillOutdated ? "unchanged" : "succeeded",

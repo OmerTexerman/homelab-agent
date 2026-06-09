@@ -42,7 +42,7 @@ function walkBuildContext(rootPath: string): ReadonlyArray<string> {
   return entries;
 }
 
-function fingerprintBuildContext(contextPath: string): string | undefined {
+export function fingerprintBuildContext(contextPath: string): string | undefined {
   if (!nodeFs.existsSync(contextPath)) {
     return undefined;
   }
@@ -75,6 +75,32 @@ function findRuntimeContextPath(startDir: string): string {
   }
 }
 
+/**
+ * Basename of the shared provider-version manifest that lives inside the
+ * runtime build context. It is the single source of truth for the CLI versions
+ * baked into the runtime image (the Dockerfile installs from it) and the host
+ * update flow rewrites it so host + image stay in sync.
+ */
+export const RUNTIME_PROVIDER_VERSIONS_BASENAME = "provider-versions.json";
+
+export function resolveRuntimeBuildContextPath(repoRoot: string): string {
+  return (
+    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_CONTEXT) ?? findRuntimeContextPath(repoRoot)
+  );
+}
+
+/**
+ * Absolute path of the provider-version manifest within the same build context
+ * that {@link resolveLocalRuntimeImageBuildSpec} fingerprints and builds, so a
+ * write here reliably changes the image fingerprint.
+ */
+export function resolveRuntimeProviderVersionsManifestPath(repoRoot: string): string {
+  return nodePath.join(
+    resolveRuntimeBuildContextPath(repoRoot),
+    RUNTIME_PROVIDER_VERSIONS_BASENAME,
+  );
+}
+
 export function defaultRuntimeImageRef(): string {
   return trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_IMAGE) ?? LOCAL_RUNTIME_IMAGE_FALLBACK;
 }
@@ -88,8 +114,7 @@ export function normalizeRuntimeImageRef(imageRef: string): string {
 }
 
 export function resolveLocalRuntimeImageBuildSpec(repoRoot: string): LocalRuntimeImageBuildSpec {
-  const contextPath =
-    trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_CONTEXT) ?? findRuntimeContextPath(repoRoot);
+  const contextPath = resolveRuntimeBuildContextPath(repoRoot);
   const dockerfilePath =
     trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_DOCKERFILE) ??
     nodePath.join(contextPath, "Dockerfile");

@@ -1,9 +1,5 @@
 FROM ubuntu:24.04
 
-ARG CODEX_CLI_VERSION=0.130.0
-ARG CLAUDE_CODE_VERSION=2.1.143
-ARG OPENCODE_CLI_VERSION=1.15.1
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,8 +36,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     > /etc/apt/sources.list.d/nodesource.list \
   && apt-get update && apt-get install -y --no-install-recommends \
   nodejs \
-  && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_CLI_VERSION} opencode-ai@${OPENCODE_CLI_VERSION} \
-  && npm cache clean --force \
   && rm -rf /var/lib/apt/lists/*
+
+# Provider CLI versions are pinned by a single source of truth that the host
+# shares with this image: docker/runtime/provider-versions.json. The host
+# update flow rewrites this file with the version it just installed, which
+# changes the build-context fingerprint and triggers a rebuild so the image
+# and host stay on the same versions. Keep this COPY + install in their own
+# layer so version bumps don't bust the (slow) apt/node layer above.
+COPY provider-versions.json /opt/homelab/provider-versions.json
+
+RUN set -eux; \
+  CLAUDE_CODE_VERSION="$(jq -er '."@anthropic-ai/claude-code"' /opt/homelab/provider-versions.json)"; \
+  CODEX_CLI_VERSION="$(jq -er '."@openai/codex"' /opt/homelab/provider-versions.json)"; \
+  OPENCODE_CLI_VERSION="$(jq -er '."opencode-ai"' /opt/homelab/provider-versions.json)"; \
+  npm install -g \
+    "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    "@openai/codex@${CODEX_CLI_VERSION}" \
+    "opencode-ai@${OPENCODE_CLI_VERSION}"; \
+  npm cache clean --force
 
 CMD ["/bin/bash", "-lc", "trap : TERM INT; while sleep 3600; do :; done"]

@@ -46,7 +46,7 @@
     "ghcr.io/devcontainers/features/git",
     "ghcr.io/devcontainers-extra/features/bun"
   ],
-  "postCreateCommand": "npm install --global @openai/codex@0.130.0 @anthropic-ai/claude-code@2.1.143 opencode-ai@1.15.1 && bun install --backend=copyfile --frozen-lockfile --force",
+  "postCreateCommand": "npm install --global $(node -e \"const m=require('./docker/runtime/provider-versions.json');process.stdout.write(Object.entries(m).map(([k,v])=>k+'@'+v).join(' '))\") && bun install --backend=copyfile --frozen-lockfile --force",
   "customizations": {
     "vscode": {
       "extensions": ["oxc.oxc-vscode"]

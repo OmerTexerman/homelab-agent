@@ -111,6 +111,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { useServerConfig } from "~/rpc/serverState";
 import { APP_BASE_NAME } from "../../branding";
+import { shouldShowMultiBackendConnectionsUi } from "../../productCapabilities";
 import { deriveDeviceSessionReadiness } from "../../setupReadinessReadModel";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
@@ -1588,6 +1589,12 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
+  // Multi-backend "Connected servers" pairing (SSH / remote backends) is a real
+  // desktop-app feature, but it does not fit the single-tenant cloud web build.
+  // The desktop app always keeps it; the hosted web build hides it unless the
+  // capability flag is explicitly enabled.
+  const showMultiBackendConnections =
+    desktopBridge != null || shouldShowMultiBackendConnectionsUi();
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = desktopBridge
     ? AuthAdministrativeScopes
@@ -2265,6 +2272,12 @@ export function ConnectionsSettings() {
   );
   const isLocalBackendRemotelyReachable =
     isLocalBackendNetworkAccessible || tailscaleHttpsEndpoint?.status === "available";
+  // A hosted/cloud server reports a "remote-reachable" auth policy and has no
+  // desktop bridge to toggle network exposure. Treat that as remotely reachable
+  // so device pairing works in the cloud app. `currentAuthPolicy` is forced to
+  // null whenever the desktop bridge is present, so this only adds the cloud case.
+  const isBackendRemotelyReachable =
+    isLocalBackendRemotelyReachable || currentAuthPolicy === "remote-reachable";
   const defaultDesktopNetworkAdvertisedEndpoint = useMemo(
     () =>
       selectPairingEndpoint(visibleDesktopNetworkAdvertisedEndpoints, defaultAdvertisedEndpointKey),
@@ -2675,7 +2688,7 @@ export function ConnectionsSettings() {
             )}
           </SettingsSection>
 
-          {isLocalBackendRemotelyReachable ? (
+          {canManageLocalBackend && isBackendRemotelyReachable ? (
             <SettingsSection
               title="Paired devices"
               headerAction={
@@ -2856,94 +2869,96 @@ export function ConnectionsSettings() {
         </SettingsSection>
       )}
 
-      <SettingsSection
-        title="Connected servers"
-        headerAction={
-          <Dialog
-            open={addBackendDialogOpen}
-            onOpenChange={(open) => {
-              setAddBackendDialogOpen(open);
-              if (!open) {
-                setSavedBackendError(null);
-              }
-            }}
-          >
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <DialogTrigger
-                    render={
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        className="h-5 gap-1 rounded-sm px-1 text-[11px] font-normal text-muted-foreground/60 hover:text-muted-foreground"
-                        aria-label="Add server"
-                      >
-                        <PlusIcon className="size-3" />
-                        <span>Add server</span>
-                      </Button>
-                    }
-                  />
+      {showMultiBackendConnections ? (
+        <SettingsSection
+          title="Connected servers"
+          headerAction={
+            <Dialog
+              open={addBackendDialogOpen}
+              onOpenChange={(open) => {
+                setAddBackendDialogOpen(open);
+                if (!open) {
+                  setSavedBackendError(null);
                 }
-              />
-              <TooltipPopup side="top">Add server</TooltipPopup>
-            </Tooltip>
-            <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
-              <DialogHeader>
-                <DialogTitle>Add server</DialogTitle>
-                <DialogDescription>
-                  Pair another Homelab Agent server to this client.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogPanel>
-                <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {renderConnectionModeCard({
-                      mode: "remote",
-                      title: "Remote link",
-                      description: "Enter a server host and pairing code.",
-                      icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
-                    })}
-                    {desktopBridge
-                      ? renderConnectionModeCard({
-                          mode: "ssh",
-                          title: "SSH",
-                          description: "Use local SSH config, agent, and tunnels for the server.",
-                          icon: <TerminalIcon aria-hidden className="size-4" />,
-                        })
-                      : null}
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <DialogTrigger
+                      render={
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          className="h-5 gap-1 rounded-sm px-1 text-[11px] font-normal text-muted-foreground/60 hover:text-muted-foreground"
+                          aria-label="Add server"
+                        >
+                          <PlusIcon className="size-3" />
+                          <span>Add server</span>
+                        </Button>
+                      }
+                    />
+                  }
+                />
+                <TooltipPopup side="top">Add server</TooltipPopup>
+              </Tooltip>
+              <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>Add server</DialogTitle>
+                  <DialogDescription>
+                    Pair another Homelab Agent server to this client.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogPanel>
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {renderConnectionModeCard({
+                        mode: "remote",
+                        title: "Remote link",
+                        description: "Enter a server host and pairing code.",
+                        icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
+                      })}
+                      {desktopBridge
+                        ? renderConnectionModeCard({
+                            mode: "ssh",
+                            title: "SSH",
+                            description: "Use local SSH config, agent, and tunnels for the server.",
+                            icon: <TerminalIcon aria-hidden className="size-4" />,
+                          })
+                        : null}
+                    </div>
+                    <AnimatedHeight>
+                      {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
+                    </AnimatedHeight>
                   </div>
-                  <AnimatedHeight>
-                    {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
-                  </AnimatedHeight>
-                </div>
-              </DialogPanel>
-            </DialogPopup>
-          </Dialog>
-        }
-      >
-        {savedEnvironmentIds.map((environmentId) => (
-          <SavedBackendListRow
-            key={environmentId}
-            environmentId={environmentId}
-            reconnectingEnvironmentId={reconnectingSavedEnvironmentId}
-            disconnectingEnvironmentId={disconnectingSavedEnvironmentId}
-            removingEnvironmentId={removingSavedEnvironmentId}
-            onConnect={handleConnectSavedBackend}
-            onDisconnect={handleDisconnectSavedBackend}
-            onRemove={handleRemoveSavedBackend}
-          />
-        ))}
+                </DialogPanel>
+              </DialogPopup>
+            </Dialog>
+          }
+        >
+          {savedEnvironmentIds.map((environmentId) => (
+            <SavedBackendListRow
+              key={environmentId}
+              environmentId={environmentId}
+              reconnectingEnvironmentId={reconnectingSavedEnvironmentId}
+              disconnectingEnvironmentId={disconnectingSavedEnvironmentId}
+              removingEnvironmentId={removingSavedEnvironmentId}
+              onConnect={handleConnectSavedBackend}
+              onDisconnect={handleDisconnectSavedBackend}
+              onRemove={handleRemoveSavedBackend}
+            />
+          ))}
 
-        {savedEnvironmentIds.length === 0 ? (
-          <div className={ITEM_ROW_CLASSNAME}>
-            <p className="text-xs text-muted-foreground">
-              No connected servers yet. Click &ldquo;Add server&rdquo; to pair another Homelab Agent
-              server.
-            </p>
-          </div>
-        ) : null}
-      </SettingsSection>
+          {savedEnvironmentIds.length === 0 ? (
+            <div className={ITEM_ROW_CLASSNAME}>
+              <p className="text-xs text-muted-foreground">
+                No connected servers yet. Click &ldquo;Add server&rdquo; to pair another Homelab
+                Agent server.
+              </p>
+            </div>
+          ) : null}
+        </SettingsSection>
+      ) : null}
     </SettingsPageContainer>
   );
 }

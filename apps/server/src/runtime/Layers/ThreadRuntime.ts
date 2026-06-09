@@ -29,7 +29,7 @@ import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.t
 import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
 import { renderHomelabBaselineViewFiles } from "../HomelabContextView.ts";
 import { isStandaloneRuntimeId, standaloneProjectShortTitle } from "../ProjectRuntimePolicy.ts";
-import { resolveLocalRuntimeImageBuildSpec } from "../image.ts";
+import { fingerprintBuildContext, resolveLocalRuntimeImageBuildSpec } from "../image.ts";
 import {
   homePathForThread,
   hostWorkspacePathForContainerPath,
@@ -95,7 +95,23 @@ interface DockerContainerInspectResult {
     readonly Labels?: Record<string, string> | null;
   };
   readonly Mounts?: ReadonlyArray<DockerContainerInspectMount>;
+  // `HostConfig.PortBindings` records the port mapping the container was *created*
+  // with. Unlike `NetworkSettings.Ports` (the live publication, see below) it
+  // persists while the container is stopped, so it is the durable signal for
+  // "this container was configured with the managed OpenCode server port".
+  readonly HostConfig?: {
+    readonly PortBindings?: Record<
+      string,
+      null | ReadonlyArray<{
+        readonly HostIp?: string;
+        readonly HostPort?: string;
+      }>
+    > | null;
+  };
   readonly NetworkSettings?: {
+    // Only populated while the container is running. A stopped container reports
+    // `Ports: {}` (and the ephemeral host port is reassigned on the next start),
+    // so this is read for the *live* endpoint, never for compatibility.
     readonly Ports?: Record<
       string,
       null | ReadonlyArray<{
@@ -1590,8 +1606,23 @@ function isContainerCompatible(
       actualMounts.has(
         `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
       ),
-    ) && readManagedOpenCodeServerEndpoint(inspect) !== undefined
+    ) && isManagedOpenCodeServerPortConfigured(inspect)
   );
+}
+
+// Compatibility must be decided from the container's *configuration*, not its
+// runtime state, because this gates reuse of containers that the idle reaper has
+// stopped. Checking the live published port (`NetworkSettings.Ports`) here would
+// classify every stopped container as incompatible — a stopped container reports
+// no live port — forcing a destroy + recreate on each wake and discarding any
+// changes outside the bind-mounted workspace/home (e.g. `apt`-installed tools).
+// `HostConfig.PortBindings` persists across stop, so we use it to distinguish a
+// container that simply needs `docker start` from a legacy one that predates the
+// managed OpenCode server port mapping and genuinely must be recreated.
+function isManagedOpenCodeServerPortConfigured(inspect: DockerContainerInspectResult): boolean {
+  const bindings =
+    inspect.HostConfig?.PortBindings?.[`${OPENCODE_MANAGED_SERVER_CONTAINER_PORT}/tcp`];
+  return Array.isArray(bindings) && bindings.length > 0;
 }
 
 function readManagedOpenCodeServerEndpoint(
@@ -2540,6 +2571,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
   const ensureRuntimeImageReady = Effect.fn("threadRuntime.ensureRuntimeImageReady")(function* (
     runtime: ThreadRuntimeDescriptor,
+    // Fingerprint of the build context as of *this* start, recomputed by the
+    // caller so edits to the context (e.g. a provider-version manifest bump
+    // from the update flow) trigger a rebuild without a server restart.
+    expectedFingerprint: string | undefined,
   ) {
     const usesLocalRuntimeImage = runtime.imageRef === localRuntimeImageBuildSpec.imageRef;
     if (!usesLocalRuntimeImage) {
@@ -2550,10 +2585,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       return;
     }
 
-    if (
-      !localRuntimeImageBuildSpec.fingerprint ||
-      !nodeFs.existsSync(localRuntimeImageBuildSpec.dockerfilePath)
-    ) {
+    if (!expectedFingerprint || !nodeFs.existsSync(localRuntimeImageBuildSpec.dockerfilePath)) {
       return yield* new ThreadRuntimeError({
         message:
           `Local runtime image '${runtime.imageRef}' is configured but the Docker build context is incomplete. ` +
@@ -2563,7 +2595,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
     yield* runtimeImageBuildSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const fingerprint = localRuntimeImageBuildSpec.fingerprint;
+        const fingerprint = expectedFingerprint;
         if (!fingerprint) {
           return yield* new ThreadRuntimeError({
             message: `Local runtime image '${runtime.imageRef}' is missing a build fingerprint.`,
@@ -2616,12 +2648,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const ensureRunningContainer = Effect.fn("threadRuntime.ensureRunningContainer")(function* (
     runtime: ThreadRuntimeDescriptor,
     hostBindings: RuntimeHostBindings,
+    currentFingerprint: string | undefined,
   ) {
     const mounts = buildMountSpecs(runtime, hostBindings);
     const expectedImageFingerprint =
-      runtime.imageRef === localRuntimeImageBuildSpec.imageRef
-        ? localRuntimeImageBuildSpec.fingerprint
-        : undefined;
+      runtime.imageRef === localRuntimeImageBuildSpec.imageRef ? currentFingerprint : undefined;
 
     let inspect = yield* inspectContainerByName(runtime.containerName);
     if (inspect && !isContainerCompatible(inspect, runtime, mounts, expectedImageFingerprint)) {
@@ -2874,9 +2905,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* writeRuntimeHomelabBaselineView(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
-        yield* ensureRuntimeImageReady(normalizedRuntime);
+        // Recompute the build-context fingerprint per start so a provider
+        // update (which rewrites the shared version manifest in the context)
+        // rebuilds the image and recreates this container on its next start.
+        const currentImageFingerprint = yield* Effect.sync(() =>
+          fingerprintBuildContext(localRuntimeImageBuildSpec.contextPath),
+        );
+        yield* ensureRuntimeImageReady(normalizedRuntime, currentImageFingerprint);
 
-        const inspect = yield* ensureRunningContainer(normalizedRuntime, hostBindings);
+        const inspect = yield* ensureRunningContainer(
+          normalizedRuntime,
+          hostBindings,
+          currentImageFingerprint,
+        );
         const managedOpenCodeServer = readManagedOpenCodeServerEndpoint(inspect);
         if (!managedOpenCodeServer) {
           return yield* new ThreadRuntimeError({

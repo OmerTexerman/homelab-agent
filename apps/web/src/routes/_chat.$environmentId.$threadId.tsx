@@ -28,6 +28,11 @@ const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
 const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
 const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+// A freshly created thread (e.g. a standalone thread created via a dispatched
+// command) is not present in the local projection until its `thread.created`
+// shell event arrives. Wait this long before treating the thread as missing so
+// a just-created thread isn't bounced back to home while its event is in flight.
+const MISSING_THREAD_REDIRECT_GRACE_MS = 4_000;
 
 const DiffPanelSheet = (props: {
   children: ReactNode;
@@ -253,8 +258,19 @@ function ChatThreadRouteView() {
       return;
     }
 
-    redirectedMissingThreadKeyRef.current = currentThreadKey;
-    void navigate({ to: "/", replace: true });
+    // Grace period: a just-created thread may not be in the local projection
+    // yet (the `thread.created` shell event is still in flight). If the thread
+    // shows up within the window this effect re-runs (threadExists dependency)
+    // and the timer is cleared before it fires; otherwise we treat it as a
+    // genuinely missing thread and redirect home.
+    const redirectTimeoutId = window.setTimeout(() => {
+      redirectedMissingThreadKeyRef.current = currentThreadKey;
+      void navigate({ to: "/", replace: true });
+    }, MISSING_THREAD_REDIRECT_GRACE_MS);
+
+    return () => {
+      window.clearTimeout(redirectTimeoutId);
+    };
   }, [bootstrapComplete, currentThreadKey, navigate, threadExists, threadRef]);
 
   useEffect(() => {
