@@ -474,12 +474,37 @@ describe("providerMaintenanceRunner", () => {
 
       assert.strictEqual(updateState?.status, "failed");
       assert.strictEqual(updateState?.message, "Update command exited with code 1.");
-      assert.include(updateState?.output ?? "", "permission denied");
+      assert.include(updateState?.output ?? "", "network unreachable");
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           latestVersionHttpClient("0.0.0"),
-          mockSpawnerLayer(() => ({ stderr: "permission denied", code: 1 })),
+          mockSpawnerLayer(() => ({ stderr: "network unreachable", code: 1 })),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("explains permission failures with a npm prefix remediation hint", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry();
+      const updater = yield* makeTestRunner(registry);
+
+      const result = yield* updater.updateProvider(CODEX_DRIVER);
+      const updateState = result.providers[0]?.updateState;
+
+      assert.strictEqual(updateState?.status, "failed");
+      assert.include(updateState?.message ?? "", "Update command exited with code 243");
+      assert.include(updateState?.message ?? "", "user-writable npm prefix");
+      assert.include(updateState?.output ?? "", "EACCES");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer(() => ({
+            stderr: "npm error Error: EACCES: permission denied, rename '/usr/lib/node_modules'",
+            code: 243,
+          })),
         ),
       ),
     ),

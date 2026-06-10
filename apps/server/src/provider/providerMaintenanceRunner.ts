@@ -161,11 +161,19 @@ function commandOutput(result: ProviderMaintenanceCommandResult): string | null 
   return truncateText(output, UPDATE_OUTPUT_MAX_BYTES);
 }
 
+function isPermissionFailure(result: ProviderMaintenanceCommandResult): boolean {
+  const output = `${result.stderr}\n${result.stdout}`;
+  return output.includes("EACCES") || output.toLowerCase().includes("permission denied");
+}
+
 function failureMessage(result: ProviderMaintenanceCommandResult): string {
   if (result.timedOut) {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
+    if (isPermissionFailure(result)) {
+      return `Update command exited with code ${result.exitCode} because the server user cannot write to the install location. Install the provider CLI under a user-writable npm prefix for the server user (for example \`npm config set prefix ~/.npm-global\`, reinstall the CLI, and put that bin directory on the service PATH).`;
+    }
     return `Update command exited with code ${result.exitCode}.`;
   }
   return "Update command failed.";

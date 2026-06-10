@@ -6,6 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/homelab-agent
+# Provider CLIs (claude, codex, ...) must be npm-installed under a prefix the
+# service user can write to, or in-app provider updates fail with EACCES.
+# As the service user: `npm config set prefix ~/.npm-global` and reinstall the
+# CLIs, then keep that bin directory first on PATH here:
+# Environment=PATH=/home/<service-user>/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=T3CODE_HOME=/var/lib/homelab-agent
 Environment=T3CODE_HOST=0.0.0.0
 Environment=T3CODE_PORT=13773

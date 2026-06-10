@@ -22,7 +22,10 @@ Environment:
   T3CODE_HOME                     Persistent state directory to back up.
 
 The script never hard-resets local changes. The deployment checkout must be
-clean and able to fast-forward to the remote branch.
+clean and able to fast-forward to the remote branch. The one exception is
+docker/runtime/provider-versions.json, which in-app provider updates rewrite
+on the deployment host: local changes there are kept unless the incoming
+commits also touch the file, in which case the incoming version wins.
 EOF
 }
 
@@ -69,11 +72,31 @@ run() {
   fi
 }
 
+# Successful in-app provider updates rewrite this pin inside the deployment
+# checkout (the runtime build context lives there), so this single path may be
+# dirty without blocking deployments.
+provider_versions_manifest="docker/runtime/provider-versions.json"
+
 require_clean_worktree() {
-  if [[ -n "$(git status --porcelain)" ]]; then
+  local disallowed
+  disallowed="$(git status --porcelain | grep -v -F " M $provider_versions_manifest" || true)"
+  if [[ -n "$disallowed" ]]; then
     git status --short >&2
     echo "Deployment checkout has local changes; refusing to deploy." >&2
     exit 1
+  fi
+}
+
+reconcile_provider_versions_manifest() {
+  local current_head="$1" target_head="$2" target_ref="$3"
+  if [[ -z "$(git status --porcelain -- "$provider_versions_manifest")" ]]; then
+    return
+  fi
+  if git diff --quiet "$current_head" "$target_head" -- "$provider_versions_manifest"; then
+    log "Keeping locally pinned $provider_versions_manifest (rewritten by an in-app provider update)."
+  else
+    log "$target_ref updates $provider_versions_manifest; replacing the local pin with the incoming version."
+    run git checkout -- "$provider_versions_manifest"
   fi
 }
 
@@ -143,6 +166,8 @@ if ! git merge-base --is-ancestor "$current_head" "$target_head"; then
   echo "Current HEAD is not an ancestor of $target_ref; refusing non-fast-forward deployment." >&2
   exit 1
 fi
+
+reconcile_provider_versions_manifest "$current_head" "$target_head" "$target_ref"
 
 current_branch="$(git branch --show-current)"
 if [[ "$current_branch" != "$branch" ]]; then
