@@ -5,6 +5,7 @@ import {
   PairingPendingSurface,
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
+import { submitServerAuthCredential, takePairingTokenFromUrl } from "../environments/primary";
 
 export const Route = createFileRoute("/pair")({
   beforeLoad: async ({ context }) => {
@@ -15,7 +16,30 @@ export const Route = createFileRoute("/pair")({
       };
     }
 
-    if (authGateState.status === "authenticated" || authGateState.status === "hosted-static") {
+    if (authGateState.status === "authenticated") {
+      // An already-paired device may follow a fresh pairing link to re-scope
+      // its session (for example to regain access:write). Consume the token
+      // instead of bouncing to the app with the old session.
+      const token = takePairingTokenFromUrl();
+      if (token !== null) {
+        const submitted = await submitServerAuthCredential(token).then(
+          () => true,
+          (error: unknown) => {
+            console.error("Pairing token exchange failed; keeping the current session.", error);
+            return false;
+          },
+        );
+        if (submitted) {
+          // Hard reload so every session-state consumer picks up the
+          // re-scoped session cookie.
+          window.location.replace("/");
+          return new Promise<never>(() => {});
+        }
+      }
+      throw redirect({ to: "/", replace: true });
+    }
+
+    if (authGateState.status === "hosted-static") {
       throw redirect({ to: "/", replace: true });
     }
     return {
