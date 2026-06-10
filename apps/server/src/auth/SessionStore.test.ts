@@ -199,6 +199,39 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
     }).pipe(Effect.provide(makeSessionStoreLayer())),
   );
 
+  it.effect("keeps internal sessions out of listings and bulk revocation", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const device = yield* sessions.issue({
+        subject: "one-time-token",
+        scopes: ["orchestration:read", "access:write"],
+        client: {
+          label: "Admin laptop",
+          deviceType: "desktop",
+        },
+      });
+      const runtime = yield* sessions.issue({
+        subject: "thread-runtime:thread-1",
+        method: "bearer-access-token",
+        scopes: ["orchestration:read"],
+        visibility: "internal",
+        client: {
+          label: "Thread runtime thread-1",
+          deviceType: "bot",
+        },
+      });
+
+      const listed = yield* sessions.listActive();
+      const revokedCount = yield* sessions.revokeAllExcept(device.sessionId);
+      const runtimeStillValid = yield* sessions.verify(runtime.token);
+
+      expect(listed).toHaveLength(1);
+      expect(listed[0]?.sessionId).toBe(device.sessionId);
+      expect(revokedCount).toBe(0);
+      expect(runtimeStillValid.sessionId).toBe(runtime.sessionId);
+    }).pipe(Effect.provide(makeSessionStoreLayer())),
+  );
+
   it.effect("persists lastConnectedAt on first connect and updates it after reconnect", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStore.SessionStore;

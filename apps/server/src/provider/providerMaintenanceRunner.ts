@@ -323,11 +323,20 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       }),
     ).pipe(Effect.asVoid);
 
+    // The update runs inside the caller's (RPC) fiber, so a dropped websocket
+    // interrupts it after "queued"/"running" was published. Track whether a
+    // terminal state was recorded so the interruption finalizer below can
+    // close out the update state instead of leaving the UI spinning forever.
+    const startedAtRef = yield* Ref.make<string | null>(null);
+    const terminalStateRecordedRef = yield* Ref.make(false);
+
     const runProviderUpdate = Effect.fn("ProviderMaintenanceRunner.runProviderUpdate")(
       function* () {
         const finish = (state: ServerProviderUpdateState) =>
-          setUpdateState(state).pipe(Effect.map((providers) => ({ providers })));
-        const startedAtRef = yield* Ref.make<string | null>(null);
+          setUpdateState(state).pipe(
+            Effect.tap(() => Ref.set(terminalStateRecordedRef, true)),
+            Effect.map((providers) => ({ providers })),
+          );
 
         const runCommandAndVerify = Effect.fn("ProviderMaintenanceRunner.runCommandAndVerify")(
           function* () {
@@ -419,6 +428,23 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       },
     );
 
+    const recordInterruptedUpdate = Effect.gen(function* () {
+      const recorded = yield* Ref.get(terminalStateRecordedRef);
+      if (recorded) {
+        return;
+      }
+      const startedAt = yield* Ref.get(startedAtRef);
+      yield* setUpdateState(
+        makeUpdateState({
+          status: "failed",
+          startedAt,
+          finishedAt: yield* nowIso,
+          message:
+            "Update was interrupted before it finished (for example by a dropped connection). Run the update again.",
+        }),
+      );
+    }).pipe(Effect.ignore);
+
     return yield* commandCoordinator
       .withCommandLock({
         targetKey,
@@ -427,6 +453,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         run: runProviderUpdate(),
       })
       .pipe(
+        Effect.onInterrupt(() => recordInterruptedUpdate),
         Effect.mapError((error) =>
           isServerProviderUpdateError(error)
             ? new ServerProviderUpdateError({

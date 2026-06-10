@@ -11,6 +11,15 @@ import type * as Effect from "effect/Effect";
 
 import type { AuthSessionRepositoryError } from "../Errors.ts";
 
+/**
+ * `user` sessions belong to devices people paired and show up in
+ * Devices & Sessions; `internal` sessions are machinery (for example
+ * thread-runtime bearer tokens) and stay out of user-facing lists and
+ * bulk revocation.
+ */
+export const AuthSessionVisibility = Schema.Literals(["user", "internal"]);
+export type AuthSessionVisibility = typeof AuthSessionVisibility.Type;
+
 export const AuthSessionClientMetadataRecord = Schema.Struct({
   label: Schema.NullOr(Schema.String),
   ipAddress: Schema.NullOr(Schema.String),
@@ -26,6 +35,7 @@ export const AuthSessionRecord = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
+  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -39,6 +49,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
+  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,

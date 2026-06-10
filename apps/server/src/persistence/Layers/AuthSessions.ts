@@ -15,6 +15,7 @@ import {
   AuthSessionRecord,
   AuthSessionRepository,
   type AuthSessionRepositoryShape,
+  AuthSessionVisibility,
   CreateAuthSessionInput,
   GetAuthSessionByIdInput,
   ListActiveAuthSessionsInput,
@@ -28,6 +29,7 @@ const AuthSessionDbRow = Schema.Struct({
   subject: Schema.String,
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   method: ServerAuthSessionMethod,
+  visibility: AuthSessionVisibility,
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
   clientUserAgent: Schema.NullOr(Schema.String),
@@ -46,6 +48,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     subject: row.subject,
     scopes: row.scopes,
     method: row.method,
+    visibility: row.visibility,
     client: {
       label: row.clientLabel,
       ipAddress: row.clientIpAddress,
@@ -80,6 +83,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
           subject,
           scopes,
           method,
+          visibility,
           client_label,
           client_ip_address,
           client_user_agent,
@@ -95,6 +99,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
           ${input.subject},
           ${JSON.stringify(input.scopes)},
           ${input.method},
+          ${input.visibility},
           ${input.client.label},
           ${input.client.ipAddress},
           ${input.client.userAgent},
@@ -118,6 +123,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
+          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -143,6 +149,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
+          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -156,6 +163,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         FROM auth_sessions
         WHERE revoked_at IS NULL
           AND expires_at > ${now}
+          AND visibility = 'user'
         ORDER BY issued_at DESC, session_id DESC
       `,
   });
@@ -193,6 +201,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         SET revoked_at = ${revokedAt}
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
+          AND visibility = 'user'
         RETURNING session_id AS "sessionId"
       `,
   });

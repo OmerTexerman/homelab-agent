@@ -177,7 +177,10 @@ layer("037_RepairProjectionThreadShellSummarySchema", (it) => {
       );
 
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed, [[37, "RepairProjectionThreadShellSummarySchema"]]);
+      assert.deepStrictEqual(executed, [
+        [37, "RepairProjectionThreadShellSummarySchema"],
+        [38, "BackfillAuthSessionVisibility"],
+      ]);
 
       const afterColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)

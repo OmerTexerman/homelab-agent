@@ -50,6 +50,7 @@ import Migration0034 from "./Migrations/034_ProjectRuntimeAssignments.ts";
 import Migration0035 from "./Migrations/035_ProjectMemory.ts";
 import Migration0036 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0037 from "./Migrations/037_RepairProjectionThreadShellSummarySchema.ts";
+import Migration0038 from "./Migrations/038_BackfillAuthSessionVisibility.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -99,6 +100,7 @@ export const migrationEntries = [
   [35, "ProjectMemory", Migration0035],
   [36, "AuthAuthorizationScopes", Migration0036],
   [37, "RepairProjectionThreadShellSummarySchema", Migration0037],
+  [38, "BackfillAuthSessionVisibility", Migration0038],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

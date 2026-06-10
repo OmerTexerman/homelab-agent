@@ -2071,6 +2071,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         method: "bearer-access-token",
         scopes: AuthAdministrativeScopes,
         subject: expectedSubject,
+        visibility: "internal",
         client: {
           deviceType: "bot",
           label: `Thread runtime ${runtime.threadId}`,

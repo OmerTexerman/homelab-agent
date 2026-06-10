@@ -23,7 +23,10 @@ import * as Option from "effect/Option";
 
 import { ServerConfig } from "../config.ts";
 import { AuthSessionRepositoryLive } from "../persistence/Layers/AuthSessions.ts";
-import { AuthSessionRepository } from "../persistence/Services/AuthSessions.ts";
+import {
+  AuthSessionRepository,
+  type AuthSessionVisibility,
+} from "../persistence/Services/AuthSessions.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
   base64UrlDecodeUtf8,
@@ -86,6 +89,12 @@ export interface SessionStoreShape {
     readonly method?: ServerAuthSessionMethod;
     readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly client?: AuthClientMetadata;
+    /**
+     * `internal` sessions (for example thread-runtime bearer tokens) are
+     * excluded from user-facing session lists, change events, and bulk
+     * revocation. Defaults to `user`.
+     */
+    readonly visibility?: AuthSessionVisibility;
   }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
   readonly issueWebSocketToken: (
@@ -215,7 +224,12 @@ export const make = Effect.fn("makeSessionStore")(function* () {
   const loadActiveSession = (sessionId: AuthSessionId) =>
     Effect.gen(function* () {
       const row = yield* authSessions.getById({ sessionId });
-      if (Option.isNone(row) || row.value.revokedAt !== null) {
+      if (
+        Option.isNone(row) ||
+        row.value.revokedAt !== null ||
+        // Internal sessions never surface in user-facing change events.
+        row.value.visibility === "internal"
+      ) {
         return Option.none<AuthClientSession>();
       }
 
@@ -323,11 +337,13 @@ export const make = Effect.fn("makeSessionStore")(function* () {
       );
       const signature = signPayload(encodedPayload, signingSecret);
       const client = input?.client ?? createDefaultClientMetadata();
+      const visibility = input?.visibility ?? "user";
       yield* authSessions.create({
         sessionId,
         subject: claims.sub,
         scopes: claims.scopes,
         method: claims.method,
+        visibility,
         client: {
           label: client.label ?? null,
           ipAddress: client.ipAddress ?? null,
@@ -339,19 +355,21 @@ export const make = Effect.fn("makeSessionStore")(function* () {
         issuedAt,
         expiresAt,
       });
-      yield* emitUpsert(
-        toAuthClientSession({
-          sessionId,
-          subject: claims.sub,
-          scopes: claims.scopes,
-          method: claims.method,
-          client,
-          issuedAt,
-          expiresAt,
-          lastConnectedAt: null,
-          connected: false,
-        }),
-      );
+      if (visibility === "user") {
+        yield* emitUpsert(
+          toAuthClientSession({
+            sessionId,
+            subject: claims.sub,
+            scopes: claims.scopes,
+            method: claims.method,
+            client,
+            issuedAt,
+            expiresAt,
+            lastConnectedAt: null,
+            connected: false,
+          }),
+        );
+      }
 
       return {
         sessionId,

@@ -485,6 +485,38 @@ describe("providerMaintenanceRunner", () => {
     ),
   );
 
+  it.effect("records a failed state when the update fiber is interrupted mid-run", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry();
+      const updater = yield* makeTestRunner(registry);
+
+      const fiber = yield* Effect.forkChild(updater.updateProvider(CODEX_DRIVER));
+      // Wait for the spawned command to publish the running state, then
+      // interrupt like a dropped RPC connection would.
+      yield* Effect.gen(function* () {
+        while (true) {
+          const providers = yield* registry.getProviders;
+          if (providers[0]?.updateState?.status === "running") {
+            return;
+          }
+          yield* Effect.yieldNow;
+        }
+      });
+      yield* Fiber.interrupt(fiber);
+
+      const providers = yield* registry.getProviders;
+      assert.strictEqual(providers[0]?.updateState?.status, "failed");
+      assert.include(providers[0]?.updateState?.message ?? "", "interrupted");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer(() => ({ exitCode: Effect.never })),
+        ),
+      ),
+    ),
+  );
+
   it.effect("explains permission failures with a npm prefix remediation hint", () =>
     Effect.gen(function* () {
       const { registry } = yield* makeRegistry();
