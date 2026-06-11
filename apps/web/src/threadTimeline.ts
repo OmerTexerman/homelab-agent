@@ -11,7 +11,7 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
-import type { WorkLogEntry } from "./session-logic";
+import type { WorkLogEntry } from "./threadActivityDerivations";
 
 export type TimelineEntry =
   | {

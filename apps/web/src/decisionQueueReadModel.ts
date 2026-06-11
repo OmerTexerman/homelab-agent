@@ -6,7 +6,11 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import type { LatestProposedPlanState, PendingApproval, PendingUserInput } from "./session-logic";
+import type {
+  LatestProposedPlanState,
+  PendingApproval,
+  PendingUserInput,
+} from "./threadActivityDerivations";
 import { isLatestTurnSettled } from "./threadTimeline";
 import type { ProposedPlan, SidebarThreadSummary } from "./types";
 
