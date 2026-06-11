@@ -52,6 +52,7 @@ import Migration0036 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0037 from "./Migrations/037_RepairProjectionThreadShellSummarySchema.ts";
 import Migration0038 from "./Migrations/038_BackfillAuthSessionVisibility.ts";
 import Migration0039 from "./Migrations/039_DeriveThreadRuntimeBindings.ts";
+import Migration0040 from "./Migrations/040_HomelabSkills.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -103,6 +104,7 @@ export const migrationEntries = [
   [37, "RepairProjectionThreadShellSummarySchema", Migration0037],
   [38, "BackfillAuthSessionVisibility", Migration0038],
   [39, "DeriveThreadRuntimeBindings", Migration0039],
+  [40, "HomelabSkills", Migration0040],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

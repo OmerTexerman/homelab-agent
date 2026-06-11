@@ -15,10 +15,24 @@ import {
   type RuntimeSessionId as RuntimeSessionIdModel,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  PubSub,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { SessionStore } from "../../auth/SessionStore.ts";
+import { writeHomelabSkillsView } from "../HomelabSkillsView.ts";
+import { HomelabSkills, type HomelabSkillContext } from "../../homelab/Services/HomelabSkills.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
@@ -943,6 +957,43 @@ def cmd_memory_promote(args):
     print_json(request_json("POST", "/api/homelab/project-memory/promote", payload=payload))
 
 
+def cmd_skill_list(args):
+    print_json(request_json("GET", "/api/homelab/skills", query=runtime_thread_query(args)))
+
+
+def cmd_skill_show(args):
+    result = request_json("GET", "/api/homelab/skills", query=runtime_thread_query(args))
+    for skill in result.get("skills", []):
+        if skill.get("name") == args.name:
+            print(skill.get("body", ""))
+            return
+    fail(f"Skill '{args.name}' is not visible in this scope.")
+
+
+def cmd_skill_add(args):
+    payload = runtime_thread_query(args)
+    payload["name"] = args.name
+    payload["description"] = args.description
+    body = read_text_input(args.body_file, args.stdin, args.body)
+    if not body:
+        fail("Provide the SKILL.md content via --body, --body-file, or --stdin.")
+    payload["body"] = body
+    print_json(request_json("POST", "/api/homelab/skills", payload=payload))
+    print(
+        "Skill saved. It is materialized into runtime skill folders on the next turn start.",
+        file=sys.stderr,
+    )
+
+
+def cmd_skill_promote(args):
+    if args.to == "project" and SCOPE == "scratch":
+        fail(SCRATCH_NO_PROJECT_MESSAGE)
+    payload = runtime_thread_query(args)
+    payload["name"] = args.name
+    payload["to"] = args.to
+    print_json(request_json("POST", "/api/homelab/skills/promote", payload=payload))
+
+
 def cmd_promote(args):
     if args.example:
         print_json(promotion_example_payload())
@@ -1087,6 +1138,43 @@ def build_parser():
         "--stdin", action="store_true", help="Read the promotion envelope from stdin."
     )
     memory_promote_parser.set_defaults(func=cmd_memory_promote)
+
+    skill_parser = subparsers.add_parser(
+        "skill", help="Author, inspect, and promote reusable agent skills (SKILL.md documents)."
+    )
+    skill_subparsers = skill_parser.add_subparsers(dest="skill_command", required=True)
+
+    skill_list_parser = skill_subparsers.add_parser(
+        "list", help="List skills visible to this runtime (global plus this scope)."
+    )
+    skill_list_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    skill_list_parser.set_defaults(func=cmd_skill_list)
+
+    skill_show_parser = skill_subparsers.add_parser("show", help="Print one skill's SKILL.md body.")
+    skill_show_parser.add_argument("name", help="Skill name (kebab-case).")
+    skill_show_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    skill_show_parser.set_defaults(func=cmd_skill_show)
+
+    skill_add_parser = skill_subparsers.add_parser(
+        "add", help="Author or update a skill at this scope (thread for scratch, project otherwise)."
+    )
+    skill_add_parser.add_argument("name", help="Skill name (kebab-case).")
+    skill_add_parser.add_argument("--description", required=True, help="One-line description of when to use the skill.")
+    skill_add_parser.add_argument("--body", help="SKILL.md content inline.")
+    skill_add_parser.add_argument("--body-file", help="Read SKILL.md content from a file.")
+    skill_add_parser.add_argument("--stdin", action="store_true", help="Read SKILL.md content from stdin.")
+    skill_add_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    skill_add_parser.set_defaults(func=cmd_skill_add)
+
+    skill_promote_parser = skill_subparsers.add_parser(
+        "promote", help="Promote a skill up the ladder (project skills -> global; scratch skills -> global)."
+    )
+    skill_promote_parser.add_argument("name", help="Skill name (kebab-case).")
+    skill_promote_parser.add_argument(
+        "--to", choices=["project", "global"], required=True, help="Target scope."
+    )
+    skill_promote_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
+    skill_promote_parser.set_defaults(func=cmd_skill_promote)
 
     promote_parser = subparsers.add_parser(
         "promote",
@@ -2355,6 +2443,61 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   );
 
   /**
+   * Materialize homelab skills (global plus this runtime's scope) into the workspace
+   * `.homelab/skills` view and Claude Code's `~/.claude/skills`. Best-effort: when the
+   * skills service or projection query is not in the ambient context (e.g. minimal test
+   * layers), the runtime simply starts without a skills view.
+   */
+  const writeRuntimeSkillFiles = Effect.fn("threadRuntime.writeRuntimeSkillFiles")(function* (
+    runtime: ThreadRuntimeDescriptor,
+  ) {
+    const skillsService = yield* Effect.serviceOption(HomelabSkills);
+    if (Option.isNone(skillsService)) {
+      return;
+    }
+    const isStandalone = resolveRuntimeIsStandalone(runtime);
+    let context: HomelabSkillContext;
+    if (isStandalone) {
+      context = { kind: "scratch", threadId: runtime.threadId };
+    } else {
+      const projectionQuery = yield* Effect.serviceOption(ProjectionSnapshotQuery);
+      if (Option.isNone(projectionQuery)) {
+        return;
+      }
+      const threadShell = yield* projectionQuery.value
+        .getThreadShellById(runtime.threadId)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(threadShell)) {
+        return;
+      }
+      context = { kind: "project", projectId: threadShell.value.projectId };
+    }
+    const skills = yield* skillsService.value.listForContext(context).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("failed to list homelab skills for runtime view", {
+          threadId: runtime.threadId,
+          detail: cause.message,
+        }).pipe(Effect.as([])),
+      ),
+    );
+    const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
+    const homeRoot = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
+    yield* writeHomelabSkillsView({
+      workspaceRoot,
+      homeRoot,
+      skills,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to materialize homelab skills view", {
+          threadId: runtime.threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+  });
+
+  /**
    * Seed the baseline `.homelab` workspace view (README + empty indexes + tool placeholders).
    * The generated AGENTS.md/CLAUDE.md unconditionally tell the agent to search `.homelab/`, so
    * every materialized runtime must expose it — otherwise the instructions point at missing
@@ -2883,6 +3026,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* ensureRuntimeDirectories(runtime);
         yield* writeRuntimeInstructionFiles(runtime);
         yield* writeRuntimeHomelabBaselineView(runtime);
+        yield* writeRuntimeSkillFiles(runtime);
         const persistedRuntime = yield* updateRuntimes((current) => {
           const nextRuntime = {
             ...runtime,
@@ -2919,6 +3063,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* writeRuntimeShellInitFiles(normalizedRuntime);
         yield* writeRuntimeInstructionFiles(normalizedRuntime);
         yield* writeRuntimeHomelabBaselineView(normalizedRuntime);
+        yield* writeRuntimeSkillFiles(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
         // Recompute the build-context fingerprint per start so a provider

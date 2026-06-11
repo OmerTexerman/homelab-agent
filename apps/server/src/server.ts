@@ -57,6 +57,7 @@ import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { KnowledgeGraphLive } from "./homelab/Layers/KnowledgeGraph.ts";
 import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistry.ts";
 import { ProjectMemoryLive } from "./homelab/Layers/ProjectMemory.ts";
+import { HomelabSkillsLive } from "./homelab/Layers/HomelabSkills.ts";
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
 import { RuntimeWorkspaceLive } from "./runtime/Layers/RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./runtime/Layers/ThreadWorkspace.ts";
@@ -100,6 +101,9 @@ import {
   homelabRuntimeBootstrapRouteLayer,
   homelabSearchRouteLayer,
   homelabSecretRequestsRouteLayer,
+  homelabSkillsCreateRouteLayer,
+  homelabSkillsListRouteLayer,
+  homelabSkillsPromoteRouteLayer,
   homelabSecretsRouteLayer,
   homelabSetupStatusRouteLayer,
   homelabSnapshotRouteLayer,
@@ -319,6 +323,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
   Layer.provideMerge(KnowledgeGraphLive),
   Layer.provideMerge(HomelabSecretRegistryLive.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(ProjectMemoryLive),
+  Layer.provideMerge(HomelabSkillsLive),
   Layer.provideMerge(ThreadRuntimeLive),
   Layer.provideMerge(ProjectRuntimeQueueLive),
   Layer.provideMerge(ProjectRuntimeLifecycleLayerLive),
@@ -359,6 +364,9 @@ const HomelabRoutesLayer = Layer.mergeAll(
   homelabRuntimeBootstrapRouteLayer,
   homelabSearchRouteLayer,
   homelabSecretRequestsRouteLayer,
+  homelabSkillsCreateRouteLayer,
+  homelabSkillsListRouteLayer,
+  homelabSkillsPromoteRouteLayer,
   homelabSecretsRouteLayer,
   homelabSetupStatusRouteLayer,
   homelabSnapshotRouteLayer,

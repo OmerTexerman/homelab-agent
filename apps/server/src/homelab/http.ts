@@ -26,6 +26,10 @@ import {
   type ProjectMemoryListResult,
   type ProjectMemorySearchResult,
   type ProjectMemorySearchResultList,
+  HomelabSkillCreateInput,
+  HomelabSkillListInput,
+  HomelabSkillPromoteInput,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -34,6 +38,7 @@ import { EnvironmentAuth } from "../auth/EnvironmentAuth.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
+import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
@@ -54,6 +59,7 @@ class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
 const decodeHomelabEntityId = Schema.decodeUnknownSync(HomelabEntityId);
 const decodeHomelabEntityKind = Schema.decodeUnknownSync(HomelabEntityKind);
 const decodeProjectMemoryListInput = Schema.decodeUnknownEffect(ProjectMemoryListInput);
+const decodeHomelabSkillListInput = Schema.decodeUnknownEffect(HomelabSkillListInput);
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
 const respondToHomelabHttpError = (error: HomelabHttpError) =>
@@ -657,6 +663,120 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+const resolveSkillContext = (input: {
+  readonly projectId?: ProjectId | undefined;
+  readonly threadId?: ThreadId | undefined;
+}) =>
+  Effect.gen(function* () {
+    const projectId = yield* resolveProjectIdForMemoryRequest(input);
+    if (isStandaloneProjectId(projectId)) {
+      if (!input.threadId) {
+        return yield* new HomelabHttpError({
+          message: "Scratch skill requests must include threadId.",
+          status: 400,
+        });
+      }
+      return { kind: "scratch", threadId: input.threadId } as const;
+    }
+    return { kind: "project", projectId } as const;
+  });
+
+const respondToHomelabSkillsError = (error: HomelabSkillsError) =>
+  respondToHomelabHttpError(
+    new HomelabHttpError({
+      message: error.message,
+      status: 400,
+      cause: error.cause,
+    }),
+  );
+
+export const homelabSkillsListRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/skills",
+  Effect.gen(function* () {
+    yield* authenticateHomelabRead;
+    const url = yield* getRequestUrl;
+    const input = yield* decodeHomelabSkillListInput({
+      ...(url.searchParams.get("projectId")
+        ? { projectId: url.searchParams.get("projectId") }
+        : {}),
+      ...(url.searchParams.get("threadId") ? { threadId: url.searchParams.get("threadId") } : {}),
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid homelab skill list query.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const context = yield* resolveSkillContext(input);
+    const skills = yield* HomelabSkills;
+    const entries = yield* skills.listForContext(context);
+    return HttpServerResponse.jsonUnsafe({ skills: entries }, { status: 200 });
+  }).pipe(
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabSkillsCreateRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/skills",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSkillCreateInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid homelab skill payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const context = yield* resolveSkillContext(input);
+    const skills = yield* HomelabSkills;
+    const secrets = yield* listHomelabSecretsForRedaction;
+    const entry = yield* skills.upsert({
+      context,
+      name: input.name,
+      description: redactHomelabViewText(input.description, secrets),
+      body: redactHomelabViewText(input.body, secrets),
+    });
+    return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
+  }).pipe(
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabSkillsPromoteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/skills/promote",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSkillPromoteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid homelab skill promotion payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const context = yield* resolveSkillContext(input);
+    const skills = yield* HomelabSkills;
+    const entry = yield* skills.promote({ context, name: input.name, to: input.to });
+    return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
+  }).pipe(
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
 );

@@ -46,6 +46,7 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
+import { HomelabSkills } from "../../homelab/Services/HomelabSkills.ts";
 import { refreshActiveProjectContextViews } from "../../homelab/ProjectMemoryContextViews.ts";
 import { standaloneProjectId } from "../../runtime/ProjectRuntimePolicy.ts";
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
@@ -86,6 +87,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectMemory = yield* Effect.serviceOption(ProjectMemory);
+  const homelabSkills = yield* Effect.serviceOption(HomelabSkills);
   const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -148,6 +150,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 detail: cause.message,
                 cause,
               }),
+          ),
+        );
+    });
+
+  const adoptScratchThreadSkills = (input: { readonly command: OrchestrationCommand }) =>
+    Effect.gen(function* () {
+      if (
+        input.command.type !== "thread.standalone.move-to-project" &&
+        input.command.type !== "thread.standalone.promote-to-project"
+      ) {
+        return;
+      }
+      if (Option.isNone(homelabSkills)) {
+        return;
+      }
+      const command = input.command;
+      // Skills authored by the scratch thread follow it into its project: they become
+      // project-scoped, exactly like the thread's runtime and (optionally) its memory.
+      yield* homelabSkills.value
+        .adoptThreadSkillsIntoProject({
+          threadId: command.threadId,
+          projectId: command.projectId,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("failed to adopt scratch thread skills into project", {
+              threadId: command.threadId,
+              projectId: command.projectId,
+              detail: cause.message,
+            }),
           ),
         );
     });
@@ -251,6 +283,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 committedEvents.push(savedEvent);
               }
 
+              yield* adoptScratchThreadSkills({ command: envelope.command });
               yield* applyStandaloneMoveMemoryMigration({
                 command: envelope.command,
                 committedEvents,

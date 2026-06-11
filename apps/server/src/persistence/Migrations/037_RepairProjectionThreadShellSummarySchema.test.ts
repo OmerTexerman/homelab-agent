@@ -181,6 +181,7 @@ layer("037_RepairProjectionThreadShellSummarySchema", (it) => {
         [37, "RepairProjectionThreadShellSummarySchema"],
         [38, "BackfillAuthSessionVisibility"],
         [39, "DeriveThreadRuntimeBindings"],
+        [40, "HomelabSkills"],
       ]);
 
       const afterColumns = yield* sql<{ readonly name: string }>`
