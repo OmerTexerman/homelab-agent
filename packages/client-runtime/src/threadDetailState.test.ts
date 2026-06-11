@@ -56,6 +56,8 @@ const BASE_THREAD: OrchestrationThread = {
   activities: [],
   checkpoints: [],
   session: null,
+  runtimeId: null,
+  runtimeSelectionMode: "shared",
 };
 
 const TARGET = {

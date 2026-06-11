@@ -12,7 +12,7 @@ import * as Effect from "effect/Effect";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
-import { isStandaloneProjectId } from "./runtime/ProjectRuntimePolicy.ts";
+import { resolveProjectRuntimeAssignment } from "./runtime/ProjectRuntimePolicy.ts";
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
 import type { ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
@@ -79,13 +79,21 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
           return;
         }
 
+        const project = readModel.projects.find(
+          (entry) => entry.id === thread.projectId && entry.deletedAt === null,
+        );
+        if (!project) {
+          return;
+        }
+        const assignment = resolveProjectRuntimeAssignment({ project, thread });
+
         yield* threadRuntime
           .ensureRuntime({
             threadId,
-            ...(thread.runtimeId != null ? { runtimeId: thread.runtimeId } : {}),
+            runtimeId: assignment.runtimeId,
             provider: null,
             runtimeMode: thread.runtimeMode,
-            isStandalone: isStandaloneProjectId(thread.projectId),
+            isStandalone: assignment.kind === "scratch",
           })
           .pipe(Effect.catch(() => Effect.void));
       }

@@ -69,7 +69,6 @@ export const makeThreadBootstrapRecovery = (deps: {
     thread: Pick<
       OrchestrationThread,
       | "projectId"
-      | "runtimeId"
       | "runtimeSelectionMode"
       | "runtimeMode"
       | "interactionMode"
@@ -94,8 +93,8 @@ export const makeThreadBootstrapRecovery = (deps: {
 
       const sameBootstrapTarget =
         thread.projectId === requested.projectId &&
-        thread.runtimeId === (requested.runtimeId ?? thread.runtimeId) &&
-        thread.runtimeSelectionMode === requested.runtimeSelectionMode &&
+        thread.runtimeSelectionMode ===
+          (requested.runtimeSelectionMode ?? thread.runtimeSelectionMode) &&
         thread.runtimeMode === requested.runtimeMode &&
         thread.interactionMode === requested.interactionMode &&
         thread.branch === requested.branch &&
@@ -111,7 +110,6 @@ export const makeThreadBootstrapRecovery = (deps: {
     thread: Pick<
       OrchestrationThread,
       | "projectId"
-      | "runtimeId"
       | "runtimeSelectionMode"
       | "runtimeMode"
       | "interactionMode"

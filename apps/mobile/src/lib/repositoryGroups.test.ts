@@ -31,6 +31,8 @@ function makeThread(
     >,
 ): EnvironmentScopedThreadShell {
   return {
+    runtimeId: null,
+    runtimeSelectionMode: "shared",
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,

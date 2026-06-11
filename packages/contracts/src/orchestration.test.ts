@@ -199,7 +199,9 @@ it.effect("decodes standalone thread create commands", () =>
     if (parsed.type !== "thread.standalone.create") {
       throw new Error(`Unexpected command type ${parsed.type}`);
     }
-    assert.strictEqual(parsed.runtimeSelectionMode, "isolated");
+    // Scratch threads are isolated by definition: the command no longer carries a
+    // runtime selection mode, and a legacy field from older clients is ignored.
+    assert.strictEqual("runtimeSelectionMode" in parsed, false);
     assert.deepStrictEqual(parsed.modelSelection, {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",

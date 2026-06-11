@@ -1,4 +1,5 @@
 import {
+  DEFAULT_THREAD_RUNTIME_MODE,
   ChatAttachment,
   CheckpointRef,
   IsoDateTime,
@@ -1188,8 +1189,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
-                runtimeId: row.runtimeId,
-                runtimeSelectionMode: row.runtimeSelectionMode,
+                runtimeId: row.runtimeId ?? null,
+                runtimeSelectionMode: row.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -1389,8 +1390,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
-                  runtimeId: row.runtimeId,
-                  runtimeSelectionMode: row.runtimeSelectionMode,
+                  runtimeId: row.runtimeId ?? null,
+                  runtimeSelectionMode: row.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -1519,8 +1520,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   (row): OrchestrationThreadShell => ({
                     id: row.threadId,
                     projectId: row.projectId,
-                    runtimeId: row.runtimeId,
-                    runtimeSelectionMode: row.runtimeSelectionMode,
+                    runtimeId: row.runtimeId ?? null,
+                    runtimeSelectionMode: row.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
                     title: row.title,
                     modelSelection: row.modelSelection,
                     runtimeMode: row.runtimeMode,
@@ -1654,8 +1655,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 (row): OrchestrationThreadShell => ({
                   id: row.threadId,
                   projectId: row.projectId,
-                  runtimeId: row.runtimeId,
-                  runtimeSelectionMode: row.runtimeSelectionMode,
+                  runtimeId: row.runtimeId ?? null,
+                  runtimeSelectionMode: row.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -1897,8 +1898,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return Option.some({
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
-        runtimeId: threadRow.value.runtimeId,
-        runtimeSelectionMode: threadRow.value.runtimeSelectionMode,
+        runtimeId: threadRow.value.runtimeId ?? null,
+        runtimeSelectionMode: threadRow.value.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
@@ -1993,8 +1994,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
-        runtimeId: threadRow.value.runtimeId,
-        runtimeSelectionMode: threadRow.value.runtimeSelectionMode,
+        runtimeId: threadRow.value.runtimeId ?? null,
+        runtimeSelectionMode: threadRow.value.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,

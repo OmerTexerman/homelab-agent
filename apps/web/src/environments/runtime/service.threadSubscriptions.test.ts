@@ -203,6 +203,8 @@ function makeThreadShellSnapshot(params: {
       {
         id: params.threadId,
         projectId,
+        runtimeId: null,
+        runtimeSelectionMode: "shared" as const,
         title: "Thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),

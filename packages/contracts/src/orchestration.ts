@@ -340,8 +340,12 @@ export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
-  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
-  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
+  // Derived: runtime binding is a pure function of (runtimeSelectionMode, threadId,
+  // project.defaultRuntimeId) in ProjectRuntimePolicy. Projections cache it for display.
+  runtimeId: Schema.NullOr(RuntimeSessionId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  runtimeSelectionMode: ThreadRuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_RUNTIME_MODE)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -389,8 +393,12 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
-  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
-  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
+  // Derived: runtime binding is a pure function of (runtimeSelectionMode, threadId,
+  // project.defaultRuntimeId) in ProjectRuntimePolicy. Projections cache it for display.
+  runtimeId: Schema.NullOr(RuntimeSessionId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  runtimeSelectionMode: ThreadRuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_RUNTIME_MODE)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -497,7 +505,6 @@ const ThreadCreateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
-  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
@@ -514,7 +521,6 @@ const ThreadStandaloneCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.standalone.create"),
   commandId: CommandId,
   threadId: ThreadId,
-  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -582,8 +588,6 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
-  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
-  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -608,7 +612,6 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
-  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,

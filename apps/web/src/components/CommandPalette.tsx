@@ -1192,7 +1192,6 @@ function OpenCommandPaletteDialog() {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
-        runtimeSelectionMode: "isolated",
         createdAt: new Date().toISOString(),
       });
       await navigate({

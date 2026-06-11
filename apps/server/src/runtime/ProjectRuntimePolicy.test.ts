@@ -33,14 +33,11 @@ function makeProject(
 }
 
 function makeThread(
-  overrides: Partial<
-    Pick<OrchestrationThread, "id" | "projectId" | "runtimeId" | "runtimeSelectionMode">
-  > = {},
-): Pick<OrchestrationThread, "id" | "projectId" | "runtimeId" | "runtimeSelectionMode"> {
+  overrides: Partial<Pick<OrchestrationThread, "id" | "projectId" | "runtimeSelectionMode">> = {},
+): Pick<OrchestrationThread, "id" | "projectId" | "runtimeSelectionMode"> {
   return {
     id: threadId,
     projectId,
-    runtimeId: null,
     runtimeSelectionMode: "shared",
     ...overrides,
   };
@@ -85,7 +82,7 @@ describe("project runtime policy", () => {
       thread: {
         id: threadId,
         projectId,
-        runtimeId: null,
+        runtimeSelectionMode: "shared",
       },
     });
 
@@ -102,7 +99,6 @@ describe("project runtime policy", () => {
       project: makeProject(),
       thread: makeThread({
         runtimeSelectionMode: "isolated",
-        runtimeId: null,
       }),
     });
 
@@ -114,18 +110,14 @@ describe("project runtime policy", () => {
     });
   });
 
-  it("honors an explicit runtime override while preserving the selected mode policy", () => {
-    const runtimeId = RuntimeSessionId.make("project-runtime:advanced-override");
+  it("ignores any persisted runtime pin: binding is a pure derivation", () => {
     const assignment = resolveProjectRuntimeAssignment({
       project: makeProject(),
-      thread: makeThread({
-        runtimeId,
-        runtimeSelectionMode: "shared",
-      }),
+      thread: makeThread({ runtimeSelectionMode: "shared" }),
     });
 
-    expect(assignment.runtimeId).toBe(runtimeId);
-    expect(assignment.queuePolicy).toBe("shared-single-writer");
+    expect(assignment.runtimeId).toBe("project-runtime:custom-project-1");
+    expect(assignment.kind).toBe("project-shared");
   });
 
   it("always assigns scratch threads their own isolated runtime", () => {
@@ -135,7 +127,6 @@ describe("project runtime policy", () => {
       thread: makeThread({
         id: scratchThreadId,
         projectId: standaloneProjectId(),
-        runtimeId: null,
         runtimeSelectionMode: "shared",
       }),
     });
@@ -146,36 +137,19 @@ describe("project runtime policy", () => {
     expect(assignment.isolated).toBe(true);
   });
 
-  it("coerces a legacy pin to the retired shared scratch runtime onto the thread's own runtime", () => {
+  it("derives the scratch binding regardless of any legacy persisted state", () => {
     const scratchThreadId = ThreadId.make("scratch-legacy");
     const assignment = resolveProjectRuntimeAssignment({
       project: { id: standaloneProjectId(), defaultRuntimeId: standaloneProjectDefaultRuntimeId() },
-      thread: makeThread({
+      thread: {
         id: scratchThreadId,
         projectId: standaloneProjectId(),
-        runtimeId: standaloneProjectDefaultRuntimeId(),
         runtimeSelectionMode: "shared",
-      }),
+      },
     });
 
     expect(assignment.runtimeId).toBe(isolatedThreadRuntimeId(scratchThreadId));
     expect(assignment.runtimeSelectionMode).toBe("isolated");
-  });
-
-  it("respects an explicit non-scratch runtime pin on a standalone thread", () => {
-    const scratchThreadId = ThreadId.make("scratch-pinned");
-    const pinned = RuntimeSessionId.make("isolated-runtime:scratch-pinned");
-    const assignment = resolveProjectRuntimeAssignment({
-      project: { id: standaloneProjectId(), defaultRuntimeId: null },
-      thread: makeThread({
-        id: scratchThreadId,
-        projectId: standaloneProjectId(),
-        runtimeId: pinned,
-        runtimeSelectionMode: "isolated",
-      }),
-    });
-
-    expect(assignment.runtimeId).toBe(pinned);
-    expect(assignment.isolated).toBe(true);
+    expect(assignment.kind).toBe("scratch");
   });
 });

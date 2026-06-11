@@ -126,7 +126,7 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("gives every scratch thread its own isolated runtime even when shared mode is requested", async () => {
+  it("gives every additional scratch thread its own isolated runtime", async () => {
     const initial = createEmptyReadModel(now);
     const first = await decide(standaloneCreateCommand(), initial);
     const withStandalone = await applyPlannedEvents(initial, first);
@@ -135,7 +135,6 @@ describe("standalone thread orchestration", () => {
       standaloneCreateCommand({
         commandId: asCommandId("cmd-standalone-create-2"),
         threadId: asThreadId("thread-standalone-2"),
-        runtimeSelectionMode: "shared",
       }),
       withStandalone,
     );
@@ -150,13 +149,12 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("assigns isolated standalone threads to isolated runtimes", async () => {
+  it("derives the scratch runtime binding from the thread id alone", async () => {
     const readModel = createEmptyReadModel(now);
     const threadId = asThreadId("thread-standalone-isolated");
     const result = await decide(
       standaloneCreateCommand({
         threadId,
-        runtimeSelectionMode: "isolated",
       }),
       readModel,
     );
@@ -296,7 +294,6 @@ describe("standalone thread orchestration", () => {
       await decide(
         standaloneCreateCommand({
           threadId,
-          runtimeSelectionMode: "isolated",
         }),
         initial,
       ),
@@ -395,7 +392,6 @@ describe("standalone thread orchestration", () => {
       await decide(
         standaloneCreateCommand({
           threadId,
-          runtimeSelectionMode: "isolated",
         }),
         initial,
       ),

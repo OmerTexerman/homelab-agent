@@ -183,6 +183,8 @@ function createMinimalSnapshot(): OrchestrationReadModel {
       {
         id: THREAD_ID,
         projectId: PROJECT_ID,
+        runtimeId: null,
+        runtimeSelectionMode: "shared" as const,
         title: "Test thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),

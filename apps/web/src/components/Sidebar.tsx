@@ -1771,7 +1771,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             },
             runtimeMode: "full-access",
             interactionMode: "default",
-            runtimeSelectionMode: "isolated",
             createdAt: new Date().toISOString(),
           });
           if (isMobile) {
@@ -3600,7 +3599,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         },
         runtimeMode: "full-access",
         interactionMode: "default",
-        runtimeSelectionMode: "isolated",
         createdAt: new Date().toISOString(),
       });
       if (isMobile) {

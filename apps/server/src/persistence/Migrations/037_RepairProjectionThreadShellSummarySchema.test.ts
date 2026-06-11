@@ -180,6 +180,7 @@ layer("037_RepairProjectionThreadShellSummarySchema", (it) => {
       assert.deepStrictEqual(executed, [
         [37, "RepairProjectionThreadShellSummarySchema"],
         [38, "BackfillAuthSessionVisibility"],
+        [39, "DeriveThreadRuntimeBindings"],
       ]);
 
       const afterColumns = yield* sql<{ readonly name: string }>`

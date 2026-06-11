@@ -15,9 +15,20 @@ import {
   isStandaloneProjectId as isStandaloneProjectIdValue,
 } from "@t3tools/shared/standaloneProject";
 
+/**
+ * The three runtime contexts a thread can run in. `kind` is the single source of truth
+ * for persona, generated instructions, queueing, and knowledge scoping:
+ * - "scratch": a standalone thread's own runtime — private workspace, thread-scoped memory.
+ * - "project-isolated": a project thread's own parallel runtime — private workspace,
+ *   project-scoped memory/knowledge.
+ * - "project-shared": the project's default runtime — shared workspace, single-writer queue.
+ */
+export type ProjectRuntimeAssignmentKind = "scratch" | "project-isolated" | "project-shared";
+
 export interface ProjectRuntimeAssignment {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly kind: ProjectRuntimeAssignmentKind;
   readonly runtimeId: RuntimeSessionId;
   readonly runtimeSelectionMode: ThreadRuntimeMode;
   readonly queuePolicy: "shared-single-writer" | "isolated-concurrent";
@@ -75,23 +86,20 @@ export function defaultRuntimeIdForProject(
 
 export function resolveProjectRuntimeAssignment(input: {
   readonly project: Pick<OrchestrationProject, "id" | "defaultRuntimeId">;
-  readonly thread: Pick<
-    OrchestrationThread,
-    "id" | "projectId" | "runtimeId" | "runtimeSelectionMode"
-  >;
+  readonly thread: Pick<OrchestrationThread, "id" | "projectId" | "runtimeSelectionMode">;
 }): ProjectRuntimeAssignment {
-  // Standalone (scratch) threads are always isolated: each one owns a fresh runtime and
-  // shares nothing. Legacy threads pinned to the retired shared scratch runtime coerce to
-  // their own isolated runtime here even before persisted state is migrated.
+  // Runtime binding is a pure function of (scope, mode, threadId, project default). Persisted
+  // thread.runtimeId is a derived display cache and is intentionally NOT consulted here:
+  // there are no pins, no fallback chains, and no representable illegal states.
+  //
+  // Scratch (standalone) threads always own their runtime: private workspace, thread-scoped
+  // memory, nothing shared.
   if (isStandaloneProjectId(input.thread.projectId)) {
-    const pinnedRuntimeId =
-      input.thread.runtimeId != null && !isStandaloneRuntimeId(input.thread.runtimeId)
-        ? input.thread.runtimeId
-        : null;
     return {
       projectId: input.thread.projectId,
       threadId: input.thread.id,
-      runtimeId: pinnedRuntimeId ?? isolatedThreadRuntimeId(input.thread.id),
+      kind: "scratch",
+      runtimeId: isolatedThreadRuntimeId(input.thread.id),
       runtimeSelectionMode: "isolated",
       queuePolicy: "isolated-concurrent",
       isolated: true,
@@ -99,19 +107,25 @@ export function resolveProjectRuntimeAssignment(input: {
   }
 
   const runtimeSelectionMode = input.thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
-  const runtimeId =
-    input.thread.runtimeId ??
-    (runtimeSelectionMode === "isolated"
-      ? isolatedThreadRuntimeId(input.thread.id)
-      : defaultRuntimeIdForProject(input.project));
+  if (runtimeSelectionMode === "isolated") {
+    return {
+      projectId: input.thread.projectId,
+      threadId: input.thread.id,
+      kind: "project-isolated",
+      runtimeId: isolatedThreadRuntimeId(input.thread.id),
+      runtimeSelectionMode,
+      queuePolicy: "isolated-concurrent",
+      isolated: true,
+    };
+  }
 
   return {
     projectId: input.thread.projectId,
     threadId: input.thread.id,
-    runtimeId,
+    kind: "project-shared",
+    runtimeId: defaultRuntimeIdForProject(input.project),
     runtimeSelectionMode,
-    queuePolicy:
-      runtimeSelectionMode === "isolated" ? "isolated-concurrent" : "shared-single-writer",
-    isolated: runtimeSelectionMode === "isolated",
+    queuePolicy: "shared-single-writer",
+    isolated: false,
   };
 }

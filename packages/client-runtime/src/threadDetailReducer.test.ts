@@ -40,6 +40,8 @@ const baseThread: OrchestrationThread = {
   activities: [],
   checkpoints: [],
   session: null,
+  runtimeId: null,
+  runtimeSelectionMode: "shared",
 };
 
 describe("applyThreadDetailEvent", () => {

@@ -48,6 +48,8 @@ const BASE_SNAPSHOT: OrchestrationShellSnapshot = {
       updatedAt: "2026-04-01T00:00:00.000Z",
       archivedAt: null,
       session: null,
+      runtimeId: null,
+      runtimeSelectionMode: "shared",
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,

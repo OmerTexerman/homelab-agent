@@ -41,6 +41,8 @@ const stubThread = {
   hasPendingUserInput: false,
   hasActionableProposedPlan: false,
   session: null,
+  runtimeId: null,
+  runtimeSelectionMode: "shared",
 } as const;
 
 describe("applyShellStreamEvent", () => {

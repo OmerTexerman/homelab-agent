@@ -119,6 +119,8 @@ describe("OrchestrationEngine", () => {
         {
           id: ThreadId.make("thread-bootstrap"),
           projectId: asProjectId("project-bootstrap"),
+          runtimeId: null,
+          runtimeSelectionMode: "shared" as const,
           title: "Bootstrap Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
