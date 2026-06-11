@@ -5,7 +5,6 @@ import {
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
-  type ProviderKind,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
@@ -40,24 +39,14 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
-import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
-import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
-import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
-import { homelabRuntimeBootstrapView } from "../../runtime/RuntimeBootstrapCatalogView.ts";
-import { RuntimeBootstrapRegistry } from "../../runtime/Services/RuntimeBootstrapRegistry.ts";
-import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
-import {
-  isStandaloneProjectId,
-  resolveProjectRuntimeAssignment,
-} from "../../runtime/ProjectRuntimePolicy.ts";
+import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
+import { makeProjectRuntimeTurnDispatch } from "./ProjectRuntimeTurnDispatch.ts";
 import {
   buildGeneratedWorktreeBranchName,
   canReplaceThreadTitle,
   hasActiveProviderSession,
   isTemporaryWorktreeBranch,
   mapProviderSessionStatusToOrchestrationStatus,
-  planProviderTurnDispatch,
   toNonEmptyProviderInput,
   turnStartKeyForEvent,
 } from "./ProviderCommandPolicy.ts";
@@ -143,9 +132,10 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
-  const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
-  const projectRuntimeQueue = yield* Effect.serviceOption(ProjectRuntimeQueue);
-  const homelabSecretRegistry = yield* Effect.serviceOption(HomelabSecretRegistry);
+  const projectRuntimeTurnDispatch = yield* makeProjectRuntimeTurnDispatch({
+    projectionSnapshotQuery,
+    providerService,
+  });
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -551,103 +541,6 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const refreshRuntimeContextView = Effect.fn("refreshRuntimeContextView")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly provider: ProviderDriverKind;
-    readonly runtimeMode: RuntimeMode;
-    readonly createdAt: string;
-  }) {
-    const readModel = yield* projectionSnapshotQuery.getSnapshot();
-    if (Option.isNone(threadRuntime)) {
-      return;
-    }
-    const thread = readModel.threads.find(
-      (entry) => entry.id === input.threadId && entry.deletedAt === null,
-    );
-    if (!thread) return;
-    const project = readModel.projects.find(
-      (entry) => entry.id === thread.projectId && entry.deletedAt === null,
-    );
-    if (!project) return;
-    const assignment = resolveProjectRuntimeAssignment({ project, thread });
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: [project],
-    });
-
-    const runtimeProvider: ProviderKind | null =
-      input.provider === ProviderDriverKind.make("codex")
-        ? "codex"
-        : input.provider === ProviderDriverKind.make("claudeAgent")
-          ? "claudeAgent"
-          : null;
-    yield* threadRuntime.value.ensureRuntime({
-      threadId: input.threadId,
-      runtimeId: assignment.runtimeId,
-      provider: runtimeProvider,
-      runtimeMode: input.runtimeMode,
-      ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
-      isStandalone: isStandaloneProjectId(project.id),
-      projectTitle: project.title,
-    });
-    yield* threadRuntime.value.startRuntime(input.threadId);
-    const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
-    const secrets = Option.isSome(homelabSecretRegistry)
-      ? yield* homelabSecretRegistry.value.listSecrets().pipe(
-          Effect.catchTag("HomelabSecretRegistryError", (error) =>
-            Effect.logWarning("failed to list homelab secrets for context view", {
-              threadId: input.threadId,
-              detail: error.message,
-            }).pipe(Effect.as([])),
-          ),
-        )
-      : [];
-    const projectMemory = yield* Effect.serviceOption(ProjectMemory);
-    const memoryEntries = Option.isSome(projectMemory)
-      ? yield* projectMemory.value
-          .list({
-            projectId: project.id,
-            limit: 1_000,
-          })
-          .pipe(
-            Effect.catchTag("ProjectMemoryError", (error) =>
-              Effect.logWarning("failed to list project memory for context view", {
-                threadId: input.threadId,
-                detail: error.message,
-              }).pipe(Effect.as([])),
-            ),
-          )
-      : [];
-    const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
-    const bootstrap = Option.isSome(runtimeBootstrapRegistry)
-      ? yield* runtimeBootstrapRegistry.value.getCatalog().pipe(
-          Effect.map(homelabRuntimeBootstrapView),
-          Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
-            Effect.logWarning("failed to load runtime bootstrap catalog for context view", {
-              threadId: input.threadId,
-              detail: error.message,
-            }).pipe(Effect.as(undefined)),
-          ),
-        )
-      : undefined;
-    yield* writeHomelabContextView({
-      hostWorkspacePath: launchContext.hostWorkspacePath,
-      project,
-      threads: readModel.threads.filter((entry) => entry.projectId === project.id),
-      memoryEntries,
-      secrets,
-      ...(bootstrap !== undefined ? { bootstrap } : {}),
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to write homelab context view", {
-          threadId: input.threadId,
-          runtimeId: assignment.runtimeId,
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
-  });
-
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fn(
     "maybeGenerateAndRenameWorktreeBranchForFirstTurn",
   )(function* (input: {
@@ -859,67 +752,17 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const project = yield* resolveProject(thread.projectId);
-    if (!project) {
-      yield* recoverTurnStartFailure(
-        Cause.fail(new Error(`Project '${thread.projectId}' was not found.`)),
-      );
-      return;
-    }
-    const runtimeAssignment = resolveProjectRuntimeAssignment({ project, thread });
-    const providerInfo = yield* providerService.getInstanceInfo(
-      (event.payload.modelSelection ?? thread.modelSelection).instanceId,
-    );
-    const providerDriver = providerInfo.driverKind;
-    if (!isProviderDriverKind(providerDriver)) {
-      yield* recoverTurnStartFailure(
-        Cause.fail(new Error(`Provider driver '${providerDriver}' is not available.`)),
-      );
-      return;
-    }
-
-    const runtimeContextReady = yield* refreshRuntimeContextView({
-      threadId: event.payload.threadId,
-      provider: providerDriver,
+    yield* projectRuntimeTurnDispatch.dispatchTurnStart({
+      thread,
+      modelSelection: event.payload.modelSelection ?? thread.modelSelection,
       runtimeMode: event.payload.runtimeMode,
       createdAt: event.payload.createdAt,
-    }).pipe(
-      Effect.as(true),
-      Effect.catchCause((cause) =>
-        handleTurnStartFailure(cause).pipe(
-          Effect.as(false),
-          Effect.catchCause((recoveryCause) =>
-            Effect.logWarning(
-              "provider command reactor failed to recover runtime context failure",
-              {
-                threadId: event.payload.threadId,
-                cause: Cause.pretty(recoveryCause),
-                originalCause: Cause.pretty(cause),
-              },
-            ).pipe(Effect.as(false)),
-          ),
-        ),
-      ),
-    );
-    if (!runtimeContextReady) {
-      return;
-    }
-
-    const sendTurnEffect = providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure));
-    const dispatchPlan = planProviderTurnDispatch({
-      runtimeQueueAvailable: Option.isSome(projectRuntimeQueue),
-      runtimeId: runtimeAssignment.runtimeId,
-      queuePolicy: runtimeAssignment.queuePolicy,
-      projectId: project.id,
-      threadId: event.payload.threadId,
+      sendTurn: providerService
+        .sendTurn(sendTurnRequest.value)
+        .pipe(Effect.catchCause(recoverTurnStartFailure)),
+      onFailure: handleTurnStartFailure,
+      onUnrecoverableFailure: recoverTurnStartFailure,
     });
-    const queuedSendTurnEffect =
-      dispatchPlan.action === "queue" && Option.isSome(projectRuntimeQueue)
-        ? projectRuntimeQueue.value.run(dispatchPlan.options, sendTurnEffect)
-        : sendTurnEffect;
-    yield* queuedSendTurnEffect.pipe(Effect.forkScoped);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
