@@ -35,6 +35,7 @@ import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
+import { isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -184,6 +185,21 @@ function redactProjectMemorySearchResult(
     tags: result.tags.map((tag) => redactHomelabViewText(tag, secrets)),
   };
 }
+
+const SCRATCH_NO_PROJECT_DETAIL =
+  "This is a standalone (scratch) thread: there is no project to propose or promote into. " +
+  "Use 'homelab promote' to publish durable findings straight to the global homelab graph, " +
+  "or promote this thread to a project first.";
+
+const requireProjectScopeForPromotion = (projectId: ProjectId) =>
+  isStandaloneProjectId(projectId)
+    ? Effect.fail(
+        new HomelabHttpError({
+          message: SCRATCH_NO_PROJECT_DETAIL,
+          status: 400,
+        }),
+      )
+    : Effect.void;
 
 const resolveProjectIdForMemoryRequest = (input: {
   readonly projectId?: ProjectId | undefined;
@@ -584,6 +600,9 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
       projectId: input.projectId,
       threadId: input.sourceThreadId,
     });
+    if (input.promotionStatus === "proposed") {
+      yield* requireProjectScopeForPromotion(projectId);
+    }
     const projectMemory = yield* ProjectMemory;
     const secrets = yield* listHomelabSecretsForRedaction;
     const entry = yield* projectMemory.create({
@@ -622,6 +641,7 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
       }),
     );
     const projectId = yield* resolveProjectIdForMemoryRequest(input);
+    yield* requireProjectScopeForPromotion(projectId);
     const projectMemory = yield* ProjectMemory;
     const recorded = yield* recordPromotedDiscoveries(input.promotion);
     const entry = yield* projectMemory.markPromoted({ ...input, projectId });

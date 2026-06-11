@@ -466,6 +466,18 @@ import urllib.request
 SERVER_URL = os.environ.get("HOMELAB_AGENT_SERVER_URL", "").rstrip("/")
 RUNTIME_TOKEN = os.environ.get("HOMELAB_AGENT_RUNTIME_TOKEN", "")
 THREAD_ID = os.environ.get("HOMELAB_AGENT_THREAD_ID", "")
+SCOPE = os.environ.get("HOMELAB_AGENT_SCOPE", "project")
+
+SCRATCH_NO_PROJECT_MESSAGE = (
+    "This is a standalone (scratch) thread: there is no project to propose or promote into. "
+    "Use 'homelab promote' to publish durable findings straight to the global homelab graph, "
+    "or promote this thread to a project first (Promote to project in the app)."
+)
+
+
+def require_project_scope():
+    if SCOPE == "scratch":
+        fail(SCRATCH_NO_PROJECT_MESSAGE)
 
 
 def fail(message: str, code: int = 1):
@@ -913,6 +925,7 @@ def cmd_memory_add(args):
 
 
 def cmd_memory_propose(args):
+    require_project_scope()
     print_json(
         request_json(
             "POST",
@@ -923,6 +936,7 @@ def cmd_memory_propose(args):
 
 
 def cmd_memory_promote(args):
+    require_project_scope()
     payload = runtime_thread_query(args)
     payload["memoryId"] = args.memory_id
     payload["promotion"] = prepare_promotion_payload(read_json_input(args.file, args.stdin))
@@ -2247,6 +2261,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       secretEnv,
       serverUrl: runtimeNetworkPlan.serverUrl,
       threadId: runtime.threadId,
+      scope: runtime.isStandalone ? "scratch" : "project",
       ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
     });
 

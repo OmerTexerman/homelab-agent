@@ -386,12 +386,16 @@ export function buildRuntimeControlEnvironment(input: {
   readonly secretEnv: Readonly<Record<string, string>>;
   readonly serverUrl: string;
   readonly threadId: ThreadIdModel;
+  readonly scope: "scratch" | "project";
   readonly runtimeAccessToken?: string;
 }): Readonly<Record<string, string>> {
   return {
     ...input.secretEnv,
     HOMELAB_AGENT_SERVER_URL: input.serverUrl,
     HOMELAB_AGENT_THREAD_ID: String(input.threadId),
+    // The in-container homelab CLI uses this to teach scope-appropriate promotion paths:
+    // scratch threads have no project to propose into.
+    HOMELAB_AGENT_SCOPE: input.scope,
     ...(input.runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: input.runtimeAccessToken } : {}),
   };
 }

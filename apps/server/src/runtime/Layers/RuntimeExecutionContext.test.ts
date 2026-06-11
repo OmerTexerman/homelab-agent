@@ -412,11 +412,13 @@ describe("runtime file rendering", () => {
         },
         serverUrl: "http://host.docker.internal:3456",
         threadId: ThreadId.make("thread-secrets"),
+        scope: "project",
         runtimeAccessToken: "runtime-token",
       }),
     ).toEqual({
       FIRST_SECRET: "one",
       SECOND_SECRET: "two",
+      HOMELAB_AGENT_SCOPE: "project",
       HOMELAB_AGENT_SERVER_URL: "http://host.docker.internal:3456",
       HOMELAB_AGENT_THREAD_ID: "thread-secrets",
       HOMELAB_AGENT_RUNTIME_TOKEN: "runtime-token",
