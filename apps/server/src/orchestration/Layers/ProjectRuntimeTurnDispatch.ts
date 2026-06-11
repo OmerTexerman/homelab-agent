@@ -92,6 +92,7 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       runtimeMode: input.runtimeMode,
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
       isStandalone: assignment.kind === "scratch",
+      runtimeKind: assignment.kind,
       projectTitle: project.title,
       // A parallel project thread starts from an exact copy of the Project Runtime.
       ...(assignment.kind === "project-isolated"

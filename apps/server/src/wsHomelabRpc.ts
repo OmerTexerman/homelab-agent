@@ -98,6 +98,7 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
             provider: null,
             runtimeMode: thread.runtimeMode,
             isStandalone: assignment.kind === "scratch",
+            runtimeKind: assignment.kind,
             ...(assignment.kind === "project-isolated"
               ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
               : {}),

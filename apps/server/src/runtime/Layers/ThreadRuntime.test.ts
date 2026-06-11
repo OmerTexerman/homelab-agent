@@ -809,9 +809,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         assert.match(standaloneAgents, /Thread-local memory and transcripts/);
         assert.match(
           standaloneAgents,
-          /This is a one-off standalone thread with its own isolated runtime and filesystem\./,
+          /This is a one-off standalone thread with its own runtime and filesystem\./,
         );
-        assert.match(standaloneAgents, /There is no project to promote into\./);
+        assert.match(standaloneAgents, /There is no project to propose or\npromote into/);
+        assert.match(standaloneAgents, /homelab skill list/);
 
         // Both personas keep the still-correct orientation: workspace, .homelab distinction, CLI, secrets.
         for (const persona of [projectAgents, standaloneAgents]) {
@@ -860,10 +861,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         assert.match(isolatedAgents, /This is a one-off standalone \(scratch\) thread\./);
         assert.match(
           isolatedAgents,
-          /This is a one-off standalone thread with its own isolated runtime and filesystem\./,
+          /This is a one-off standalone thread with its own runtime and filesystem\./,
         );
         assert.match(isolatedAgents, /Thread-local memory and transcripts/);
-        assert.match(isolatedAgents, /There is no project to promote into\./);
+        assert.match(isolatedAgents, /There is no project to propose or\npromote into/);
         assert.doesNotMatch(
           isolatedAgents,
           /This is a thread inside (?:the .* project|a project)\./,
@@ -881,6 +882,45 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         assert.match(isolatedReadme, /^# Scratch Homelab Context/);
         assert.doesNotMatch(isolatedReadme, /Project Runtime/);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("renders the parallel-thread persona for a project-isolated runtime", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      docker.imageLabels.clear();
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+
+      const parallelThreadId = ThreadId.make("thread-parallel-persona");
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: parallelThreadId,
+        runtimeId: isolatedThreadRuntimeId(parallelThreadId),
+        provider: "codex",
+        runtimeMode: "full-access",
+        isStandalone: false,
+        runtimeKind: "project-isolated",
+        projectTitle: "Edge Stack",
+      });
+
+      const launch = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const agents = yield* fileSystem.readFileString(
+        path.join(launch.hostWorkspacePath, "AGENTS.md"),
+      );
+
+      assert.match(
+        agents,
+        /This is an isolated \(parallel\) thread inside the "Edge Stack" project\./,
+      );
+      assert.match(agents, /exact copy of the Project Runtime/);
+      assert.match(agents, /Merge into Project\nRuntime/);
+      assert.match(agents, /Project-local memory and transcripts/);
+      // It must not claim the shared-single-writer framing or the scratch framing.
+      assert.doesNotMatch(agents, /turns are queued so there is one active writer/);
+      assert.doesNotMatch(agents, /one-off standalone \(scratch\) thread/);
+    }).pipe(Effect.scoped),
   );
 
   it.effect(
