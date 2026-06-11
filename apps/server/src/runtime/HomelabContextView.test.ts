@@ -8,7 +8,6 @@ import {
   ProviderInstanceId,
   RuntimeSessionId,
   ThreadId,
-  type HomelabSecretDescriptor,
   type OrchestrationProject,
   type ProjectMemoryEntry,
   type OrchestrationThread,
@@ -24,7 +23,6 @@ import * as FileSystem from "effect/FileSystem";
 import { describe, expect, it } from "vitest";
 
 import {
-  redactHomelabViewText,
   renderHomelabContextViewFiles,
   scopeHomelabContextViewToThread,
   writeHomelabContextView,
@@ -40,18 +38,6 @@ const project: Pick<OrchestrationProject, "id" | "title" | "workspaceRoot" | "de
   workspaceRoot: "/workspace",
   defaultRuntimeId: runtimeId,
 };
-
-const secrets: ReadonlyArray<HomelabSecretDescriptor> = [
-  {
-    key: "GITHUB_TOKEN",
-    placeholder: "$GITHUB_TOKEN",
-    label: "GitHub token",
-    summary: "Used for GitHub API calls",
-    hasValue: true,
-    createdAt: now,
-    updatedAt: now,
-  },
-];
 
 function makeThread(
   input: Partial<OrchestrationThread> & Pick<OrchestrationThread, "id" | "title">,
@@ -90,7 +76,7 @@ function byPath(files: ReturnType<typeof renderHomelabContextViewFiles>) {
 }
 
 describe("HomelabContextView", () => {
-  it("renders searchable thread indexes, summaries, and redacted raw transcripts", () => {
+  it("renders searchable thread indexes, summaries, and raw transcripts", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),
       title: "Repair backups",
@@ -159,7 +145,6 @@ describe("HomelabContextView", () => {
             updatedAt: now,
           },
         ],
-        secrets,
         bootstrap: {
           activeBootstrapVersion: "bootstrap-current",
           activeImageRef: "runtime:current",
@@ -188,19 +173,21 @@ describe("HomelabContextView", () => {
 
     expect(files.get(".homelab/README.md")).toContain("Homelab Core Homelab Context");
     expect(files.get(".homelab/threads/thread_thread-1/summary.md")).toContain(
-      "Investigate failed backups with [REDACTED_SECRET]",
+      "Investigate failed backups with ghp_abcdefghijklmnopqrstuvwxyz123456",
     );
     expect(files.get(".homelab/threads/thread_thread-1/transcript.md")).toContain(
-      "[REDACTED_SECRET]",
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
     );
     expect(files.get(".homelab/threads/thread_thread-1/messages.jsonl")).toContain("$GITHUB_TOKEN");
-    expect(files.get(".homelab/threads/thread_thread-1/messages.jsonl")).not.toContain(
+    expect(files.get(".homelab/threads/thread_thread-1/messages.jsonl")).toContain(
       "ghp_abcdefghijklmnopqrstuvwxyz123456",
     );
     expect(files.has(".homelab/threads/thread_thread-deleted/summary.md")).toBe(false);
     expect(files.get(".homelab/memory/index.jsonl")).toContain("Rotate backup credentials");
     expect(files.get(".homelab/memory/index.jsonl")).toContain("memory-backups");
-    expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("[REDACTED_SECRET]");
+    expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain(
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    );
     expect(files.get(".homelab/memory/latest/memory-backups.md")).toContain("$GITHUB_TOKEN");
     expect(files.get(".homelab/index/memory.jsonl")).toContain("memory-backups");
     expect(files.get(".homelab/bootstrap/README.md")).toContain(
@@ -256,12 +243,6 @@ describe("HomelabContextView", () => {
     expect(files.get(".homelab/threads/index.jsonl")).toContain(
       "project-runtime:system:standalone",
     );
-  });
-
-  it("redacts common secret value shapes while preserving broker placeholders", () => {
-    expect(
-      redactHomelabViewText("token sk-abcdefghijklmnopqrstuvwxyz123456 and $GITHUB_TOKEN", secrets),
-    ).toBe("token [REDACTED_SECRET] and $GITHUB_TOKEN");
   });
 
   it("prunes orphaned thread dirs and superseded memory files on re-write while preserving owned files", async () => {

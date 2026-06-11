@@ -12,7 +12,6 @@ import {
   ProjectMemoryListInput,
   ProjectMemoryPromoteInput,
   ProjectMemorySearchInput,
-  type HomelabSecretDescriptor,
   type HomelabEntity,
   type HomelabEntityKind as HomelabEntityKindModel,
   type HomelabGraphSearchResult,
@@ -22,9 +21,7 @@ import {
   type HomelabSnapshot,
   type HomelabSetupStatus,
   type ProjectId,
-  type ProjectMemoryEntry,
   type ProjectMemoryListResult,
-  type ProjectMemorySearchResult,
   type ProjectMemorySearchResultList,
   HomelabSkillCreateInput,
   HomelabSkillListInput,
@@ -44,11 +41,7 @@ import { isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import {
-  listHomelabSecretsForRedaction,
-  redactHomelabViewText,
-  refreshActiveProjectContextViews,
-} from "./ProjectMemoryContextViews.ts";
+import { refreshActiveProjectContextViews } from "./ProjectMemoryContextViews.ts";
 
 class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
   readonly message: string;
@@ -166,30 +159,6 @@ function parseDelimitedQueryValues(value: string | null): ReadonlyArray<string> 
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-}
-
-function redactProjectMemoryEntry(
-  entry: ProjectMemoryEntry,
-  secrets: ReadonlyArray<HomelabSecretDescriptor>,
-): ProjectMemoryEntry {
-  return {
-    ...entry,
-    summary: redactHomelabViewText(entry.summary, secrets),
-    body: redactHomelabViewText(entry.body, secrets),
-    tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
-  };
-}
-
-function redactProjectMemorySearchResult(
-  result: ProjectMemorySearchResult,
-  secrets: ReadonlyArray<HomelabSecretDescriptor>,
-): ProjectMemorySearchResult {
-  return {
-    ...result,
-    summary: redactHomelabViewText(result.summary, secrets),
-    snippet: redactHomelabViewText(result.snippet, secrets),
-    tags: result.tags.map((tag) => redactHomelabViewText(tag, secrets)),
-  };
 }
 
 const SCRATCH_NO_PROJECT_DETAIL =
@@ -539,11 +508,10 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
       threadId: input.threadId,
     });
     const projectMemory = yield* ProjectMemory;
-    const secrets = yield* listHomelabSecretsForRedaction;
     const entries = yield* projectMemory.list({ ...input, projectId });
     return HttpServerResponse.jsonUnsafe(
       {
-        entries: entries.map((entry) => redactProjectMemoryEntry(entry, secrets)),
+        entries,
       } satisfies ProjectMemoryListResult,
       { status: 200 },
     );
@@ -573,11 +541,10 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
       threadId: input.threadId,
     });
     const projectMemory = yield* ProjectMemory;
-    const secrets = yield* listHomelabSecretsForRedaction;
     const results = yield* projectMemory.search({ ...input, projectId });
     return HttpServerResponse.jsonUnsafe(
       {
-        results: results.map((result) => redactProjectMemorySearchResult(result, secrets)),
+        results,
       } satisfies ProjectMemorySearchResultList,
       { status: 200 },
     );
@@ -610,16 +577,12 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
       yield* requireProjectScopeForPromotion(projectId);
     }
     const projectMemory = yield* ProjectMemory;
-    const secrets = yield* listHomelabSecretsForRedaction;
     const entry = yield* projectMemory.create({
       ...input,
       projectId,
-      summary: redactHomelabViewText(input.summary, secrets),
-      body: input.body === undefined ? undefined : redactHomelabViewText(input.body, secrets),
-      tags: input.tags?.map((tag) => redactHomelabViewText(tag, secrets)),
     });
     yield* refreshActiveProjectContextViews(projectId);
-    return HttpServerResponse.jsonUnsafe(redactProjectMemoryEntry(entry, secrets), { status: 201 });
+    return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
@@ -652,10 +615,9 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
     const recorded = yield* recordPromotedDiscoveries(input.promotion);
     const entry = yield* projectMemory.markPromoted({ ...input, projectId });
     yield* refreshActiveProjectContextViews(projectId);
-    const secrets = yield* listHomelabSecretsForRedaction;
     return HttpServerResponse.jsonUnsafe(
       {
-        entry: redactProjectMemoryEntry(entry, secrets),
+        entry,
         recorded,
       },
       { status: 201 },
@@ -742,12 +704,11 @@ export const homelabSkillsCreateRouteLayer = HttpRouter.add(
     );
     const context = yield* resolveSkillContext(input);
     const skills = yield* HomelabSkills;
-    const secrets = yield* listHomelabSecretsForRedaction;
     const entry = yield* skills.upsert({
       context,
       name: input.name,
-      description: redactHomelabViewText(input.description, secrets),
-      body: redactHomelabViewText(input.body, secrets),
+      description: input.description,
+      body: input.body,
     });
     return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(

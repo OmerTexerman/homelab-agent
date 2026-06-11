@@ -29,7 +29,6 @@ import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
-import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
@@ -548,10 +547,6 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
           }),
         ),
       );
-      const secretRegistry = yield* Effect.serviceOption(HomelabSecretRegistry);
-      const secrets = Option.isSome(secretRegistry)
-        ? yield* secretRegistry.value.listSecrets().pipe(Effect.catch(() => Effect.succeed([])))
-        : [];
       const projectMemory = yield* Effect.serviceOption(ProjectMemory);
       const memoryEntries = Option.isSome(projectMemory)
         ? yield* projectMemory.value
@@ -577,7 +572,6 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         project: input.project,
         threads: scoped.threads,
         memoryEntries: scoped.memoryEntries,
-        secrets,
         ...(bootstrap !== undefined ? { bootstrap } : {}),
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),

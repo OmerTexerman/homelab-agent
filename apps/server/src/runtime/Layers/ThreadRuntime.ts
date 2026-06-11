@@ -1315,8 +1315,8 @@ them with normal tools:
 - \`.homelab/skills/\` holds the skills visible to this thread (global + thread-local).
 
 Do not dump all of \`.homelab\` into prompts. Search it for the current task and
-open only the relevant files. Secret values are redacted; use placeholders and
-\`homelab secret-request\` when a real value is needed.`
+open only the relevant files. Reference secrets by their placeholders and use
+\`homelab secret-request\` when a value needs to be provided.`
     : `## Project-local memory and transcripts
 
 Generated project context lives under \`.homelab/\` in this workspace
@@ -1335,8 +1335,8 @@ context lives here in the workspace, not there.) Search them with normal tools:
 - \`.homelab/skills/\` holds the skills visible to this project (global + project).
 
 Do not dump all of \`.homelab\` into prompts. Search it for the current task and
-open only the relevant files. Secret values are redacted; use placeholders and
-\`homelab secret-request\` when a real value is needed.`;
+open only the relevant files. Reference secrets by their placeholders and use
+\`homelab secret-request\` when a value needs to be provided.`;
 
   const promotionSection = isScratch
     ? `When you want to keep a note for the rest of this thread, add it to thread-local memory:

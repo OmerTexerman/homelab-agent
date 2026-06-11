@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type {
-  HomelabSecretDescriptor,
   OrchestrationProject,
   OrchestrationThread,
   ProjectId,
@@ -11,12 +10,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
-import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { ProjectMemory } from "./Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
-  redactHomelabViewText,
   writeHomelabContextView,
   scopeHomelabContextViewToThread,
 } from "../runtime/HomelabContextView.ts";
@@ -24,26 +21,6 @@ import { resolveProjectRuntimeAssignment } from "../runtime/ProjectRuntimePolicy
 import { homelabRuntimeBootstrapView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime, type ThreadRuntimeDescriptor } from "../runtime/Services/ThreadRuntime.ts";
-
-export const listHomelabSecretsForRedaction: Effect.Effect<
-  ReadonlyArray<HomelabSecretDescriptor>,
-  never,
-  never
-> = Effect.gen(function* () {
-  const registryOption = yield* Effect.serviceOption(HomelabSecretRegistry);
-  if (Option.isNone(registryOption)) {
-    return [] satisfies ReadonlyArray<HomelabSecretDescriptor>;
-  }
-  return yield* registryOption.value.listSecrets().pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("failed to list homelab secrets for project memory redaction", {
-        cause: Cause.pretty(cause),
-      }).pipe(Effect.as([] satisfies ReadonlyArray<HomelabSecretDescriptor>)),
-    ),
-  );
-});
-
-export { redactHomelabViewText };
 
 export function selectProjectContextViewRuntimeThreadIds(input: {
   readonly project: Pick<OrchestrationProject, "id" | "defaultRuntimeId">;
@@ -137,7 +114,7 @@ export const refreshActiveProjectContextViews = (
     }
 
     const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
-    const [memoryEntries, secrets, bootstrap] = yield* Effect.all([
+    const [memoryEntries, bootstrap] = yield* Effect.all([
       projectMemory.value.list({ projectId, limit: HOMELAB_MEMORY_VIEW_ENTRY_LIMIT }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("failed to list project memory for view refresh", {
@@ -146,7 +123,6 @@ export const refreshActiveProjectContextViews = (
           }).pipe(Effect.as([])),
         ),
       ),
-      listHomelabSecretsForRedaction,
       Option.isSome(runtimeBootstrapRegistry)
         ? runtimeBootstrapRegistry.value.getCatalog().pipe(
             Effect.map(homelabRuntimeBootstrapView),
@@ -176,7 +152,6 @@ export const refreshActiveProjectContextViews = (
             project,
             threads: scoped.threads,
             memoryEntries: scoped.memoryEntries,
-            secrets,
             ...(bootstrap !== undefined ? { bootstrap } : {}),
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem.value));
         }).pipe(

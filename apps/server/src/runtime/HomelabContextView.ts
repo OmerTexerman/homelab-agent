@@ -2,7 +2,6 @@
 import nodePath from "node:path";
 
 import type {
-  HomelabSecretDescriptor,
   OrchestrationProject,
   OrchestrationThread,
   ProjectMemoryEntry,
@@ -58,7 +57,6 @@ export interface HomelabContextViewInput {
   >;
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
-  readonly secrets?: ReadonlyArray<HomelabSecretDescriptor>;
   readonly bootstrap?: HomelabRuntimeBootstrapView | undefined;
 }
 
@@ -87,13 +85,6 @@ export function scopeHomelabContextViewToThread(input: {
   };
 }
 
-const SECRET_VALUE_PATTERNS = [
-  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
-  /\bgh[pousr]_[A-Za-z0-9_]{16,}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]{16,}\b/g,
-  /\b[A-Za-z0-9+/]{32,}={0,2}\b/g,
-];
-
 export function safeHomelabViewSegment(value: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized.slice(0, 120) : "unknown";
@@ -101,18 +92,6 @@ export function safeHomelabViewSegment(value: string): string {
 
 function jsonLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
-}
-
-export function redactHomelabViewText(
-  value: string,
-  secrets: ReadonlyArray<HomelabSecretDescriptor> = [],
-): string {
-  let redacted = value;
-  for (const pattern of SECRET_VALUE_PATTERNS) {
-    redacted = redacted.replace(pattern, "[REDACTED_SECRET]");
-  }
-
-  return redacted;
 }
 
 function summarizeThread(thread: OrchestrationThread): string {
@@ -126,12 +105,9 @@ function summarizeThread(thread: OrchestrationThread): string {
   return thread.title;
 }
 
-function renderThreadSummary(input: {
-  readonly thread: OrchestrationThread;
-  readonly secrets: ReadonlyArray<HomelabSecretDescriptor>;
-}): string {
-  const { thread, secrets } = input;
-  const summary = redactHomelabViewText(summarizeThread(thread), secrets);
+function renderThreadSummary(input: { readonly thread: OrchestrationThread }): string {
+  const { thread } = input;
+  const summary = summarizeThread(thread);
   return [
     `# ${thread.title}`,
     "",
@@ -150,32 +126,26 @@ function renderThreadSummary(input: {
   ].join("\n");
 }
 
-function renderTranscriptMarkdown(input: {
-  readonly thread: OrchestrationThread;
-  readonly secrets: ReadonlyArray<HomelabSecretDescriptor>;
-}): string {
-  const { thread, secrets } = input;
+function renderTranscriptMarkdown(input: { readonly thread: OrchestrationThread }): string {
+  const { thread } = input;
   const lines = [`# Transcript: ${thread.title}`, ""];
   for (const message of thread.messages) {
     lines.push(`## ${message.role} ${message.createdAt}`);
     lines.push("");
-    lines.push(redactHomelabViewText(message.text, secrets));
+    lines.push(message.text);
     lines.push("");
   }
   return lines.join("\n");
 }
 
-function renderMessagesJsonl(input: {
-  readonly thread: OrchestrationThread;
-  readonly secrets: ReadonlyArray<HomelabSecretDescriptor>;
-}): string {
+function renderMessagesJsonl(input: { readonly thread: OrchestrationThread }): string {
   return input.thread.messages
     .map((message) =>
       jsonLine({
         id: message.id,
         role: message.role,
         turnId: message.turnId,
-        text: redactHomelabViewText(message.text, input.secrets),
+        text: message.text,
         attachments: message.attachments ?? [],
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
@@ -184,14 +154,11 @@ function renderMessagesJsonl(input: {
     .join("");
 }
 
-function renderMemoryMarkdown(input: {
-  readonly entry: ProjectMemoryEntry;
-  readonly secrets: ReadonlyArray<HomelabSecretDescriptor>;
-}): string {
-  const { entry, secrets } = input;
-  const tags = entry.tags.map((tag) => redactHomelabViewText(tag, secrets));
+function renderMemoryMarkdown(input: { readonly entry: ProjectMemoryEntry }): string {
+  const { entry } = input;
+  const tags = entry.tags;
   const lines = [
-    `# ${redactHomelabViewText(entry.summary, secrets)}`,
+    `# ${entry.summary}`,
     "",
     `- Memory: ${entry.id}`,
     `- Project: ${entry.projectId}`,
@@ -206,7 +173,7 @@ function renderMemoryMarkdown(input: {
     "",
     "## Body",
     "",
-    redactHomelabViewText(entry.body || entry.summary, secrets),
+    entry.body || entry.summary,
     "",
   ];
 
@@ -245,7 +212,7 @@ function renderHomelabReadme(title: string): string {
     "talks to the app server. `~/.homelab` only contains that CLI; project context lives here.",
     "",
     "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server",
-    "exposes it. Secret values are redacted; secret references appear as placeholders.",
+    "exposes it.",
     "",
   ].join("\n");
 }
@@ -315,7 +282,6 @@ function renderBootstrapMarkdown(input: HomelabRuntimeBootstrapView): string {
 export function renderHomelabContextViewFiles(
   input: Omit<HomelabContextViewInput, "hostWorkspacePath">,
 ): HomelabViewFile[] {
-  const secrets = input.secrets ?? [];
   const files: HomelabViewFile[] = [];
   const activeThreads = input.threads
     .filter((thread) => thread.deletedAt === null)
@@ -356,7 +322,7 @@ export function renderHomelabContextViewFiles(
           title: thread.title,
           runtimeId: thread.runtimeId,
           runtimeSelectionMode: thread.runtimeSelectionMode,
-          summary: redactHomelabViewText(summarizeThread(thread), secrets),
+          summary: summarizeThread(thread),
           summaryPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/summary.md`,
           transcriptPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/transcript.md`,
           messagesPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/messages.jsonl`,
@@ -379,8 +345,8 @@ export function renderHomelabContextViewFiles(
           sourceThreadId: entry.sourceThreadId,
           sourceMessageId: entry.sourceMessageId,
           sourceFilePath: entry.sourceFilePath,
-          summary: redactHomelabViewText(entry.summary, secrets),
-          tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
+          summary: entry.summary,
+          tags: entry.tags,
           promotionStatus: entry.promotionStatus,
           promotionId: entry.promotionId,
           // Only emit `sourcePath` when the `latest/<id>.md` is actually rendered.
@@ -402,7 +368,7 @@ export function renderHomelabContextViewFiles(
             projectId: input.project.id,
             threadId: thread.id,
             planId: plan.id,
-            summary: redactHomelabViewText(plan.planMarkdown.split("\n")[0] ?? "", secrets),
+            summary: plan.planMarkdown.split("\n")[0] ?? "",
             sourcePath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/summary.md`,
             createdAt: plan.createdAt,
             updatedAt: plan.updatedAt,
@@ -436,8 +402,8 @@ export function renderHomelabContextViewFiles(
       .map((entry) =>
         jsonLine({
           memoryId: entry.id,
-          summary: redactHomelabViewText(entry.summary, secrets),
-          tags: entry.tags.map((tag) => redactHomelabViewText(tag, secrets)),
+          summary: entry.summary,
+          tags: entry.tags,
           sourceThreadId: entry.sourceThreadId,
           sourceFilePath: entry.sourceFilePath,
           // Same dangling-reference guard as `memory/index.jsonl`: only point at
@@ -500,7 +466,7 @@ export function renderHomelabContextViewFiles(
   for (const entry of latestMemoryEntries) {
     files.push({
       relativePath: `.homelab/memory/latest/${safeHomelabViewSegment(String(entry.id))}.md`,
-      contents: renderMemoryMarkdown({ entry, secrets }),
+      contents: renderMemoryMarkdown({ entry }),
     });
   }
 
@@ -508,15 +474,15 @@ export function renderHomelabContextViewFiles(
     const threadDir = `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}`;
     files.push({
       relativePath: `${threadDir}/summary.md`,
-      contents: renderThreadSummary({ thread, secrets }),
+      contents: renderThreadSummary({ thread }),
     });
     files.push({
       relativePath: `${threadDir}/messages.jsonl`,
-      contents: renderMessagesJsonl({ thread, secrets }),
+      contents: renderMessagesJsonl({ thread }),
     });
     files.push({
       relativePath: `${threadDir}/transcript.md`,
-      contents: renderTranscriptMarkdown({ thread, secrets }),
+      contents: renderTranscriptMarkdown({ thread }),
     });
   }
 

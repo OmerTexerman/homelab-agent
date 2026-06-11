@@ -12,7 +12,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import {
   scopeHomelabContextViewToThread,
@@ -42,7 +41,7 @@ export interface ProjectRuntimeTurnDispatchDeps {
  * the turn through the project-runtime queue.
  *
  * Owns waking/ensuring the runtime container, refreshing the generated homelab
- * context view (project memory, secrets, runtime bootstrap catalog), and
+ * context view (project memory, runtime bootstrap catalog), and
  * shared-single-writer queue routing. Keeps these homelab side-effects out of
  * the upstream-aligned ProviderCommandReactor, which calls this at thin call
  * sites.
@@ -53,7 +52,6 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
   const { projectionSnapshotQuery, providerService } = deps;
   const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
   const projectRuntimeQueue = yield* Effect.serviceOption(ProjectRuntimeQueue);
-  const homelabSecretRegistry = yield* Effect.serviceOption(HomelabSecretRegistry);
 
   const refreshRuntimeContextView = Effect.fn("refreshRuntimeContextView")(function* (input: {
     readonly threadId: ThreadId;
@@ -101,16 +99,6 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
     });
     yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
-    const secrets = Option.isSome(homelabSecretRegistry)
-      ? yield* homelabSecretRegistry.value.listSecrets().pipe(
-          Effect.catchTag("HomelabSecretRegistryError", (error) =>
-            Effect.logWarning("failed to list homelab secrets for context view", {
-              threadId: input.threadId,
-              detail: error.message,
-            }).pipe(Effect.as([])),
-          ),
-        )
-      : [];
     const projectMemory = yield* Effect.serviceOption(ProjectMemory);
     const memoryEntries = Option.isSome(projectMemory)
       ? yield* projectMemory.value
@@ -150,7 +138,6 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       project,
       threads: scoped.threads,
       memoryEntries: scoped.memoryEntries,
-      secrets,
       ...(bootstrap !== undefined ? { bootstrap } : {}),
     }).pipe(
       Effect.catchCause((cause) =>
