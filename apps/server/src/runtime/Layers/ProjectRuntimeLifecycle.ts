@@ -33,7 +33,11 @@ import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegis
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
-import { HOMELAB_MEMORY_VIEW_ENTRY_LIMIT, writeHomelabContextView } from "../HomelabContextView.ts";
+import {
+  HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
+  scopeHomelabContextViewToThread,
+  writeHomelabContextView,
+} from "../HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../RuntimeBootstrapCatalogView.ts";
 import { defaultProjectRuntimeId, isStandaloneProjectId } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
@@ -558,11 +562,17 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
           )
         : undefined;
 
-      yield* writeHomelabContextView({
-        hostWorkspacePath: launchContext.hostWorkspacePath,
+      const scoped = scopeHomelabContextViewToThread({
         project: input.project,
         threads: input.threads,
         memoryEntries,
+        threadId: input.threadId,
+      });
+      yield* writeHomelabContextView({
+        hostWorkspacePath: launchContext.hostWorkspacePath,
+        project: input.project,
+        threads: scoped.threads,
+        memoryEntries: scoped.memoryEntries,
         secrets,
         ...(bootstrap !== undefined ? { bootstrap } : {}),
       }).pipe(

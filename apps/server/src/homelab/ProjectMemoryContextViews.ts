@@ -18,6 +18,7 @@ import {
   HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
   redactHomelabViewText,
   writeHomelabContextView,
+  scopeHomelabContextViewToThread,
 } from "../runtime/HomelabContextView.ts";
 import { resolveProjectRuntimeAssignment } from "../runtime/ProjectRuntimePolicy.ts";
 import { homelabRuntimeBootstrapView } from "../runtime/RuntimeBootstrapCatalogView.ts";
@@ -164,11 +165,17 @@ export const refreshActiveProjectContextViews = (
       (threadId) =>
         Effect.gen(function* () {
           const launchContext = yield* threadRuntime.value.resolveLaunchContext(threadId);
-          yield* writeHomelabContextView({
-            hostWorkspacePath: launchContext.hostWorkspacePath,
+          const scoped = scopeHomelabContextViewToThread({
             project,
             threads: projectThreads,
             memoryEntries,
+            threadId,
+          });
+          yield* writeHomelabContextView({
+            hostWorkspacePath: launchContext.hostWorkspacePath,
+            project,
+            threads: scoped.threads,
+            memoryEntries: scoped.memoryEntries,
             secrets,
             ...(bootstrap !== undefined ? { bootstrap } : {}),
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem.value));

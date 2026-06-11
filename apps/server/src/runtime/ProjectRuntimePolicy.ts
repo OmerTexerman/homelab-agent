@@ -53,12 +53,11 @@ export function isStandaloneProjectId(projectId: ProjectId | string): boolean {
 }
 
 /**
- * Detect whether a runtime session id belongs to the synthetic standalone project. Used where
- * only the runtime descriptor is in scope (no projectId), e.g. when rendering the runtime persona.
- * Standalone threads default to the shared standalone project runtime
- * (`project-runtime:system:standalone`); this recognises that id regardless of the thread bound to
- * it. Isolated runtimes (`isolated-runtime:<threadId>`) do not encode the project, so they are not
- * matched here and fall back to the project persona.
+ * Detect whether a runtime session id is the retired shared scratch runtime
+ * (`project-runtime:system:standalone`). Standalone threads now always run in their own
+ * isolated runtime; this recogniser exists so legacy descriptors and persisted thread pins
+ * to the old shared scratch runtime can be detected and coerced. Isolated runtimes
+ * (`isolated-runtime:<threadId>`) do not encode the project, so they are not matched here.
  */
 export function isStandaloneRuntimeId(runtimeId: RuntimeSessionId | string): boolean {
   return String(runtimeId) === String(standaloneProjectDefaultRuntimeId());
@@ -81,6 +80,24 @@ export function resolveProjectRuntimeAssignment(input: {
     "id" | "projectId" | "runtimeId" | "runtimeSelectionMode"
   >;
 }): ProjectRuntimeAssignment {
+  // Standalone (scratch) threads are always isolated: each one owns a fresh runtime and
+  // shares nothing. Legacy threads pinned to the retired shared scratch runtime coerce to
+  // their own isolated runtime here even before persisted state is migrated.
+  if (isStandaloneProjectId(input.thread.projectId)) {
+    const pinnedRuntimeId =
+      input.thread.runtimeId != null && !isStandaloneRuntimeId(input.thread.runtimeId)
+        ? input.thread.runtimeId
+        : null;
+    return {
+      projectId: input.thread.projectId,
+      threadId: input.thread.id,
+      runtimeId: pinnedRuntimeId ?? isolatedThreadRuntimeId(input.thread.id),
+      runtimeSelectionMode: "isolated",
+      queuePolicy: "isolated-concurrent",
+      isolated: true,
+    };
+  }
+
   const runtimeSelectionMode = input.thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
   const runtimeId =
     input.thread.runtimeId ??

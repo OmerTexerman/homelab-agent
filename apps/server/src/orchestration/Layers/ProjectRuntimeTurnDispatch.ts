@@ -14,7 +14,10 @@ import * as Schema from "effect/Schema";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
-import { writeHomelabContextView } from "../../runtime/HomelabContextView.ts";
+import {
+  scopeHomelabContextViewToThread,
+  writeHomelabContextView,
+} from "../../runtime/HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../../runtime/RuntimeBootstrapCatalogView.ts";
 import { RuntimeBootstrapRegistry } from "../../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
@@ -131,11 +134,17 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
           ),
         )
       : undefined;
-    yield* writeHomelabContextView({
-      hostWorkspacePath: launchContext.hostWorkspacePath,
+    const scoped = scopeHomelabContextViewToThread({
       project,
       threads: readModel.threads.filter((entry) => entry.projectId === project.id),
       memoryEntries,
+      threadId: input.threadId,
+    });
+    yield* writeHomelabContextView({
+      hostWorkspacePath: launchContext.hostWorkspacePath,
+      project,
+      threads: scoped.threads,
+      memoryEntries: scoped.memoryEntries,
       secrets,
       ...(bootstrap !== undefined ? { bootstrap } : {}),
     }).pipe(

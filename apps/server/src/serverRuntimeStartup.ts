@@ -35,6 +35,11 @@ import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import {
+  isStandaloneProjectId,
+  isStandaloneRuntimeId,
+  isolatedThreadRuntimeId,
+} from "./runtime/ProjectRuntimePolicy.ts";
+import {
   formatHeadlessServeOutput,
   formatHostForUrl,
   isWildcardHost,
@@ -168,6 +173,51 @@ export const resolveWelcomeBase = Effect.gen(function* () {
     cwd: serverConfig.cwd,
     projectName,
   } as const;
+});
+
+/**
+ * One-time data migration: scratch (standalone) threads each own an isolated runtime.
+ * Threads persisted before that rule — shared mode, no runtime, or a pin to the retired
+ * shared scratch runtime (`project-runtime:system:standalone`) — are reassigned to their
+ * own `isolated-runtime:<threadId>`. Runtime assignment already coerces these at turn
+ * start; this sweep makes the persisted thread records and UI match.
+ */
+export const migrateLegacyScratchThreadRuntimes = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  const orchestrationEngine = yield* OrchestrationEngineService;
+  const readModel = yield* orchestrationEngine.getReadModel();
+  const legacyThreads = readModel.threads.filter(
+    (thread) =>
+      thread.deletedAt === null &&
+      isStandaloneProjectId(thread.projectId) &&
+      (thread.runtimeSelectionMode !== "isolated" ||
+        thread.runtimeId == null ||
+        isStandaloneRuntimeId(thread.runtimeId)),
+  );
+  if (legacyThreads.length === 0) {
+    return;
+  }
+  yield* Effect.logInfo("migrating legacy scratch threads to isolated runtimes", {
+    threadCount: legacyThreads.length,
+  });
+  for (const thread of legacyThreads) {
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make(yield* crypto.randomUUIDv4),
+        threadId: thread.id,
+        runtimeId: isolatedThreadRuntimeId(thread.id),
+        runtimeSelectionMode: "isolated",
+      })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to migrate legacy scratch thread runtime", {
+            threadId: thread.id,
+            cause,
+          }),
+        ),
+      );
+  }
 });
 
 export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
@@ -334,6 +384,16 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
       }),
+    );
+
+    yield* Effect.logDebug("startup phase: migrating legacy scratch thread runtimes");
+    yield* runStartupPhase(
+      "standalone.migrate-runtimes",
+      migrateLegacyScratchThreadRuntimes.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("legacy scratch thread runtime migration failed", { cause }),
+        ),
+      ),
     );
 
     const welcomeBase = yield* resolveWelcomeBase;

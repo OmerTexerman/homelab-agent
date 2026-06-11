@@ -6,7 +6,9 @@ import type {
   OrchestrationProject,
   OrchestrationThread,
   ProjectMemoryEntry,
+  ThreadId,
 } from "@t3tools/contracts";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
@@ -58,6 +60,31 @@ export interface HomelabContextViewInput {
   readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
   readonly secrets?: ReadonlyArray<HomelabSecretDescriptor>;
   readonly bootstrap?: HomelabRuntimeBootstrapView | undefined;
+}
+
+/**
+ * Scratch (standalone) threads are truly standalone: their runtime's generated `.homelab`
+ * view must contain only the thread's own transcript and memory, never sibling scratch
+ * threads'. The synthetic standalone project is a storage namespace, not a sharing scope,
+ * so callers materializing a view for a standalone thread scope the inputs through this
+ * helper first. Project threads are returned unchanged.
+ */
+export function scopeHomelabContextViewToThread(input: {
+  readonly project: Pick<OrchestrationProject, "id">;
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly memoryEntries: ReadonlyArray<ProjectMemoryEntry>;
+  readonly threadId: ThreadId;
+}): {
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly memoryEntries: ReadonlyArray<ProjectMemoryEntry>;
+} {
+  if (!isStandaloneProjectId(String(input.project.id))) {
+    return { threads: input.threads, memoryEntries: input.memoryEntries };
+  }
+  return {
+    threads: input.threads.filter((thread) => thread.id === input.threadId),
+    memoryEntries: input.memoryEntries.filter((entry) => entry.sourceThreadId === input.threadId),
+  };
 }
 
 const SECRET_VALUE_PATTERNS = [

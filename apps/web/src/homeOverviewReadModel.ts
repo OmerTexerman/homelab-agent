@@ -780,7 +780,7 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
         detail:
           standaloneThreads.length === 0
             ? "No standalone work is active."
-            : "Standalone threads use the scratch runtime and can be promoted.",
+            : "Each scratch thread runs in its own isolated runtime and can be promoted.",
         severity: standaloneThreads.length > 0 ? "partial" : "neutral",
       },
       {

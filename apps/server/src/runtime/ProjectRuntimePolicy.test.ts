@@ -127,4 +127,55 @@ describe("project runtime policy", () => {
     expect(assignment.runtimeId).toBe(runtimeId);
     expect(assignment.queuePolicy).toBe("shared-single-writer");
   });
+
+  it("always assigns scratch threads their own isolated runtime", () => {
+    const scratchThreadId = ThreadId.make("scratch-thread");
+    const assignment = resolveProjectRuntimeAssignment({
+      project: { id: standaloneProjectId(), defaultRuntimeId: null },
+      thread: makeThread({
+        id: scratchThreadId,
+        projectId: standaloneProjectId(),
+        runtimeId: null,
+        runtimeSelectionMode: "shared",
+      }),
+    });
+
+    expect(assignment.runtimeId).toBe(isolatedThreadRuntimeId(scratchThreadId));
+    expect(assignment.runtimeSelectionMode).toBe("isolated");
+    expect(assignment.queuePolicy).toBe("isolated-concurrent");
+    expect(assignment.isolated).toBe(true);
+  });
+
+  it("coerces a legacy pin to the retired shared scratch runtime onto the thread's own runtime", () => {
+    const scratchThreadId = ThreadId.make("scratch-legacy");
+    const assignment = resolveProjectRuntimeAssignment({
+      project: { id: standaloneProjectId(), defaultRuntimeId: standaloneProjectDefaultRuntimeId() },
+      thread: makeThread({
+        id: scratchThreadId,
+        projectId: standaloneProjectId(),
+        runtimeId: standaloneProjectDefaultRuntimeId(),
+        runtimeSelectionMode: "shared",
+      }),
+    });
+
+    expect(assignment.runtimeId).toBe(isolatedThreadRuntimeId(scratchThreadId));
+    expect(assignment.runtimeSelectionMode).toBe("isolated");
+  });
+
+  it("respects an explicit non-scratch runtime pin on a standalone thread", () => {
+    const scratchThreadId = ThreadId.make("scratch-pinned");
+    const pinned = RuntimeSessionId.make("isolated-runtime:scratch-pinned");
+    const assignment = resolveProjectRuntimeAssignment({
+      project: { id: standaloneProjectId(), defaultRuntimeId: null },
+      thread: makeThread({
+        id: scratchThreadId,
+        projectId: standaloneProjectId(),
+        runtimeId: pinned,
+        runtimeSelectionMode: "isolated",
+      }),
+    });
+
+    expect(assignment.runtimeId).toBe(pinned);
+    expect(assignment.isolated).toBe(true);
+  });
 });

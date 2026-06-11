@@ -7,7 +7,7 @@ export const STANDALONE_PROJECT_ID = "system:standalone";
 export const STANDALONE_PROJECT_TITLE = "Standalone Threads";
 export const STANDALONE_PROJECT_SHORT_TITLE = "Scratch";
 export const STANDALONE_PROJECT_DESCRIPTION =
-  "One-off threads with their own Project Runtime and project-local memory scope.";
+  "One-off threads, each with its own isolated runtime and thread-local memory.";
 
 export function createStandaloneProjectWorkspaceRoot(): string {
   return createLogicalProjectWorkspaceRoot(STANDALONE_PROJECT_ID);

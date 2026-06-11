@@ -22,8 +22,10 @@ import { ProjectMemoryEntryRepository } from "../../persistence/Services/Project
 import {
   ProjectMemory,
   ProjectMemoryError,
+  type ProjectMemoryListResolvedInput,
   type ProjectMemoryShape,
 } from "../Services/ProjectMemory.ts";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 
 const DEFAULT_LIST_LIMIT = 200;
 const SEARCH_ENTRY_SCAN_LIMIT = 1_000;
@@ -229,19 +231,38 @@ const makeProjectMemory = Effect.gen(function* () {
         Effect.mapError(toProjectMemoryError("Failed to read project memory entry.")),
       );
 
+  // Scratch (standalone) thread memory is strictly thread-scoped: the synthetic standalone
+  // project is only a storage namespace, so reads on behalf of a thread must never surface
+  // sibling scratch threads' entries or transcripts.
+  const standaloneScopeThreadId = (input: {
+    readonly projectId: ProjectMemoryListResolvedInput["projectId"];
+    readonly threadId?: ProjectMemoryListResolvedInput["threadId"];
+  }) =>
+    input.threadId !== undefined && isStandaloneProjectId(String(input.projectId))
+      ? input.threadId
+      : null;
+
   const list: ProjectMemoryShape["list"] = (input) =>
-    repository
-      .listByProjectId({
-        projectId: input.projectId,
-        ...(input.promotionStatus ? { promotionStatus: input.promotionStatus } : {}),
-        limit: input.limit ?? DEFAULT_LIST_LIMIT,
-      })
-      .pipe(Effect.mapError(toProjectMemoryError("Failed to list project memory entries.")));
+    Effect.gen(function* () {
+      const scopeThreadId = standaloneScopeThreadId(input);
+      const limit = input.limit ?? DEFAULT_LIST_LIMIT;
+      const entries = yield* repository
+        .listByProjectId({
+          projectId: input.projectId,
+          ...(input.promotionStatus ? { promotionStatus: input.promotionStatus } : {}),
+          limit: scopeThreadId !== null ? SEARCH_ENTRY_SCAN_LIMIT : limit,
+        })
+        .pipe(Effect.mapError(toProjectMemoryError("Failed to list project memory entries.")));
+      return scopeThreadId !== null
+        ? entries.filter((entry) => entry.sourceThreadId === scopeThreadId).slice(0, limit)
+        : entries;
+    });
 
   const search: ProjectMemoryShape["search"] = (input) =>
     Effect.gen(function* () {
       const query = normalizeSearchText(input.query);
       const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
+      const scopeThreadId = standaloneScopeThreadId(input);
       const entries = yield* repository
         .listByProjectId({
           projectId: input.projectId,
@@ -250,6 +271,7 @@ const makeProjectMemory = Effect.gen(function* () {
         .pipe(Effect.mapError(toProjectMemoryError("Failed to load project memory for search.")));
 
       const memoryResults = entries
+        .filter((entry) => scopeThreadId === null || entry.sourceThreadId === scopeThreadId)
         .map((entry) => [entry, scoreEntry(entry, query)] as const)
         .filter(([, score]) => score > 0)
         .map(([entry, score]) => toMemorySearchResult(entry, query, score));
@@ -260,6 +282,7 @@ const makeProjectMemory = Effect.gen(function* () {
           : (yield* listTranscriptRows({ projectId: input.projectId }).pipe(
               Effect.mapError(toProjectMemoryError("Failed to load transcript index for search.")),
             ))
+              .filter((row) => scopeThreadId === null || row.threadId === scopeThreadId)
               .map((row) => [row, scoreCandidate(row.text, query, 45)] as const)
               .filter(([, score]) => score > 0)
               .map(([row, score]) => toTranscriptSearchResult(row, input.projectId, query, score));

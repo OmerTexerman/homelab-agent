@@ -103,10 +103,17 @@ orchestration model:
   project runtime or an isolated runtime.
 - New shared threads attach to `project.defaultRuntimeId` automatically.
 - New isolated threads attach to `isolated-runtime:<thread-id>`.
-- Moving a standalone shared thread into an existing project reassigns it to
-  the target project's default runtime. Moving a standalone isolated thread
-  keeps its isolated runtime id. Neither path merges Scratch filesystem state
-  into the target Project Runtime.
+- Standalone (scratch) threads are always isolated: each one owns
+  `isolated-runtime:<thread-id>`, and there is no shared scratch runtime.
+  Requested "shared" mode is coerced to isolated for the standalone project,
+  and a startup sweep migrates legacy threads off the retired
+  `project-runtime:system:standalone` runtime.
+- Promoting a scratch thread to a new project adopts the thread's runtime as
+  the project's default runtime (container kept in place). Moving a scratch
+  thread into an existing project keeps its own runtime and arrives as an
+  isolated thread; joining the project's shared runtime stays an explicit
+  follow-up. Neither path merges Scratch filesystem state into the target
+  Project Runtime.
 - Older persisted events and projections are backfilled through migration 034.
 
 Runtime assignment policy lives in `apps/server/src/runtime/ProjectRuntimePolicy.ts`.
@@ -306,7 +313,10 @@ available for technical promotion envelopes. The review UI explicitly shows that
 project memory stays project-local until promotion is submitted, and that only
 reviewed graph entries become shared global homelab knowledge.
 
-Standalone threads use the hidden `system:standalone` project memory scope.
+Standalone threads store memory in the hidden `system:standalone` namespace,
+but reads are strictly thread-scoped: memory list/search on behalf of a scratch
+thread and its generated `.homelab` context view only surface entries and
+transcripts attributed to that thread, never sibling scratch threads'.
 When a standalone thread is moved to an existing project, the transcript moves
 with the thread automatically. Durable Scratch memory entries move only when the
 command/UI explicitly requests `copy` or `move`. Copying creates target-project

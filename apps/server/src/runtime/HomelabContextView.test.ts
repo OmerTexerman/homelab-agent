@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 import {
   redactHomelabViewText,
   renderHomelabContextViewFiles,
+  scopeHomelabContextViewToThread,
   writeHomelabContextView,
 } from "./HomelabContextView.ts";
 
@@ -333,5 +334,76 @@ describe("HomelabContextView", () => {
       expect(yield* exists(".homelab/threads/index.jsonl")).toBe(true);
       expect(yield* exists(".homelab/memory/index.jsonl")).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+  });
+});
+
+describe("scopeHomelabContextViewToThread", () => {
+  const makeMemoryEntry = (id: string, sourceThreadId: ThreadId | null): ProjectMemoryEntry => ({
+    id: ProjectMemoryId.make(id),
+    projectId: ProjectId.make(STANDALONE_PROJECT_ID),
+    runtimeId: null,
+    sourceThreadId,
+    sourceMessageId: null,
+    sourceFilePath: null,
+    summary: `entry ${id}`,
+    body: `entry ${id}`,
+    tags: [],
+    supersedes: [],
+    replaces: [],
+    promotionStatus: "none",
+    promotionId: null,
+    promotionSummary: null,
+    promotedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  it("limits a scratch thread's view to its own transcript and memory", () => {
+    const standaloneProject = {
+      id: ProjectId.make(STANDALONE_PROJECT_ID),
+      title: STANDALONE_PROJECT_TITLE,
+      workspaceRoot: createStandaloneProjectWorkspaceRoot(),
+      defaultRuntimeId: null,
+    };
+    const own = makeThread({
+      id: ThreadId.make("scratch-own"),
+      title: "Own scratch thread",
+      projectId: standaloneProject.id,
+    });
+    const sibling = makeThread({
+      id: ThreadId.make("scratch-sibling"),
+      title: "Sibling scratch thread",
+      projectId: standaloneProject.id,
+    });
+
+    const scoped = scopeHomelabContextViewToThread({
+      project: standaloneProject,
+      threads: [own, sibling],
+      memoryEntries: [
+        makeMemoryEntry("memory-own", own.id),
+        makeMemoryEntry("memory-sibling", sibling.id),
+        makeMemoryEntry("memory-unattributed", null),
+      ],
+      threadId: own.id,
+    });
+
+    expect(scoped.threads.map((thread) => thread.id)).toEqual([own.id]);
+    expect(scoped.memoryEntries.map((entry) => String(entry.id))).toEqual(["memory-own"]);
+  });
+
+  it("leaves project threads' shared view unchanged", () => {
+    const threadA = makeThread({ id: ThreadId.make("thread-a"), title: "A" });
+    const threadB = makeThread({ id: ThreadId.make("thread-b"), title: "B" });
+    const entries = [makeMemoryEntry("memory-a", threadA.id), makeMemoryEntry("memory-b", null)];
+
+    const scoped = scopeHomelabContextViewToThread({
+      project,
+      threads: [threadA, threadB],
+      memoryEntries: entries,
+      threadId: threadA.id,
+    });
+
+    expect(scoped.threads).toHaveLength(2);
+    expect(scoped.memoryEntries).toHaveLength(2);
   });
 });

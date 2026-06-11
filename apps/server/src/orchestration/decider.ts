@@ -27,8 +27,8 @@ import {
   defaultProjectRuntimeId,
   defaultRuntimeIdForProject,
   isStandaloneProjectId,
+  isStandaloneRuntimeId,
   isolatedThreadRuntimeId,
-  standaloneProjectDefaultRuntimeId,
   standaloneProjectId,
   standaloneProjectTitle,
   standaloneProjectWorkspaceRoot,
@@ -239,12 +239,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const runtimeSelectionMode = command.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      // Threads created directly in the standalone project follow the scratch rule:
+      // always isolated, never the (retired) shared scratch runtime.
+      const runtimeSelectionMode = isStandaloneProjectId(command.projectId)
+        ? ("isolated" as const)
+        : (command.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE);
       const runtimeId =
-        command.runtimeId ??
-        (runtimeSelectionMode === "isolated"
-          ? isolatedThreadRuntimeId(command.threadId)
-          : (project.defaultRuntimeId ?? defaultProjectRuntimeId(command.projectId)));
+        runtimeSelectionMode === "isolated"
+          ? (command.runtimeId ?? isolatedThreadRuntimeId(command.threadId))
+          : (command.runtimeId ??
+            project.defaultRuntimeId ??
+            defaultProjectRuntimeId(command.projectId));
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -281,13 +286,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const existingProject = readModel.projects.find(
         (project) => isStandaloneProjectId(project.id) && project.deletedAt === null,
       );
-      const defaultRuntimeId =
-        existingProject?.defaultRuntimeId ?? standaloneProjectDefaultRuntimeId();
-      const runtimeSelectionMode = command.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
-      const runtimeId =
-        runtimeSelectionMode === "isolated"
-          ? isolatedThreadRuntimeId(command.threadId)
-          : defaultRuntimeId;
+      // Standalone (scratch) threads always own a fresh isolated runtime; a requested
+      // "shared" mode is ignored because there is no shared scratch runtime to join.
+      const runtimeSelectionMode = "isolated" as const;
+      const runtimeId = isolatedThreadRuntimeId(command.threadId);
       const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -326,9 +328,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.created",
         payload: {
           projectId,
+          // The synthetic standalone project has no shared runtime: every scratch thread
+          // runs in its own isolated runtime, so there is no meaningful project default.
+          defaultRuntimeId: null,
           title: standaloneProjectTitle(),
           workspaceRoot: standaloneProjectWorkspaceRoot(),
-          defaultRuntimeId,
           defaultModelSelection: command.modelSelection,
           scripts: [],
           createdAt: command.createdAt,
@@ -366,14 +370,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Promotion turns the scratch thread into the project's primary (shared) thread so all
       // future threads in the project share its runtime. We reuse the thread's own isolated
       // runtime in place — the new project simply adopts it as its default runtime, so the
-      // existing workspace/container is kept (no copy, no move). A shared standalone thread
-      // runs on the global standalone runtime (shared by every scratch thread), which can't be
-      // handed to a single project, so it falls back to a fresh project runtime instead.
-      const threadRuntimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      // existing workspace/container is kept (no copy, no move). A legacy pin to the retired
+      // shared scratch runtime resolves to the thread's own isolated runtime id instead: that
+      // is where runtime assignment coercion actually ran this thread's turns, and the shared
+      // scratch container can't be handed to a single project.
       const runtimeId =
-        threadRuntimeSelectionMode === "isolated"
-          ? (thread.runtimeId ?? isolatedThreadRuntimeId(thread.id))
-          : defaultProjectRuntimeId(command.projectId);
+        thread.runtimeId != null && !isStandaloneRuntimeId(thread.runtimeId)
+          ? thread.runtimeId
+          : isolatedThreadRuntimeId(thread.id);
       const defaultRuntimeId = runtimeId;
       const runtimeSelectionMode = "shared" as const;
       const projectCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -446,11 +450,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      const runtimeSelectionMode = thread.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE;
+      // A scratch thread arrives in the target project as an isolated (parallel) thread,
+      // keeping its own runtime so its workspace survives the move; joining the project's
+      // shared runtime stays an explicit follow-up step. A legacy pin to the retired shared
+      // scratch runtime resolves to the thread's own isolated runtime id, where runtime
+      // assignment coercion actually ran its turns.
+      const runtimeSelectionMode = "isolated" as const;
       const runtimeId =
-        runtimeSelectionMode === "isolated"
-          ? (thread.runtimeId ?? isolatedThreadRuntimeId(thread.id))
-          : (targetProject.defaultRuntimeId ?? defaultProjectRuntimeId(targetProject.id));
+        thread.runtimeId != null && !isStandaloneRuntimeId(thread.runtimeId)
+          ? thread.runtimeId
+          : isolatedThreadRuntimeId(thread.id);
 
       return {
         ...(yield* withEventBase({

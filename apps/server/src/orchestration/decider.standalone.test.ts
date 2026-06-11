@@ -109,7 +109,9 @@ describe("standalone thread orchestration", () => {
         projectId: standaloneProjectId(),
         title: "Standalone Threads",
         workspaceRoot: createStandaloneProjectWorkspaceRoot(),
-        defaultRuntimeId: standaloneProjectDefaultRuntimeId(),
+        // No shared scratch runtime: every scratch thread owns an isolated runtime, so the
+        // synthetic project has no meaningful default runtime.
+        defaultRuntimeId: null,
         defaultModelSelection: modelSelection,
       },
     });
@@ -118,13 +120,13 @@ describe("standalone thread orchestration", () => {
       payload: {
         threadId: asThreadId("thread-standalone-1"),
         projectId: standaloneProjectId(),
-        runtimeId: standaloneProjectDefaultRuntimeId(),
-        runtimeSelectionMode: "shared",
+        runtimeId: isolatedThreadRuntimeId(asThreadId("thread-standalone-1")),
+        runtimeSelectionMode: "isolated",
       },
     });
   });
 
-  it("reuses the standalone project runtime for additional shared standalone threads", async () => {
+  it("gives every scratch thread its own isolated runtime even when shared mode is requested", async () => {
     const initial = createEmptyReadModel(now);
     const first = await decide(standaloneCreateCommand(), initial);
     const withStandalone = await applyPlannedEvents(initial, first);
@@ -133,6 +135,7 @@ describe("standalone thread orchestration", () => {
       standaloneCreateCommand({
         commandId: asCommandId("cmd-standalone-create-2"),
         threadId: asThreadId("thread-standalone-2"),
+        runtimeSelectionMode: "shared",
       }),
       withStandalone,
     );
@@ -142,8 +145,8 @@ describe("standalone thread orchestration", () => {
     expect(events[0]?.payload).toMatchObject({
       threadId: asThreadId("thread-standalone-2"),
       projectId: standaloneProjectId(),
-      runtimeId: standaloneProjectDefaultRuntimeId(),
-      runtimeSelectionMode: "shared",
+      runtimeId: isolatedThreadRuntimeId(asThreadId("thread-standalone-2")),
+      runtimeSelectionMode: "isolated",
     });
   });
 
@@ -167,13 +170,14 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("promotes a standalone shared thread by moving the transcript to a new logical project", async () => {
+  it("promotes a scratch thread by handing its own runtime to the new logical project", async () => {
     const initial = createEmptyReadModel(now);
     const withStandalone = await applyPlannedEvents(
       initial,
       await decide(standaloneCreateCommand(), initial),
     );
     const promotedProjectId = asProjectId("project-promoted");
+    const threadRuntimeId = isolatedThreadRuntimeId(asThreadId("thread-standalone-1"));
 
     const result = await decide(
       {
@@ -197,7 +201,8 @@ describe("standalone thread orchestration", () => {
         projectId: promotedProjectId,
         title: "Promoted project",
         workspaceRoot: "homelab://project/project-promoted",
-        defaultRuntimeId: defaultProjectRuntimeId(promotedProjectId),
+        // The thread's standalone runtime becomes the project runtime — container kept.
+        defaultRuntimeId: threadRuntimeId,
         defaultModelSelection: modelSelection,
       },
     });
@@ -207,7 +212,7 @@ describe("standalone thread orchestration", () => {
       payload: {
         threadId: asThreadId("thread-standalone-1"),
         projectId: promotedProjectId,
-        runtimeId: defaultProjectRuntimeId(promotedProjectId),
+        runtimeId: threadRuntimeId,
         runtimeSelectionMode: "shared",
       },
     });
@@ -216,8 +221,69 @@ describe("standalone thread orchestration", () => {
     ).toMatchObject({
       id: asThreadId("thread-standalone-1"),
       projectId: promotedProjectId,
-      runtimeId: defaultProjectRuntimeId(promotedProjectId),
+      runtimeId: threadRuntimeId,
       runtimeSelectionMode: "shared",
+    });
+  });
+
+  it("coerces a legacy shared-scratch pin to the thread's own runtime when promoting", async () => {
+    const threadId = asThreadId("thread-legacy-shared");
+    const promotedProjectId = asProjectId("project-promoted-legacy");
+    const readModel = await applyPlannedEvents(createEmptyReadModel(now), [
+      {
+        type: "thread.created",
+        eventId: asEventId("evt-thread-legacy-shared"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: asCommandId("cmd-thread-legacy-shared"),
+        causationEventId: null,
+        correlationId: asCommandId("cmd-thread-legacy-shared"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: standaloneProjectId(),
+          // Legacy state: pinned to the retired shared scratch runtime.
+          runtimeId: standaloneProjectDefaultRuntimeId(),
+          runtimeSelectionMode: "shared",
+          title: "Legacy scratch thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    ]);
+
+    const result = await decide(
+      {
+        type: "thread.standalone.promote-to-project",
+        commandId: asCommandId("cmd-promote-legacy"),
+        threadId,
+        projectId: promotedProjectId,
+        title: "Promoted legacy project",
+        createdAt: now,
+      },
+      readModel,
+    );
+    const events = Array.isArray(result) ? result : [result];
+
+    // The shared scratch container cannot be handed to a single project; the promotion
+    // resolves to the thread's own isolated runtime id, where coerced turns actually ran.
+    expect(events[0]).toMatchObject({
+      type: "project.created",
+      payload: { defaultRuntimeId: isolatedThreadRuntimeId(threadId) },
+    });
+    expect(events[1]).toMatchObject({
+      type: "thread.meta-updated",
+      payload: {
+        threadId,
+        runtimeId: isolatedThreadRuntimeId(threadId),
+        runtimeSelectionMode: "shared",
+      },
     });
   });
 
@@ -271,7 +337,7 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("moves a standalone shared thread into an existing project runtime", async () => {
+  it("moves a scratch thread into an existing project as an isolated thread keeping its runtime", async () => {
     const targetProjectId = asProjectId("project-existing");
     const initial = createEmptyReadModel(now);
     const withStandalone = await applyPlannedEvents(
@@ -282,6 +348,7 @@ describe("standalone thread orchestration", () => {
       withStandalone,
       projectCreatedEvent(targetProjectId),
     );
+    const threadRuntimeId = isolatedThreadRuntimeId(asThreadId("thread-standalone-1"));
 
     const result = await decide(
       {
@@ -305,8 +372,8 @@ describe("standalone thread orchestration", () => {
       payload: {
         threadId: asThreadId("thread-standalone-1"),
         projectId: targetProjectId,
-        runtimeId: defaultProjectRuntimeId(targetProjectId),
-        runtimeSelectionMode: "shared",
+        runtimeId: threadRuntimeId,
+        runtimeSelectionMode: "isolated",
       },
     });
     expect(
@@ -314,8 +381,8 @@ describe("standalone thread orchestration", () => {
     ).toMatchObject({
       id: asThreadId("thread-standalone-1"),
       projectId: targetProjectId,
-      runtimeId: defaultProjectRuntimeId(targetProjectId),
-      runtimeSelectionMode: "shared",
+      runtimeId: threadRuntimeId,
+      runtimeSelectionMode: "isolated",
     });
   });
 
