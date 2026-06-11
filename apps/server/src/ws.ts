@@ -28,7 +28,6 @@ import {
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
-  type OrchestrationThread,
   type OrchestrationShellStreamEvent,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
@@ -38,8 +37,6 @@ import {
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
-  HomelabSecretError,
-  ThreadWorkspaceError,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -73,7 +70,6 @@ import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
-import { isStandaloneProjectId } from "./runtime/ProjectRuntimePolicy.ts";
 import { ProjectRuntimeLifecycle } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry.ts";
@@ -86,6 +82,11 @@ import {
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
+import { HOMELAB_RPC_REQUIRED_SCOPES, makeHomelabRpcHandlers } from "./wsHomelabRpc.ts";
+import {
+  type AdoptedBootstrapThread,
+  makeThreadBootstrapRecovery,
+} from "./wsThreadBootstrapRecovery.ts";
 import { ReviewService } from "./review/ReviewService.ts";
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
@@ -117,10 +118,6 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 const toErrorMessage = (cause: unknown, fallbackMessage: string) =>
   cause instanceof Error ? cause.message : fallbackMessage;
-
-const hasBootstrapPriorTurnState = (
-  thread: Pick<OrchestrationThread, "latestTurn" | "messages" | "checkpoints">,
-) => thread.latestTurn !== null || thread.messages.length > 0 || thread.checkpoints.length > 0;
 
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
@@ -161,9 +158,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
-  [WS_METHODS.serverUpsertHomelabSecret, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverDeleteHomelabSecret, AuthOrchestrationOperateScope],
+  ...HOMELAB_RPC_REQUIRED_SCOPES,
   [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
@@ -174,16 +169,6 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
-  [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceReadFile, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeGet, AuthOrchestrationReadScope],
-  [WS_METHODS.projectRuntimeWake, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeArchive, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeReset, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeSnapshot, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeRestore, AuthOrchestrationOperateScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
   [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
@@ -373,52 +358,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const serverEventId = randomUUID.pipe(Effect.map(EventId.make));
       const serverCommandId = (tag: string) =>
         randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-
-      const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
-        Effect.gen(function* () {
-          const existingRuntime = yield* threadRuntime
-            .getRuntime(threadId)
-            .pipe(Effect.catch(() => Effect.void));
-
-          if (!existingRuntime) {
-            const readModel = yield* orchestrationEngine.getReadModel();
-            const thread = readModel.threads.find(
-              (entry) => entry.id === threadId && entry.deletedAt === null,
-            );
-            if (!thread) {
-              return;
-            }
-
-            yield* threadRuntime
-              .ensureRuntime({
-                threadId,
-                ...(thread.runtimeId != null ? { runtimeId: thread.runtimeId } : {}),
-                provider: null,
-                runtimeMode: thread.runtimeMode,
-                isStandalone: isStandaloneProjectId(thread.projectId),
-              })
-              .pipe(Effect.catch(() => Effect.void));
-          }
-
-          yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-          yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-        });
-
-      const refreshHomelabSecretRuntimeEnvironments = () =>
-        threadRuntime
-          .listRuntimes()
-          .pipe(
-            Effect.flatMap((runtimes) =>
-              Effect.forEach(
-                runtimes,
-                (runtime) =>
-                  threadRuntime
-                    .refreshRuntimeEnvironment(runtime.threadId)
-                    .pipe(Effect.catch(() => Effect.void)),
-                { discard: true, concurrency: 8 },
-              ),
-            ),
-          );
 
       const loadAuthAccessSnapshot = () =>
         Effect.all({
@@ -632,137 +571,19 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           } | null = null;
           let existingSetupAlreadyStarted = false;
 
-          const loadExistingBootstrapThread = (): Effect.Effect<
-            OrchestrationThread | null,
-            never,
-            never
-          > =>
-            orchestrationEngine
-              .getReadModel()
-              .pipe(
-                Effect.map(
-                  (readModel) =>
-                    readModel.threads.find(
-                      (thread) => thread.id === command.threadId && thread.deletedAt === null,
-                    ) ?? null,
-                ),
-              );
+          const bootstrapRecovery = makeThreadBootstrapRecovery({
+            orchestrationEngine,
+            gitWorkflow,
+            serverCommandId,
+            threadId: command.threadId,
+            requestedCreateThread: bootstrap?.createThread,
+          });
 
-          const validateExistingBootstrapThread = (
-            thread: Pick<
-              OrchestrationThread,
-              | "projectId"
-              | "runtimeId"
-              | "runtimeSelectionMode"
-              | "runtimeMode"
-              | "interactionMode"
-              | "branch"
-              | "worktreePath"
-              | "latestTurn"
-              | "messages"
-              | "checkpoints"
-            >,
-          ): Effect.Effect<void, OrchestrationDispatchCommandError, never> =>
-            Effect.gen(function* () {
-              if (hasBootstrapPriorTurnState(thread)) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Thread ${command.threadId} already has prior turn state and cannot be reused for bootstrap retry.`,
-                });
-              }
-
-              const requested = bootstrap?.createThread;
-              if (!requested) {
-                return;
-              }
-
-              const sameBootstrapTarget =
-                thread.projectId === requested.projectId &&
-                thread.runtimeId === (requested.runtimeId ?? thread.runtimeId) &&
-                thread.runtimeSelectionMode === requested.runtimeSelectionMode &&
-                thread.runtimeMode === requested.runtimeMode &&
-                thread.interactionMode === requested.interactionMode &&
-                thread.branch === requested.branch &&
-                thread.worktreePath === requested.worktreePath;
-              if (!sameBootstrapTarget) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `Thread ${command.threadId} already exists with different metadata and cannot be reused for bootstrap retry.`,
-                });
-              }
-            });
-
-          const adoptExistingBootstrapThread = (
-            thread: Pick<
-              OrchestrationThread,
-              | "projectId"
-              | "runtimeId"
-              | "runtimeSelectionMode"
-              | "runtimeMode"
-              | "interactionMode"
-              | "branch"
-              | "worktreePath"
-              | "latestTurn"
-              | "messages"
-              | "checkpoints"
-              | "activities"
-            >,
-          ): Effect.Effect<void, OrchestrationDispatchCommandError, never> =>
-            Effect.gen(function* () {
-              yield* validateExistingBootstrapThread(thread);
-              targetProjectId = thread.projectId;
-              targetWorktreePath = thread.worktreePath;
-              previousThreadMetadata = {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-              };
-              existingSetupAlreadyStarted = thread.activities.some(
-                (activity) => activity.kind === "setup-script.started",
-              );
-            });
-
-          const recoverDuplicateBootstrapThread = (): Effect.Effect<
-            boolean,
-            OrchestrationDispatchCommandError,
-            never
-          > =>
-            Effect.gen(function* () {
-              for (let attempt = 0; attempt < 8; attempt += 1) {
-                const existingThread = yield* loadExistingBootstrapThread();
-                if (existingThread) {
-                  yield* adoptExistingBootstrapThread(existingThread);
-                  return true;
-                }
-              }
-              return false;
-            });
-
-          const cleanupPreparedWorktree = () =>
-            preparedWorktreeCleanup
-              ? gitWorkflow
-                  .removeWorktree({
-                    cwd: preparedWorktreeCleanup.cwd,
-                    path: preparedWorktreeCleanup.path,
-                    force: true,
-                  })
-                  .pipe(Effect.ignoreCause({ log: true }))
-              : Effect.void;
-
-          const rollbackExistingThreadMetadata = () => {
-            const metadata = previousThreadMetadata;
-            return metadata
-              ? serverCommandId("bootstrap-thread-meta-rollback")
-                  .pipe(
-                    Effect.flatMap((commandId) =>
-                      orchestrationEngine.dispatch({
-                        type: "thread.meta.update",
-                        commandId,
-                        threadId: command.threadId,
-                        branch: metadata.branch,
-                        worktreePath: metadata.worktreePath,
-                      }),
-                    ),
-                  )
-                  .pipe(Effect.ignoreCause({ log: true }))
-              : Effect.void;
+          const adoptBootstrapThreadState = (adopted: AdoptedBootstrapThread) => {
+            targetProjectId = adopted.projectId;
+            targetWorktreePath = adopted.worktreePath;
+            previousThreadMetadata = adopted.previousMetadata;
+            existingSetupAlreadyStarted = adopted.setupAlreadyStarted;
           };
 
           const cleanupCreatedThread = () =>
@@ -907,9 +728,11 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             never
           > = Effect.gen(function* () {
             if (bootstrap?.createThread) {
-              const existingThread = yield* loadExistingBootstrapThread();
+              const existingThread = yield* bootstrapRecovery.loadExistingThread();
               if (existingThread) {
-                yield* adoptExistingBootstrapThread(existingThread);
+                adoptBootstrapThreadState(
+                  yield* bootstrapRecovery.adoptExistingThread(existingThread),
+                );
               } else {
                 const createResult = yield* orchestrationEngine
                   .dispatch({
@@ -938,24 +761,26 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                       if (!error.message.includes("already exists")) {
                         return Effect.fail(error);
                       }
-                      return recoverDuplicateBootstrapThread().pipe(
-                        Effect.flatMap((recovered) =>
-                          recovered
-                            ? Effect.succeed(false)
-                            : Effect.fail(
-                                new OrchestrationDispatchCommandError({
-                                  message: `Thread ${command.threadId} already exists but could not be loaded for bootstrap retry.`,
-                                  cause: error,
-                                }),
-                              ),
-                        ),
+                      return bootstrapRecovery.recoverDuplicateThread().pipe(
+                        Effect.flatMap((adopted) => {
+                          if (adopted) {
+                            adoptBootstrapThreadState(adopted);
+                            return Effect.succeed(false);
+                          }
+                          return Effect.fail(
+                            new OrchestrationDispatchCommandError({
+                              message: `Thread ${command.threadId} already exists but could not be loaded for bootstrap retry.`,
+                              cause: error,
+                            }),
+                          );
+                        }),
                       );
                     }),
                   );
                 createdThread = createResult;
               }
             } else {
-              const existingThread = yield* loadExistingBootstrapThread();
+              const existingThread = yield* bootstrapRecovery.loadExistingThread();
               if (existingThread) {
                 previousThreadMetadata = {
                   branch: existingThread.branch,
@@ -1021,9 +846,9 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               }
               return Effect.all(
                 [
-                  cleanupPreparedWorktree(),
+                  bootstrapRecovery.removePreparedWorktree(preparedWorktreeCleanup),
                   cleanupCreatedThread(),
-                  rollbackExistingThreadMetadata(),
+                  bootstrapRecovery.rollbackThreadMetadata(previousThreadMetadata),
                 ],
                 { discard: true },
               ).pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
@@ -1391,52 +1216,14 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverListHomelabSecrets]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.serverListHomelabSecrets,
-            homelabSecretRegistry.listSecrets().pipe(
-              Effect.map((secrets) => ({ secrets })),
-              Effect.mapError(
-                (cause) =>
-                  new HomelabSecretError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverUpsertHomelabSecret]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverUpsertHomelabSecret,
-            homelabSecretRegistry.upsertSecret(input).pipe(
-              Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
-              Effect.mapError(
-                (cause) =>
-                  new HomelabSecretError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverDeleteHomelabSecret]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverDeleteHomelabSecret,
-            homelabSecretRegistry.deleteSecret(input).pipe(
-              Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
-              Effect.as({}),
-              Effect.mapError(
-                (cause) =>
-                  new HomelabSecretError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "server" },
-          ),
+        ...makeHomelabRpcHandlers({
+          observeRpcEffect,
+          orchestrationEngine,
+          threadRuntime,
+          threadWorkspace,
+          projectRuntimeLifecycle,
+          homelabSecretRegistry,
+        }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -1525,95 +1312,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               ),
             ),
             { "rpc.aggregate": "workspace" },
-          ),
-        [WS_METHODS.threadWorkspaceListEntries]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.threadWorkspaceListEntries,
-            wakeThreadWorkspaceRuntime(input.threadId).pipe(
-              Effect.flatMap(() => threadWorkspace.listEntries(input)),
-              Effect.mapError(
-                (cause) =>
-                  new ThreadWorkspaceError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "threadWorkspace" },
-          ),
-        [WS_METHODS.threadWorkspaceReadFile]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.threadWorkspaceReadFile,
-            wakeThreadWorkspaceRuntime(input.threadId).pipe(
-              Effect.flatMap(() => threadWorkspace.readFile(input)),
-              Effect.mapError(
-                (cause) =>
-                  new ThreadWorkspaceError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "threadWorkspace" },
-          ),
-        [WS_METHODS.threadWorkspaceWriteFile]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.threadWorkspaceWriteFile,
-            wakeThreadWorkspaceRuntime(input.threadId).pipe(
-              Effect.flatMap(() => threadWorkspace.writeFile(input)),
-              Effect.mapError(
-                (cause) =>
-                  new ThreadWorkspaceError({
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "threadWorkspace" },
-          ),
-        [WS_METHODS.projectRuntimeGet]: (input) =>
-          observeRpcEffect(WS_METHODS.projectRuntimeGet, projectRuntimeLifecycle.get(input), {
-            "rpc.aggregate": "projectRuntime",
-          }),
-        [WS_METHODS.projectRuntimeWake]: (input) =>
-          observeRpcEffect(WS_METHODS.projectRuntimeWake, projectRuntimeLifecycle.wake(input), {
-            "rpc.aggregate": "projectRuntime",
-          }),
-        [WS_METHODS.projectRuntimeArchive]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.projectRuntimeArchive,
-            projectRuntimeLifecycle.archive(input),
-            {
-              "rpc.aggregate": "projectRuntime",
-            },
-          ),
-        [WS_METHODS.projectRuntimeReset]: (input) =>
-          observeRpcEffect(WS_METHODS.projectRuntimeReset, projectRuntimeLifecycle.reset(input), {
-            "rpc.aggregate": "projectRuntime",
-          }),
-        [WS_METHODS.projectRuntimeCleanupScratch]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.projectRuntimeCleanupScratch,
-            projectRuntimeLifecycle.cleanupScratch(input),
-            {
-              "rpc.aggregate": "projectRuntime",
-            },
-          ),
-        [WS_METHODS.projectRuntimeSnapshot]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.projectRuntimeSnapshot,
-            projectRuntimeLifecycle.createSnapshot(input),
-            {
-              "rpc.aggregate": "projectRuntime",
-            },
-          ),
-        [WS_METHODS.projectRuntimeRestore]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.projectRuntimeRestore,
-            projectRuntimeLifecycle.restore(input),
-            {
-              "rpc.aggregate": "projectRuntime",
-            },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
