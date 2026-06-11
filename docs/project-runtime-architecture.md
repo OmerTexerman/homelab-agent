@@ -104,16 +104,27 @@ orchestration model:
 - New shared threads attach to `project.defaultRuntimeId` automatically.
 - New isolated threads attach to `isolated-runtime:<thread-id>`.
 - Standalone (scratch) threads are always isolated: each one owns
-  `isolated-runtime:<thread-id>`, and there is no shared scratch runtime.
-  Requested "shared" mode is coerced to isolated for the standalone project,
-  and a startup sweep migrates legacy threads off the retired
-  `project-runtime:system:standalone` runtime.
+  `isolated-runtime:<thread-id>`, and there is no shared scratch runtime. The
+  schema makes this unrepresentable — `thread.standalone.create` carries no
+  runtime selection mode, `thread.create` rejects the standalone project, and
+  runtime bindings are a pure derivation in `ProjectRuntimePolicy` with an
+  explicit assignment kind (scratch | project-shared | project-isolated).
+  `thread.runtimeId` is a derived display cache, never a command input;
+  migration 039 rewrote legacy projection rows to the derivation.
 - Promoting a scratch thread to a new project adopts the thread's runtime as
-  the project's default runtime (container kept in place). Moving a scratch
-  thread into an existing project keeps its own runtime and arrives as an
-  isolated thread; joining the project's shared runtime stays an explicit
-  follow-up. Neither path merges Scratch filesystem state into the target
-  Project Runtime.
+  the project's default runtime (container kept in place); the thread's
+  memory and skills move with it. Moving a scratch thread into an existing
+  project keeps its own runtime and arrives as an isolated thread; joining
+  the project's shared runtime stays an explicit follow-up.
+- Isolated (parallel) project threads start from an exact copy of the Project
+  Runtime: the new runtime's workspace and home are cloned at first ensure
+  (per-runtime tokens/auth excluded and regenerated). Their work returns via
+  the explicit `mergeIsolated` operation, which copies the isolated workspace
+  into the project runtime under a fresh `merged/<thread>` folder through the
+  single-writer queue (no overwrites; generated files excluded).
+- Generated AGENTS.md/CLAUDE.md render one of three personas (scratch,
+  project-shared, project-isolated) decided by the policy assignment kind,
+  including scope-correct memory/skill/promotion guidance.
 - Older persisted events and projections are backfilled through migration 034.
 
 Runtime assignment policy lives in `apps/server/src/runtime/ProjectRuntimePolicy.ts`.
@@ -322,6 +333,18 @@ with the thread automatically. Durable Scratch memory entries move only when the
 command/UI explicitly requests `copy` or `move`. Copying creates target-project
 entries while preserving source thread/message/file attribution; moving
 re-scopes the selected entries to the target project.
+
+## Skills
+
+Agents can author reusable skills (SKILL.md documents) inside any runtime via
+`homelab skill add` and promote them up the ladder with
+`homelab skill promote --to global` (project skills) — scratch threads author
+thread-scoped skills and can only promote to global; `--to project` errors
+with a teaching message because there is no project. Promoting or moving a
+scratch thread into a project adopts its skills as project skills. Visible
+skills (global plus the runtime's own scope, narrowest name wins) are
+materialized into `.homelab/skills/` and `~/.claude/skills/` at runtime
+ensure/start.
 
 ## Secrets
 

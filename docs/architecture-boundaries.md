@@ -25,6 +25,8 @@ runtime, terminal, or chat components.
 | `apps/server/src/orchestration/Layers/ProjectRuntimeTurnDispatch.ts`                                                            | Preparing the Project Runtime for a provider turn: waking/ensuring the runtime container, refreshing the generated homelab context view (project memory, secrets, bootstrap catalog), and routing turns through the project-runtime queue. | Provider stream handling, turn-failure activity projection, queue implementation, context-view rendering, or the reactor's event loop.                                       |
 | `apps/server/src/wsHomelabRpc.ts`                                                                                               | The homelab secret, thread workspace, and Project Runtime lifecycle websocket RPC handlers plus their authorization scopes, including waking workspace runtimes before thread-workspace access.                                            | RPC transport/instrumentation, scope enforcement mechanics, secret value storage, or runtime lifecycle implementation.                                                       |
 | `apps/server/src/wsThreadBootstrapRecovery.ts`                                                                                  | Bootstrap turn-start retry rules: whether an existing thread can be adopted by a retry, duplicate thread-create recovery, and compensation for prepared worktrees and overwritten thread metadata.                                         | The bootstrapProgram sequencing in `ws.ts`, worktree creation, setup-script launching, or turn dispatch.                                                                     |
+| `apps/server/src/homelab/Services/HomelabSkills.ts` and `apps/server/src/homelab/Layers/HomelabSkills.ts`                       | Durable agent skills (SKILL.md documents) with thread/project/global scoping, name-shadowing reads, authoring upserts, promotion up the ladder, and adoption of a scratch thread's skills into its project.                                | Materializing skill files into runtimes, the homelab CLI surface, HTTP routing, or instruction copy.                                                                         |
+| `apps/server/src/runtime/HomelabSkillsView.ts`                                                                                  | Materializing visible skills into a runtime: the generated `.homelab/skills` view (indexed and reconciled) and `~/.claude/skills` for Claude Code auto-discovery.                                                                          | Skill storage/scoping rules, deciding which skills are visible (HomelabSkills owns that), or when materialization runs (ThreadRuntime owns the call sites).                  |
 | `apps/web/src/threadActivityDerivations.ts`                                                                                     | Deriving pending approvals, pending user-input requests, active and proposed plan state, and the collapsed work log from thread activities.                                                                                                | Timeline entry derivation (`threadTimeline.ts`), read-model seam composition, data fetching, or rendering.                                                                   |
 
 `apps/web/src/session-logic.ts` is intentionally a thin re-export shim over
@@ -58,9 +60,15 @@ select data and call commands, but cross-cutting state such as blocked decisions
 runtime waiting, optimistic messages, and work-log derivation belongs in
 `threadTimelineReadModel` and `decisionQueueReadModel`.
 
-Runtime and terminal code should preserve Project Runtime identity. Shared
-project runtime ids use the `project-runtime:<project-id>` shape; thread-only
-fallback runtimes use encoded thread-derived ids. Terminal ownership and logs
+Runtime and terminal code should preserve Project Runtime identity. Runtime
+bindings are a pure derivation in `ProjectRuntimePolicy`
+(`resolveProjectRuntimeAssignment`): shared project threads follow the
+project's default runtime (`project-runtime:<project-id>` unless a promoted
+scratch runtime was adopted), and a thread's own runtime — scratch or
+parallel — is always `isolated-runtime:<thread-id>`. `thread.runtimeId` is a
+derived display cache, never an input; the assignment `kind`
+(scratch | project-shared | project-isolated) drives personas, queueing,
+knowledge scoping, and clone-on-create seeding. Terminal ownership and logs
 should follow the runtime id for shared Project Runtimes.
 
 ## Known Gaps
@@ -68,10 +76,12 @@ should follow the runtime id for shared Project Runtimes.
 - Cursor pinned CLI: Cursor remains blocked for Project Runtime execution until
   the repo has a pinned installable CLI artifact and an authentication strategy.
 - Snapshot restore V1 is implemented for managed Project Runtime filesystem
-  state. Remaining gaps are compression/deduplication, partial merge restore,
-  isolated-runtime merge/discard flows, and stronger detection of user-created
-  files that may contain sensitive values outside known broker/provider auth
-  paths.
+  state. Isolated runtimes now clone the Project Runtime on creation and merge
+  back via `mergeIsolated` (copy into a fresh `merged/<thread>` folder, queued
+  on the single-writer queue). Remaining gaps are compression/deduplication,
+  partial merge restore, in-place (non-subfolder) merges, discard-with-summary
+  flows, and stronger detection of user-created files that may contain
+  sensitive values outside known broker/provider auth paths.
 - Historical bootstrap materialization replay is implemented for the durable
   registry-backed materialization catalog. Remaining follow-up: apply richer
   non-env mutation payloads inside containers as the bootstrap mutation model
