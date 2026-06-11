@@ -39,6 +39,8 @@ import type {
   ProjectRuntimeOperationInput,
   ProjectRuntimeOperationResult,
   ProjectRuntimeRestoreSnapshotInput,
+  ProjectRuntimeMergeIsolatedInput,
+  ProjectRuntimeMergeIsolatedResult,
 } from "./runtimeWorkspace.ts";
 import type {
   HomelabSecretDeleteInput,
@@ -577,6 +579,9 @@ export interface EnvironmentApi {
     cleanupScratch: (input: ProjectRuntimeOperationInput) => Promise<ProjectRuntimeOperationResult>;
     snapshot: (input: ProjectRuntimeCreateSnapshotInput) => Promise<ProjectRuntimeOperationResult>;
     restore: (input: ProjectRuntimeRestoreSnapshotInput) => Promise<ProjectRuntimeOperationResult>;
+    mergeIsolated: (
+      input: ProjectRuntimeMergeIsolatedInput,
+    ) => Promise<ProjectRuntimeMergeIsolatedResult>;
   };
   vcs: {
     listRefs: (input: VcsListRefsInput) => Promise<VcsListRefsResult>;

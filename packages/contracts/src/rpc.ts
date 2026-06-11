@@ -132,6 +132,8 @@ import {
   ProjectRuntimeOperationInput,
   ProjectRuntimeOperationResult,
   ProjectRuntimeRestoreSnapshotInput,
+  ProjectRuntimeMergeIsolatedInput,
+  ProjectRuntimeMergeIsolatedResult,
 } from "./runtimeWorkspace.ts";
 
 export const WS_METHODS = {
@@ -151,6 +153,7 @@ export const WS_METHODS = {
   projectRuntimeCleanupScratch: "projectRuntime.cleanupScratch",
   projectRuntimeSnapshot: "projectRuntime.snapshot",
   projectRuntimeRestore: "projectRuntime.restore",
+  projectRuntimeMergeIsolated: "projectRuntime.mergeIsolated",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -413,6 +416,12 @@ export const WsProjectRuntimeRestoreRpc = Rpc.make(WS_METHODS.projectRuntimeRest
   error: Schema.Union([ProjectRuntimeError, EnvironmentAuthorizationError]),
 });
 
+export const WsProjectRuntimeMergeIsolatedRpc = Rpc.make(WS_METHODS.projectRuntimeMergeIsolated, {
+  payload: ProjectRuntimeMergeIsolatedInput,
+  success: ProjectRuntimeMergeIsolatedResult,
+  error: Schema.Union([ProjectRuntimeError, EnvironmentAuthorizationError]),
+});
+
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
@@ -668,6 +677,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectRuntimeCleanupScratchRpc,
   WsProjectRuntimeSnapshotRpc,
   WsProjectRuntimeRestoreRpc,
+  WsProjectRuntimeMergeIsolatedRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsSubscribeVcsStatusRpc,

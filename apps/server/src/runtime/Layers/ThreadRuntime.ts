@@ -2442,6 +2442,67 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
+  // Per-runtime state that must never be cloned between runtimes: tokens and secret env are
+  // reissued per runtime, and provider auth/state is synced from the host on every start.
+  const SEED_EXCLUDED_HOME_RELATIVE_PATHS = [
+    ".homelab-runtime.env",
+    ".homelab-runtime-token",
+    ".codex",
+    ".claude",
+    ".claude.json",
+    ".local/share/opencode",
+  ];
+
+  /**
+   * Seed a brand-new runtime's storage as an exact copy of another runtime's workspace and
+   * home, so an isolated (parallel) project thread starts from an exact copy of the Project
+   * Runtime. No-op when the target already has a workspace (already provisioned) or the
+   * source has none yet (nothing to clone).
+   */
+  const seedRuntimeStorage = Effect.fn("threadRuntime.seedRuntimeStorage")(function* (
+    runtime: ThreadRuntimeDescriptor,
+    seedFromRuntimeId: RuntimeSessionId,
+  ) {
+    yield* Effect.try({
+      try: () => {
+        const targetStorageId = runtimeStorageIdFor(runtime);
+        const sourceStorageId = String(seedFromRuntimeId);
+        if (targetStorageId === sourceStorageId) {
+          return;
+        }
+        const targetWorkspace = managedWorkspacePath(threadRuntimesDir, targetStorageId);
+        const targetHome = homePathForThread(threadRuntimesDir, targetStorageId);
+        const sourceWorkspace = managedWorkspacePath(threadRuntimesDir, sourceStorageId);
+        const sourceHome = homePathForThread(threadRuntimesDir, sourceStorageId);
+        if (nodeFs.existsSync(targetWorkspace) || !nodeFs.existsSync(sourceWorkspace)) {
+          return;
+        }
+        nodeFs.mkdirSync(nodePath.dirname(targetWorkspace), { recursive: true });
+        nodeFs.cpSync(sourceWorkspace, targetWorkspace, { recursive: true });
+        if (nodeFs.existsSync(sourceHome)) {
+          nodeFs.cpSync(sourceHome, targetHome, {
+            recursive: true,
+            filter: (source) => {
+              const relative = nodePath.relative(sourceHome, source);
+              if (relative === "") {
+                return true;
+              }
+              return !SEED_EXCLUDED_HOME_RELATIVE_PATHS.some(
+                (excluded) =>
+                  relative === excluded || relative.startsWith(`${excluded}${nodePath.sep}`),
+              );
+            },
+          });
+        }
+      },
+      catch: (cause) =>
+        new ThreadRuntimeError({
+          message: `Failed to seed runtime '${runtime.runtimeId}' from '${seedFromRuntimeId}'.`,
+          cause,
+        }),
+    });
+  });
+
   /**
    * Materialize homelab skills (global plus this runtime's scope) into the workspace
    * `.homelab/skills` view and Claude Code's `~/.claude/skills`. Best-effort: when the
@@ -3023,6 +3084,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           ...(existingRuntime !== undefined ? { existing: existingRuntime } : {}),
         });
 
+        if (existingRuntime === undefined && input.seedFromRuntimeId !== undefined) {
+          yield* seedRuntimeStorage(runtime, input.seedFromRuntimeId);
+        }
         yield* ensureRuntimeDirectories(runtime);
         yield* writeRuntimeInstructionFiles(runtime);
         yield* writeRuntimeHomelabBaselineView(runtime);

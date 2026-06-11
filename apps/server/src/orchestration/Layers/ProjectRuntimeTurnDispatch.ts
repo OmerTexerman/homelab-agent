@@ -23,7 +23,7 @@ import { RuntimeBootstrapRegistry } from "../../runtime/Services/RuntimeBootstra
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { ProjectRuntimeQueue } from "../../runtime/ProjectRuntimeQueue.ts";
 import {
-  isStandaloneProjectId,
+  defaultRuntimeIdForProject,
   resolveProjectRuntimeAssignment,
 } from "../../runtime/ProjectRuntimePolicy.ts";
 import type { ProviderServiceShape } from "../../provider/Services/ProviderService.ts";
@@ -91,8 +91,12 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       provider: runtimeProvider,
       runtimeMode: input.runtimeMode,
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
-      isStandalone: isStandaloneProjectId(project.id),
+      isStandalone: assignment.kind === "scratch",
       projectTitle: project.title,
+      // A parallel project thread starts from an exact copy of the Project Runtime.
+      ...(assignment.kind === "project-isolated"
+        ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
+        : {}),
     });
     yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);

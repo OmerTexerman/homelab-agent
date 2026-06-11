@@ -102,6 +102,7 @@ export interface WsRpcClient {
     readonly cleanupScratch: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeCleanupScratch>;
     readonly snapshot: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeSnapshot>;
     readonly restore: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeRestore>;
+    readonly mergeIsolated: RpcUnaryMethod<typeof WS_METHODS.projectRuntimeMergeIsolated>;
   };
   readonly shell: {
     readonly openInEditor: (input: {
@@ -259,6 +260,8 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.projectRuntimeSnapshot](input)),
       restore: (input) =>
         transport.request((client) => client[WS_METHODS.projectRuntimeRestore](input)),
+      mergeIsolated: (input) =>
+        transport.request((client) => client[WS_METHODS.projectRuntimeMergeIsolated](input)),
     },
     shell: {
       openInEditor: (input) =>

@@ -117,6 +117,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       cleanupScratch: vi.fn(),
       snapshot: vi.fn(),
       restore: vi.fn(),
+      mergeIsolated: vi.fn(),
     },
     sourceControl: {
       lookupRepository: vi.fn(),

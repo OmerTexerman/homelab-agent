@@ -69,6 +69,12 @@ export interface ThreadRuntimeDescriptor {
 }
 
 export interface ThreadRuntimeLaunchInput {
+  /**
+   * Seed a brand-new runtime's storage as an exact copy of another runtime's workspace and
+   * home (per-runtime auth/token/provider state excluded; regenerated on start). Used so an
+   * isolated (parallel) project thread starts from an exact copy of the Project Runtime.
+   */
+  readonly seedFromRuntimeId?: RuntimeSessionId | undefined;
   readonly threadId: ThreadId;
   readonly runtimeId?: RuntimeSessionId;
   readonly provider: ProviderKind | null;

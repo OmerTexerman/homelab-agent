@@ -8,6 +8,7 @@ import type {
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  GitMergeIcon,
   ArchiveIcon,
   CameraIcon,
   EraserIcon,
@@ -37,7 +38,8 @@ type ProjectRuntimePanelOperation =
   | { type: "reset" }
   | { type: "cleanupScratch" }
   | { type: "snapshot"; name: string }
-  | { type: "restore"; snapshotId: string };
+  | { type: "restore"; snapshotId: string }
+  | { type: "mergeIsolated" };
 
 interface ProjectRuntimePanelProps {
   environmentId: EnvironmentId;
@@ -148,6 +150,20 @@ export function ProjectRuntimePanel({
             ...operationInput,
             snapshotId: operation.snapshotId,
           });
+        case "mergeIsolated": {
+          if (!threadId) {
+            throw new Error("Merging requires a thread context.");
+          }
+          const merged = await api.projectRuntime.mergeIsolated({ projectId, threadId });
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: "Merged into Project Runtime",
+              description: `Files copied to ${merged.mergedPath} in the project workspace.`,
+            }),
+          );
+          return { runtime: merged.runtime };
+        }
       }
     },
     onSuccess: (result) => {
@@ -182,6 +198,10 @@ export function ProjectRuntimePanel({
 
   const wakeRuntime = useCallback(() => {
     runOperation({ type: "wake" });
+  }, [runOperation]);
+
+  const mergeIsolatedRuntime = useCallback(() => {
+    runOperation({ type: "mergeIsolated" });
   }, [runOperation]);
 
   const archiveRuntime = useCallback(() => {
@@ -334,6 +354,12 @@ export function ProjectRuntimePanel({
             <CameraIcon className="size-3.5" />
             Snapshot
           </Button>
+          {detail?.runtime.kind === "isolated" && !isStandaloneRuntime ? (
+            <Button size="xs" variant="outline" onClick={mergeIsolatedRuntime} disabled={busy}>
+              <GitMergeIcon className="size-3.5" />
+              Merge into Project Runtime
+            </Button>
+          ) : null}
         </div>
       </div>
       {detail?.snapshots.length ? (

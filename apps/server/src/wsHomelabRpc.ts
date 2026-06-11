@@ -12,7 +12,10 @@ import * as Effect from "effect/Effect";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
-import { resolveProjectRuntimeAssignment } from "./runtime/ProjectRuntimePolicy.ts";
+import {
+  defaultRuntimeIdForProject,
+  resolveProjectRuntimeAssignment,
+} from "./runtime/ProjectRuntimePolicy.ts";
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
 import type { ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
@@ -39,6 +42,7 @@ export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEn
   [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeSnapshot, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeRestore, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeMergeIsolated, AuthOrchestrationOperateScope],
 ];
 
 export interface HomelabRpcHandlerDeps {
@@ -94,6 +98,9 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
             provider: null,
             runtimeMode: thread.runtimeMode,
             isStandalone: assignment.kind === "scratch",
+            ...(assignment.kind === "project-isolated"
+              ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
+              : {}),
           })
           .pipe(Effect.catch(() => Effect.void));
       }
@@ -266,5 +273,15 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       observeRpcEffect(WS_METHODS.projectRuntimeRestore, projectRuntimeLifecycle.restore(input), {
         "rpc.aggregate": "projectRuntime",
       }),
+    [WS_METHODS.projectRuntimeMergeIsolated]: (
+      input: Parameters<ProjectRuntimeLifecycleShape["mergeIsolated"]>[0],
+    ) =>
+      observeRpcEffect(
+        WS_METHODS.projectRuntimeMergeIsolated,
+        projectRuntimeLifecycle.mergeIsolated(input),
+        {
+          "rpc.aggregate": "projectRuntime",
+        },
+      ),
   } as const;
 };

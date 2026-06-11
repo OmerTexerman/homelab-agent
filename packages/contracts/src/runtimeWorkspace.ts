@@ -146,6 +146,19 @@ export const ProjectRuntimeOperationResult = Schema.Struct({
 });
 export type ProjectRuntimeOperationResult = typeof ProjectRuntimeOperationResult.Type;
 
+export const ProjectRuntimeMergeIsolatedInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+});
+export type ProjectRuntimeMergeIsolatedInput = typeof ProjectRuntimeMergeIsolatedInput.Type;
+
+export const ProjectRuntimeMergeIsolatedResult = Schema.Struct({
+  runtime: ProjectRuntimeDetail,
+  /** Workspace-relative folder inside the project runtime that received the copied files. */
+  mergedPath: TrimmedNonEmptyString,
+});
+export type ProjectRuntimeMergeIsolatedResult = typeof ProjectRuntimeMergeIsolatedResult.Type;
+
 export class ProjectRuntimeError extends Schema.TaggedErrorClass<ProjectRuntimeError>()(
   "ProjectRuntimeError",
   {

@@ -39,7 +39,11 @@ import {
   writeHomelabContextView,
 } from "../HomelabContextView.ts";
 import { homelabRuntimeBootstrapView } from "../RuntimeBootstrapCatalogView.ts";
-import { defaultProjectRuntimeId, isStandaloneProjectId } from "../ProjectRuntimePolicy.ts";
+import {
+  defaultProjectRuntimeId,
+  isStandaloneProjectId,
+  resolveProjectRuntimeAssignment,
+} from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime, type ThreadRuntimeDescriptor } from "../Services/ThreadRuntime.ts";
@@ -1132,6 +1136,126 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     return yield* describeRuntime(input);
   });
 
+  const MERGE_EXCLUDED_WORKSPACE_ENTRIES = new Set([".homelab", "AGENTS.md", "CLAUDE.md"]);
+
+  const mergeIsolated: ProjectRuntimeLifecycleShape["mergeIsolated"] = Effect.fn(
+    "projectRuntimeLifecycle.mergeIsolated",
+  )(function* (input) {
+    const resolved = yield* resolveRuntimeContext({ projectId: input.projectId });
+    const thread = resolved.readModel.threads.find(
+      (entry) =>
+        entry.id === input.threadId &&
+        entry.projectId === input.projectId &&
+        entry.deletedAt === null,
+    );
+    if (!thread) {
+      return yield* toProjectRuntimeError({
+        message: `Thread '${input.threadId}' was not found in project '${input.projectId}'.`,
+        projectId: input.projectId,
+        threadId: input.threadId,
+      });
+    }
+    const assignment = resolveProjectRuntimeAssignment({ project: resolved.project, thread });
+    if (assignment.kind !== "project-isolated") {
+      return yield* toProjectRuntimeError({
+        message:
+          "Only isolated (parallel) project threads can merge back into the Project Runtime.",
+        projectId: input.projectId,
+        threadId: input.threadId,
+      });
+    }
+    const targetBindingThread = resolved.bindingThread;
+    if (!targetBindingThread) {
+      return yield* toProjectRuntimeError({
+        message:
+          "The Project Runtime has no bound thread yet; start a shared project thread before merging.",
+        projectId: input.projectId,
+        threadId: input.threadId,
+      });
+    }
+
+    const sourceLaunchContext = yield* threadRuntime.resolveLaunchContext(input.threadId).pipe(
+      Effect.mapError((cause) =>
+        toProjectRuntimeError({
+          message: "Failed to resolve the isolated runtime workspace for merge.",
+          projectId: input.projectId,
+          threadId: input.threadId,
+          cause,
+        }),
+      ),
+    );
+    const targetLaunchContext = yield* threadRuntime
+      .resolveLaunchContext(targetBindingThread.id)
+      .pipe(
+        Effect.mapError((cause) =>
+          toProjectRuntimeError({
+            message: "Failed to resolve the Project Runtime workspace for merge.",
+            projectId: input.projectId,
+            threadId: input.threadId,
+            cause,
+          }),
+        ),
+      );
+
+    const threadSlug =
+      String(thread.title)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48) || "thread";
+    const mergedPath = nodePath.join(
+      "merged",
+      `${threadSlug}-${String(thread.id)
+        .slice(-8)
+        .replace(/[^a-zA-Z0-9]/g, "")}`,
+    );
+    const targetPath = nodePath.join(targetLaunchContext.hostWorkspacePath, mergedPath);
+
+    // The copy is queued on the project runtime so no provider turn is writing mid-merge.
+    yield* queue.run(
+      {
+        runtimeId: resolved.runtimeId,
+        policy: "shared-single-writer",
+        projectId: resolved.project.id,
+        threadId: input.threadId,
+        label: "merge-isolated-runtime",
+      },
+      Effect.try({
+        try: () => {
+          if (nodeFs.existsSync(targetPath)) {
+            throw new Error(`Merge target '${mergedPath}' already exists in the Project Runtime.`);
+          }
+          nodeFs.mkdirSync(nodePath.dirname(targetPath), { recursive: true });
+          nodeFs.cpSync(sourceLaunchContext.hostWorkspacePath, targetPath, {
+            recursive: true,
+            force: false,
+            filter: (source) => {
+              const relative = nodePath.relative(sourceLaunchContext.hostWorkspacePath, source);
+              if (relative === "") {
+                return true;
+              }
+              const [firstSegment] = relative.split(nodePath.sep);
+              return !MERGE_EXCLUDED_WORKSPACE_ENTRIES.has(firstSegment ?? "");
+            },
+          });
+        },
+        catch: (cause) =>
+          toProjectRuntimeError({
+            message:
+              cause instanceof Error
+                ? cause.message
+                : "Failed to merge isolated runtime workspace.",
+            projectId: input.projectId,
+            threadId: input.threadId,
+            cause,
+          }),
+      }),
+    );
+
+    const result = yield* describeRuntime({ projectId: input.projectId });
+    return { runtime: result.runtime, mergedPath };
+  });
+
   return {
     get: describeRuntime,
     wake,
@@ -1140,6 +1264,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     cleanupScratch,
     createSnapshot,
     restore,
+    mergeIsolated,
   } satisfies ProjectRuntimeLifecycleShape;
 });
 
