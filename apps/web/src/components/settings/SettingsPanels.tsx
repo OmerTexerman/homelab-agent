@@ -69,7 +69,7 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { readEnvironmentApi } from "../../environmentApi";
-import { newCommandId, newThreadId } from "../../lib/utils";
+import { newCommandId, newMessageId, newThreadId } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -1157,6 +1157,7 @@ function KnowledgeGraphExplorer(props: {
 export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
+  const { deleteThread } = useThreadActions();
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const allSidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
@@ -1187,15 +1188,33 @@ export function MemoryKnowledgeSettingsPanel() {
             project.environmentId === primaryEnvironmentId && isCuratorProjectId(project.id),
         );
         const threadId = newThreadId();
+        const modelSelection = curatorProject?.defaultModelSelection ?? {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        };
         await api.orchestration.dispatchCommand({
           type: "thread.curator.create",
           commandId: newCommandId(),
           threadId,
-          title: HOMELAB_PRODUCT_COPY.curator.newSessionAction,
-          modelSelection: curatorProject?.defaultModelSelection ?? {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
+          title: HOMELAB_PRODUCT_COPY.curator.sessionTitle,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+        // Kick the session off immediately: the curator persona's first move is a
+        // knowledge inventory, so the opening sweep starts without an empty-composer stop.
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: HOMELAB_PRODUCT_COPY.curator.kickoffPrompt,
+            attachments: [],
           },
+          modelSelection,
           runtimeMode: "full-access",
           interactionMode: "default",
           createdAt: new Date().toISOString(),
@@ -1301,17 +1320,35 @@ export function MemoryKnowledgeSettingsPanel() {
                 {HOMELAB_PRODUCT_COPY.curator.recentSessionsLabel}
               </div>
               {curatorSessions.slice(0, 8).map((thread) => (
-                <Link
+                <div
                   key={`${thread.environmentId}:${thread.id}`}
-                  to="/$environmentId/$threadId"
-                  params={buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id))}
-                  className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-xs hover:bg-accent/50"
+                  className="flex items-center gap-1 rounded-md border border-border pr-1 hover:bg-accent/50"
                 >
-                  <span className="min-w-0 truncate text-foreground">{thread.title}</span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
-                  </span>
-                </Link>
+                  <Link
+                    to="/$environmentId/$threadId"
+                    params={buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id))}
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-xs"
+                  >
+                    <span className="min-w-0 truncate text-foreground">{thread.title}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
+                    </span>
+                  </Link>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete "${thread.title}"`}
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => {
+                      // Deleting the session destroys its isolated runtime container and
+                      // storage server-side; the sidebar hides curator threads, so this is
+                      // the cleanup surface.
+                      void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+                    }}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </Button>
+                </div>
               ))}
             </div>
           ) : (
