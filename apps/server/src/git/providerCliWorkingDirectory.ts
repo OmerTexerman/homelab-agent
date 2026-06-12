@@ -14,15 +14,25 @@ export const resolveProviderCliWorkingDirectory = Effect.fn("resolveProviderCliW
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle";
+    /**
+     * Git-backed operations need the requested cwd and must fail when it is
+     * missing; cwd-incidental operations (thread titles) can run anywhere and
+     * prefer degrading to the state dir over failing.
+     */
+    readonly missingCwdBehavior?: "fail" | "fallback-to-state-dir";
   }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
 
-    if (isLogicalProjectWorkspaceRoot(input.cwd)) {
+    const stateDirFallback = Effect.gen(function* () {
       yield* fileSystem
         .makeDirectory(serverConfig.stateDir, { recursive: true })
         .pipe(Effect.catch(() => Effect.void));
       return serverConfig.stateDir;
+    });
+
+    if (isLogicalProjectWorkspaceRoot(input.cwd)) {
+      return yield* stateDirFallback;
     }
 
     const cwdStat = yield* fileSystem
@@ -30,6 +40,10 @@ export const resolveProviderCliWorkingDirectory = Effect.fn("resolveProviderCliW
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (cwdStat?.type === "Directory") {
       return input.cwd;
+    }
+
+    if (input.missingCwdBehavior === "fallback-to-state-dir") {
+      return yield* stateDirFallback;
     }
 
     return yield* new TextGenerationError({

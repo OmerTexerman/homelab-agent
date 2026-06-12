@@ -25,6 +25,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { resolveProviderCliWorkingDirectory } from "../../git/providerCliWorkingDirectory.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -609,8 +610,16 @@ const make = Effect.gen(function* () {
         const { textGenerationModelSelection: modelSelection } =
           yield* serverSettingsService.getSettings;
 
-        const generated = yield* textGeneration.generateThreadTitle({
+        // Standalone threads report a logical homelab:// workspace root; the
+        // generation CLI spawns on the host, so map it to a real directory.
+        const generationCwd = yield* resolveProviderCliWorkingDirectory({
           cwd: input.cwd,
+          operation: "generateThreadTitle",
+          missingCwdBehavior: "fallback-to-state-dir",
+        });
+
+        const generated = yield* textGeneration.generateThreadTitle({
+          cwd: generationCwd,
           message: input.messageText,
           ...(attachments.length > 0 ? { attachments } : {}),
           modelSelection,

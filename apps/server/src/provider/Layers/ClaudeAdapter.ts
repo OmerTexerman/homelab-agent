@@ -189,6 +189,7 @@ interface ClaudeSessionContext {
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  readonly stderrTail: Array<string>;
   stopped: boolean;
 }
 
@@ -238,15 +239,46 @@ function toMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
+// The SDK reports process death as a bare "exited with code N", so the CLI's
+// own diagnostics (auth refusals, spend limits, flag errors) only survive if
+// we keep a bounded tail of its stderr to attach to the process error.
+const STDERR_TAIL_MAX_CHARS = 2_000;
+
+function appendStderrTail(tail: Array<string>, chunk: string): void {
+  const text = chunk.trim();
+  if (text.length === 0) {
+    return;
+  }
+  tail.push(text);
+  let total = 0;
+  for (const entry of tail) {
+    total += entry.length;
+  }
+  while (tail.length > 1 && total > STDERR_TAIL_MAX_CHARS) {
+    total -= tail[0]!.length;
+    tail.shift();
+  }
+}
+
+function formatStderrTail(tail: ReadonlyArray<string>): string | undefined {
+  if (tail.length === 0) {
+    return undefined;
+  }
+  const joined = tail.join("\n");
+  return joined.length > STDERR_TAIL_MAX_CHARS ? joined.slice(-STDERR_TAIL_MAX_CHARS) : joined;
+}
+
 function toProcessError(
   cause: unknown,
   fallback: string,
   threadId: ThreadId,
+  stderrTail?: string,
 ): ProviderAdapterProcessError {
+  const message = toMessage(cause, fallback);
   return new ProviderAdapterProcessError({
     provider: PROVIDER,
     threadId,
-    detail: toMessage(cause, fallback),
+    detail: stderrTail ? `${message}\nstderr: ${stderrTail}` : message,
     cause,
   });
 }
@@ -1962,8 +1994,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
-    const status = turnStatusFromResult(message);
-    const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+    // API failures (for example 429 spend-limit rejections) arrive as
+    // subtype "success" with is_error set and the error text in `result`.
+    const status =
+      message.subtype === "success" && message.is_error === true
+        ? "failed"
+        : turnStatusFromResult(message);
+    const errorMessage =
+      message.subtype === "success"
+        ? message.is_error === true
+          ? message.result
+          : undefined
+        : message.errors[0];
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
@@ -2288,7 +2330,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context: ClaudeSessionContext,
   ): Effect.Effect<void, ProviderAdapterProcessError> =>
     Stream.fromAsyncIterable(context.query, (cause) =>
-      toProcessError(cause, "Claude runtime stream failed.", context.session.threadId),
+      toProcessError(
+        cause,
+        "Claude runtime stream failed.",
+        context.session.threadId,
+        formatStderrTail(context.stderrTail),
+      ),
     ).pipe(
       Stream.takeWhile(() => !context.stopped),
       Stream.runForEach((message) =>
@@ -2829,8 +2876,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const claudeBinaryPath = runtimeEnvironment?.commandPath ?? claudeSettings.binaryPath;
       const queryCwd = runtimeEnvironment?.processCwd ?? input.cwd;
       const providerCwd = runtimeEnvironment?.providerCwd ?? input.cwd;
+      const stderrTail: Array<string> = [];
       const queryOptions: ClaudeQueryOptions = {
         ...(queryCwd ? { cwd: queryCwd } : {}),
+        stderr: (data: string) => appendStderrTail(stderrTail, data),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         systemPrompt: { type: "preset", preset: "claude_code" },
@@ -2933,6 +2982,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTokenUsage: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        stderrTail,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
