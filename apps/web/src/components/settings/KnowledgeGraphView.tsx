@@ -31,24 +31,22 @@ interface GraphLayout {
   readonly bounds: { readonly minX: number; readonly minY: number; readonly width: number; readonly height: number };
 }
 
-const KIND_COLORS: Record<string, string> = {
-  host: "hsl(210 70% 55%)",
-  service: "hsl(150 60% 45%)",
-  stack: "hsl(170 55% 45%)",
-  container: "hsl(190 65% 50%)",
-  volume: "hsl(35 80% 55%)",
-  network: "hsl(260 60% 62%)",
-  domain: "hsl(285 55% 60%)",
-  endpoint: "hsl(320 60% 58%)",
-  secret_ref: "hsl(0 65% 60%)",
-  tool: "hsl(50 70% 50%)",
-  artifact: "hsl(20 70% 55%)",
-  runbook: "hsl(95 50% 48%)",
-  finding: "hsl(345 70% 58%)",
-};
+/**
+ * The kind vocabulary is open — agents introduce kinds organically — so every kind's
+ * color is derived from its name: a deterministic hue keeps a kind the same color across
+ * renders, sessions, and machines no matter which other kinds are present, with nothing
+ * hard-coded to maintain.
+ */
+function kindHue(kind: string): number {
+  let hash = 0;
+  for (const char of kind) {
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
+}
 
 function kindColor(kind: string): string {
-  return KIND_COLORS[kind] ?? "hsl(210 10% 60%)";
+  return `hsl(${kindHue(kind)} 62% 55%)`;
 }
 
 function computeGraphLayout(

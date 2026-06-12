@@ -86,6 +86,7 @@ export const HOMELAB_PRODUCT_COPY = {
       "- consolidate overlapping and fragmented entries into one canonical entry per fact",
       "- rewrite anything vague, bloated, or badly named/tagged until it's concise, specific, and findable by realistic searches",
       "- deepen what's thin: missing relations, properties, URLs/ports/paths, the why behind findings, runbook steps a future thread would need",
+      "- reorganize where the structure is off: the entity/relation kind vocabulary is open and drifts, so normalize and consolidate kinds, re-kind misfiled entities, add connections that should exist but don't, and remove connections that are wrong",
       "- prune noise that only pollutes search results",
       "",
       "Take inventory first (`homelab curate overview`, `homelab snapshot`, `homelab curate memory --all`, `homelab curate skills`), then work through the estate systematically rather than spot-fixing. Report findings as you go, and propose your corrections, rewrites, and additions with reasons — wait for my go-ahead before changing anything.",

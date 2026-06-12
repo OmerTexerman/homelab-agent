@@ -17,7 +17,19 @@ export type HomelabObservationId = typeof HomelabObservationId.Type;
 export const HomelabPromotionId = makeHomelabId("HomelabPromotionId");
 export type HomelabPromotionId = typeof HomelabPromotionId.Type;
 
-export const HomelabEntityKind = Schema.Literals([
+/**
+ * Entity and relation kinds are an OPEN vocabulary, by design: agents introduce kinds
+ * organically while committing knowledge, and the knowledge curator owns keeping the
+ * vocabulary small and coherent (merging synonyms, re-kinding misfiled entities). The
+ * suggested lists below are conventions agents should prefer before inventing new kinds —
+ * they are not validation.
+ */
+export const HomelabEntityKind = Schema.String.check(
+  Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/),
+);
+export type HomelabEntityKind = typeof HomelabEntityKind.Type;
+
+export const SUGGESTED_HOMELAB_ENTITY_KINDS = [
   "host",
   "service",
   "stack",
@@ -31,13 +43,17 @@ export const HomelabEntityKind = Schema.Literals([
   "artifact",
   "runbook",
   "finding",
-]);
-export type HomelabEntityKind = typeof HomelabEntityKind.Type;
+] as const;
 
 export const HomelabEntityStatus = Schema.Literals(["active", "planned", "deprecated", "unknown"]);
 export type HomelabEntityStatus = typeof HomelabEntityStatus.Type;
 
-export const HomelabRelationKind = Schema.Literals([
+export const HomelabRelationKind = Schema.String.check(
+  Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/),
+);
+export type HomelabRelationKind = typeof HomelabRelationKind.Type;
+
+export const SUGGESTED_HOMELAB_RELATION_KINDS = [
   "runs_on",
   "managed_by",
   "part_of",
@@ -54,8 +70,7 @@ export const HomelabRelationKind = Schema.Literals([
   "discovered_in",
   "derived_from",
   "owns",
-]);
-export type HomelabRelationKind = typeof HomelabRelationKind.Type;
+] as const;
 
 export const HomelabObservationSourceKind = Schema.Literals([
   "thread",

@@ -593,6 +593,9 @@ def runtime_thread_query(args=None):
     return query
 
 
+# Kind vocabularies are OPEN: these are the suggested/common values, not validation.
+# Prefer reusing one of these (or a kind that already exists in the graph) before
+# inventing a new kind — the knowledge curator consolidates vocabulary drift later.
 PROMOTION_ENTITY_KINDS = [
     "host",
     "service",
@@ -738,13 +741,15 @@ def promotion_schema_overview():
                 "observedAt",
                 "lastVerifiedAt",
             ],
-            "kindValues": PROMOTION_ENTITY_KINDS,
+            "kindSuggestions": PROMOTION_ENTITY_KINDS,
+            "kindNote": "open vocabulary (lowercase snake_case); prefer an existing kind before inventing one",
             "statusValues": ["active", "planned", "deprecated", "unknown"],
         },
         "relation": {
             "required": ["id", "kind", "fromEntityId", "toEntityId", "createdAt", "updatedAt"],
             "optional": ["summary", "properties", "confidence", "observedAt", "lastVerifiedAt"],
-            "kindValues": PROMOTION_RELATION_KINDS,
+            "kindSuggestions": PROMOTION_RELATION_KINDS,
+            "kindNote": "open vocabulary (lowercase snake_case); prefer an existing kind before inventing one",
         },
         "observation": {
             "required": ["id", "sourceKind", "summary", "createdAt"],
@@ -1522,6 +1527,10 @@ You are a skeptical librarian, not a collector.
   conversation. Include the concrete values; never write "as discussed" or "see above".
 - **One canonical entry per fact.** Overlapping near-duplicates compete in search results
   and split updates. Consolidate them, keep the best one, delete the rest with a reason.
+- **You own the taxonomy and the graph's shape.** Entity and relation kinds are an open
+  vocabulary — agents invent kinds while committing knowledge, and nobody else cleans that
+  up. Keep the vocabulary small and coherent, and keep the graph structured the way the
+  homelab actually is.
 
 ## First thing: take inventory
 
@@ -1590,6 +1599,23 @@ clean answers out of search:
   descriptions so \`skill list\` makes the right skill obvious.
 - Delete noise: transient debugging crumbs and one-off chatter that only pollute search
   results for future threads.
+
+## Organize the graph (taxonomy and structure)
+
+The kind vocabulary is open by design, so it drifts: synonymous kinds (\`vm\` vs
+\`virtual_machine\`), misfiled entities, one-off kinds with a single member. Curating the
+taxonomy and the structure is your job:
+
+- Normalize kinds: pick the canonical kind, re-kind the strays (promotion upsert with the
+  corrected \`kind\` — same id, kind is just a field), and keep the overall vocabulary
+  small enough that filters and the graph view stay meaningful.
+- Restructure where the shape is wrong: **add relations that should exist but don't**
+  (promotion \`upsert_relation\`) so the graph is navigable — what runs where, what
+  depends on what, what backs up what — and **delete relations that are wrong or
+  redundant** (\`curate relation-delete\`).
+- Regroup: if a cluster of entities is really one thing (a stack, a host with its
+  services), reshape it with the merge recipe above plus relation edits until the graph
+  reads like the homelab actually looks.
 
 ## Verification toolkit
 
@@ -1863,9 +1889,11 @@ source code or wrapper scripts before using it.
 | \`homelab secrets\` | List secret references and whether values exist |
 | \`homelab bootstrap\` | Show active bootstrap data and historical materializations |
 
-Entity kinds: \`host\`, \`service\`, \`stack\`, \`container\`, \`volume\`,
-\`network\`, \`domain\`, \`endpoint\`, \`secret_ref\`, \`tool\`, \`artifact\`,
-\`runbook\`, \`finding\`
+Entity kinds are an open vocabulary. Common ones: \`host\`, \`service\`, \`stack\`,
+\`container\`, \`volume\`, \`network\`, \`domain\`, \`endpoint\`, \`secret_ref\`,
+\`tool\`, \`artifact\`, \`runbook\`, \`finding\`. Prefer a kind that already exists in
+the graph (check \`homelab snapshot\`) before inventing a new one — vocabulary drift is
+cleaned up later by the knowledge curator, but reuse keeps search and filters working now.
 
 ### Writing back (promotions)
 
