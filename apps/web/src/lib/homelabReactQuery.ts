@@ -1,4 +1,7 @@
 import type {
+  CuratorMemoryListResult,
+  CuratorOverview,
+  CuratorSkillListResult,
   EnvironmentId,
   HomelabGraphSearchResult,
   HomelabEntityKind,
@@ -87,6 +90,12 @@ export const homelabQueryKeys = {
       query,
       includeTranscripts,
     ] as const,
+  allMemory: (environmentId: EnvironmentId | null) =>
+    ["homelab", "allMemory", environmentId ?? null] as const,
+  allSkills: (environmentId: EnvironmentId | null) =>
+    ["homelab", "allSkills", environmentId ?? null] as const,
+  curatorOverview: (environmentId: EnvironmentId | null) =>
+    ["homelab", "curatorOverview", environmentId ?? null] as const,
   graphSearch: (
     environmentId: EnvironmentId | null,
     query: string,
@@ -221,6 +230,81 @@ export function homelabGraphSearchQueryOptions(input: {
       (input.enabled ?? true) && input.environmentId !== null && input.query.trim().length > 0,
     staleTime: 2_000,
     placeholderData: (previous) => previous ?? [],
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Every project's memory entries (including scratch/curator namespaces), via the curator read route. */
+export function homelabAllMemoryQueryOptions(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: homelabQueryKeys.allMemory(input.environmentId),
+    queryFn: async () => {
+      if (!input.environmentId) {
+        throw new Error("Homelab memory is unavailable.");
+      }
+      return readEnvironmentJson<CuratorMemoryListResult>(
+        resolveEnvironmentHttpUrl({
+          environmentId: input.environmentId,
+          pathname: "/api/homelab/curate/memory",
+          searchParams: { limit: "10000" },
+        }),
+      );
+    },
+    enabled: (input.enabled ?? true) && input.environmentId !== null,
+    staleTime: 10_000,
+    placeholderData: (previous) => previous ?? { entries: [] },
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Every skill at every scope (thread/project/global), via the curator read route. */
+export function homelabAllSkillsQueryOptions(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: homelabQueryKeys.allSkills(input.environmentId),
+    queryFn: async () => {
+      if (!input.environmentId) {
+        throw new Error("Homelab skills are unavailable.");
+      }
+      return readEnvironmentJson<CuratorSkillListResult>(
+        resolveEnvironmentHttpUrl({
+          environmentId: input.environmentId,
+          pathname: "/api/homelab/curate/skills",
+        }),
+      );
+    },
+    enabled: (input.enabled ?? true) && input.environmentId !== null,
+    staleTime: 10_000,
+    placeholderData: (previous) => previous ?? { skills: [] },
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Aggregate counts and staleness signals across the whole knowledge estate. */
+export function homelabCuratorOverviewQueryOptions(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: homelabQueryKeys.curatorOverview(input.environmentId),
+    queryFn: async () => {
+      if (!input.environmentId) {
+        throw new Error("Homelab curator overview is unavailable.");
+      }
+      return readEnvironmentJson<CuratorOverview>(
+        resolveEnvironmentHttpUrl({
+          environmentId: input.environmentId,
+          pathname: "/api/homelab/curate/overview",
+        }),
+      );
+    },
+    enabled: (input.enabled ?? true) && input.environmentId !== null,
+    staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
 }

@@ -178,6 +178,7 @@ function populatedModel() {
       thread(),
       thread({
         id: "thread-isolated" as SidebarThreadSummary["id"],
+        title: "Experiment safely",
         runtimeSelectionMode: "isolated",
       }),
     ],
@@ -200,12 +201,14 @@ describe("HomeOverviewSurface", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the populated operational overview with real topology data", async () => {
+  it("renders the populated overview with clickable recent activity", async () => {
+    const onOpenThread = vi.fn();
     const mounted = await render(
       <div style={{ width: "1180px", minHeight: "820px" }}>
         <HomeOverviewSurface
           model={populatedModel()}
           onNewThread={vi.fn()}
+          onOpenThread={onOpenThread}
           onOpenSettings={vi.fn()}
           onRefresh={vi.fn()}
         />
@@ -214,19 +217,25 @@ describe("HomeOverviewSurface", () => {
 
     try {
       await expect.element(page.getByText("Homelab operations")).toBeInTheDocument();
-      await expect.element(page.getByTestId("home-runtime-work")).toBeInTheDocument();
-      await expect.element(page.getByText("Media", { exact: true })).toBeInTheDocument();
+      await expect.element(page.getByTestId("home-activity")).toBeInTheDocument();
       await expect
-        .element(page.getByRole("img", { name: "Homelab topology graph" }))
+        .element(page.getByTestId("home-runtimes").getByText("Media", { exact: true }))
         .toBeInTheDocument();
       await expect
-        .element(page.getByTestId("home-topology").getByText("Plex", { exact: true }))
-        .toBeInTheDocument();
-      await expect
-        .element(page.getByTestId("home-topology").getByText("active 2", { exact: true }))
+        .element(page.getByTestId("home-knowledge").getByText("Plex", { exact: true }))
         .toBeInTheDocument();
       await expect.element(page.getByText("Next setup steps")).not.toBeInTheDocument();
       await expect.element(page.getByText("Core setup is ready")).not.toBeInTheDocument();
+
+      const activityRow = page
+        .getByTestId("home-activity")
+        .getByRole("button", { name: /Inspect Plex/ })
+        .first();
+      (activityRow.element() as HTMLButtonElement).click();
+      expect(onOpenThread).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-shared",
+      });
     } finally {
       await mounted.unmount();
     }
@@ -255,7 +264,7 @@ describe("HomeOverviewSurface", () => {
     );
 
     try {
-      await expect.element(page.getByText("No promoted topology yet")).toBeInTheDocument();
+      await expect.element(page.getByText("No promoted knowledge yet")).toBeInTheDocument();
       await expect.element(page.getByText("Create a logical project")).toBeInTheDocument();
       await expect.element(page.getByText("Configure a provider")).toBeInTheDocument();
       expect(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth + 1);

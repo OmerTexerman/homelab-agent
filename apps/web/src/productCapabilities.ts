@@ -231,18 +231,23 @@ export const HOMELAB_PRODUCT_COPY = {
   homeOverview: {
     title: "Homelab operations",
     subtitle:
-      "Project Runtimes hold the working state. Threads attach provider sessions, queue shared work, and use isolated clones only when requested.",
-    newThreadAction: "New Project Runtime thread",
+      "Resume recent threads, clear decisions that are waiting on you, and keep an eye on Project Runtimes and promoted knowledge.",
+    newThreadAction: "New thread",
     settingsAction: "Settings",
     refreshAction: "Refresh",
-    topologyTitle: "Topology",
-    topologyEmptyTitle: "No promoted topology yet",
-    topologyEmptyDescription:
-      "Promote hosts, services, endpoints, and relations from threads to build the shared homelab graph.",
-    runtimeWorkTitle: "Runtime work",
+    attentionTitle: "Needs you",
+    activityTitle: "Recent activity",
+    activityEmptyTitle: "No threads yet",
+    activityEmptyDescription:
+      "Start a thread to inspect services, run operations, or record homelab knowledge. Recent work shows up here so you can jump back in.",
+    runtimesTitle: "Project Runtimes",
+    runtimesEmptyDescription: "Create a project to get a default Project Runtime.",
     readinessTitle: "Readiness",
-    memoryTitle: "Memory and knowledge",
-    decisionsTitle: "Decisions",
+    knowledgeTitle: "Knowledge",
+    knowledgeGraphAction: "Open knowledge graph",
+    knowledgeEmptyTitle: "No promoted knowledge yet",
+    knowledgeEmptyDescription:
+      "Promote hosts, services, endpoints, and relations from threads to build the shared homelab graph.",
     setupTitle: "Next setup steps",
     setupCompleteTitle: "Core setup is ready",
     setupCompleteDescription:

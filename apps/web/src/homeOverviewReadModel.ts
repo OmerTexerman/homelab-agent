@@ -1,6 +1,5 @@
 import type {
   HomelabEntity,
-  HomelabRelation,
   HomelabSetupStatus,
   ProjectMemoryEntry,
   ProjectRuntimeDetail,
@@ -9,7 +8,12 @@ import type {
   ServerProvider,
   ThreadRuntimeMode,
 } from "@t3tools/contracts";
-import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
+import { isCuratorProject, isCuratorProjectId } from "@t3tools/shared/curatorProject";
+import {
+  STANDALONE_PROJECT_SHORT_TITLE,
+  isStandaloneProject,
+  isStandaloneProjectId,
+} from "@t3tools/shared/standaloneProject";
 
 import { HOMELAB_PRODUCT_COPY } from "./productCapabilities";
 import {
@@ -38,11 +42,10 @@ export interface HomeOverviewInput {
   readonly devices?: SetupDeviceSessionReadinessInput | null | undefined;
 }
 
-export interface HomeOverviewMetric {
+export interface HomeOverviewFact {
   readonly id: string;
   readonly label: string;
   readonly value: string;
-  readonly detail: string;
   readonly severity: HomeOverviewSeverity;
 }
 
@@ -59,6 +62,38 @@ export interface HomeOverviewSetupStep {
   readonly label: string;
   readonly detail: string;
   readonly complete: boolean;
+}
+
+export interface HomeOverviewThreadRef {
+  readonly threadId: SidebarThreadSummary["id"];
+  readonly environmentId: Project["environmentId"];
+}
+
+export interface HomeOverviewAttentionItem extends HomeOverviewThreadRef {
+  readonly id: string;
+  readonly title: string;
+  readonly reason: string;
+  readonly timestamp: string;
+  readonly severity: HomeOverviewSeverity;
+}
+
+export interface HomeOverviewAttentionSummary {
+  readonly pendingApprovalCount: number;
+  readonly pendingUserInputCount: number;
+  readonly actionablePlanCount: number;
+  readonly totalCount: number;
+  readonly items: readonly HomeOverviewAttentionItem[];
+}
+
+export interface HomeOverviewRecentThread extends HomeOverviewThreadRef {
+  readonly id: string;
+  readonly title: string;
+  readonly contextLabel: string;
+  readonly isScratch: boolean;
+  readonly isIsolated: boolean;
+  readonly isRunning: boolean;
+  readonly pendingReason: string | null;
+  readonly timestamp: string;
 }
 
 export interface HomeOverviewRuntimeRow {
@@ -80,39 +115,6 @@ export interface HomeOverviewRuntimeRow {
   readonly severity: HomeOverviewSeverity;
 }
 
-export interface HomeOverviewTopologyNode {
-  readonly id: HomelabEntity["id"];
-  readonly label: string;
-  readonly kind: HomelabEntity["kind"];
-  readonly status: HomelabEntity["status"] | "unknown";
-  readonly x: number;
-  readonly y: number;
-}
-
-export interface HomeOverviewTopologyEdge {
-  readonly id: HomelabRelation["id"];
-  readonly label: string;
-  readonly fromId: HomelabEntity["id"];
-  readonly toId: HomelabEntity["id"];
-}
-
-export interface HomeOverviewTopologyGroup {
-  readonly label: string;
-  readonly count: number;
-}
-
-export interface HomeOverviewTopology {
-  readonly hasGraphData: boolean;
-  readonly nodes: readonly HomeOverviewTopologyNode[];
-  readonly edges: readonly HomeOverviewTopologyEdge[];
-  readonly kindGroups: readonly HomeOverviewTopologyGroup[];
-  readonly statusGroups: readonly HomeOverviewTopologyGroup[];
-  readonly omittedEntityCount: number;
-  readonly omittedRelationCount: number;
-  readonly emptyTitle: string;
-  readonly emptyDescription: string;
-}
-
 export interface HomeOverviewRuntimeSummary {
   readonly rows: readonly HomeOverviewRuntimeRow[];
   readonly projectRuntimeCount: number;
@@ -124,13 +126,16 @@ export interface HomeOverviewRuntimeSummary {
   readonly activeQueueCount: number;
 }
 
-export interface HomeOverviewMemorySummary {
-  readonly projectMemoryCount: number;
-  readonly promotedProjectMemoryCount: number;
-  readonly proposedProjectMemoryCount: number;
-  readonly globalEntityCount: number;
-  readonly globalRelationCount: number;
+export interface HomeOverviewKnowledgeGroup {
+  readonly label: string;
+  readonly count: number;
+}
+
+export interface HomeOverviewKnowledgeSummary {
+  readonly entityCount: number;
+  readonly relationCount: number;
   readonly observationCount: number;
+  readonly kindGroups: readonly HomeOverviewKnowledgeGroup[];
   readonly recentEntities: readonly {
     readonly id: HomelabEntity["id"];
     readonly label: string;
@@ -138,19 +143,16 @@ export interface HomeOverviewMemorySummary {
     readonly summary: string | null;
     readonly status: HomelabEntity["status"] | "unknown";
   }[];
+  readonly projectMemoryCount: number;
+  readonly promotedProjectMemoryCount: number;
+  readonly proposedProjectMemoryCount: number;
+  readonly emptyTitle: string;
+  readonly emptyDescription: string;
 }
 
-export interface HomeOverviewDecisionSummary {
-  readonly pendingApprovalCount: number;
-  readonly pendingUserInputCount: number;
-  readonly actionablePlanCount: number;
-  readonly totalCount: number;
-  readonly items: readonly {
-    readonly id: string;
-    readonly label: string;
-    readonly detail: string;
-    readonly severity: HomeOverviewSeverity;
-  }[];
+export interface HomeOverviewHealth {
+  readonly severity: HomeOverviewSeverity;
+  readonly headline: string;
 }
 
 export interface HomeOverviewReadModel {
@@ -158,9 +160,11 @@ export interface HomeOverviewReadModel {
   readonly title: string;
   readonly subtitle: string;
   readonly primaryActionLabel: string;
-  readonly metrics: readonly HomeOverviewMetric[];
+  readonly health: HomeOverviewHealth;
+  readonly facts: readonly HomeOverviewFact[];
+  readonly attention: HomeOverviewAttentionSummary;
+  readonly recentThreads: readonly HomeOverviewRecentThread[];
   readonly runtime: HomeOverviewRuntimeSummary;
-  readonly topology: HomeOverviewTopology;
   readonly readiness: readonly HomeOverviewReadinessItem[];
   readonly setupReadiness: SetupReadinessReadModel;
   readonly setup: {
@@ -169,29 +173,12 @@ export interface HomeOverviewReadModel {
     readonly steps: readonly HomeOverviewSetupStep[];
     readonly incompleteCount: number;
   };
-  readonly memory: HomeOverviewMemorySummary;
-  readonly decisions: HomeOverviewDecisionSummary;
+  readonly knowledge: HomeOverviewKnowledgeSummary;
 }
 
-const TOPOLOGY_ENTITY_LIMIT = 10;
-const TOPOLOGY_RELATION_LIMIT = 14;
-const RECENT_ENTITY_LIMIT = 5;
-
-const ENTITY_KIND_RANK: Partial<Record<HomelabEntity["kind"], number>> = {
-  host: 0,
-  stack: 1,
-  container: 2,
-  service: 3,
-  endpoint: 4,
-  domain: 5,
-  network: 6,
-  volume: 7,
-  secret_ref: 8,
-  runbook: 9,
-  finding: 10,
-  tool: 11,
-  artifact: 12,
-};
+const RECENT_THREAD_LIMIT = 8;
+const RECENT_ENTITY_LIMIT = 4;
+const KIND_GROUP_LIMIT = 5;
 
 function severityForRatio(ready: number, total: number): HomeOverviewSeverity {
   if (total === 0) return "attention";
@@ -266,6 +253,13 @@ function isThreadRunning(thread: SidebarThreadSummary): boolean {
 
 function latestThreadTimestamp(thread: SidebarThreadSummary): string {
   return thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt;
+}
+
+function threadPendingReason(thread: SidebarThreadSummary): string | null {
+  if (thread.hasPendingApprovals) return "Approval requested";
+  if (thread.hasPendingUserInput) return "Waiting for input";
+  if (thread.hasActionableProposedPlan) return "Plan ready to review";
+  return null;
 }
 
 function sortThreadsByRecentActivity(
@@ -406,51 +400,10 @@ function deriveRuntimeRows(input: {
   };
 }
 
-function entitySortKey(entity: HomelabEntity): string {
-  const rank = ENTITY_KIND_RANK[entity.kind] ?? 99;
-  return `${String(rank).padStart(2, "0")}:${entity.kind}:${entity.title ?? entity.name}`;
-}
-
-function selectTopologyEntities(input: {
-  readonly entities: readonly HomelabEntity[];
-  readonly relations: readonly HomelabRelation[];
-}): HomelabEntity[] {
-  const relationDegree = new Map<HomelabEntity["id"], number>();
-  for (const relation of input.relations) {
-    relationDegree.set(relation.fromEntityId, (relationDegree.get(relation.fromEntityId) ?? 0) + 1);
-    relationDegree.set(relation.toEntityId, (relationDegree.get(relation.toEntityId) ?? 0) + 1);
-  }
-
-  return [...input.entities]
-    .toSorted((left, right) => {
-      const rightDegree = relationDegree.get(right.id) ?? 0;
-      const leftDegree = relationDegree.get(left.id) ?? 0;
-      return rightDegree - leftDegree || entitySortKey(left).localeCompare(entitySortKey(right));
-    })
-    .slice(0, TOPOLOGY_ENTITY_LIMIT);
-}
-
-function topologyPosition(
-  index: number,
-  total: number,
-): { readonly x: number; readonly y: number } {
-  if (total <= 1) {
-    return { x: 50, y: 50 };
-  }
-
-  const angle = -Math.PI / 2 + (index / total) * Math.PI * 2;
-  const radiusX = 35;
-  const radiusY = 30;
-  return {
-    x: Math.round((50 + Math.cos(angle) * radiusX) * 10) / 10,
-    y: Math.round((50 + Math.sin(angle) * radiusY) * 10) / 10,
-  };
-}
-
-function topologyGroups<T extends string>(
+function knowledgeGroups<T extends string>(
   values: readonly T[],
   limit: number,
-): readonly HomeOverviewTopologyGroup[] {
+): readonly HomeOverviewKnowledgeGroup[] {
   const counts = new Map<T, number>();
   for (const value of values) {
     counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -464,70 +417,10 @@ function topologyGroups<T extends string>(
     }));
 }
 
-function deriveTopology(setupStatus: HomelabSetupStatus | null | undefined): HomeOverviewTopology {
-  const entities = setupStatus?.snapshot.entities ?? [];
-  const relations = setupStatus?.snapshot.relations ?? [];
-  if (entities.length === 0) {
-    return {
-      hasGraphData: false,
-      nodes: [],
-      edges: [],
-      kindGroups: [],
-      statusGroups: [],
-      omittedEntityCount: 0,
-      omittedRelationCount: 0,
-      emptyTitle: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyTitle,
-      emptyDescription: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyDescription,
-    };
-  }
-
-  const selectedEntities = selectTopologyEntities({ entities, relations });
-  const selectedEntityIds = new Set(selectedEntities.map((entity) => entity.id));
-  const selectedRelations = relations
-    .filter(
-      (relation) =>
-        selectedEntityIds.has(relation.fromEntityId) && selectedEntityIds.has(relation.toEntityId),
-    )
-    .slice(0, TOPOLOGY_RELATION_LIMIT);
-
-  return {
-    hasGraphData: true,
-    nodes: selectedEntities.map((entity, index) => {
-      const position = topologyPosition(index, selectedEntities.length);
-      return {
-        id: entity.id,
-        label: entity.title ?? entity.name,
-        kind: entity.kind,
-        status: entity.status ?? "unknown",
-        x: position.x,
-        y: position.y,
-      };
-    }),
-    edges: selectedRelations.map((relation) => ({
-      id: relation.id,
-      label: formatKind(relation.kind),
-      fromId: relation.fromEntityId,
-      toId: relation.toEntityId,
-    })),
-    kindGroups: topologyGroups(
-      entities.map((entity) => entity.kind),
-      4,
-    ),
-    statusGroups: topologyGroups(
-      entities.map((entity) => entity.status ?? "unknown"),
-      4,
-    ),
-    omittedEntityCount: Math.max(0, entities.length - selectedEntities.length),
-    omittedRelationCount: Math.max(0, relations.length - selectedRelations.length),
-    emptyTitle: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyTitle,
-    emptyDescription: HOMELAB_PRODUCT_COPY.homeOverview.topologyEmptyDescription,
-  };
-}
-
-function deriveMemorySummary(input: {
+function deriveKnowledgeSummary(input: {
   readonly setupStatus: HomelabSetupStatus | null | undefined;
   readonly projectMemoryEntries: readonly ProjectMemoryEntry[];
-}): HomeOverviewMemorySummary {
+}): HomeOverviewKnowledgeSummary {
   const entities = input.setupStatus?.snapshot.entities ?? [];
   const relations = input.setupStatus?.snapshot.relations ?? [];
   const observations = input.setupStatus?.snapshot.observations ?? [];
@@ -543,6 +436,14 @@ function deriveMemorySummary(input: {
     }));
 
   return {
+    entityCount: entities.length,
+    relationCount: relations.length,
+    observationCount: observations.length,
+    kindGroups: knowledgeGroups(
+      entities.map((entity) => entity.kind),
+      KIND_GROUP_LIMIT,
+    ),
+    recentEntities,
     projectMemoryCount: input.projectMemoryEntries.length,
     promotedProjectMemoryCount: input.projectMemoryEntries.filter(
       (entry) => entry.promotionStatus === "promoted",
@@ -550,40 +451,48 @@ function deriveMemorySummary(input: {
     proposedProjectMemoryCount: input.projectMemoryEntries.filter(
       (entry) => entry.promotionStatus === "proposed",
     ).length,
-    globalEntityCount: entities.length,
-    globalRelationCount: relations.length,
-    observationCount: observations.length,
-    recentEntities,
+    emptyTitle: HOMELAB_PRODUCT_COPY.homeOverview.knowledgeEmptyTitle,
+    emptyDescription: HOMELAB_PRODUCT_COPY.homeOverview.knowledgeEmptyDescription,
   };
 }
 
-function deriveDecisionSummary(
+function deriveAttentionSummary(
   threads: readonly SidebarThreadSummary[],
-): HomeOverviewDecisionSummary {
-  const activeThreads = threads.filter((thread) => thread.archivedAt === null);
-  const pendingApprovalThreads = activeThreads.filter((thread) => thread.hasPendingApprovals);
-  const pendingUserInputThreads = activeThreads.filter((thread) => thread.hasPendingUserInput);
-  const actionablePlanThreads = activeThreads.filter((thread) => thread.hasActionableProposedPlan);
-  const items: HomeOverviewDecisionSummary["items"] = [
-    ...pendingApprovalThreads.slice(0, 3).map((thread) => ({
-      id: `approval:${thread.environmentId}:${thread.id}`,
-      label: thread.title,
-      detail: "Approval requested",
-      severity: "attention" as const,
-    })),
-    ...pendingUserInputThreads.slice(0, 3).map((thread) => ({
-      id: `input:${thread.environmentId}:${thread.id}`,
-      label: thread.title,
-      detail: "Provider is waiting for input",
-      severity: "partial" as const,
-    })),
-    ...actionablePlanThreads.slice(0, 3).map((thread) => ({
-      id: `plan:${thread.environmentId}:${thread.id}`,
-      label: thread.title,
-      detail: "Plan is ready to review",
-      severity: "partial" as const,
-    })),
-  ].slice(0, 5);
+): HomeOverviewAttentionSummary {
+  const pendingApprovalThreads = threads.filter((thread) => thread.hasPendingApprovals);
+  const pendingUserInputThreads = threads.filter(
+    (thread) => !thread.hasPendingApprovals && thread.hasPendingUserInput,
+  );
+  const actionablePlanThreads = threads.filter(
+    (thread) =>
+      !thread.hasPendingApprovals &&
+      !thread.hasPendingUserInput &&
+      thread.hasActionableProposedPlan,
+  );
+  const toItem = (
+    thread: SidebarThreadSummary,
+    reason: string,
+    severity: HomeOverviewSeverity,
+  ): HomeOverviewAttentionItem => ({
+    id: `${reason}:${thread.environmentId}:${thread.id}`,
+    threadId: thread.id,
+    environmentId: thread.environmentId,
+    title: thread.title,
+    reason,
+    timestamp: latestThreadTimestamp(thread),
+    severity,
+  });
+  const items = [
+    ...pendingApprovalThreads.map((thread) =>
+      toItem(thread, "Approval requested", "attention"),
+    ),
+    ...pendingUserInputThreads.map((thread) =>
+      toItem(thread, "Waiting for input", "partial"),
+    ),
+    ...actionablePlanThreads.map((thread) =>
+      toItem(thread, "Plan ready to review", "partial"),
+    ),
+  ].slice(0, 6);
 
   return {
     pendingApprovalCount: pendingApprovalThreads.length,
@@ -593,6 +502,38 @@ function deriveDecisionSummary(
       pendingApprovalThreads.length + pendingUserInputThreads.length + actionablePlanThreads.length,
     items,
   };
+}
+
+function deriveRecentThreads(input: {
+  readonly threads: readonly SidebarThreadSummary[];
+  readonly projects: readonly Project[];
+}): readonly HomeOverviewRecentThread[] {
+  const projectNameByKey = new Map(
+    input.projects.map(
+      (project) => [`${project.environmentId}:${project.id}`, project.name] as const,
+    ),
+  );
+
+  return sortThreadsByRecentActivity(input.threads)
+    .slice(0, RECENT_THREAD_LIMIT)
+    .map((thread) => {
+      const isScratch = isStandaloneProjectId(thread.projectId);
+      const contextLabel = isScratch
+        ? STANDALONE_PROJECT_SHORT_TITLE
+        : (projectNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? "Project");
+      return {
+        id: `${thread.environmentId}:${thread.id}`,
+        threadId: thread.id,
+        environmentId: thread.environmentId,
+        title: thread.title,
+        contextLabel,
+        isScratch,
+        isIsolated: (thread.runtimeSelectionMode ?? "shared") === "isolated",
+        isRunning: isThreadRunning(thread),
+        pendingReason: threadPendingReason(thread),
+        timestamp: latestThreadTimestamp(thread),
+      };
+    });
 }
 
 function deriveSetupSteps(input: {
@@ -623,8 +564,6 @@ function deriveSetupSteps(input: {
 
 function deriveReadinessItems(input: {
   readonly setupReadiness: SetupReadinessReadModel;
-  readonly memory: HomeOverviewMemorySummary;
-  readonly decisions: HomeOverviewDecisionSummary;
   readonly bootstrapMutationCount: number;
 }): HomeOverviewReadinessItem[] {
   const providerSummary = input.setupReadiness.providerSummary;
@@ -658,37 +597,6 @@ function deriveReadinessItems(input: {
       severity: secrets.severity,
     },
     {
-      id: "knowledge",
-      label: "Knowledge",
-      value: formatCount(input.memory.globalEntityCount),
-      detail: `${formatCount(input.memory.globalRelationCount)} relations and ${formatCount(
-        input.memory.observationCount,
-      )} observations are promoted globally.`,
-      severity: input.memory.globalEntityCount > 0 ? "good" : "partial",
-    },
-    {
-      id: "memory",
-      label: "Project memory",
-      value: formatCount(input.memory.projectMemoryCount),
-      detail:
-        input.memory.projectMemoryCount === 0
-          ? "No project-local memory entries are loaded for the default project."
-          : `${formatCount(input.memory.promotedProjectMemoryCount)} promoted and ${formatCount(
-              input.memory.proposedProjectMemoryCount,
-            )} proposed for promotion.`,
-      severity: input.memory.projectMemoryCount > 0 ? "good" : "neutral",
-    },
-    {
-      id: "decisions",
-      label: "Decisions",
-      value: formatCount(input.decisions.totalCount),
-      detail:
-        input.decisions.totalCount === 0
-          ? "No approvals, user-input prompts, or plan reviews are waiting."
-          : "Threads are blocked on a user decision.",
-      severity: input.decisions.pendingApprovalCount > 0 ? "attention" : "neutral",
-    },
-    {
       id: "bootstrap",
       label: "Bootstrap",
       value: formatCount(input.bootstrapMutationCount),
@@ -711,11 +619,64 @@ function deriveReadinessItems(input: {
   return items;
 }
 
+function worstSeverity(severities: readonly HomeOverviewSeverity[]): HomeOverviewSeverity {
+  if (severities.includes("attention")) return "attention";
+  if (severities.includes("partial")) return "partial";
+  if (severities.includes("good")) return "good";
+  return "neutral";
+}
+
+function deriveHealth(input: {
+  readonly mode: HomeOverviewReadModel["mode"];
+  readonly readiness: readonly HomeOverviewReadinessItem[];
+  readonly attention: HomeOverviewAttentionSummary;
+  readonly runtime: HomeOverviewRuntimeSummary;
+  readonly incompleteSetupStepCount: number;
+}): HomeOverviewHealth {
+  if (input.mode === "empty") {
+    return { severity: "neutral", headline: "Waiting on first setup" };
+  }
+  if (input.attention.totalCount > 0) {
+    return {
+      severity: "attention",
+      headline:
+        input.attention.totalCount === 1
+          ? "1 thread is waiting on you"
+          : `${formatCount(input.attention.totalCount)} threads are waiting on you`,
+    };
+  }
+  const readinessSeverity = worstSeverity(input.readiness.map((item) => item.severity));
+  if (input.incompleteSetupStepCount > 0) {
+    return {
+      severity: readinessSeverity === "attention" ? "attention" : "partial",
+      headline: "Setup is incomplete",
+    };
+  }
+  if (readinessSeverity === "attention") {
+    return { severity: "attention", headline: "Readiness needs attention" };
+  }
+  if (readinessSeverity === "partial") {
+    return { severity: "partial", headline: "Running degraded" };
+  }
+  if (input.runtime.runningThreadCount > 0 || input.runtime.activeQueueCount > 0) {
+    return { severity: "good", headline: "Agents are working" };
+  }
+  return { severity: "good", headline: "All quiet" };
+}
+
 export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverviewReadModel {
-  const normalProjects = input.projects.filter(
+  // The system:curator project is a hidden namespace; it must never surface
+  // on the home overview alongside user projects and threads.
+  const visibleProjects = input.projects.filter(
+    (project) => !isCuratorProject({ id: project.id, cwd: project.cwd }),
+  );
+  const visibleThreads = input.threads.filter(
+    (thread) => !isCuratorProjectId(thread.projectId),
+  );
+  const normalProjects = visibleProjects.filter(
     (project) => !isStandaloneProject({ id: project.id, cwd: project.cwd }),
   );
-  const activeThreads = input.threads.filter((thread) => thread.archivedAt === null);
+  const activeThreads = visibleThreads.filter((thread) => thread.archivedAt === null);
   const standaloneThreads = activeThreads.filter((thread) =>
     isStandaloneProject({ id: thread.projectId }),
   );
@@ -725,20 +686,21 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
     ...(input.devices !== undefined ? { devices: input.devices } : {}),
   });
   const readyProviderCount = setupReadiness.providerSummary.runtimeUsableCount;
-  const entityCount = input.setupStatus?.snapshot.entities.length ?? 0;
-  const relationCount = input.setupStatus?.snapshot.relations.length ?? 0;
   const bootstrapMutationCount = input.setupStatus?.runtimeBootstrap.mutations.length ?? 0;
   const runtime = deriveRuntimeRows({
-    projects: input.projects,
+    projects: visibleProjects,
     threads: activeThreads,
     details: input.projectRuntimeDetails ?? [],
   });
-  const topology = deriveTopology(input.setupStatus);
-  const memory = deriveMemorySummary({
+  const knowledge = deriveKnowledgeSummary({
     setupStatus: input.setupStatus,
     projectMemoryEntries: input.projectMemoryEntries ?? [],
   });
-  const decisions = deriveDecisionSummary(activeThreads);
+  const attention = deriveAttentionSummary(activeThreads);
+  const recentThreads = deriveRecentThreads({
+    threads: activeThreads,
+    projects: visibleProjects,
+  });
   const setupSteps = deriveSetupSteps({
     projectsCount: normalProjects.length,
     setupReadiness,
@@ -746,8 +708,6 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
   const incompleteSetupSteps = setupSteps.filter((step) => !step.complete);
   const readiness = deriveReadinessItems({
     setupReadiness,
-    memory,
-    decisions,
     bootstrapMutationCount,
   });
   const mode =
@@ -756,73 +716,55 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
       : incompleteSetupSteps.length > 0
         ? "partial"
         : "operational";
+  const health = deriveHealth({
+    mode,
+    readiness,
+    attention,
+    runtime,
+    incompleteSetupStepCount: incompleteSetupSteps.length,
+  });
 
   return {
     mode,
     title: HOMELAB_PRODUCT_COPY.homeOverview.title,
     subtitle: HOMELAB_PRODUCT_COPY.homeOverview.subtitle,
     primaryActionLabel: HOMELAB_PRODUCT_COPY.homeOverview.newThreadAction,
-    metrics: [
-      {
-        id: "projects",
-        label: "Projects",
-        value: formatCount(normalProjects.length),
-        detail:
-          normalProjects.length === 1
-            ? "1 logical project owns a Project Runtime."
-            : `${formatCount(normalProjects.length)} logical projects own Project Runtimes.`,
-        severity: normalProjects.length > 0 ? "good" : "attention",
-      },
-      {
-        id: "standalone",
-        label: "Scratch threads",
-        value: formatCount(standaloneThreads.length),
-        detail:
-          standaloneThreads.length === 0
-            ? "No standalone work is active."
-            : "Each scratch thread runs in its own isolated runtime and can be promoted.",
-        severity: standaloneThreads.length > 0 ? "partial" : "neutral",
-      },
-      {
-        id: "runtime-work",
-        label: "Runtime work",
-        value: formatCount(runtime.runningThreadCount + runtime.queuedWorkCount),
-        detail: `${formatCount(runtime.activeQueueCount)} active queues, ${formatCount(
-          runtime.queuedWorkCount,
-        )} queued shared-runtime turns.`,
-        severity:
-          runtime.waitingThreadCount > 0
-            ? "partial"
-            : runtime.runningThreadCount > 0
-              ? "good"
-              : "neutral",
-      },
-      {
-        id: "runtime-modes",
-        label: "Runtime modes",
-        value: `${formatCount(runtime.sharedThreadCount)} / ${formatCount(
-          runtime.isolatedThreadCount,
-        )}`,
-        detail: "Shared Project Runtime threads / isolated runtime clones.",
-        severity: runtime.isolatedThreadCount > 0 ? "partial" : "neutral",
-      },
+    health,
+    facts: [
       {
         id: "providers",
-        label: "Providers",
+        label: "providers ready",
         value: `${formatCount(readyProviderCount)}/${formatCount(input.providers.length)}`,
-        detail: "Ready provider instances for Project Runtime sessions.",
         severity: severityForRatio(readyProviderCount, input.providers.length),
       },
       {
-        id: "knowledge",
-        label: "Knowledge graph",
-        value: formatCount(entityCount),
-        detail: `${formatCount(relationCount)} relations promoted globally.`,
-        severity: entityCount > 0 ? "good" : "partial",
+        id: "runtimes",
+        label: runtime.projectRuntimeCount === 1 ? "runtime" : "runtimes",
+        value: formatCount(runtime.projectRuntimeCount),
+        severity: runtime.projectRuntimeCount > 0 ? "good" : "attention",
+      },
+      {
+        id: "queued",
+        label: "queued turns",
+        value: formatCount(runtime.queuedWorkCount),
+        severity: runtime.queuedWorkCount > 0 ? "partial" : "neutral",
+      },
+      {
+        id: "entities",
+        label: knowledge.entityCount === 1 ? "known entity" : "known entities",
+        value: formatCount(knowledge.entityCount),
+        severity: knowledge.entityCount > 0 ? "good" : "partial",
+      },
+      {
+        id: "relations",
+        label: "relations",
+        value: formatCount(knowledge.relationCount),
+        severity: "neutral",
       },
     ],
+    attention,
+    recentThreads,
     runtime,
-    topology,
     readiness,
     setupReadiness,
     setup: {
@@ -837,8 +779,7 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
       steps: setupSteps,
       incompleteCount: incompleteSetupSteps.length,
     },
-    memory,
-    decisions,
+    knowledge,
   };
 }
 

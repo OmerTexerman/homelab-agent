@@ -257,7 +257,7 @@ function memoryEntry(overrides: Record<string, unknown> = {}): ProjectMemoryEntr
 }
 
 describe("deriveHomeOverviewReadModel", () => {
-  it("summarizes an empty home state without fake topology data", () => {
+  it("summarizes an empty home state without fake knowledge data", () => {
     const model = deriveHomeOverviewReadModel({
       projects: [],
       threads: [],
@@ -267,10 +267,13 @@ describe("deriveHomeOverviewReadModel", () => {
 
     expect(model.mode).toBe("empty");
     expect(model.runtime.projectRuntimeCount).toBe(0);
-    expect(model.topology.hasGraphData).toBe(false);
-    expect(model.topology.nodes).toEqual([]);
+    expect(model.recentThreads).toEqual([]);
+    expect(model.attention.totalCount).toBe(0);
+    expect(model.knowledge.entityCount).toBe(0);
+    expect(model.knowledge.recentEntities).toEqual([]);
     expect(model.setup.incompleteCount).toBeGreaterThan(0);
-    expect(model.metrics.find((metric) => metric.id === "projects")?.severity).toBe("attention");
+    expect(model.health.severity).toBe("neutral");
+    expect(model.facts.find((fact) => fact.id === "providers")?.severity).toBe("attention");
   });
 
   it("surfaces partial readiness for projects with missing auth, secrets, and knowledge", () => {
@@ -304,10 +307,11 @@ describe("deriveHomeOverviewReadModel", () => {
     expect(model.readiness.find((item) => item.id === "providers")?.severity).toBe("attention");
     expect(model.readiness.find((item) => item.id === "secrets")?.severity).toBe("attention");
     expect(model.setup.steps.map((step) => step.id)).toEqual(["providers", "secrets"]);
-    expect(model.topology.hasGraphData).toBe(false);
+    expect(model.health.severity).toBe("attention");
+    expect(model.knowledge.entityCount).toBe(0);
   });
 
-  it("summarizes populated runtime, queue, memory, topology, and decision state", () => {
+  it("summarizes populated runtime, queue, memory, knowledge, and attention state", () => {
     const model = deriveHomeOverviewReadModel({
       projects: [project()],
       threads: [
@@ -358,15 +362,84 @@ describe("deriveHomeOverviewReadModel", () => {
       isolatedThreadCount: 1,
     });
     expect(model.runtime.isolatedThreadCount).toBe(1);
-    expect(model.topology.hasGraphData).toBe(true);
-    expect(model.topology.nodes.map((node) => node.label)).toContain("Plex");
-    expect(model.topology.edges).toHaveLength(1);
-    expect(model.topology.kindGroups).toContainEqual({ label: "service", count: 1 });
-    expect(model.topology.statusGroups).toContainEqual({ label: "active", count: 2 });
-    expect(model.memory.promotedProjectMemoryCount).toBe(1);
-    expect(model.memory.proposedProjectMemoryCount).toBe(1);
-    expect(model.decisions.totalCount).toBe(2);
+    expect(model.knowledge.entityCount).toBe(2);
+    expect(model.knowledge.relationCount).toBe(1);
+    expect(model.knowledge.kindGroups).toContainEqual({ label: "service", count: 1 });
+    expect(model.knowledge.recentEntities.map((entity) => entity.label)).toContain("Plex");
+    expect(model.knowledge.promotedProjectMemoryCount).toBe(1);
+    expect(model.knowledge.proposedProjectMemoryCount).toBe(1);
+    expect(model.attention.totalCount).toBe(2);
+    expect(model.attention.items.map((item) => item.reason)).toEqual([
+      "Approval requested",
+      "Plan ready to review",
+    ]);
+    expect(model.attention.items[0]).toMatchObject({
+      threadId: "thread-queued",
+      environmentId: ENVIRONMENT_ID,
+      severity: "attention",
+    });
+    expect(model.recentThreads).toHaveLength(3);
+    expect(model.recentThreads[0]).toMatchObject({
+      contextLabel: "Media",
+      isScratch: false,
+    });
+    expect(
+      model.recentThreads.find((entry) => entry.threadId === "thread-shared"),
+    ).toMatchObject({ isRunning: true });
+    expect(
+      model.recentThreads.find((entry) => entry.threadId === "thread-isolated"),
+    ).toMatchObject({ isIsolated: true, pendingReason: "Plan ready to review" });
+    expect(model.health.headline).toMatch(/waiting on you/);
     expect(model.setup.incompleteCount).toBe(0);
     expect(model.setup.steps).toEqual([]);
+  });
+
+  it("keeps the hidden curator project and its threads off the overview", () => {
+    const model = deriveHomeOverviewReadModel({
+      projects: [
+        project({
+          id: "system:curator" as Project["id"],
+          name: "Knowledge Curator",
+        }),
+      ],
+      threads: [
+        thread({
+          id: "thread-curator" as SidebarThreadSummary["id"],
+          projectId: "system:curator" as SidebarThreadSummary["projectId"],
+          title: "Audit memory",
+          hasPendingApprovals: true,
+        }),
+      ],
+      providers: [provider()],
+      setupStatus: setupStatus(),
+    });
+
+    expect(model.mode).toBe("empty");
+    expect(model.runtime.rows).toEqual([]);
+    expect(model.recentThreads).toEqual([]);
+    expect(model.attention.totalCount).toBe(0);
+  });
+
+  it("labels scratch threads and keeps them out of runtime rows", () => {
+    const model = deriveHomeOverviewReadModel({
+      projects: [],
+      threads: [
+        thread({
+          id: "thread-scratch" as SidebarThreadSummary["id"],
+          projectId: "system:standalone" as SidebarThreadSummary["projectId"],
+          runtimeSelectionMode: "isolated",
+          title: "Quick question",
+        }),
+      ],
+      providers: [provider()],
+      setupStatus: setupStatus(),
+    });
+
+    expect(model.runtime.rows).toEqual([]);
+    expect(model.recentThreads).toHaveLength(1);
+    expect(model.recentThreads[0]).toMatchObject({
+      contextLabel: "Scratch",
+      isScratch: true,
+    });
   });
 });
