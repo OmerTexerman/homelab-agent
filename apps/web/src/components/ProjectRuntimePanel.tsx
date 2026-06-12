@@ -5,6 +5,7 @@ import type {
   RuntimeSessionId,
   ThreadId,
 } from "@t3tools/contracts";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -97,9 +98,12 @@ export function ProjectRuntimePanel({
   runtimeId,
 }: ProjectRuntimePanelProps) {
   const isStandaloneRuntime = isStandaloneProjectId(projectId);
-  const runtimeTitle = isStandaloneRuntime
-    ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
-    : HOMELAB_PRODUCT_COPY.projectRuntime.title;
+  const isCuratorRuntime = isCuratorProjectId(projectId);
+  const runtimeTitle = isCuratorRuntime
+    ? HOMELAB_PRODUCT_COPY.curator.activeThreadBadgeLabel
+    : isStandaloneRuntime
+      ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
+      : HOMELAB_PRODUCT_COPY.projectRuntime.title;
   const queryClient = useQueryClient();
   const operationInput = useMemo(
     () => ({
@@ -354,7 +358,7 @@ export function ProjectRuntimePanel({
             <CameraIcon className="size-3.5" />
             Snapshot
           </Button>
-          {detail?.runtime.kind === "isolated" && !isStandaloneRuntime ? (
+          {detail?.runtime.kind === "isolated" && !isStandaloneRuntime && !isCuratorRuntime ? (
             <Button size="xs" variant="outline" onClick={mergeIsolatedRuntime} disabled={busy}>
               <GitMergeIcon className="size-3.5" />
               Merge into Project Runtime
