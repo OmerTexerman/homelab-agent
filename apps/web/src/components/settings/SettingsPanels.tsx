@@ -1356,6 +1356,9 @@ export function MemoryKnowledgeSettingsPanel() {
               {HOMELAB_PRODUCT_COPY.curator.emptySessionsLabel}
             </div>
           )}
+          <div className="mt-2 text-[11px] text-muted-foreground/80">
+            {HOMELAB_PRODUCT_COPY.curator.autoCleanupNote}
+          </div>
         </SettingsRow>
         <SettingsRow
           title="Shared knowledge graph"

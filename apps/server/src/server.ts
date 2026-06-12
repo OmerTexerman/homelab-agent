@@ -27,6 +27,7 @@ import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRe
 import { ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
+import { CuratorSessionReaperLive } from "./homelab/Layers/CuratorSessionReaper.ts";
 import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
@@ -294,6 +295,12 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
+// Deletes stale curator sessions (and thus their isolated runtimes, via the normal
+// thread.delete -> ThreadRuntimeReactor path) once they age past the retention window.
+const CuratorReaperLayerLive = CuratorSessionReaperLive.pipe(
+  Layer.provideMerge(OrchestrationLayerLive),
+);
+
 // Daemon that mirrors probed host CLI versions into the runtime image's
 // provider-versions manifest, keeping host and container CLIs in lockstep
 // even when the host changes out-of-band (manual installs, failed updates).
@@ -311,6 +318,7 @@ const RuntimeCoreBaseLive = Layer.mergeAll(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
+  Layer.provideMerge(CuratorReaperLayerLive),
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),

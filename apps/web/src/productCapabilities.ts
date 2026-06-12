@@ -73,6 +73,8 @@ export const HOMELAB_PRODUCT_COPY = {
     emptySessionsLabel: "No curator sessions yet.",
     creationFailedTitle: "Failed to start curator session",
     sessionTitle: "Curator session",
+    autoCleanupNote:
+      "Sessions stay resumable here, then are cleaned up automatically (with their runtimes) after 14 days of inactivity.",
     kickoffPrompt: [
       "Start a knowledge audit.",
       "",
