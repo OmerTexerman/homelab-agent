@@ -248,6 +248,8 @@ describe("runtime wrapper planning", () => {
     expect(files.get("claude")?.contents).toContain(
       "sh '/runtime/home/.homelab-runtime.env' 'claude'",
     );
+    expect(files.get("claude")?.contents).toContain('docker_args+=(-e "IS_SANDBOX=1")');
+    expect(files.get("codex")?.contents).not.toContain("IS_SANDBOX");
     expect(files.get("opencode")?.contents).toContain(
       "sh '/runtime/home/.homelab-runtime.env' 'opencode'",
     );

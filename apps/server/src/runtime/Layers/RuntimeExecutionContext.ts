@@ -558,6 +558,10 @@ export function buildRuntimeWrapperScriptSpecs(input: {
         ...base,
         command: CLAUDE_RUNTIME_WRAPPER,
         interactive: false,
+        // The runtime container execs as root, and Claude Code refuses
+        // --dangerously-skip-permissions under root unless IS_SANDBOX=1
+        // attests that it is confined to a sandbox.
+        extraEnv: { IS_SANDBOX: "1" },
       }),
       mode: 0o755,
     },
@@ -748,6 +752,7 @@ export function renderDockerExecWrapper(input: {
   readonly interactive: boolean;
   readonly pathValue?: string;
   readonly sourceEnvFilePath?: string;
+  readonly extraEnv?: Readonly<Record<string, string>>;
 }): string {
   const staticEnvEntries = Object.entries(input.runtime.env)
     .filter(
@@ -770,6 +775,9 @@ export function renderDockerExecWrapper(input: {
     `docker_args+=(-e "CODEX_HOME=${runtimeCodexAuthPath(input.runtime.homePath)}")`,
     ...(input.pathValue ? [`docker_args+=(-e "PATH=${input.pathValue}")`] : []),
     ...staticEnvEntries.map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
+    ...Object.entries(input.extraEnv ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
   ];
 
   const commandLine = input.sourceEnvFilePath
