@@ -2202,6 +2202,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      case "thinking_tokens":
+        // Continuous thinking-token estimate telemetry; emitted on every
+        // reasoning chunk during extended thinking, so surfacing it as a
+        // work-log warning floods the thread. Turn-level usage events
+        // already cover token reporting.
+        return;
       default:
         yield* emitRuntimeWarning(
           context,

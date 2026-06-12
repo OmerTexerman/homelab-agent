@@ -1448,6 +1448,56 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("ignores thinking_tokens telemetry without emitting runtime warnings", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const runFork = Effect.runForkWith(context);
+
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = runFork(
+        Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.sync(() => {
+            runtimeEvents.push(event);
+          }),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "thinking_tokens",
+        estimated_tokens: 1200,
+        estimated_tokens_delta: 100,
+        session_id: "sdk-session-thinking",
+        uuid: "thinking-tokens-1",
+      } as unknown as SDKMessage);
+
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEventsFiber.interruptUnsafe();
+
+      const runtimeWarning = runtimeEvents.find((event) => event.type === "runtime.warning");
+      assert.equal(runtimeWarning, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("appends the CLI stderr tail to process exit errors", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
