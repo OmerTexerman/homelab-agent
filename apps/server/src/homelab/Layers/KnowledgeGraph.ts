@@ -8,6 +8,7 @@ import {
   type HomelabGraphSearchResult,
   type HomelabPromotionEnvelope,
   type HomelabPromotionRecorded,
+  type HomelabRelationId,
   type HomelabSnapshot as HomelabSnapshotModel,
 } from "@t3tools/contracts";
 import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
@@ -315,6 +316,45 @@ const makeKnowledgeGraph = Effect.gen(function* () {
         }),
         result: undefined,
       })),
+    deleteEntity: (entityId) =>
+      mutateSnapshot<{
+        removed: boolean;
+        removedRelationIds: ReadonlyArray<HomelabRelationId>;
+      }>((snapshot) => {
+        const removed = snapshot.entities.some((entity) => entity.id === entityId);
+        const removedRelationIds = snapshot.relations
+          .filter(
+            (relation) => relation.fromEntityId === entityId || relation.toEntityId === entityId,
+          )
+          .map((relation) => relation.id);
+        if (!removed && removedRelationIds.length === 0) {
+          return { nextSnapshot: snapshot, result: { removed, removedRelationIds } };
+        }
+        return {
+          nextSnapshot: withSnapshotUpdatedAt({
+            ...snapshot,
+            entities: snapshot.entities.filter((entity) => entity.id !== entityId),
+            relations: snapshot.relations.filter(
+              (relation) => relation.fromEntityId !== entityId && relation.toEntityId !== entityId,
+            ),
+          }),
+          result: { removed, removedRelationIds },
+        };
+      }),
+    deleteRelation: (relationId) =>
+      mutateSnapshot<{ removed: boolean }>((snapshot) => {
+        const removed = snapshot.relations.some((relation) => relation.id === relationId);
+        if (!removed) {
+          return { nextSnapshot: snapshot, result: { removed } };
+        }
+        return {
+          nextSnapshot: withSnapshotUpdatedAt({
+            ...snapshot,
+            relations: snapshot.relations.filter((relation) => relation.id !== relationId),
+          }),
+          result: { removed },
+        };
+      }),
     recordObservation: (observation) =>
       mutateSnapshot((snapshot) => ({
         nextSnapshot: withSnapshotUpdatedAt({

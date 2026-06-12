@@ -58,11 +58,11 @@ export interface ThreadRuntimeDescriptor {
    */
   readonly isStandalone?: boolean | undefined;
   /**
-   * The policy-decided runtime context (scratch | project-shared | project-isolated), set by
-   * callers that resolved the ProjectRuntimeAssignment. Drives the generated instruction
+   * The policy-decided runtime context (scratch | curator | project-shared | project-isolated),
+   * set by callers that resolved the ProjectRuntimeAssignment. Drives the generated instruction
    * persona; when absent, readers fall back to the standalone flag and runtime id shape.
    */
-  readonly runtimeKind?: "scratch" | "project-shared" | "project-isolated" | undefined;
+  readonly runtimeKind?: "scratch" | "curator" | "project-shared" | "project-isolated" | undefined;
   /** Human-readable owning project title, when the caller knows it. Used only for the persona copy. */
   readonly projectTitle?: string | undefined;
   readonly env: Readonly<Record<string, string>>;
@@ -82,7 +82,7 @@ export interface ThreadRuntimeLaunchInput {
    */
   readonly seedFromRuntimeId?: RuntimeSessionId | undefined;
   /** The policy-decided runtime context; persisted on the descriptor for persona rendering. */
-  readonly runtimeKind?: "scratch" | "project-shared" | "project-isolated" | undefined;
+  readonly runtimeKind?: "scratch" | "curator" | "project-shared" | "project-isolated" | undefined;
   readonly threadId: ThreadId;
   readonly runtimeId?: RuntimeSessionId;
   readonly provider: ProviderKind | null;

@@ -57,6 +57,22 @@ export const HOMELAB_PRODUCT_COPY = {
     moveActiveSubmenuDescription:
       "Move the active chat transcript to an existing Project. Scratch memory and runtime files stay put until you choose how to handle them.",
   },
+  curator: {
+    title: "Knowledge Curator",
+    shortTitle: "Curator",
+    newSessionAction: "Start curator session",
+    newSessionDescription:
+      "Audit, verify, and correct all durable homelab memory and knowledge in an isolated curator runtime.",
+    activeThreadBadgeLabel: "Curator session",
+    activeThreadBadgeDescription:
+      "This curator session runs in its own isolated runtime with full read and write access to the durable homelab memory and knowledge.",
+    settingsCardTitle: "Knowledge curator",
+    settingsCardDescription:
+      "Spin up an agent session that audits the knowledge graph, every project's memory, and the skills library — verifying entries against the live homelab and correcting rot.",
+    recentSessionsLabel: "Recent curator sessions",
+    emptySessionsLabel: "No curator sessions yet.",
+    creationFailedTitle: "Failed to start curator session",
+  },
   projectRuntime: {
     title: "Project Runtime",
     defaultThreadRuntimeTitle: "Default Project Runtime",

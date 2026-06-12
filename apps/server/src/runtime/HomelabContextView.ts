@@ -7,6 +7,7 @@ import type {
   ProjectMemoryEntry,
   ThreadId,
 } from "@t3tools/contracts";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -65,7 +66,10 @@ export interface HomelabContextViewInput {
  * view must contain only the thread's own transcript and memory, never sibling scratch
  * threads'. The synthetic standalone project is a storage namespace, not a sharing scope,
  * so callers materializing a view for a standalone thread scope the inputs through this
- * helper first. Project threads are returned unchanged.
+ * helper first. Curator sessions get the same treatment — a curator session's own working
+ * notes must never leak into a sibling session (the curator reads the durable knowledge it
+ * audits through the curator CLI, not through this view). Project threads are returned
+ * unchanged.
  */
 export function scopeHomelabContextViewToThread(input: {
   readonly project: Pick<OrchestrationProject, "id">;
@@ -76,7 +80,8 @@ export function scopeHomelabContextViewToThread(input: {
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly memoryEntries: ReadonlyArray<ProjectMemoryEntry>;
 } {
-  if (!isStandaloneProjectId(String(input.project.id))) {
+  const projectId = String(input.project.id);
+  if (!isStandaloneProjectId(projectId) && !isCuratorProjectId(projectId)) {
     return { threads: input.threads, memoryEntries: input.memoryEntries };
   }
   return {

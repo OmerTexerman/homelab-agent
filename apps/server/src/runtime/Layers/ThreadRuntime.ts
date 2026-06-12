@@ -184,7 +184,9 @@ const ThreadRuntimeDescriptorSchema = Schema.Struct({
   shell: Schema.String,
   bootstrapVersion: Schema.optional(Schema.String),
   isStandalone: Schema.optional(Schema.Boolean),
-  runtimeKind: Schema.optional(Schema.Literals(["scratch", "project-shared", "project-isolated"])),
+  runtimeKind: Schema.optional(
+    Schema.Literals(["scratch", "curator", "project-shared", "project-isolated"]),
+  ),
   projectTitle: Schema.optional(Schema.String),
   env: RuntimeEnvSchema,
   managedOpenCodeServer: Schema.optional(
@@ -489,10 +491,28 @@ SCRATCH_NO_PROJECT_MESSAGE = (
     "or promote this thread to a project first (Promote to project in the app)."
 )
 
+CURATOR_NO_PROJECT_MESSAGE = (
+    "This is a knowledge curator session: there is no project to propose or promote into. "
+    "Correct the durable record directly with 'homelab curate' mutations, or upsert through "
+    "'homelab promote'."
+)
+
+CURATOR_ONLY_MESSAGE = (
+    "'homelab curate' is only available inside a knowledge curator session. "
+    "Start one from Settings -> Memory & Knowledge in the app."
+)
+
 
 def require_project_scope():
     if SCOPE == "scratch":
         fail(SCRATCH_NO_PROJECT_MESSAGE)
+    if SCOPE == "curator":
+        fail(CURATOR_NO_PROJECT_MESSAGE)
+
+
+def require_curator_scope():
+    if SCOPE != "curator":
+        fail(CURATOR_ONLY_MESSAGE)
 
 
 def fail(message: str, code: int = 1):
@@ -1006,6 +1026,97 @@ def cmd_promote(args):
     print_json(request_json("POST", "/api/homelab/promotions", payload=payload))
 
 
+def curator_mutation_payload(args, extra=None):
+    payload = dict(extra or {})
+    if THREAD_ID:
+        payload["threadId"] = THREAD_ID
+    reason = getattr(args, "reason", None)
+    if reason:
+        payload["reason"] = reason
+    return payload
+
+
+def cmd_curate_overview(_args):
+    require_curator_scope()
+    print_json(request_json("GET", "/api/homelab/curate/overview"))
+
+
+def cmd_curate_memory(args):
+    require_curator_scope()
+    query = {}
+    if args.project_id and not args.all:
+        query["projectId"] = args.project_id
+    if args.promotion_status:
+        query["promotionStatus"] = args.promotion_status
+    if args.limit is not None:
+        query["limit"] = args.limit
+    print_json(request_json("GET", "/api/homelab/curate/memory", query=query))
+
+
+def cmd_curate_memory_update(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"memoryId": args.memory_id})
+    has_field = False
+    if args.summary:
+        payload["summary"] = args.summary
+        has_field = True
+    body = read_text_input(args.body_file, args.stdin, args.body)
+    if body:
+        payload["body"] = body
+        has_field = True
+    if args.tag:
+        payload["tags"] = args.tag
+        has_field = True
+    if not has_field:
+        fail("Provide at least one of --summary, --body/--body-file/--stdin, or --tag.")
+    print_json(request_json("POST", "/api/homelab/curate/memory/update", payload=payload))
+
+
+def cmd_curate_memory_delete(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"memoryId": args.memory_id})
+    print_json(request_json("POST", "/api/homelab/curate/memory/delete", payload=payload))
+
+
+def cmd_curate_entity_delete(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"entityId": args.entity_id})
+    print_json(request_json("POST", "/api/homelab/curate/entity/delete", payload=payload))
+
+
+def cmd_curate_relation_delete(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"relationId": args.relation_id})
+    print_json(request_json("POST", "/api/homelab/curate/relation/delete", payload=payload))
+
+
+def cmd_curate_skills(_args):
+    require_curator_scope()
+    print_json(request_json("GET", "/api/homelab/curate/skills"))
+
+
+def cmd_curate_skill_update(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"skillId": args.skill_id})
+    has_field = False
+    if args.description:
+        payload["description"] = args.description
+        has_field = True
+    body = read_text_input(args.body_file, args.stdin, args.body)
+    if body:
+        payload["body"] = body
+        has_field = True
+    if not has_field:
+        fail("Provide at least one of --description or --body/--body-file/--stdin.")
+    print_json(request_json("POST", "/api/homelab/curate/skill/update", payload=payload))
+
+
+def cmd_curate_skill_delete(args):
+    require_curator_scope()
+    payload = curator_mutation_payload(args, {"skillId": args.skill_id})
+    print_json(request_json("POST", "/api/homelab/curate/skill/delete", payload=payload))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="homelab",
@@ -1214,6 +1325,100 @@ def build_parser():
     )
     promote_parser.set_defaults(func=cmd_promote)
 
+    curate_parser = subparsers.add_parser(
+        "curate",
+        help="Curator-only: audit and correct ALL durable homelab memory and knowledge.",
+    )
+    curate_subparsers = curate_parser.add_subparsers(dest="curate_command", required=True)
+
+    curate_overview_parser = curate_subparsers.add_parser(
+        "overview", help="Counts and staleness signals across the whole knowledge estate."
+    )
+    curate_overview_parser.set_defaults(func=cmd_curate_overview)
+
+    curate_memory_parser = curate_subparsers.add_parser(
+        "memory", help="List memory entries across all projects (or one project)."
+    )
+    curate_memory_parser.add_argument("--all", action="store_true", help="All projects (default).")
+    curate_memory_parser.add_argument("--project-id", help="Restrict to one project id.")
+    curate_memory_parser.add_argument(
+        "--promotion-status",
+        choices=["none", "proposed", "promoted", "rejected"],
+        help="Filter by promotion status.",
+    )
+    curate_memory_parser.add_argument("--limit", type=int, default=None, help="Max entry count.")
+    curate_memory_parser.set_defaults(func=cmd_curate_memory)
+
+    curate_memory_update_parser = curate_subparsers.add_parser(
+        "memory-update", help="Rewrite a memory entry (any project) in place."
+    )
+    curate_memory_update_parser.add_argument("memory_id", help="Project memory id.")
+    curate_memory_update_parser.add_argument("--summary", help="New summary.")
+    curate_memory_update_parser.add_argument("--body", help="New body text inline.")
+    curate_memory_update_parser.add_argument("--body-file", help="Read new body text from a file.")
+    curate_memory_update_parser.add_argument(
+        "--stdin", action="store_true", help="Read new body text from stdin."
+    )
+    curate_memory_update_parser.add_argument(
+        "--tag", action="append", help="Replacement tag set. Can be repeated."
+    )
+    curate_memory_update_parser.add_argument("--reason", help="Why this entry is being corrected.")
+    curate_memory_update_parser.set_defaults(func=cmd_curate_memory_update)
+
+    curate_memory_delete_parser = curate_subparsers.add_parser(
+        "memory-delete", help="Delete a memory entry (any project)."
+    )
+    curate_memory_delete_parser.add_argument("memory_id", help="Project memory id.")
+    curate_memory_delete_parser.add_argument(
+        "--reason", required=True, help="Why this entry is being deleted."
+    )
+    curate_memory_delete_parser.set_defaults(func=cmd_curate_memory_delete)
+
+    curate_entity_delete_parser = curate_subparsers.add_parser(
+        "entity-delete", help="Delete a graph entity and the relations connected to it."
+    )
+    curate_entity_delete_parser.add_argument("entity_id", help="Entity id.")
+    curate_entity_delete_parser.add_argument(
+        "--reason", required=True, help="Why this entity is being deleted."
+    )
+    curate_entity_delete_parser.set_defaults(func=cmd_curate_entity_delete)
+
+    curate_relation_delete_parser = curate_subparsers.add_parser(
+        "relation-delete", help="Delete one graph relation."
+    )
+    curate_relation_delete_parser.add_argument("relation_id", help="Relation id.")
+    curate_relation_delete_parser.add_argument(
+        "--reason", required=True, help="Why this relation is being deleted."
+    )
+    curate_relation_delete_parser.set_defaults(func=cmd_curate_relation_delete)
+
+    curate_skills_parser = curate_subparsers.add_parser(
+        "skills", help="List ALL skills at every scope, with ids."
+    )
+    curate_skills_parser.set_defaults(func=cmd_curate_skills)
+
+    curate_skill_update_parser = curate_subparsers.add_parser(
+        "skill-update", help="Rewrite a skill (any scope) by skill id."
+    )
+    curate_skill_update_parser.add_argument("skill_id", help="Skill id (see 'curate skills').")
+    curate_skill_update_parser.add_argument("--description", help="New one-line description.")
+    curate_skill_update_parser.add_argument("--body", help="New SKILL.md content inline.")
+    curate_skill_update_parser.add_argument("--body-file", help="Read new SKILL.md content from a file.")
+    curate_skill_update_parser.add_argument(
+        "--stdin", action="store_true", help="Read new SKILL.md content from stdin."
+    )
+    curate_skill_update_parser.add_argument("--reason", help="Why this skill is being corrected.")
+    curate_skill_update_parser.set_defaults(func=cmd_curate_skill_update)
+
+    curate_skill_delete_parser = curate_subparsers.add_parser(
+        "skill-delete", help="Delete a skill (any scope) by skill id."
+    )
+    curate_skill_delete_parser.add_argument("skill_id", help="Skill id (see 'curate skills').")
+    curate_skill_delete_parser.add_argument(
+        "--reason", required=True, help="Why this skill is being deleted."
+    )
+    curate_skill_delete_parser.set_defaults(func=cmd_curate_skill_delete)
+
     return parser
 
 
@@ -1228,7 +1433,7 @@ if __name__ == "__main__":
 `;
 }
 
-export type RuntimeInstructionKind = "scratch" | "project-shared" | "project-isolated";
+export type RuntimeInstructionKind = "scratch" | "curator" | "project-shared" | "project-isolated";
 
 interface RuntimeInstructionContext {
   readonly filename: typeof RUNTIME_AGENTS_FILENAME | typeof RUNTIME_CLAUDE_FILENAME;
@@ -1236,6 +1441,8 @@ interface RuntimeInstructionContext {
    * The runtime context this instruction file describes. Decided by
    * ProjectRuntimePolicy (`ProjectRuntimeAssignment.kind`) and threaded down from callers:
    * - "scratch": a standalone thread's own runtime — private workspace, thread-local memory.
+   * - "curator": a knowledge-curator session's own runtime — audits and corrects ALL durable
+   *   memory/knowledge through the `homelab curate` surface.
    * - "project-shared": the project's default runtime — shared workspace, queued turns.
    * - "project-isolated": a parallel thread's own runtime, cloned from the Project Runtime.
    */
@@ -1266,8 +1473,123 @@ function resolveRuntimeIsStandalone(runtime: ThreadRuntimeDescriptor): boolean {
   return runtime.isStandalone ?? isStandaloneRuntimeId(runtime.runtimeId);
 }
 
+/**
+ * The curator persona is deliberately separate from the scratch/project matrix: a curator
+ * session is not doing infrastructure work, it is auditing the durable record of that work.
+ * Its tool surface (`homelab curate`) spans ALL projects' memory, the full knowledge graph
+ * including observations, and skills at every scope — far wider than any other runtime sees.
+ */
+function renderCuratorInstructionMarkdown(
+  filename: typeof RUNTIME_AGENTS_FILENAME | typeof RUNTIME_CLAUDE_FILENAME,
+): string {
+  return `# Homelab Knowledge Curator
+${filename === RUNTIME_CLAUDE_FILENAME ? "\nClaude Code reads this file automatically." : "\nThis file is the runtime guide for this agent session."}
+
+**This is a knowledge curator session.** Your job is not to operate the homelab — it is to
+audit, verify, and correct the durable record of it: the global knowledge graph (entities,
+relations, observations), every project's memory entries, and the skills library at every
+scope. You were launched from Settings → Memory & Knowledge to fight knowledge rot.
+
+You run inside an isolated Linux container with shell access, outbound network access, and
+the \`homelab\` CLI. The user is in the loop: talk to them, show them what you find, and let
+runtime permissions gate your edits.
+
+## The curator mindset
+
+You are a skeptical librarian, not a collector.
+
+- **Verify before trusting.** If the graph says a service runs on a host, probe it
+  (\`curl\`, \`dig\`, \`nc\`, SSH when a key is available) before treating it as true. If a
+  skill claims a procedure works, dry-run the safe parts.
+- **Prefer correcting over adding.** Merge duplicates, retire dead entries, fix wrong
+  relations, tighten vague summaries. Only add new knowledge when an audit uncovers
+  something genuinely missing.
+- **Every edit needs a reason.** All \`homelab curate\` mutations take a \`--reason\` and are
+  recorded as observations in the graph, so the audit trail explains itself later.
+- **Stale beats wrong.** When you cannot verify either way, lower confidence or flag it in
+  your report instead of deleting. Deleting is for entries you have shown to be wrong,
+  duplicated, or permanently obsolete.
+
+## First thing: take inventory
+
+\`\`\`bash
+homelab --help            # Confirm the installed CLI surface
+homelab curate overview   # Counts and staleness signals across all knowledge
+homelab snapshot          # Full graph: entities, relations, AND observations
+homelab curate memory --all        # Memory entries across every project
+homelab curate skills              # Skills at every scope (thread/project/global)
+\`\`\`
+
+Then triage: duplicates, contradictions, entries that have not been verified in a long
+time, skills that reference retired infrastructure, memory superseded in practice but not
+in the record. Present the user a short prioritized list before making sweeping changes.
+
+## Reading (full visibility)
+
+| Command | What it does |
+|---------|-------------|
+| \`homelab curate overview\` | Counts + staleness signals for the whole knowledge estate |
+| \`homelab snapshot\` | Full dump: entities, relations, observations |
+| \`homelab search <query>\` | Search graph entities |
+| \`homelab entity <id>\` / \`homelab relations <id>\` | Inspect one entity and its edges |
+| \`homelab curate memory --all\` | List memory entries across ALL projects |
+| \`homelab curate memory --project <id>\` | List one project's memory entries |
+| \`homelab curate skills\` | List ALL skills at every scope, with ids |
+| \`homelab skill show <name>\` | Print a skill body |
+
+## Correcting (the curator surface)
+
+| Command | What it does |
+|---------|-------------|
+| \`homelab curate entity-delete <id> --reason "..."\` | Delete an entity and its relations |
+| \`homelab curate relation-delete <id> --reason "..."\` | Delete one relation |
+| \`homelab curate memory-update <memory-id> [--summary ...] [--body/--stdin] [--tag ...]\` | Rewrite a memory entry in place |
+| \`homelab curate memory-delete <memory-id> --reason "..."\` | Delete a memory entry |
+| \`homelab curate skill-update <skill-id> [--description ...] [--body/--stdin]\` | Rewrite a skill at any scope |
+| \`homelab curate skill-delete <skill-id> --reason "..."\` | Delete a skill |
+
+To **retire** (rather than delete) an entity, or to fix its summary/properties/confidence,
+upsert it through a normal promotion with the corrected fields — entity upserts are
+idempotent:
+
+\`\`\`bash
+homelab promote --example   # payload shape; set "status": "deprecated" to retire
+\`\`\`
+
+To **merge duplicates**: pick the survivor, move anything worth keeping onto it via a
+promotion upsert, re-point relations the same way, then \`curate entity-delete\` the
+duplicate with a reason naming the survivor.
+
+## Verification toolkit
+
+You have the same container powers as any homelab agent: outbound network, scratch
+scripts, live probes, and the secret broker (\`homelab secret-request\`,
+\`homelab-secret-to-file\` for key material). Use them to test whether recorded
+infrastructure still answers before ruling on it. Never paste credentials into chat.
+
+## Session notes vs. durable record
+
+Your own working notes (\`homelab memory add\`) are scoped to this curator session only —
+they never leak into the knowledge you are auditing. The durable record changes ONLY
+through \`homelab curate\` mutations and explicit \`homelab promote\` upserts. There is no
+project to propose into here; \`homelab memory propose\`/\`promote\` will refuse to run.
+
+## What NOT to do
+
+- **Don't bulk-delete without showing the user the list first.**
+- **Don't invent facts to fill gaps.** An audit that says "unverifiable" is a good result.
+- **Don't rewrite history.** Observations are provenance; correct the present state
+  (entities, relations, memory, skills) and add new observations explaining why.
+- **Don't hoard findings in chat.** Apply fixes through \`homelab curate\` so the record
+  itself improves, and finish with a short summary of what changed and why.
+`;
+}
+
 function renderRuntimeInstructionMarkdown(context: RuntimeInstructionContext): string {
   const { filename, kind } = context;
+  if (kind === "curator") {
+    return renderCuratorInstructionMarkdown(filename);
+  }
   const isScratch = kind === "scratch";
   const projectLabel = context.projectTitle ? `the "${context.projectTitle}" project` : "a project";
   const orientationLine =
@@ -2425,7 +2747,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       secretEnv,
       serverUrl: runtimeNetworkPlan.serverUrl,
       threadId: runtime.threadId,
-      scope: runtime.isStandalone ? "scratch" : "project",
+      scope:
+        runtime.runtimeKind === "curator"
+          ? "curator"
+          : runtime.isStandalone
+            ? "scratch"
+            : "project",
       ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
     });
 
@@ -2992,7 +3319,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly baseEnvironment?: Readonly<Record<string, string>>;
     readonly bootstrapVersion?: string;
     readonly isStandalone?: boolean | undefined;
-    readonly runtimeKind?: "scratch" | "project-shared" | "project-isolated" | undefined;
+    readonly runtimeKind?:
+      | "scratch"
+      | "curator"
+      | "project-shared"
+      | "project-isolated"
+      | undefined;
     readonly projectTitle?: string;
     readonly existing?: ThreadRuntimeDescriptor;
   }) {

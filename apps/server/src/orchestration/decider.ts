@@ -24,8 +24,12 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import {
+  curatorProjectId,
+  curatorProjectTitle,
+  curatorProjectWorkspaceRoot,
   defaultProjectRuntimeId,
   defaultRuntimeIdForProject,
+  isCuratorProjectId,
   isStandaloneProjectId,
   isolatedThreadRuntimeId,
   resolveProjectRuntimeAssignment,
@@ -248,6 +252,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             "Threads cannot be created in the standalone project. Use thread.standalone.create.",
         });
       }
+      // Same for curator sessions: the curator project is a hidden storage namespace.
+      if (isCuratorProjectId(command.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Threads cannot be created in the curator project. Use thread.curator.create.",
+        });
+      }
       const { runtimeId, runtimeSelectionMode } = resolveProjectRuntimeAssignment({
         project,
         thread: {
@@ -355,6 +366,81 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ];
     }
 
+    case "thread.curator.create": {
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const projectId = curatorProjectId();
+      const existingProject = readModel.projects.find(
+        (project) => isCuratorProjectId(project.id) && project.deletedAt === null,
+      );
+      // Curator sessions are isolated by definition, exactly like scratch threads: the
+      // command schema carries no runtime selection mode, and the binding derives from
+      // the thread id alone.
+      const runtimeSelectionMode = "isolated" as const;
+      const runtimeId = isolatedThreadRuntimeId(command.threadId);
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId,
+          runtimeId,
+          runtimeSelectionMode,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      if (existingProject) {
+        return threadCreatedEvent;
+      }
+
+      const projectCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "project.created",
+        payload: {
+          projectId,
+          // The synthetic curator project has no shared runtime: every curator session
+          // runs in its own isolated runtime, so there is no meaningful project default.
+          defaultRuntimeId: null,
+          title: curatorProjectTitle(),
+          workspaceRoot: curatorProjectWorkspaceRoot(),
+          defaultModelSelection: command.modelSelection,
+          scripts: [],
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      return [
+        projectCreatedEvent,
+        {
+          ...threadCreatedEvent,
+          causationEventId: projectCreatedEvent.eventId,
+        },
+      ];
+    }
+
     case "thread.standalone.promote-to-project": {
       const thread = yield* requireThread({
         readModel,
@@ -446,6 +532,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: "Standalone threads cannot be moved to the standalone project.",
+        });
+      }
+      if (isCuratorProjectId(targetProject.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Standalone threads cannot be moved to the curator project.",
         });
       }
 

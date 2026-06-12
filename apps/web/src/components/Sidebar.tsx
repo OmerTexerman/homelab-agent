@@ -218,6 +218,7 @@ import {
   shouldShowPrimarySourceControlUi,
   shouldShowSidebarProjectGroupingControls,
 } from "../productCapabilities";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
@@ -1308,7 +1309,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     return allProjects
       .filter(
         (candidate) =>
-          candidate.environmentId === environmentId && !isStandaloneProjectId(candidate.id),
+          candidate.environmentId === environmentId &&
+          !isStandaloneProjectId(candidate.id) &&
+          !isCuratorProjectId(candidate.id),
       )
       .toSorted((left, right) => left.name.localeCompare(right.name));
   }, [allProjects, moveStandaloneTarget?.thread.environmentId]);
@@ -1526,7 +1529,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         .filter(
           (candidate) =>
             candidate.environmentId === thread.environmentId &&
-            !isStandaloneProjectId(candidate.id),
+            !isStandaloneProjectId(candidate.id) &&
+            !isCuratorProjectId(candidate.id),
         )
         .toSorted((left, right) => left.name.localeCompare(right.name))[0];
       setMoveStandaloneTarget({ thread, threadKey });
@@ -3843,8 +3847,22 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 });
 
 export default function Sidebar() {
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const allProjectsIncludingCurator = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const allSidebarThreadsIncludingCurator = useStore(
+    useShallow(selectSidebarThreadsAcrossEnvironments),
+  );
+  // Curator sessions live in Settings -> Memory & Knowledge, not the sidebar: the hidden
+  // system:curator project would otherwise render as a normal project group whose
+  // "+ new thread" affordance the server rejects.
+  const projects = useMemo(
+    () => allProjectsIncludingCurator.filter((project) => !isCuratorProjectId(project.id)),
+    [allProjectsIncludingCurator],
+  );
+  const sidebarThreads = useMemo(
+    () =>
+      allSidebarThreadsIncludingCurator.filter((thread) => !isCuratorProjectId(thread.projectId)),
+    [allSidebarThreadsIncludingCurator],
+  );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);

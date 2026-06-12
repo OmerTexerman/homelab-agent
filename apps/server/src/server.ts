@@ -48,6 +48,8 @@ import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ThreadRuntimeReactorLive } from "./orchestration/Layers/ThreadRuntimeReactor.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import { layer as runtimeProviderVersionManifestLayer } from "./provider/RuntimeProviderVersionManifest.ts";
+import { layer as runtimeProviderVersionReconcilerLayer } from "./provider/RuntimeProviderVersionReconciler.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
@@ -90,6 +92,15 @@ import {
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import {
+  homelabCuratorEntityDeleteRouteLayer,
+  homelabCuratorMemoryDeleteRouteLayer,
+  homelabCuratorMemoryListRouteLayer,
+  homelabCuratorMemoryUpdateRouteLayer,
+  homelabCuratorOverviewRouteLayer,
+  homelabCuratorRelationDeleteRouteLayer,
+  homelabCuratorSkillDeleteRouteLayer,
+  homelabCuratorSkillsListRouteLayer,
+  homelabCuratorSkillUpdateRouteLayer,
   homelabEntitiesRouteLayer,
   homelabEntityRouteLayer,
   homelabProjectMemoryCreateRouteLayer,
@@ -283,7 +294,17 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreBaseLive = ReactorLayerLive.pipe(
+// Daemon that mirrors probed host CLI versions into the runtime image's
+// provider-versions manifest, keeping host and container CLIs in lockstep
+// even when the host changes out-of-band (manual installs, failed updates).
+const RuntimeProviderVersionReconcilerLive = runtimeProviderVersionReconcilerLayer.pipe(
+  Layer.provide(runtimeProviderVersionManifestLayer),
+);
+
+const RuntimeCoreBaseLive = Layer.mergeAll(
+  ReactorLayerLive,
+  RuntimeProviderVersionReconcilerLive,
+).pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -353,6 +374,15 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
 );
 
 const HomelabRoutesLayer = Layer.mergeAll(
+  homelabCuratorEntityDeleteRouteLayer,
+  homelabCuratorMemoryDeleteRouteLayer,
+  homelabCuratorMemoryListRouteLayer,
+  homelabCuratorMemoryUpdateRouteLayer,
+  homelabCuratorOverviewRouteLayer,
+  homelabCuratorRelationDeleteRouteLayer,
+  homelabCuratorSkillDeleteRouteLayer,
+  homelabCuratorSkillsListRouteLayer,
+  homelabCuratorSkillUpdateRouteLayer,
   homelabEntitiesRouteLayer,
   homelabEntityRouteLayer,
   homelabProjectMemoryCreateRouteLayer,

@@ -530,6 +530,19 @@ const ThreadStandaloneCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadCuratorCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.curator.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  createdAt: IsoDateTime,
+});
+
 const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
   type: Schema.Literal("thread.standalone.promote-to-project"),
   commandId: CommandId,
@@ -723,6 +736,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadStandaloneCreateCommand,
+  ThreadCuratorCreateCommand,
   ThreadStandalonePromoteToProjectCommand,
   ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,
@@ -747,6 +761,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadStandaloneCreateCommand,
+  ThreadCuratorCreateCommand,
   ThreadStandalonePromoteToProjectCommand,
   ThreadStandaloneMoveToProjectCommand,
   ThreadDeleteCommand,

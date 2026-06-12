@@ -379,6 +379,85 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     });
   });
 
+  it("switches package-tool to Homebrew updates when the binary resolves through Linuxbrew", () => {
+    expect(
+      packageToolUpdate.resolve({
+        binaryPath: "/home/linuxbrew/.linuxbrew/bin/package-tool",
+        platform: "linux",
+        env: {
+          PATH: "",
+        },
+      }),
+    ).toEqual({
+      provider: driver("packageTool"),
+      packageName: "@example/package-tool",
+      update: {
+        command: "brew upgrade package-tool",
+
+        executable: "brew",
+
+        args: ["upgrade", "package-tool"],
+
+        lockKey: "homebrew",
+      },
+    });
+  });
+
+  it("prefers Homebrew over npm for node CLIs vendored inside a brew keg", () => {
+    // Node-based formulas place the package under
+    // `<keg>/libexec/lib/node_modules/`, which the npm-global heuristic would
+    // otherwise claim — but the install is brew-managed.
+    expect(
+      packageToolUpdate.resolve({
+        binaryPath: "/home/linuxbrew/.linuxbrew/bin/package-tool",
+        platform: "linux",
+        env: {
+          PATH: "",
+        },
+        realCommandPath:
+          "/home/linuxbrew/.linuxbrew/Cellar/package-tool/1.2.3/libexec/lib/node_modules/@example/package-tool/bin/package-tool.js",
+      }),
+    ).toEqual({
+      provider: driver("packageTool"),
+      packageName: "@example/package-tool",
+      update: {
+        command: "brew upgrade package-tool",
+
+        executable: "brew",
+
+        args: ["upgrade", "package-tool"],
+
+        lockKey: "homebrew",
+      },
+    });
+  });
+
+  it("prefers Homebrew over npm for node CLIs vendored inside a macOS brew keg", () => {
+    expect(
+      packageToolUpdate.resolve({
+        binaryPath: "/opt/homebrew/bin/package-tool",
+        platform: "darwin",
+        env: {
+          PATH: "",
+        },
+        realCommandPath:
+          "/opt/homebrew/Cellar/package-tool/1.2.3/libexec/lib/node_modules/@example/package-tool/bin/package-tool.js",
+      }),
+    ).toEqual({
+      provider: driver("packageTool"),
+      packageName: "@example/package-tool",
+      update: {
+        command: "brew upgrade package-tool",
+
+        executable: "brew",
+
+        args: ["upgrade", "package-tool"],
+
+        lockKey: "homebrew",
+      },
+    });
+  });
+
   it.effect("keeps npm updates for binaries symlinked into npm's global node_modules tree", () =>
     Effect.gen(function* () {
       const tempDir = yield* makeTempDir("t3-npm-capabilities");

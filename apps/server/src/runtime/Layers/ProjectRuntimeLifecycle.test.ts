@@ -341,6 +341,9 @@ function makeHarness(input: {
     getById: () => Effect.die("unused"),
     list: () => Effect.succeed(memoryEntries),
     search: () => Effect.die("unused"),
+    listAll: () => Effect.die("unused"),
+    update: () => Effect.die("unused"),
+    remove: () => Effect.die("unused"),
     markPromoted: () => Effect.die("unused"),
     migrateStandaloneThreadEntries: () => Effect.die("unused"),
   } satisfies ProjectMemoryShape;

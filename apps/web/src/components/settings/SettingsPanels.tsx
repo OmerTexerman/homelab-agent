@@ -11,9 +11,10 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
   type EnvironmentId,
@@ -22,11 +23,12 @@ import {
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
-  type ProviderInstanceId,
+  ProviderInstanceId,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Arr from "effect/Array";
@@ -66,8 +68,15 @@ import {
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
+import { readEnvironmentApi } from "../../environmentApi";
+import { newCommandId, newThreadId } from "../../lib/utils";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { useShallow } from "zustand/react/shallow";
-import { selectProjectsAcrossEnvironments, useStore } from "../../store";
+import {
+  selectProjectsAcrossEnvironments,
+  selectSidebarThreadsAcrossEnvironments,
+  useStore,
+} from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -1147,6 +1156,67 @@ function KnowledgeGraphExplorer(props: {
 
 export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const navigate = useNavigate();
+  const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const allSidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
+  const curatorSessions = useMemo(
+    () =>
+      allSidebarThreads
+        .filter((thread) => isCuratorProjectId(thread.projectId) && thread.archivedAt === null)
+        .toSorted((left, right) =>
+          (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt),
+        ),
+    [allSidebarThreads],
+  );
+  const startCuratorSession = useCallback(() => {
+    if (primaryEnvironmentId === null || isStartingCuratorSession) {
+      return;
+    }
+    void (async () => {
+      setIsStartingCuratorSession(true);
+      try {
+        const api = readEnvironmentApi(primaryEnvironmentId);
+        if (!api) {
+          throw new Error(HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle);
+        }
+        // New sessions reuse the curator project's last model selection; the model can be
+        // switched in the thread composer before the first message.
+        const curatorProject = allProjects.find(
+          (project) =>
+            project.environmentId === primaryEnvironmentId && isCuratorProjectId(project.id),
+        );
+        const threadId = newThreadId();
+        await api.orchestration.dispatchCommand({
+          type: "thread.curator.create",
+          commandId: newCommandId(),
+          threadId,
+          title: HOMELAB_PRODUCT_COPY.curator.newSessionAction,
+          modelSelection: curatorProject?.defaultModelSelection ?? {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: DEFAULT_MODEL,
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: HOMELAB_PRODUCT_COPY.curator.creationFailedTitle,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setIsStartingCuratorSession(false);
+      }
+    })();
+  }, [allProjects, isStartingCuratorSession, navigate, primaryEnvironmentId]);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<HomelabEntityKind | "all">("all");
   const [statusFilter, setStatusFilter] = useState<HomelabEntityStatus | "unknown" | "all">("all");
@@ -1207,6 +1277,49 @@ export function MemoryKnowledgeSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge}>
+        <SettingsRow
+          title={HOMELAB_PRODUCT_COPY.curator.settingsCardTitle}
+          description={HOMELAB_PRODUCT_COPY.curator.settingsCardDescription}
+          control={
+            <Button
+              size="sm"
+              onClick={startCuratorSession}
+              disabled={primaryEnvironmentId === null || isStartingCuratorSession}
+            >
+              {isStartingCuratorSession ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <PlusIcon className="size-3.5" />
+              )}
+              {HOMELAB_PRODUCT_COPY.curator.newSessionAction}
+            </Button>
+          }
+        >
+          {curatorSessions.length > 0 ? (
+            <div className="mt-3 space-y-1 border-t border-border/60 pt-3">
+              <div className="text-[11px] font-medium text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.curator.recentSessionsLabel}
+              </div>
+              {curatorSessions.slice(0, 8).map((thread) => (
+                <Link
+                  key={`${thread.environmentId}:${thread.id}`}
+                  to="/$environmentId/$threadId"
+                  params={buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id))}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-xs hover:bg-accent/50"
+                >
+                  <span className="min-w-0 truncate text-foreground">{thread.title}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+              {HOMELAB_PRODUCT_COPY.curator.emptySessionsLabel}
+            </div>
+          )}
+        </SettingsRow>
         <SettingsRow
           title="Shared knowledge graph"
           description="Durable homelab entities and relations promoted from project work."

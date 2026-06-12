@@ -38,6 +38,22 @@ export interface KnowledgeGraphShape {
     input: HomelabGraphSearchInput,
   ) => Effect.Effect<ReadonlyArray<HomelabGraphSearchResult>, KnowledgeGraphError>;
   readonly upsertEntity: (entity: HomelabEntity) => Effect.Effect<void, KnowledgeGraphError>;
+  /**
+   * Curator-only: remove an entity and every relation connected to it. Observations are
+   * preserved as provenance. Returns what was actually removed so callers can 404 on a
+   * missing entity and record an accurate audit observation.
+   */
+  readonly deleteEntity: (entityId: HomelabEntityId) => Effect.Effect<
+    {
+      readonly removed: boolean;
+      readonly removedRelationIds: ReadonlyArray<HomelabRelationId>;
+    },
+    KnowledgeGraphError
+  >;
+  /** Curator-only: remove one relation. Returns whether it existed. */
+  readonly deleteRelation: (
+    relationId: HomelabRelationId,
+  ) => Effect.Effect<{ readonly removed: boolean }, KnowledgeGraphError>;
   readonly upsertRelation: (relation: HomelabRelation) => Effect.Effect<void, KnowledgeGraphError>;
   readonly recordObservation: (
     observation: HomelabObservation,

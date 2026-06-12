@@ -111,6 +111,10 @@
       "types": "./src/workspace.ts",
       "import": "./src/workspace.ts"
     },
+    "./curatorProject": {
+      "types": "./src/curatorProject.ts",
+      "import": "./src/curatorProject.ts"
+    },
     "./standaloneProject": {
       "types": "./src/standaloneProject.ts",
       "import": "./src/standaloneProject.ts"

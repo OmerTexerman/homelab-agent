@@ -9,7 +9,9 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
+  DeleteProjectMemoryEntryInput,
   GetProjectMemoryEntryInput,
+  ListAllProjectMemoryEntriesInput,
   ListProjectMemoryEntriesInput,
   ProjectMemoryEntryRepository,
   UpdateProjectMemoryPromotionInput,
@@ -175,6 +177,45 @@ const makeProjectMemoryEntryRepository = Effect.gen(function* () {
       `,
   });
 
+  const listAllProjectMemoryEntryRows = SqlSchema.findAll({
+    Request: ListAllProjectMemoryEntriesInput,
+    Result: ProjectMemoryEntryDbRow,
+    execute: ({ promotionStatus, limit }) =>
+      sql`
+        SELECT
+          memory_id AS "id",
+          project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          source_thread_id AS "sourceThreadId",
+          source_message_id AS "sourceMessageId",
+          source_file_path AS "sourceFilePath",
+          summary,
+          body,
+          tags_json AS "tags",
+          supersedes_json AS "supersedes",
+          replaces_json AS "replaces",
+          promotion_status AS "promotionStatus",
+          promotion_id AS "promotionId",
+          promotion_summary AS "promotionSummary",
+          promoted_at AS "promotedAt",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM project_memory_entries
+        WHERE (${promotionStatus ?? null} IS NULL OR promotion_status = ${promotionStatus ?? null})
+        ORDER BY updated_at DESC, memory_id ASC
+        LIMIT ${limit ?? 1000}
+      `,
+  });
+
+  const deleteProjectMemoryEntryRow = SqlSchema.void({
+    Request: DeleteProjectMemoryEntryInput,
+    execute: ({ memoryId }) =>
+      sql`
+        DELETE FROM project_memory_entries
+        WHERE memory_id = ${memoryId}
+      `,
+  });
+
   const updateProjectMemoryPromotionRow = SqlSchema.void({
     Request: UpdateProjectMemoryPromotionInput,
     execute: ({
@@ -214,6 +255,17 @@ const makeProjectMemoryEntryRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toProjectMemoryEntry)),
     );
 
+  const listAll: ProjectMemoryEntryRepositoryShape["listAll"] = (input) =>
+    listAllProjectMemoryEntryRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectMemoryEntryRepository.listAll:query")),
+      Effect.map((rows) => rows.map(toProjectMemoryEntry)),
+    );
+
+  const deleteById: ProjectMemoryEntryRepositoryShape["deleteById"] = (input) =>
+    deleteProjectMemoryEntryRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectMemoryEntryRepository.deleteById:query")),
+    );
+
   const updatePromotion: ProjectMemoryEntryRepositoryShape["updatePromotion"] = (input) =>
     updateProjectMemoryPromotionRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectMemoryEntryRepository.updatePromotion:query")),
@@ -223,6 +275,8 @@ const makeProjectMemoryEntryRepository = Effect.gen(function* () {
     upsert,
     getById,
     listByProjectId,
+    listAll,
+    deleteById,
     updatePromotion,
   } satisfies ProjectMemoryEntryRepositoryShape;
 });

@@ -59,7 +59,15 @@ export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"]
 export const CodexReasoningEffort = Schema.Literals(CODEX_REASONING_EFFORT_OPTIONS);
 export type CodexReasoningEffort = typeof CodexReasoningEffort.Type;
 
-export const ClaudeCodeEffort = Schema.Literals(["low", "medium", "high", "max", "ultrathink"]);
+export const ClaudeCodeEffort = Schema.Literals([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+  "ultrathink",
+]);
 export type ClaudeCodeEffort = typeof ClaudeCodeEffort.Type;
 
 export const CodexProviderModelOptions = Schema.Struct({
@@ -200,6 +208,9 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   [CLAUDE_DRIVER_KIND]: {
+    fable: "claude-fable-5",
+    "fable-5": "claude-fable-5",
+    "claude-fable5": "claude-fable-5",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "claude-opus-4.8": "claude-opus-4-8",

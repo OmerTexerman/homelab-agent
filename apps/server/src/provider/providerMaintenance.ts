@@ -227,17 +227,32 @@ function isNpmGlobalCommandPath(commandPath: string): boolean {
   );
 }
 
+/**
+ * Definitive Homebrew evidence: the real command path lives inside a Cellar or
+ * Caskroom keg (macOS Homebrew or Linuxbrew). Checked *before* the package
+ * manager heuristics because node-based formulas vendor their package under
+ * `<keg>/libexec/lib/node_modules/`, which would otherwise be misclassified as
+ * an npm-global install.
+ */
+function isHomebrewKegCommandPath(commandPath: string): boolean {
+  const normalized = normalizeCommandPath(commandPath);
+  return (
+    normalized.includes("/homebrew/cellar/") ||
+    normalized.includes("/usr/local/cellar/") ||
+    normalized.includes(".linuxbrew/cellar/") ||
+    normalized.includes("/homebrew/caskroom/") ||
+    normalized.includes("/usr/local/caskroom/") ||
+    normalized.includes(".linuxbrew/caskroom/")
+  );
+}
+
 function isHomebrewCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
   return (
-    normalized.includes("/opt/homebrew/cellar/") ||
-    normalized.includes("/usr/local/cellar/") ||
-    normalized.includes("/homebrew/cellar/") ||
-    normalized.includes("/opt/homebrew/caskroom/") ||
-    normalized.includes("/usr/local/caskroom/") ||
-    normalized.includes("/homebrew/caskroom/") ||
+    isHomebrewKegCommandPath(normalized) ||
     normalized.startsWith("/opt/homebrew/bin/") ||
-    normalized.startsWith("/usr/local/bin/")
+    normalized.startsWith("/usr/local/bin/") ||
+    normalized.includes(".linuxbrew/bin/")
   );
 }
 
@@ -271,6 +286,12 @@ export function resolvePackageManagedProviderMaintenance(
         makeNativeProviderMaintenanceCapabilities(definition) ??
         makeNpmGlobalProviderMaintenanceCapabilities(definition)
       );
+    }
+    // Keg paths win over the package-manager heuristics below: a brew-vendored
+    // node CLI contains `/lib/node_modules/` inside its keg and must still be
+    // upgraded through brew, not npm.
+    if (commandPaths.some(isHomebrewKegCommandPath)) {
+      return makeHomebrewProviderMaintenanceCapabilities(definition);
     }
     if (commandPaths.some(isVitePlusGlobalCommandPath)) {
       return makeVitePlusGlobalProviderMaintenanceCapabilities(definition);

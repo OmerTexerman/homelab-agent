@@ -27,6 +27,17 @@ export const ListProjectMemoryEntriesInput = Schema.Struct({
 });
 export type ListProjectMemoryEntriesInput = typeof ListProjectMemoryEntriesInput.Type;
 
+export const ListAllProjectMemoryEntriesInput = Schema.Struct({
+  promotionStatus: Schema.optional(ProjectMemoryPromotionStatus),
+  limit: Schema.optional(Schema.Number),
+});
+export type ListAllProjectMemoryEntriesInput = typeof ListAllProjectMemoryEntriesInput.Type;
+
+export const DeleteProjectMemoryEntryInput = Schema.Struct({
+  memoryId: ProjectMemoryId,
+});
+export type DeleteProjectMemoryEntryInput = typeof DeleteProjectMemoryEntryInput.Type;
+
 export const UpdateProjectMemoryPromotionInput = Schema.Struct({
   memoryId: ProjectMemoryId,
   promotionStatus: ProjectMemoryPromotionStatus,
@@ -47,6 +58,13 @@ export interface ProjectMemoryEntryRepositoryShape {
   readonly listByProjectId: (
     input: ListProjectMemoryEntriesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectMemoryEntry>, ProjectionRepositoryError>;
+  /** Curator-only cross-project listing over every project's memory entries. */
+  readonly listAll: (
+    input: ListAllProjectMemoryEntriesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectMemoryEntry>, ProjectionRepositoryError>;
+  readonly deleteById: (
+    input: DeleteProjectMemoryEntryInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly updatePromotion: (
     input: UpdateProjectMemoryPromotionInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

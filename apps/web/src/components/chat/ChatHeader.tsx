@@ -54,6 +54,7 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   activeProjectName: string | undefined;
   isStandaloneThread?: boolean | undefined;
+  isCuratorThread?: boolean | undefined;
   runtimeSelectionMode?: ThreadRuntimeMode | undefined;
   projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
   isGitRepo: boolean;
@@ -135,9 +136,16 @@ export function shouldShowOpenInPicker(input: {
 export function describeActiveThreadRuntimeMode(input: {
   readonly runtimeSelectionMode?: ThreadRuntimeMode | undefined;
   readonly isStandaloneThread?: boolean | undefined;
+  readonly isCuratorThread?: boolean | undefined;
   readonly activeProjectName?: string | undefined;
   readonly projectDefaultRuntimeId?: RuntimeSessionId | null | undefined;
 }): string | null {
+  if (input.isCuratorThread) {
+    return input.runtimeSelectionMode === "isolated"
+      ? HOMELAB_PRODUCT_COPY.curator.activeThreadBadgeDescription
+      : null;
+  }
+
   if (input.isStandaloneThread) {
     return input.runtimeSelectionMode === "isolated"
       ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeDescription
@@ -165,6 +173,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   activeProjectName,
   isStandaloneThread,
+  isCuratorThread,
   runtimeSelectionMode,
   projectDefaultRuntimeId,
   isGitRepo,
@@ -202,12 +211,15 @@ export const ChatHeader = memo(function ChatHeader({
   const isolatedRuntimeDescription = describeActiveThreadRuntimeMode({
     runtimeSelectionMode,
     isStandaloneThread,
+    isCuratorThread,
     activeProjectName,
     projectDefaultRuntimeId,
   });
-  const runtimeModeBadgeLabel = isStandaloneThread
-    ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
-    : HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel;
+  const runtimeModeBadgeLabel = isCuratorThread
+    ? HOMELAB_PRODUCT_COPY.curator.activeThreadBadgeLabel
+    : isStandaloneThread
+      ? HOMELAB_PRODUCT_COPY.standalone.activeThreadBadgeLabel
+      : HOMELAB_PRODUCT_COPY.projectRuntime.activeIsolatedThreadBadgeLabel;
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

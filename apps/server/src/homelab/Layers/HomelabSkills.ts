@@ -274,10 +274,104 @@ const makeHomelabSkills = Effect.gen(function* () {
       `,
   });
 
+  const selectAll = SqlSchema.findAll({
+    Request: Schema.Struct({}),
+    Result: SkillRow,
+    execute: () =>
+      sql`
+        SELECT
+          skill_id AS "skillId",
+          name,
+          scope,
+          project_id AS "projectId",
+          source_thread_id AS "sourceThreadId",
+          description,
+          body,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM homelab_skills
+        ORDER BY scope ASC, name ASC, created_at ASC
+      `,
+  });
+
+  const findById = SqlSchema.findAll({
+    Request: Schema.Struct({ skillId: Schema.String }),
+    Result: SkillRow,
+    execute: ({ skillId }) =>
+      sql`
+        SELECT
+          skill_id AS "skillId",
+          name,
+          scope,
+          project_id AS "projectId",
+          source_thread_id AS "sourceThreadId",
+          description,
+          body,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM homelab_skills
+        WHERE skill_id = ${skillId}
+      `,
+  });
+
+  const listAll: HomelabSkillsShape["listAll"] = () =>
+    selectAll({}).pipe(
+      Effect.mapError(toSkillsError("Failed to list all homelab skills.")),
+      Effect.flatMap(decodeRows),
+    );
+
+  const updateById: HomelabSkillsShape["updateById"] = (input) =>
+    Effect.gen(function* () {
+      const rows = yield* findById({ skillId: String(input.skillId) }).pipe(
+        Effect.mapError(toSkillsError("Failed to read homelab skill.")),
+      );
+      const row = rows[0];
+      if (!row) {
+        return yield* new HomelabSkillsError({
+          message: `Skill '${String(input.skillId)}' was not found.`,
+        });
+      }
+      const description = input.description ?? row.description;
+      const body = input.body ?? row.body;
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      yield* sql`
+        UPDATE homelab_skills
+        SET description = ${description},
+            body = ${body},
+            updated_at = ${now}
+        WHERE skill_id = ${row.skillId}
+      `.pipe(Effect.mapError(toSkillsError("Failed to update homelab skill.")));
+      return yield* decodeSkill(
+        toSkillCandidate({ ...row, description, body, updatedAt: now }),
+      ).pipe(Effect.mapError(toSkillsError("Failed to decode homelab skill.")));
+    });
+
+  const removeById: HomelabSkillsShape["removeById"] = (skillId) =>
+    Effect.gen(function* () {
+      const rows = yield* findById({ skillId: String(skillId) }).pipe(
+        Effect.mapError(toSkillsError("Failed to read homelab skill.")),
+      );
+      const row = rows[0];
+      if (!row) {
+        return { removed: false, skill: undefined };
+      }
+      const skill = yield* decodeSkill(toSkillCandidate(row)).pipe(
+        Effect.mapError(toSkillsError("Failed to decode homelab skill.")),
+      );
+      yield* sql`
+        DELETE FROM homelab_skills
+        WHERE skill_id = ${row.skillId}
+      `.pipe(Effect.mapError(toSkillsError("Failed to delete homelab skill.")));
+      return { removed: true, skill };
+    });
+
   return {
     listForContext,
     upsert,
     promote,
+    listAll,
+    updateById,
+    removeById,
     adoptThreadSkillsIntoProject,
   } satisfies HomelabSkillsShape;
 });

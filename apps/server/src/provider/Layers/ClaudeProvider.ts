@@ -48,10 +48,19 @@ const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
 } as const;
+const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.170";
 const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
 
 const CLAUDE_EFFORT_OPTIONS = {
+  fable5: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultrathink", label: "Ultrathink" },
+  ],
   opus48: [
     { value: "low", label: "Low" },
     { value: "medium", label: "Medium" },
@@ -92,6 +101,24 @@ const CLAUDE_EFFORT_OPTIONS = {
 } as const;
 
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
+  {
+    slug: "claude-fable-5",
+    name: "Claude Fable 5",
+    isCustom: false,
+    capabilities: createModelCapabilities({
+      optionDescriptors: [
+        buildSelectOptionDescriptor({
+          id: "effort",
+          label: "Reasoning",
+          options: CLAUDE_EFFORT_OPTIONS.fable5,
+          promptInjectedValues: ["ultrathink"],
+        }),
+        // No thinking toggle (thinking is always on for Fable 5) and no
+        // contextWindow select — the 1M window is the model's default, so the
+        // `[1m]` suffix must never be appended to this slug.
+      ],
+    }),
+  },
   {
     slug: "claude-opus-4-8",
     name: "Claude Opus 4.8",
@@ -221,6 +248,10 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   },
 ];
 
+function supportsClaudeFable5(version: string | null | undefined): boolean {
+  return version ? compareSemverVersions(version, MINIMUM_CLAUDE_FABLE_5_VERSION) >= 0 : false;
+}
+
 function supportsClaudeOpus48(version: string | null | undefined): boolean {
   return version ? compareSemverVersions(version, MINIMUM_CLAUDE_OPUS_4_8_VERSION) >= 0 : false;
 }
@@ -233,6 +264,9 @@ function getBuiltInClaudeModelsForVersion(
   version: string | null | undefined,
 ): ReadonlyArray<ServerProviderModel> {
   return BUILT_IN_MODELS.filter((model) => {
+    if (model.slug === "claude-fable-5") {
+      return supportsClaudeFable5(version);
+    }
     if (model.slug === "claude-opus-4-8") {
       return supportsClaudeOpus48(version);
     }
@@ -241,6 +275,11 @@ function getBuiltInClaudeModelsForVersion(
     }
     return true;
   });
+}
+
+function formatClaudeFable5UpgradeMessage(version: string | null): string {
+  const versionLabel = version ? `v${version}` : "the installed version";
+  return `Claude Code ${versionLabel} is too old for Claude Fable 5. Upgrade to v${MINIMUM_CLAUDE_FABLE_5_VERSION} or newer to access it.`;
 }
 
 function formatClaudeOpus48UpgradeMessage(version: string | null): string {
@@ -294,7 +333,7 @@ export function normalizeClaudeCliEffort(
   if (effort === "ultracode") {
     return "xhigh";
   }
-  if (effort === "xhigh" && model !== "claude-opus-4-8") {
+  if (effort === "xhigh" && model !== "claude-opus-4-8" && model !== "claude-fable-5") {
     return "max";
   }
   if (effort === "max" && model === "claude-sonnet-4-6") {
@@ -308,6 +347,16 @@ export function isClaudeUltracodeEffort(effort: string | null | undefined): bool
 }
 
 export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {
+  // Only honor a stored contextWindow selection when the model actually
+  // offers that option. Selections can carry options from a previously-picked
+  // model, and appending `[1m]` to a model without the descriptor (Fable 5 —
+  // 1M is its default — or Haiku) produces an ID older CLIs reject.
+  const supportsContextWindowOption = (
+    getClaudeModelCapabilities(modelSelection.model).optionDescriptors ?? []
+  ).some((descriptor) => descriptor.id === "contextWindow");
+  if (!supportsContextWindowOption) {
+    return modelSelection.model;
+  }
   switch (getModelSelectionStringOptionValue(modelSelection, "contextWindow")) {
     case "1m":
       return `${modelSelection.model}[1m]`;
@@ -669,7 +718,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
       checkedAt,
-      models: allModels,
+      // The probe failed but may still have printed a parseable version —
+      // gate the catalog on it when present rather than advertising models
+      // the installed CLI can't serve.
+      models: parsedVersion
+        ? providerModelsFromSettings(
+            getBuiltInClaudeModelsForVersion(parsedVersion),
+            PROVIDER,
+            claudeSettings.customModels,
+            DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+          )
+        : allModels,
       probe: {
         installed: true,
         version: parsedVersion,
@@ -688,11 +747,13 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
-  const versionUpgradeMessage = supportsClaudeOpus48(parsedVersion)
+  const versionUpgradeMessage = supportsClaudeFable5(parsedVersion)
     ? undefined
-    : supportsClaudeOpus47(parsedVersion)
-      ? formatClaudeOpus48UpgradeMessage(parsedVersion)
-      : formatClaudeOpus47UpgradeMessage(parsedVersion);
+    : supportsClaudeOpus48(parsedVersion)
+      ? formatClaudeFable5UpgradeMessage(parsedVersion)
+      : supportsClaudeOpus47(parsedVersion)
+        ? formatClaudeOpus48UpgradeMessage(parsedVersion)
+        : formatClaudeOpus47UpgradeMessage(parsedVersion);
 
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))

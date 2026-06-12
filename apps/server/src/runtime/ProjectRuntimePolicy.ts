@@ -8,6 +8,13 @@ import {
   type ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import {
+  CURATOR_PROJECT_ID,
+  CURATOR_PROJECT_SHORT_TITLE,
+  CURATOR_PROJECT_TITLE,
+  createCuratorProjectWorkspaceRoot,
+  isCuratorProjectId as isCuratorProjectIdValue,
+} from "@t3tools/shared/curatorProject";
+import {
   STANDALONE_PROJECT_ID,
   STANDALONE_PROJECT_SHORT_TITLE,
   STANDALONE_PROJECT_TITLE,
@@ -16,14 +23,20 @@ import {
 } from "@t3tools/shared/standaloneProject";
 
 /**
- * The three runtime contexts a thread can run in. `kind` is the single source of truth
+ * The four runtime contexts a thread can run in. `kind` is the single source of truth
  * for persona, generated instructions, queueing, and knowledge scoping:
  * - "scratch": a standalone thread's own runtime — private workspace, thread-scoped memory.
+ * - "curator": a knowledge-curator session's own runtime — private workspace, thread-scoped
+ *   memory, plus the curator tool surface over ALL durable memory/knowledge.
  * - "project-isolated": a project thread's own parallel runtime — private workspace,
  *   project-scoped memory/knowledge.
  * - "project-shared": the project's default runtime — shared workspace, single-writer queue.
  */
-export type ProjectRuntimeAssignmentKind = "scratch" | "project-isolated" | "project-shared";
+export type ProjectRuntimeAssignmentKind =
+  | "scratch"
+  | "curator"
+  | "project-isolated"
+  | "project-shared";
 
 export interface ProjectRuntimeAssignment {
   readonly projectId: ProjectId;
@@ -63,6 +76,26 @@ export function isStandaloneProjectId(projectId: ProjectId | string): boolean {
   return isStandaloneProjectIdValue(String(projectId));
 }
 
+export function curatorProjectId(): ProjectId {
+  return ProjectId.make(CURATOR_PROJECT_ID);
+}
+
+export function curatorProjectTitle(): string {
+  return CURATOR_PROJECT_TITLE;
+}
+
+export function curatorProjectShortTitle(): string {
+  return CURATOR_PROJECT_SHORT_TITLE;
+}
+
+export function curatorProjectWorkspaceRoot(): string {
+  return createCuratorProjectWorkspaceRoot();
+}
+
+export function isCuratorProjectId(projectId: ProjectId | string): boolean {
+  return isCuratorProjectIdValue(String(projectId));
+}
+
 /**
  * Detect whether a runtime session id is the retired shared scratch runtime
  * (`project-runtime:system:standalone`). Standalone threads now always run in their own
@@ -99,6 +132,20 @@ export function resolveProjectRuntimeAssignment(input: {
       projectId: input.thread.projectId,
       threadId: input.thread.id,
       kind: "scratch",
+      runtimeId: isolatedThreadRuntimeId(input.thread.id),
+      runtimeSelectionMode: "isolated",
+      queuePolicy: "isolated-concurrent",
+      isolated: true,
+    };
+  }
+
+  // Curator sessions mirror scratch isolation: every session owns its runtime and
+  // thread-scoped memory. What differs is the persona and the curator tool surface.
+  if (isCuratorProjectId(input.thread.projectId)) {
+    return {
+      projectId: input.thread.projectId,
+      threadId: input.thread.id,
+      kind: "curator",
       runtimeId: isolatedThreadRuntimeId(input.thread.id),
       runtimeSelectionMode: "isolated",
       queuePolicy: "isolated-concurrent",

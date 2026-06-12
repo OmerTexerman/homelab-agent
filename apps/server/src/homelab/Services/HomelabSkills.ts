@@ -1,5 +1,6 @@
 import type {
   HomelabSkill,
+  HomelabSkillId,
   HomelabSkillName,
   HomelabSkillPromoteTarget,
   ProjectId,
@@ -46,6 +47,24 @@ export interface HomelabSkillsShape {
     readonly name: HomelabSkillName;
     readonly to: HomelabSkillPromoteTarget;
   }) => Effect.Effect<HomelabSkill, HomelabSkillsError>;
+
+  /** Curator-only: every skill at every scope, no visibility dedupe. */
+  readonly listAll: () => Effect.Effect<ReadonlyArray<HomelabSkill>, HomelabSkillsError>;
+
+  /** Curator-only: rewrite a skill's description/body in place, at any scope, by id. */
+  readonly updateById: (input: {
+    readonly skillId: HomelabSkillId;
+    readonly description?: string | undefined;
+    readonly body?: string | undefined;
+  }) => Effect.Effect<HomelabSkill, HomelabSkillsError>;
+
+  /** Curator-only: delete a skill at any scope by id. Returns whether it existed. */
+  readonly removeById: (
+    skillId: HomelabSkillId,
+  ) => Effect.Effect<
+    { readonly removed: boolean; readonly skill: HomelabSkill | undefined },
+    HomelabSkillsError
+  >;
 
   /** Re-scope every thread-scoped skill of a scratch thread into a project (used on move/promote of the thread). */
   readonly adoptThreadSkillsIntoProject: (input: {

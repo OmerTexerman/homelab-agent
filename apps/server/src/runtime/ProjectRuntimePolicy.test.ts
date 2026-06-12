@@ -8,8 +8,12 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  curatorProjectId,
+  curatorProjectTitle,
+  curatorProjectWorkspaceRoot,
   defaultProjectRuntimeId,
   defaultRuntimeIdForProject,
+  isCuratorProjectId,
   isStandaloneProjectId,
   isolatedThreadRuntimeId,
   resolveProjectRuntimeAssignment,
@@ -118,6 +122,33 @@ describe("project runtime policy", () => {
 
     expect(assignment.runtimeId).toBe("project-runtime:custom-project-1");
     expect(assignment.kind).toBe("project-shared");
+  });
+
+  it("defines the hidden curator project runtime policy", () => {
+    expect(curatorProjectId()).toBe("system:curator");
+    expect(curatorProjectTitle()).toBe("Knowledge Curator");
+    expect(curatorProjectWorkspaceRoot()).toBe("homelab://project/system%3Acurator");
+    expect(isCuratorProjectId(curatorProjectId())).toBe(true);
+    expect(isCuratorProjectId(standaloneProjectId())).toBe(false);
+    expect(isCuratorProjectId(projectId)).toBe(false);
+  });
+
+  it("always assigns curator sessions their own isolated runtime with the curator kind", () => {
+    const curatorThreadId = ThreadId.make("curator-thread");
+    const assignment = resolveProjectRuntimeAssignment({
+      project: { id: curatorProjectId(), defaultRuntimeId: null },
+      thread: makeThread({
+        id: curatorThreadId,
+        projectId: curatorProjectId(),
+        runtimeSelectionMode: "shared",
+      }),
+    });
+
+    expect(assignment.kind).toBe("curator");
+    expect(assignment.runtimeId).toBe(isolatedThreadRuntimeId(curatorThreadId));
+    expect(assignment.runtimeSelectionMode).toBe("isolated");
+    expect(assignment.queuePolicy).toBe("isolated-concurrent");
+    expect(assignment.isolated).toBe(true);
   });
 
   it("always assigns scratch threads their own isolated runtime", () => {

@@ -79,6 +79,15 @@ async function handleCliTestRequest(
     case "/api/homelab/secrets":
       respondJson(response, { secrets: [] });
       return;
+    case "/api/homelab/curate/overview":
+      respondJson(response, { entityCount: 0 });
+      return;
+    case "/api/homelab/curate/memory":
+      respondJson(response, { entries: [] });
+      return;
+    case "/api/homelab/curate/memory/delete":
+      respondJson(response, { removed: true });
+      return;
     case "/api/homelab/runtime-bootstrap":
       respondJson(response, {
         activeBootstrapVersion: "bootstrap-cli",
@@ -100,13 +109,17 @@ async function handleCliTestRequest(
   }
 }
 
-async function runHomelabCli(args: ReadonlyArray<string>): Promise<string> {
+async function runHomelabCli(
+  args: ReadonlyArray<string>,
+  envOverrides: Readonly<Record<string, string>> = {},
+): Promise<string> {
   const result = await execFile("python3", [cliPath, ...args], {
     env: {
       ...process.env,
       HOMELAB_AGENT_SERVER_URL: serverUrl,
       HOMELAB_AGENT_RUNTIME_TOKEN: "test-runtime-token",
       HOMELAB_AGENT_THREAD_ID: "thread-cli-connectivity",
+      ...envOverrides,
     },
     timeout: 5_000,
   });
@@ -188,5 +201,61 @@ describe("generated homelab CLI", () => {
         authorization: "Bearer test-runtime-token",
       },
     ]);
+  });
+
+  it("gates the curate surface to curator-scoped runtimes", async () => {
+    await expect(
+      runHomelabCli(["curate", "overview"], { HOMELAB_AGENT_SCOPE: "project" }),
+    ).rejects.toThrow(/only available inside a knowledge curator session/);
+    await expect(
+      runHomelabCli(["curate", "overview"], { HOMELAB_AGENT_SCOPE: "scratch" }),
+    ).rejects.toThrow(/only available inside a knowledge curator session/);
+    expect(requests).toEqual([]);
+
+    await expect(
+      runHomelabCli(["curate", "overview"], { HOMELAB_AGENT_SCOPE: "curator" }),
+    ).resolves.toContain('"entityCount"');
+    await expect(
+      runHomelabCli(["curate", "memory", "--all"], { HOMELAB_AGENT_SCOPE: "curator" }),
+    ).resolves.toContain('"entries"');
+    await expect(
+      runHomelabCli(
+        ["curate", "memory-delete", "memory-1", "--reason", "duplicate of memory-2"],
+        { HOMELAB_AGENT_SCOPE: "curator" },
+      ),
+    ).resolves.toContain('"removed"');
+
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        path: "/api/homelab/curate/overview",
+        authorization: "Bearer test-runtime-token",
+      },
+      {
+        method: "GET",
+        path: "/api/homelab/curate/memory",
+        authorization: "Bearer test-runtime-token",
+      },
+      {
+        method: "POST",
+        path: "/api/homelab/curate/memory/delete",
+        authorization: "Bearer test-runtime-token",
+        bodyJson: {
+          memoryId: "memory-1",
+          threadId: "thread-cli-connectivity",
+          reason: "duplicate of memory-2",
+        },
+      },
+    ]);
+  });
+
+  it("refuses memory proposals in curator scope", async () => {
+    await expect(
+      runHomelabCli(
+        ["memory", "propose", "--summary", "A finding"],
+        { HOMELAB_AGENT_SCOPE: "curator" },
+      ),
+    ).rejects.toThrow(/curator session: there is no project to propose or promote into/);
+    expect(requests).toEqual([]);
   });
 });

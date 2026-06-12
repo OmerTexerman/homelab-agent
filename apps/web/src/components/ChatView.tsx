@@ -32,6 +32,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import { isCuratorProject } from "@t3tools/shared/curatorProject";
 import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
@@ -3760,6 +3761,10 @@ export default function ChatView(props: ChatViewProps) {
     id: activeThread.projectId,
     cwd: activeProject?.cwd ?? null,
   });
+  const activeThreadIsCurator = isCuratorProject({
+    id: activeThread.projectId,
+    cwd: activeProject?.cwd ?? null,
+  });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
@@ -3783,6 +3788,7 @@ export default function ChatView(props: ChatViewProps) {
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
           isStandaloneThread={activeThreadIsStandalone}
+          isCuratorThread={activeThreadIsCurator}
           runtimeSelectionMode={activeThread.runtimeSelectionMode ?? "shared"}
           projectDefaultRuntimeId={activeProject?.defaultRuntimeId ?? null}
           isGitRepo={isGitRepo}

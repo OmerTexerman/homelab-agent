@@ -67,9 +67,20 @@ project's default runtime (`project-runtime:<project-id>` unless a promoted
 scratch runtime was adopted), and a thread's own runtime — scratch or
 parallel — is always `isolated-runtime:<thread-id>`. `thread.runtimeId` is a
 derived display cache, never an input; the assignment `kind`
-(scratch | project-shared | project-isolated) drives personas, queueing,
-knowledge scoping, and clone-on-create seeding. Terminal ownership and logs
+(scratch | curator | project-shared | project-isolated) drives personas,
+queueing, knowledge scoping, and clone-on-create seeding. Terminal ownership and logs
 should follow the runtime id for shared Project Runtimes.
+
+Curator sessions are threads in the hidden `system:curator` project (sibling to
+`system:standalone`), created via `thread.curator.create` from Settings ->
+Memory & Knowledge. They mirror scratch isolation (own runtime, thread-scoped
+working memory) but render a curator persona and unlock the `homelab curate`
+CLI surface (`/api/homelab/curate/*`): cross-project memory reads/edits/deletes,
+graph entity/relation deletes, and all-scope skill edits/deletes. Every curator
+mutation records a graph observation carrying the session thread id and the
+`--reason`, so the audit trail lives in the durable record itself. Curator
+sessions cannot propose/promote into a project, and the curator project is
+hidden from the sidebar and from move/new-thread project pickers.
 
 ## Known Gaps
 

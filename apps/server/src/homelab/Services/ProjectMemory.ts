@@ -50,6 +50,18 @@ export interface ProjectMemoryStandaloneMoveResult {
   readonly skippedEntryIds: ReadonlyArray<ProjectMemoryId>;
 }
 
+export interface ProjectMemoryListAllInput {
+  readonly promotionStatus?: ProjectMemoryEntry["promotionStatus"] | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface ProjectMemoryUpdateInput {
+  readonly memoryId: ProjectMemoryId;
+  readonly summary?: string | undefined;
+  readonly body?: string | undefined;
+  readonly tags?: ReadonlyArray<string> | undefined;
+}
+
 export interface ProjectMemoryShape {
   readonly create: (
     input: ProjectMemoryCreateResolvedInput,
@@ -63,6 +75,18 @@ export interface ProjectMemoryShape {
   readonly search: (
     input: ProjectMemorySearchResolvedInput,
   ) => Effect.Effect<ReadonlyArray<ProjectMemorySearchResult>, ProjectMemoryError>;
+  /** Curator-only: list memory entries across every project. */
+  readonly listAll: (
+    input: ProjectMemoryListAllInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectMemoryEntry>, ProjectMemoryError>;
+  /** Curator-only: rewrite an entry's content fields in place (any project). */
+  readonly update: (
+    input: ProjectMemoryUpdateInput,
+  ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;
+  /** Curator-only: delete an entry (any project). Returns whether it existed. */
+  readonly remove: (
+    memoryId: ProjectMemoryId,
+  ) => Effect.Effect<{ readonly removed: boolean; readonly entry: ProjectMemoryEntry | undefined }, ProjectMemoryError>;
   readonly markPromoted: (
     input: ProjectMemoryPromoteResolvedInput,
   ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;

@@ -127,7 +127,7 @@ export interface RuntimeDescriptorInput {
   readonly requestedCwd?: string;
   readonly baseEnvironment?: Readonly<Record<string, string>>;
   readonly isStandalone?: boolean;
-  readonly runtimeKind?: "scratch" | "project-shared" | "project-isolated";
+  readonly runtimeKind?: "scratch" | "curator" | "project-shared" | "project-isolated";
   readonly projectTitle?: string;
   readonly bootstrapImageRef: string;
   readonly bootstrapVersion: string;
@@ -389,7 +389,7 @@ export function buildRuntimeControlEnvironment(input: {
   readonly secretEnv: Readonly<Record<string, string>>;
   readonly serverUrl: string;
   readonly threadId: ThreadIdModel;
-  readonly scope: "scratch" | "project";
+  readonly scope: "scratch" | "curator" | "project";
   readonly runtimeAccessToken?: string;
 }): Readonly<Record<string, string>> {
   return {
@@ -397,7 +397,8 @@ export function buildRuntimeControlEnvironment(input: {
     HOMELAB_AGENT_SERVER_URL: input.serverUrl,
     HOMELAB_AGENT_THREAD_ID: String(input.threadId),
     // The in-container homelab CLI uses this to teach scope-appropriate promotion paths:
-    // scratch threads have no project to propose into.
+    // scratch threads have no project to propose into, and curator sessions unlock the
+    // `homelab curate` surface.
     HOMELAB_AGENT_SCOPE: input.scope,
     ...(input.runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: input.runtimeAccessToken } : {}),
   };

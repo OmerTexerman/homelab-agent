@@ -3,9 +3,20 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
+  CuratorEntityDeleteInput,
+  CuratorMemoryDeleteInput,
+  CuratorMemoryListInput,
+  CuratorMemoryUpdateInput,
+  CuratorRelationDeleteInput,
+  CuratorSkillDeleteInput,
+  CuratorSkillUpdateInput,
+  type CuratorMemoryListResult,
+  type CuratorOverview,
+  type CuratorSkillListResult,
   HomelabEntityId,
   HomelabEntityKind,
   HomelabGraphSearchInput,
+  HomelabObservationId,
   HomelabPromotionEnvelope,
   HomelabSecretRequestInput,
   ProjectMemoryCreateInput,
@@ -17,6 +28,7 @@ import {
   type HomelabGraphSearchResult,
   type HomelabPromotionRecorded,
   type HomelabRelation,
+  type HomelabRelationId,
   type HomelabSecretsListResult,
   type HomelabSnapshot,
   type HomelabSetupStatus,
@@ -37,7 +49,7 @@ import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.t
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
-import { isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
+import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -53,6 +65,7 @@ const decodeHomelabEntityId = Schema.decodeUnknownSync(HomelabEntityId);
 const decodeHomelabEntityKind = Schema.decodeUnknownSync(HomelabEntityKind);
 const decodeProjectMemoryListInput = Schema.decodeUnknownEffect(ProjectMemoryListInput);
 const decodeHomelabSkillListInput = Schema.decodeUnknownEffect(HomelabSkillListInput);
+const decodeCuratorMemoryListInput = Schema.decodeUnknownEffect(CuratorMemoryListInput);
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
 const respondToHomelabHttpError = (error: HomelabHttpError) =>
@@ -166,6 +179,11 @@ const SCRATCH_NO_PROJECT_DETAIL =
   "Use 'homelab promote' to publish durable findings straight to the global homelab graph, " +
   "or promote this thread to a project first.";
 
+const CURATOR_NO_PROJECT_DETAIL =
+  "This is a knowledge curator session: there is no project to propose or promote into. " +
+  "Correct the durable record directly with 'homelab curate' mutations, or upsert through " +
+  "'homelab promote'.";
+
 const requireProjectScopeForPromotion = (projectId: ProjectId) =>
   isStandaloneProjectId(projectId)
     ? Effect.fail(
@@ -174,7 +192,14 @@ const requireProjectScopeForPromotion = (projectId: ProjectId) =>
           status: 400,
         }),
       )
-    : Effect.void;
+    : isCuratorProjectId(projectId)
+      ? Effect.fail(
+          new HomelabHttpError({
+            message: CURATOR_NO_PROJECT_DETAIL,
+            status: 400,
+          }),
+        )
+      : Effect.void;
 
 const resolveProjectIdForMemoryRequest = (input: {
   readonly projectId?: ProjectId | undefined;
@@ -771,6 +796,421 @@ export const homelabPromotionsRouteLayer = HttpRouter.add(
     });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+/**
+ * Curator routes: the `/api/homelab/curate/*` surface backing curator sessions
+ * (threads in the hidden `system:curator` project). The in-container CLI gates these
+ * behind `HOMELAB_AGENT_SCOPE=curator`; server-side they require the operate scope for
+ * mutations, verify a provided `threadId` really is a curator session, and record every
+ * mutation as a graph observation so the audit trail is part of the durable record.
+ */
+const CURATOR_STALENESS_WINDOW_DAYS = 30;
+
+const requireCuratorThread = (threadId: ThreadId | undefined) =>
+  Effect.gen(function* () {
+    if (threadId === undefined) {
+      return;
+    }
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const snapshot = yield* projectionSnapshotQuery.getSnapshot().pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Failed to resolve curator session thread.",
+            status: 500,
+            cause,
+          }),
+      ),
+    );
+    const thread = snapshot.threads.find(
+      (entry) => entry.id === threadId && entry.deletedAt === null,
+    );
+    if (!thread || !isCuratorProjectId(thread.projectId)) {
+      return yield* new HomelabHttpError({
+        message: "Curator mutations require a curator session thread.",
+        status: 403,
+      });
+    }
+  });
+
+function makeCuratorObservationId(): string {
+  const randomSuffix = Math.random().toString(36).slice(2, 10);
+  return `observation-curator-${Date.now()}-${randomSuffix}`;
+}
+
+const recordCuratorObservation = (input: {
+  readonly summary: string;
+  readonly reason?: string | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly entityIds?: ReadonlyArray<HomelabEntityId> | undefined;
+  readonly relationIds?: ReadonlyArray<HomelabRelationId> | undefined;
+  readonly payload?: unknown;
+}) =>
+  Effect.gen(function* () {
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const createdAt = new Date().toISOString();
+    yield* knowledgeGraph.recordObservation({
+      id: HomelabObservationId.make(makeCuratorObservationId()),
+      sourceKind: "manual",
+      summary: input.summary,
+      ...(input.reason ? { detail: input.reason } : {}),
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+      ...(input.entityIds !== undefined && input.entityIds.length > 0
+        ? { entityIds: input.entityIds }
+        : {}),
+      ...(input.relationIds !== undefined && input.relationIds.length > 0
+        ? { relationIds: input.relationIds }
+        : {}),
+      payload: { curator: true, ...(input.payload === undefined ? {} : { detail: input.payload }) },
+      createdAt,
+    });
+  });
+
+function isoTimestampOrUndefined(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+export const homelabCuratorOverviewRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/curate/overview",
+  Effect.gen(function* () {
+    yield* authenticateHomelabRead;
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const projectMemory = yield* ProjectMemory;
+    const skills = yield* HomelabSkills;
+    const snapshot = yield* knowledgeGraph.getSnapshot();
+    const memoryEntries = yield* projectMemory.listAll({ limit: 10_000 });
+    const allSkills = yield* skills.listAll().pipe(
+      Effect.mapError(
+        (error) =>
+          new HomelabHttpError({ message: error.message, status: 500, cause: error.cause }),
+      ),
+    );
+    const staleCutoff = Date.now() - CURATOR_STALENESS_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const staleEntityIds = snapshot.entities
+      .filter((entity) => {
+        const freshest = Math.max(
+          isoTimestampOrUndefined(entity.lastVerifiedAt) ?? 0,
+          isoTimestampOrUndefined(entity.observedAt) ?? 0,
+          isoTimestampOrUndefined(entity.updatedAt) ?? 0,
+        );
+        return freshest > 0 && freshest < staleCutoff;
+      })
+      .map((entity) => entity.id);
+    return HttpServerResponse.jsonUnsafe(
+      {
+        entityCount: snapshot.entities.length,
+        relationCount: snapshot.relations.length,
+        observationCount: snapshot.observations.length,
+        memoryEntryCount: memoryEntries.length,
+        skillCount: allSkills.length,
+        staleEntityCount: staleEntityIds.length,
+        staleEntityIds,
+        stalenessWindowDays: CURATOR_STALENESS_WINDOW_DAYS,
+        graphUpdatedAt: snapshot.updatedAt,
+      } satisfies CuratorOverview,
+      { status: 200 },
+    );
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorMemoryListRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/curate/memory",
+  Effect.gen(function* () {
+    yield* authenticateHomelabRead;
+    const url = yield* getRequestUrl;
+    const input = yield* decodeCuratorMemoryListInput({
+      ...(url.searchParams.get("projectId")
+        ? { projectId: url.searchParams.get("projectId") }
+        : {}),
+      ...(url.searchParams.get("promotionStatus")
+        ? { promotionStatus: url.searchParams.get("promotionStatus") }
+        : {}),
+      ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator memory list query.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const projectMemory = yield* ProjectMemory;
+    const entries = input.projectId
+      ? yield* projectMemory.list({
+          projectId: input.projectId,
+          ...(input.promotionStatus ? { promotionStatus: input.promotionStatus } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+      : yield* projectMemory.listAll({
+          ...(input.promotionStatus ? { promotionStatus: input.promotionStatus } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        });
+    return HttpServerResponse.jsonUnsafe({ entries } satisfies CuratorMemoryListResult, {
+      status: 200,
+    });
+  }).pipe(
+    Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorMemoryUpdateRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/memory/update",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorMemoryUpdateInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator memory update payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const projectMemory = yield* ProjectMemory;
+    const entry = yield* projectMemory.update({
+      memoryId: input.memoryId,
+      ...(input.summary !== undefined ? { summary: input.summary } : {}),
+      ...(input.body !== undefined ? { body: input.body } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+    });
+    yield* recordCuratorObservation({
+      summary: `Curator updated memory entry '${String(input.memoryId)}'.`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { memoryId: input.memoryId, projectId: entry.projectId },
+    });
+    yield* refreshActiveProjectContextViews(entry.projectId);
+    return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorMemoryDeleteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/memory/delete",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorMemoryDeleteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator memory delete payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const projectMemory = yield* ProjectMemory;
+    const result = yield* projectMemory.remove(input.memoryId);
+    if (!result.removed) {
+      return yield* new HomelabHttpError({
+        message: "Project memory entry not found.",
+        status: 404,
+      });
+    }
+    yield* recordCuratorObservation({
+      summary: `Curator deleted memory entry '${String(input.memoryId)}'.`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { memoryId: input.memoryId, projectId: result.entry?.projectId },
+    });
+    if (result.entry) {
+      yield* refreshActiveProjectContextViews(result.entry.projectId);
+    }
+    return HttpServerResponse.jsonUnsafe({ removed: true, entry: result.entry }, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorEntityDeleteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/entity/delete",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorEntityDeleteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator entity delete payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const result = yield* knowledgeGraph.deleteEntity(input.entityId);
+    if (!result.removed) {
+      return yield* new HomelabHttpError({
+        message: "Homelab entity not found.",
+        status: 404,
+      });
+    }
+    yield* recordCuratorObservation({
+      summary: `Curator deleted entity '${String(input.entityId)}' and ${result.removedRelationIds.length} connected relation(s).`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { entityId: input.entityId, removedRelationIds: result.removedRelationIds },
+    });
+    return HttpServerResponse.jsonUnsafe(
+      { removed: true, removedRelationIds: result.removedRelationIds },
+      { status: 200 },
+    );
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorRelationDeleteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/relation/delete",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorRelationDeleteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator relation delete payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const result = yield* knowledgeGraph.deleteRelation(input.relationId);
+    if (!result.removed) {
+      return yield* new HomelabHttpError({
+        message: "Homelab relation not found.",
+        status: 404,
+      });
+    }
+    yield* recordCuratorObservation({
+      summary: `Curator deleted relation '${String(input.relationId)}'.`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { relationId: input.relationId },
+    });
+    return HttpServerResponse.jsonUnsafe({ removed: true }, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorSkillsListRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/curate/skills",
+  Effect.gen(function* () {
+    yield* authenticateHomelabRead;
+    const skills = yield* HomelabSkills;
+    const entries = yield* skills.listAll();
+    return HttpServerResponse.jsonUnsafe({ skills: entries } satisfies CuratorSkillListResult, {
+      status: 200,
+    });
+  }).pipe(
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorSkillUpdateRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/skill/update",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorSkillUpdateInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator skill update payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const skills = yield* HomelabSkills;
+    const skill = yield* skills.updateById({
+      skillId: input.skillId,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.body !== undefined ? { body: input.body } : {}),
+    });
+    yield* recordCuratorObservation({
+      summary: `Curator updated skill '${skill.name}' (${skill.scope}).`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { skillId: input.skillId, name: skill.name, scope: skill.scope },
+    });
+    return HttpServerResponse.jsonUnsafe(skill, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curate/skill/delete",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const input = yield* HttpServerRequest.schemaBodyJson(CuratorSkillDeleteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid curator skill delete payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* requireCuratorThread(input.threadId);
+    const skills = yield* HomelabSkills;
+    const result = yield* skills.removeById(input.skillId);
+    if (!result.removed) {
+      return yield* new HomelabHttpError({
+        message: "Homelab skill not found.",
+        status: 404,
+      });
+    }
+    yield* recordCuratorObservation({
+      summary: `Curator deleted skill '${result.skill?.name ?? String(input.skillId)}'${result.skill ? ` (${result.skill.scope})` : ""}.`,
+      reason: input.reason,
+      threadId: input.threadId,
+      payload: { skillId: input.skillId, name: result.skill?.name, scope: result.skill?.scope },
+    });
+    return HttpServerResponse.jsonUnsafe({ removed: true, skill: result.skill }, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
 );

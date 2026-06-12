@@ -135,6 +135,7 @@ import {
   shouldShowEditorOpenInControls,
   shouldShowRemoteProjectCloneUi,
 } from "../productCapabilities";
+import { isCuratorProject } from "@t3tools/shared/curatorProject";
 import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 
@@ -425,7 +426,12 @@ function OpenCommandPaletteDialog() {
     useHandleNewThread();
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const normalProjects = useMemo(
-    () => projects.filter((project) => !isStandaloneProject({ id: project.id, cwd: project.cwd })),
+    () =>
+      projects.filter(
+        (project) =>
+          !isStandaloneProject({ id: project.id, cwd: project.cwd }) &&
+          !isCuratorProject({ id: project.id, cwd: project.cwd }),
+      ),
     [projects],
   );
   const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));

@@ -17,6 +17,7 @@ export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
 export * from "./homelab.ts";
+export * from "./homelabCurator.ts";
 export * from "./homelabHttp.ts";
 export * from "./homelabSecrets.ts";
 export * from "./homelabSkills.ts";

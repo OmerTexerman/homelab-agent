@@ -25,6 +25,7 @@ import {
   type ProjectMemoryListResolvedInput,
   type ProjectMemoryShape,
 } from "../Services/ProjectMemory.ts";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 
 const DEFAULT_LIST_LIMIT = 200;
@@ -233,12 +234,14 @@ const makeProjectMemory = Effect.gen(function* () {
 
   // Scratch (standalone) thread memory is strictly thread-scoped: the synthetic standalone
   // project is only a storage namespace, so reads on behalf of a thread must never surface
-  // sibling scratch threads' entries or transcripts.
+  // sibling scratch threads' entries or transcripts. Curator sessions get the same scoping
+  // so an audit session's working notes never pollute (or leak into) sibling sessions.
   const standaloneScopeThreadId = (input: {
     readonly projectId: ProjectMemoryListResolvedInput["projectId"];
     readonly threadId?: ProjectMemoryListResolvedInput["threadId"];
   }) =>
-    input.threadId !== undefined && isStandaloneProjectId(String(input.projectId))
+    input.threadId !== undefined &&
+    (isStandaloneProjectId(String(input.projectId)) || isCuratorProjectId(String(input.projectId)))
       ? input.threadId
       : null;
 
@@ -293,6 +296,52 @@ const makeProjectMemory = Effect.gen(function* () {
           return scoreDelta !== 0 ? scoreDelta : right.updatedAt.localeCompare(left.updatedAt);
         })
         .slice(0, limit);
+    });
+
+  const listAll: ProjectMemoryShape["listAll"] = (input) =>
+    repository
+      .listAll({
+        ...(input.promotionStatus ? { promotionStatus: input.promotionStatus } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      })
+      .pipe(
+        Effect.mapError(
+          toProjectMemoryError("Failed to list project memory entries across projects."),
+        ),
+      );
+
+  const update: ProjectMemoryShape["update"] = (input) =>
+    Effect.gen(function* () {
+      const entry = yield* getById(input.memoryId);
+      if (!entry) {
+        return yield* new ProjectMemoryError({
+          message: "Project memory entry not found.",
+        });
+      }
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      const updated: ProjectMemoryEntry = {
+        ...entry,
+        summary: input.summary ?? entry.summary,
+        body: input.body ?? entry.body,
+        tags: input.tags !== undefined ? [...input.tags] : entry.tags,
+        updatedAt: now,
+      };
+      yield* repository
+        .upsert(updated)
+        .pipe(Effect.mapError(toProjectMemoryError("Failed to update project memory entry.")));
+      return updated;
+    });
+
+  const remove: ProjectMemoryShape["remove"] = (memoryId) =>
+    Effect.gen(function* () {
+      const entry = yield* getById(memoryId);
+      if (!entry) {
+        return { removed: false, entry: undefined };
+      }
+      yield* repository
+        .deleteById({ memoryId })
+        .pipe(Effect.mapError(toProjectMemoryError("Failed to delete project memory entry.")));
+      return { removed: true, entry };
     });
 
   const markPromoted: ProjectMemoryShape["markPromoted"] = (input) =>
@@ -437,6 +486,9 @@ const makeProjectMemory = Effect.gen(function* () {
     getById,
     list,
     search,
+    listAll,
+    update,
+    remove,
     markPromoted,
     migrateStandaloneThreadEntries,
   } satisfies ProjectMemoryShape;
