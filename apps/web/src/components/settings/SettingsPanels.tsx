@@ -22,6 +22,7 @@ import {
   type HomelabEntityStatus,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
+  type ModelSelection,
   type ProviderInstanceConfig,
   ProviderInstanceId,
   type ScopedThreadRef,
@@ -1158,9 +1159,42 @@ export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
   const { deleteThread } = useThreadActions();
+  const settings = useSettings();
+  const serverProviders = useServerProviders();
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const allSidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
+  // The kickoff prompt auto-sends on launch, so the model/effort choice has to happen
+  // here — there is no empty-composer moment to change it before the first turn.
+  const curatorProject = useMemo(
+    () =>
+      allProjects.find(
+        (project) =>
+          project.environmentId === primaryEnvironmentId && isCuratorProjectId(project.id),
+      ),
+    [allProjects, primaryEnvironmentId],
+  );
+  const [pickedCuratorSelection, setPickedCuratorSelection] = useState<ModelSelection | null>(
+    null,
+  );
+  const curatorModelSelection: ModelSelection = pickedCuratorSelection ??
+    curatorProject?.defaultModelSelection ?? {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: DEFAULT_MODEL,
+    };
+  const curatorInstanceEntries = useMemo(
+    () => sortProviderInstanceEntries(deriveProviderInstanceEntries(serverProviders)),
+    [serverProviders],
+  );
+  const curatorInstanceEntry = curatorInstanceEntries.find(
+    (entry) => entry.instanceId === curatorModelSelection.instanceId,
+  );
+  const curatorModelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    serverProviders,
+    curatorModelSelection.instanceId,
+    curatorModelSelection.model,
+  );
   const curatorSessions = useMemo(
     () =>
       allSidebarThreads
@@ -1181,17 +1215,8 @@ export function MemoryKnowledgeSettingsPanel() {
         if (!api) {
           throw new Error(HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle);
         }
-        // New sessions reuse the curator project's last model selection; the model can be
-        // switched in the thread composer before the first message.
-        const curatorProject = allProjects.find(
-          (project) =>
-            project.environmentId === primaryEnvironmentId && isCuratorProjectId(project.id),
-        );
         const threadId = newThreadId();
-        const modelSelection = curatorProject?.defaultModelSelection ?? {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_MODEL,
-        };
+        const modelSelection = curatorModelSelection;
         await api.orchestration.dispatchCommand({
           type: "thread.curator.create",
           commandId: newCommandId(),
@@ -1219,6 +1244,21 @@ export function MemoryKnowledgeSettingsPanel() {
           interactionMode: "default",
           createdAt: new Date().toISOString(),
         });
+        // Remember the choice as the curator project default so the next session
+        // starts from it (project creation only seeds the default on first launch).
+        if (
+          curatorProject &&
+          !Equal.equals(curatorProject.defaultModelSelection ?? null, modelSelection)
+        ) {
+          await api.orchestration
+            .dispatchCommand({
+              type: "project.meta.update",
+              commandId: newCommandId(),
+              projectId: curatorProject.id,
+              defaultModelSelection: modelSelection,
+            })
+            .catch(() => {});
+        }
         await navigate({
           to: "/$environmentId/$threadId",
           params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
@@ -1235,7 +1275,13 @@ export function MemoryKnowledgeSettingsPanel() {
         setIsStartingCuratorSession(false);
       }
     })();
-  }, [allProjects, isStartingCuratorSession, navigate, primaryEnvironmentId]);
+  }, [
+    curatorModelSelection,
+    curatorProject,
+    isStartingCuratorSession,
+    navigate,
+    primaryEnvironmentId,
+  ]);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<HomelabEntityKind | "all">("all");
   const [statusFilter, setStatusFilter] = useState<HomelabEntityStatus | "unknown" | "all">("all");
@@ -1300,18 +1346,52 @@ export function MemoryKnowledgeSettingsPanel() {
           title={HOMELAB_PRODUCT_COPY.curator.settingsCardTitle}
           description={HOMELAB_PRODUCT_COPY.curator.settingsCardDescription}
           control={
-            <Button
-              size="sm"
-              onClick={startCuratorSession}
-              disabled={primaryEnvironmentId === null || isStartingCuratorSession}
-            >
-              {isStartingCuratorSession ? (
-                <LoaderIcon className="size-3.5 animate-spin" />
-              ) : (
-                <PlusIcon className="size-3.5" />
-              )}
-              {HOMELAB_PRODUCT_COPY.curator.newSessionAction}
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <ProviderModelPicker
+                activeInstanceId={curatorModelSelection.instanceId}
+                model={curatorModelSelection.model}
+                lockedProvider={null}
+                instanceEntries={curatorInstanceEntries}
+                modelOptionsByInstance={curatorModelOptionsByInstance}
+                triggerVariant="outline"
+                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                onInstanceModelChange={(instanceId, model) => {
+                  setPickedCuratorSelection(createModelSelection(instanceId, model));
+                }}
+              />
+              <TraitsPicker
+                provider={curatorInstanceEntry?.driverKind ?? ProviderDriverKind.make("codex")}
+                models={curatorInstanceEntry?.models ?? []}
+                model={curatorModelSelection.model}
+                prompt=""
+                onPromptChange={() => {}}
+                modelOptions={curatorModelSelection.options ?? []}
+                allowPromptInjectedEffort={false}
+                triggerVariant="outline"
+                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                onModelOptionsChange={(nextOptions) => {
+                  setPickedCuratorSelection(
+                    createModelSelection(
+                      curatorModelSelection.instanceId,
+                      curatorModelSelection.model,
+                      nextOptions,
+                    ),
+                  );
+                }}
+              />
+              <Button
+                size="sm"
+                onClick={startCuratorSession}
+                disabled={primaryEnvironmentId === null || isStartingCuratorSession}
+              >
+                {isStartingCuratorSession ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlusIcon className="size-3.5" />
+                )}
+                {HOMELAB_PRODUCT_COPY.curator.newSessionAction}
+              </Button>
+            </div>
           }
         >
           {curatorSessions.length > 0 ? (
