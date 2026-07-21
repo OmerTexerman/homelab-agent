@@ -1,6 +1,5 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import type { ThreadRuntimeLaunchContext } from "./Services/ThreadRuntime.ts";
 
 export const RUNTIME_BIN_DIRNAME = "bin";
@@ -14,7 +13,7 @@ export function runtimeWrapperBinaryPath(
   context: Pick<ThreadRuntimeLaunchContext, "hostBinDir">,
   wrapperBasename: string,
 ): string {
-  return nodePath.join(context.hostBinDir, wrapperBasename);
+  return NodePath.join(context.hostBinDir, wrapperBasename);
 }
 
 export function runtimeCodexBinaryPath(context: ThreadRuntimeLaunchContext): string {

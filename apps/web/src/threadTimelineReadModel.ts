@@ -134,6 +134,11 @@ export interface DeriveThreadTimelineReadModelInput {
   readonly thread: Thread | null | undefined;
   readonly threadPlanCatalog?: ReadonlyArray<Pick<Thread, "id" | "proposedPlans">>;
   readonly interactionMode: Thread["interactionMode"];
+  /**
+   * Display-ready server messages (e.g. with attachment preview URLs resolved).
+   * Falls back to the thread's raw messages when omitted.
+   */
+  readonly serverMessages?: ReadonlyArray<ChatMessage> | null | undefined;
   readonly optimisticUserMessages?: ReadonlyArray<ChatMessage> | null | undefined;
   readonly attachmentPreviewHandoffByMessageId?:
     | Readonly<Record<string, ReadonlyArray<string>>>
@@ -215,12 +220,14 @@ export function deriveThreadTimelineReadModel(
   const controlState =
     input.controlState ?? deriveThreadTimelineControlState({ thread: thread ?? null });
   const timelineMessages = deriveThreadTimelineMessages({
-    serverMessages: thread?.messages ?? EMPTY_MESSAGES,
+    serverMessages: input.serverMessages ?? thread?.messages ?? EMPTY_MESSAGES,
     optimisticUserMessages: input.optimisticUserMessages,
     attachmentPreviewHandoffByMessageId: input.attachmentPreviewHandoffByMessageId,
   });
   const latestTurnId = latestTurn?.turnId ?? null;
-  const workLogEntries = deriveWorkLogEntries(activities, latestTurnId ?? undefined);
+  // Upstream's turn-grouped timeline needs work entries from every turn; MessagesTimeline
+  // groups/folds them per turn via each entry's turnId.
+  const workLogEntries = deriveWorkLogEntries(activities);
   const latestTurnHasToolActivity = hasToolActivityForTurn(activities, latestTurnId);
   const runtime = deriveThreadTimelineRuntimeState({
     queue: input.projectRuntimeQueue ?? null,
@@ -261,7 +268,7 @@ export function deriveThreadTimelineReadModel(
       pendingDecision: decisionQueue.ui.blocksTurn,
       waitingOnProjectRuntime: runtime.waitingOnProjectRuntime,
       optimisticMessageIds: timelineMessages.optimisticMessageIds,
-      threadError: thread?.error ?? null,
+      threadError: thread?.session?.lastError ?? null,
     },
   );
   const sidebarProposedPlan = findSidebarProposedPlan({
@@ -307,7 +314,7 @@ export function deriveThreadTimelineReadModel(
         activePendingApproval: decisionQueue.activePendingApproval,
         activePendingUserInput: decisionQueue.activePendingUserInput,
         waitingOnProjectRuntime: runtime.waitingOnProjectRuntime,
-        threadError: thread?.error ?? null,
+        threadError: thread?.session?.lastError ?? null,
       }),
       inProgress: activeTurnInProgress,
       startedAt: activeTurnStartedAt,

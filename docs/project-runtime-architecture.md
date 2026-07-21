@@ -487,10 +487,10 @@ future work.
 
 Required checks before completion:
 
-- `bun fmt`
-- `bun lint`
-- `bun typecheck`
-- focused `bun run test ...` suites for changed contracts, runtime,
+- `pnpm fmt`
+- `pnpm lint`
+- `pnpm typecheck`
+- focused `pnpm run test ...` suites for changed contracts, runtime,
   orchestration, terminal, provider, and web UI logic
 
-Never run `bun test`; use `bun run test`.
+Use `pnpm run test` for test suites.

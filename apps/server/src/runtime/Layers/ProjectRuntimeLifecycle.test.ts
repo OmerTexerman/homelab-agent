@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
-import nodeFs from "node:fs";
-import nodePath from "node:path";
-
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProjectId,
@@ -27,7 +26,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager.ts";
+import { TerminalManager, type TerminalManagerShape } from "../../terminal/Manager.ts";
 import { isolatedThreadRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { makeProjectRuntimeQueue, ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import {
@@ -172,20 +171,20 @@ function makeLaunchContext(
       shell: descriptor.shell,
       env: descriptor.env,
     },
-    hostRuntimePath: nodePath.dirname(hostWorkspacePath),
+    hostRuntimePath: NodePath.dirname(hostWorkspacePath),
     hostWorkspacePath,
-    hostHomePath: nodePath.join(nodePath.dirname(hostWorkspacePath), "home"),
-    hostBinDir: nodePath.join(nodePath.dirname(hostWorkspacePath), "bin"),
-    shellWrapperPath: nodePath.join(nodePath.dirname(hostWorkspacePath), "bin", "shell"),
+    hostHomePath: NodePath.join(NodePath.dirname(hostWorkspacePath), "home"),
+    hostBinDir: NodePath.join(NodePath.dirname(hostWorkspacePath), "bin"),
+    shellWrapperPath: NodePath.join(NodePath.dirname(hostWorkspacePath), "bin", "shell"),
   };
 }
 
 function makeManagedHostWorkspacePath(baseDir: string): string {
-  return nodePath.join(baseDir, "userdata", "thread-runtimes", "runtime-storage", "workspace");
+  return NodePath.join(baseDir, "userdata", "thread-runtimes", "runtime-storage", "workspace");
 }
 
 function makeSnapshotArchivePath(baseDir: string, snapshotId: string): string {
-  return nodePath.join(
+  return NodePath.join(
     baseDir,
     "userdata",
     "project-runtime-snapshots",
@@ -240,6 +239,7 @@ function makeHarness(input: {
     getThreadShellById: () => Effect.succeed(Option.none()),
     getThreadDetailById: (id) =>
       Effect.succeed(Option.fromNullishOr(readModel.threads.find((thread) => thread.id === id))),
+    getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
   } satisfies ProjectionSnapshotQueryShape;
 
   const threadRuntime = {
@@ -249,10 +249,10 @@ function makeHarness(input: {
           makeDescriptor({ threadId: launchInput.threadId, status: "stopped" }),
           input.hostWorkspacePath,
         );
-        nodeFs.mkdirSync(launchContext.hostRuntimePath, { recursive: true });
-        nodeFs.mkdirSync(input.hostWorkspacePath, { recursive: true });
-        nodeFs.mkdirSync(launchContext.hostHomePath, { recursive: true });
-        nodeFs.mkdirSync(launchContext.hostBinDir, { recursive: true });
+        NodeFS.mkdirSync(launchContext.hostRuntimePath, { recursive: true });
+        NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
+        NodeFS.mkdirSync(launchContext.hostHomePath, { recursive: true });
+        NodeFS.mkdirSync(launchContext.hostBinDir, { recursive: true });
         const descriptor =
           descriptors.get(String(launchInput.threadId)) ??
           makeDescriptor({ threadId: launchInput.threadId, status: "stopped" });
@@ -297,7 +297,7 @@ function makeHarness(input: {
         descriptors.delete(String(id));
         if (descriptor) {
           const launchContext = makeLaunchContext(descriptor, input.hostWorkspacePath);
-          nodeFs.rmSync(launchContext.hostRuntimePath, { recursive: true, force: true });
+          NodeFS.rmSync(launchContext.hostRuntimePath, { recursive: true, force: true });
         }
       }),
     resolveExecutionContext: (id) => {
@@ -313,7 +313,7 @@ function makeHarness(input: {
         return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
       }
       return Effect.sync(() => {
-        nodeFs.mkdirSync(input.hostWorkspacePath, { recursive: true });
+        NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
         return makeLaunchContext(descriptor, input.hostWorkspacePath);
       });
     },
@@ -382,11 +382,11 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const result = yield* lifecycle.wake({ projectId, threadId });
 
         assert.equal(result.runtime.runtime.lifecycleState, "running");
-        assert.isTrue(nodeFs.existsSync(nodePath.join(hostWorkspacePath, ".homelab", "README.md")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, ".homelab", "README.md")));
         // The README documents the two `.homelab` roots so agents don't mistake the
         // bin-only `~/.homelab` for missing project context.
-        const readme = nodeFs.readFileSync(
-          nodePath.join(hostWorkspacePath, ".homelab", "README.md"),
+        const readme = NodeFS.readFileSync(
+          NodePath.join(hostWorkspacePath, ".homelab", "README.md"),
           "utf8",
         );
         assert.match(readme, /~\/\.homelab\/bin/);
@@ -419,26 +419,26 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         // must be in the ambient context when wake runs — mirroring the server's global wiring.
         yield* lifecycle.wake({ projectId, threadId }).pipe(Effect.provide(harness.layer));
 
-        const memoryIndex = nodeFs.readFileSync(
-          nodePath.join(hostWorkspacePath, ".homelab", "memory", "index.jsonl"),
+        const memoryIndex = NodeFS.readFileSync(
+          NodePath.join(hostWorkspacePath, ".homelab", "memory", "index.jsonl"),
           "utf8",
         );
         assert.match(memoryIndex, /Backups run nightly from nas01/);
         assert.match(memoryIndex, /memory-nas-backups/);
 
-        const detailPath = nodePath.join(
+        const detailPath = NodePath.join(
           hostWorkspacePath,
           ".homelab",
           "memory",
           "latest",
           "memory-nas-backups.md",
         );
-        assert.isTrue(nodeFs.existsSync(detailPath));
-        assert.match(nodeFs.readFileSync(detailPath, "utf8"), /retention is 30 days/);
+        assert.isTrue(NodeFS.existsSync(detailPath));
+        assert.match(NodeFS.readFileSync(detailPath, "utf8"), /retention is 30 days/);
 
         // Thread discovery indexes are populated from the project read model.
-        const threadsIndex = nodeFs.readFileSync(
-          nodePath.join(hostWorkspacePath, ".homelab", "threads", "index.jsonl"),
+        const threadsIndex = NodeFS.readFileSync(
+          NodePath.join(hostWorkspacePath, ".homelab", "threads", "index.jsonl"),
           "utf8",
         );
         assert.match(threadsIndex, new RegExp(String(threadId)));
@@ -458,21 +458,21 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
         yield* lifecycle.wake({ projectId, threadId });
 
-        nodeFs.mkdirSync(nodePath.join(hostWorkspacePath, "dist"), { recursive: true });
-        nodeFs.mkdirSync(nodePath.join(hostWorkspacePath, ".cache"), { recursive: true });
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "dist", "app.js"), "build output");
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, ".cache", "temp"), "cache");
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "README.md"), "durable");
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, ".homelab", "keep.md"), "keep");
+        NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, "dist"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, ".cache"), { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "dist", "app.js"), "build output");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, ".cache", "temp"), "cache");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "README.md"), "durable");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, ".homelab", "keep.md"), "keep");
 
         const result = yield* lifecycle.cleanupScratch({ projectId, threadId });
 
         assert.equal(result.runtime.runtime.lifecycleState, "running");
-        assert.isFalse(nodeFs.existsSync(nodePath.join(hostWorkspacePath, "dist")));
-        assert.isFalse(nodeFs.existsSync(nodePath.join(hostWorkspacePath, ".cache")));
-        assert.isTrue(nodeFs.existsSync(nodePath.join(hostWorkspacePath, "README.md")));
-        assert.isTrue(nodeFs.existsSync(nodePath.join(hostWorkspacePath, ".homelab", "keep.md")));
-        assert.isTrue(nodeFs.existsSync(nodePath.join(hostWorkspacePath, ".homelab", "README.md")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(hostWorkspacePath, "dist")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(hostWorkspacePath, ".cache")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, "README.md")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, ".homelab", "keep.md")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, ".homelab", "README.md")));
       }),
     ),
   );
@@ -520,25 +520,25 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           prefix: "project-runtime-snapshot-",
         });
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const hostRuntimePath = nodePath.dirname(hostWorkspacePath);
-        const hostHomePath = nodePath.join(hostRuntimePath, "home");
-        const hostBinPath = nodePath.join(hostRuntimePath, "bin");
+        const hostRuntimePath = NodePath.dirname(hostWorkspacePath);
+        const hostHomePath = NodePath.join(hostRuntimePath, "home");
+        const hostBinPath = NodePath.join(hostRuntimePath, "bin");
         const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
         yield* lifecycle.wake({ projectId, threadId });
 
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "before");
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-before");
-        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-before");
-        nodeFs.mkdirSync(nodePath.join(hostHomePath, ".codex"), { recursive: true });
-        nodeFs.mkdirSync(nodePath.join(hostHomePath, ".local", "share", "opencode"), {
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "before");
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".profile"), "home-before");
+        NodeFS.writeFileSync(NodePath.join(hostBinPath, "tool"), "tool-before");
+        NodeFS.mkdirSync(NodePath.join(hostHomePath, ".codex"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(hostHomePath, ".local", "share", "opencode"), {
           recursive: true,
         });
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime.env"), "excluded");
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".homelab-runtime-token"), "excluded");
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".codex", "auth.json"), "excluded");
-        nodeFs.writeFileSync(
-          nodePath.join(hostHomePath, ".local", "share", "opencode", "auth.json"),
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".homelab-runtime.env"), "excluded");
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".homelab-runtime-token"), "excluded");
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".codex", "auth.json"), "excluded");
+        NodeFS.writeFileSync(
+          NodePath.join(hostHomePath, ".local", "share", "opencode", "auth.json"),
           "excluded",
         );
 
@@ -553,21 +553,21 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.equal(result.runtime.runtime.lifecycleState, "stopped");
         assert.equal(snapshot.kind, "filesystem");
         assert.equal(snapshot.restoreAvailable, true);
-        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "workspace", "notes.md")));
-        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "home", ".profile")));
-        assert.isTrue(nodeFs.existsSync(nodePath.join(archivePath, "bin", "tool")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(archivePath, "workspace", "notes.md")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(archivePath, "home", ".profile")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(archivePath, "bin", "tool")));
         assert.isFalse(
-          nodeFs.existsSync(nodePath.join(archivePath, "home", ".homelab-runtime.env")),
+          NodeFS.existsSync(NodePath.join(archivePath, "home", ".homelab-runtime.env")),
         );
         assert.isFalse(
-          nodeFs.existsSync(nodePath.join(archivePath, "home", ".homelab-runtime-token")),
+          NodeFS.existsSync(NodePath.join(archivePath, "home", ".homelab-runtime-token")),
         );
-        assert.isFalse(nodeFs.existsSync(nodePath.join(archivePath, "home", ".codex")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(archivePath, "home", ".codex")));
         assert.isFalse(
-          nodeFs.existsSync(nodePath.join(archivePath, "home", ".local", "share", "opencode")),
+          NodeFS.existsSync(NodePath.join(archivePath, "home", ".local", "share", "opencode")),
         );
         assert.isTrue(
-          nodeFs.existsSync(nodePath.join(nodePath.dirname(archivePath), "manifest.json")),
+          NodeFS.existsSync(NodePath.join(NodePath.dirname(archivePath), "manifest.json")),
         );
       }),
     ),
@@ -581,16 +581,16 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           prefix: "project-runtime-restore-",
         });
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const hostRuntimePath = nodePath.dirname(hostWorkspacePath);
-        const hostHomePath = nodePath.join(hostRuntimePath, "home");
-        const hostBinPath = nodePath.join(hostRuntimePath, "bin");
+        const hostRuntimePath = NodePath.dirname(hostWorkspacePath);
+        const hostHomePath = NodePath.join(hostRuntimePath, "home");
+        const hostBinPath = NodePath.join(hostRuntimePath, "bin");
         const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
         const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
         yield* lifecycle.wake({ projectId, threadId });
 
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "before");
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-before");
-        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-before");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "before");
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".profile"), "home-before");
+        NodeFS.writeFileSync(NodePath.join(hostBinPath, "tool"), "tool-before");
         const snapshotResult = yield* lifecycle.createSnapshot({
           projectId,
           threadId,
@@ -601,10 +601,10 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         harness.destroyedThreadIds.splice(0);
 
         harness.descriptors.set(String(threadId), makeDescriptor({ threadId, status: "running" }));
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "after");
-        nodeFs.writeFileSync(nodePath.join(hostHomePath, ".profile"), "home-after");
-        nodeFs.writeFileSync(nodePath.join(hostBinPath, "tool"), "tool-after");
-        nodeFs.writeFileSync(nodePath.join(hostWorkspacePath, "new-file.md"), "remove-me");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "after");
+        NodeFS.writeFileSync(NodePath.join(hostHomePath, ".profile"), "home-after");
+        NodeFS.writeFileSync(NodePath.join(hostBinPath, "tool"), "tool-after");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "new-file.md"), "remove-me");
 
         const restored = yield* lifecycle.restore({
           projectId,
@@ -620,18 +620,18 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.deepStrictEqual(harness.destroyedThreadIds, [threadId]);
         assert.isUndefined(harness.descriptors.get(String(threadId)));
         assert.equal(
-          nodeFs.readFileSync(nodePath.join(hostWorkspacePath, "notes.md"), "utf8"),
+          NodeFS.readFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "utf8"),
           "before",
         );
         assert.equal(
-          nodeFs.readFileSync(nodePath.join(hostHomePath, ".profile"), "utf8"),
+          NodeFS.readFileSync(NodePath.join(hostHomePath, ".profile"), "utf8"),
           "home-before",
         );
         assert.equal(
-          nodeFs.readFileSync(nodePath.join(hostBinPath, "tool"), "utf8"),
+          NodeFS.readFileSync(NodePath.join(hostBinPath, "tool"), "utf8"),
           "tool-before",
         );
-        assert.isFalse(nodeFs.existsSync(nodePath.join(hostWorkspacePath, "new-file.md")));
+        assert.isFalse(NodeFS.existsSync(NodePath.join(hostWorkspacePath, "new-file.md")));
       }),
     ),
   );
@@ -643,10 +643,10 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const tempDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "project-runtime-old-snapshot-",
         });
-        const stateDir = nodePath.join(tempDir, "userdata");
-        nodeFs.mkdirSync(stateDir, { recursive: true });
-        nodeFs.writeFileSync(
-          nodePath.join(stateDir, "project-runtime-lifecycle.json"),
+        const stateDir = NodePath.join(tempDir, "userdata");
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.join(stateDir, "project-runtime-lifecycle.json"),
           `${JSON.stringify(
             {
               version: 1,

@@ -15,7 +15,7 @@ Environment=T3CODE_HOME=/var/lib/homelab-agent
 Environment=T3CODE_HOST=0.0.0.0
 Environment=T3CODE_PORT=13773
 Environment=T3CODE_NO_BROWSER=true
-ExecStart=/usr/bin/env bun run start:prod -- --base-dir /var/lib/homelab-agent --host 0.0.0.0 --port 13773
+ExecStart=/usr/bin/env pnpm run start:prod -- --base-dir /var/lib/homelab-agent --host 0.0.0.0 --port 13773
 Restart=on-failure
 RestartSec=5
 

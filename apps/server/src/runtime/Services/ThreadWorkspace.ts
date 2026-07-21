@@ -15,7 +15,7 @@ export class ThreadWorkspaceServiceError extends Schema.TaggedErrorClass<ThreadW
   "ThreadWorkspaceServiceError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

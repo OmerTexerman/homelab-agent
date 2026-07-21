@@ -1,12 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { createServer } from "node:net";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeHttps from "node:https";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import * as NodeNet from "node:net";
 import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
@@ -23,7 +23,7 @@ interface SmokeOptions {
 
 interface ManagedProcess {
   readonly name: string;
-  readonly child: ChildProcess;
+  readonly child: NodeChildProcess.ChildProcess;
   exited: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | null;
   output: string;
 }
@@ -151,11 +151,14 @@ interface SimpleHttpRequestInit {
   readonly body?: string;
 }
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const serverBinPath = resolve(repoRoot, "apps/server/src/bin.ts");
-const webCwd = resolve(repoRoot, "apps/web");
-const playwrightModulePath = resolve(repoRoot, "apps/web/node_modules/playwright/index.mjs");
-const clientRuntimeWsRpcClientModule = `/@fs/${resolve(
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
+const serverBinPath = NodePath.resolve(repoRoot, "apps/server/src/bin.ts");
+const webCwd = NodePath.resolve(repoRoot, "apps/web");
+const playwrightModulePath = NodePath.resolve(
+  repoRoot,
+  "apps/web/node_modules/playwright/index.mjs",
+);
+const clientRuntimeWsRpcClientModule = `/@fs/${NodePath.resolve(
   repoRoot,
   "packages/client-runtime/src/wsRpcClient.ts",
 )}`;
@@ -164,7 +167,7 @@ function parseOptions(argv: readonly string[]): SmokeOptions {
   let artifactsDir: string | null = null;
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--artifacts-dir") {
-      artifactsDir = resolve(argv[index + 1] ?? "");
+      artifactsDir = NodePath.resolve(argv[index + 1] ?? "");
       index += 1;
     }
   }
@@ -194,7 +197,7 @@ async function fetchWithTimeout(
   timeoutMs: number,
 ): Promise<SimpleHttpResponse> {
   const target = typeof url === "string" ? new URL(url) : url;
-  const request = target.protocol === "https:" ? httpsRequest : httpRequest;
+  const request = target.protocol === "https:" ? NodeHttps.request : NodeHttp.request;
   return await new Promise((resolveResponse, rejectResponse) => {
     const req = request(
       target,
@@ -230,7 +233,7 @@ async function fetchWithTimeout(
 
 function findOpenPort(): Promise<number> {
   return new Promise((resolvePort, rejectPort) => {
-    const server = createServer();
+    const server = NodeNet.createServer();
     server.on("error", rejectPort);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -251,7 +254,7 @@ function startManagedProcess(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ManagedProcess {
-  const child = spawn(input.command, input.args, {
+  const child = NodeChildProcess.spawn(input.command, input.args, {
     cwd: input.cwd,
     env: input.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -519,12 +522,12 @@ function assertEqual(actual: unknown, expected: unknown, message: string): void 
 }
 
 async function loadChromium(): Promise<ChromiumLike> {
-  if (!existsSync(playwrightModulePath)) {
+  if (!NodeFS.existsSync(playwrightModulePath)) {
     throw new Error(
       `Playwright is not installed at ${playwrightModulePath}. Run the web browser test install first.`,
     );
   }
-  const module = (await import(pathToFileURL(playwrightModulePath).href)) as {
+  const module = (await import(NodeURL.pathToFileURL(playwrightModulePath).href)) as {
     readonly chromium?: ChromiumLike;
   };
   if (!module.chromium) {
@@ -801,9 +804,9 @@ async function runBrowserSmoke(input: {
     }
 
     if (input.options.artifactsDir) {
-      mkdirSync(input.options.artifactsDir, { recursive: true });
+      NodeFS.mkdirSync(input.options.artifactsDir, { recursive: true });
       await page.screenshot({
-        path: resolve(input.options.artifactsDir, "home-desktop.png"),
+        path: NodePath.resolve(input.options.artifactsDir, "home-desktop.png"),
         fullPage: true,
       });
     }
@@ -862,7 +865,7 @@ async function runBrowserSmoke(input: {
     }
     if (input.options.artifactsDir) {
       await page.screenshot({
-        path: resolve(input.options.artifactsDir, "command-palette-desktop.png"),
+        path: NodePath.resolve(input.options.artifactsDir, "command-palette-desktop.png"),
         fullPage: true,
       });
     }
@@ -883,7 +886,7 @@ async function runBrowserSmoke(input: {
 
     if (input.options.artifactsDir) {
       await page.screenshot({
-        path: resolve(input.options.artifactsDir, "home-narrow.png"),
+        path: NodePath.resolve(input.options.artifactsDir, "home-narrow.png"),
         fullPage: true,
       });
     }
@@ -907,7 +910,7 @@ async function runBrowserSmoke(input: {
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
-  const baseDir = mkdtempSync(join(tmpdir(), "homelab-runtime-smoke-"));
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "homelab-runtime-smoke-"));
   const serverPort = await findOpenPort();
   const webPort = await findOpenPort();
   const serverBaseUrl = `http://127.0.0.1:${serverPort}`;
@@ -945,7 +948,7 @@ async function main(): Promise<void> {
     startedProcesses.push(serverProcess);
     const webProcess = startManagedProcess({
       name: "web",
-      command: "bun",
+      command: "pnpm",
       args: ["run", "dev"],
       cwd: webCwd,
       env: {
@@ -1254,7 +1257,7 @@ async function main(): Promise<void> {
     if (options.keep) {
       log(`Kept disposable T3CODE_HOME ${baseDir}`);
     } else {
-      rmSync(baseDir, { recursive: true, force: true });
+      NodeFS.rmSync(baseDir, { recursive: true, force: true });
     }
   }
 }

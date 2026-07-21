@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
-import path from "node:path";
-
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
@@ -30,7 +29,9 @@ it.effect("stores the active bootstrap materialization durably on startup", () =
       readonly version?: number;
       readonly materializations?: ReadonlyArray<{ readonly bootstrapVersion?: string }>;
     } = JSON.parse(
-      yield* fileSystem.readFileString(path.join(serverConfig.stateDir, "runtime-bootstrap.json")),
+      yield* fileSystem.readFileString(
+        NodePath.join(serverConfig.stateDir, "runtime-bootstrap.json"),
+      ),
     );
 
     assert.equal(materialization.bootstrapVersion, active.bootstrapVersion);
@@ -52,7 +53,7 @@ it.effect("migrates legacy bootstrap state once and keeps startup idempotent", (
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
-    const statePath = path.join(serverConfig.stateDir, "runtime-bootstrap.json");
+    const statePath = NodePath.join(serverConfig.stateDir, "runtime-bootstrap.json");
     yield* fileSystem.writeFileString(
       statePath,
       `${JSON.stringify(

@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { useCallback, type ComponentType } from "react";
 import {
   ArrowLeftIcon,
   BotIcon,
@@ -9,7 +9,7 @@ import {
   Settings2Icon,
   WrenchIcon,
 } from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCanGoBack, useNavigate } from "@tanstack/react-router";
 
 import {
   SidebarContent,
@@ -19,7 +19,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "../ui/sidebar";
+import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 
 export type SettingsSectionPath =
@@ -59,6 +61,27 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
+  const canGoBack = useCanGoBack();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const handleSectionClick = useCallback(
+    (to: SettingsSectionPath) => {
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      void navigate({ to, replace: true });
+    },
+    [isMobile, navigate, setOpenMobile],
+  );
+  const handleBackClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    if (canGoBack) {
+      window.history.back();
+      return;
+    }
+    void navigate({ to: "/" });
+  }, [canGoBack, isMobile, navigate, setOpenMobile]);
 
   return (
     <>
@@ -78,7 +101,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         ? "gap-2.5 px-2.5 py-2 text-left text-[13px] font-medium text-foreground"
                         : "gap-2.5 px-2.5 py-2 text-left text-[13px] text-muted-foreground/70 hover:text-foreground/80"
                     }
-                    onClick={() => void navigate({ to: item.to, replace: true })}
+                    onClick={() => handleSectionClick(item.to)}
                   >
                     <Icon
                       className={
@@ -98,18 +121,22 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
 
       <SidebarSeparator />
       <SidebarFooter className="p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="sm"
-              className="gap-2 px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => window.history.back()}
-            >
-              <ArrowLeftIcon className="size-4" />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <T3ConnectSidebarSignIn />
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
+          <SidebarMenu className="min-w-0">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                className="gap-2 px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                onClick={handleBackClick}
+              >
+                <ArrowLeftIcon className="size-4" />
+                <span>Back</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <T3ConnectSidebarAvatar />
+        </div>
       </SidebarFooter>
     </>
   );

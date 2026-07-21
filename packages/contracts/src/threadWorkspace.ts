@@ -70,6 +70,6 @@ export class ThreadWorkspaceError extends Schema.TaggedErrorClass<ThreadWorkspac
   "ThreadWorkspaceError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

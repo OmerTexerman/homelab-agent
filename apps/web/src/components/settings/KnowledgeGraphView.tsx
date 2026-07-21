@@ -28,7 +28,12 @@ interface GraphEdge {
 interface GraphLayout {
   readonly nodes: ReadonlyArray<GraphNode>;
   readonly edges: ReadonlyArray<GraphEdge>;
-  readonly bounds: { readonly minX: number; readonly minY: number; readonly width: number; readonly height: number };
+  readonly bounds: {
+    readonly minX: number;
+    readonly minY: number;
+    readonly width: number;
+    readonly height: number;
+  };
 }
 
 /**
@@ -164,7 +169,13 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
   const layout = useMemo(() => computeGraphLayout(entities, relations), [entities, relations]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const panState = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const panState = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   const neighborIds = useMemo(() => {
@@ -187,7 +198,14 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
     if (query.length === 0) {
       return true;
     }
-    return [entity.name, entity.title, entity.summary, entity.kind, ...(entity.tags ?? []), ...(entity.aliases ?? [])]
+    return [
+      entity.name,
+      entity.title,
+      entity.summary,
+      entity.kind,
+      ...(entity.tags ?? []),
+      ...(entity.aliases ?? []),
+    ]
       .filter((value): value is string => value != null)
       .some((value) => value.toLowerCase().includes(query));
   };
@@ -225,9 +243,7 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
     }
     // Convert screen pixels to viewBox units so panning tracks the cursor at any zoom.
     const svg = svgRef.current;
-    const pixelsPerUnit = svg
-      ? svg.clientWidth / (layout.bounds.width / viewTransform.scale)
-      : 1;
+    const pixelsPerUnit = svg ? svg.clientWidth / (layout.bounds.width / viewTransform.scale) : 1;
     setViewTransform((previous) => ({
       ...previous,
       x: pan.originX + (event.clientX - pan.startX) / pixelsPerUnit,
@@ -385,7 +401,10 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {presentKinds.map((kind) => (
-          <span key={kind} className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+          <span
+            key={kind}
+            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+          >
             <span className="size-2 rounded-full" style={{ backgroundColor: kindColor(kind) }} />
             {kind.replaceAll("_", " ")}
           </span>

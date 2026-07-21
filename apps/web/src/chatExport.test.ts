@@ -26,7 +26,14 @@ import {
   buildChatExportReadModel,
 } from "./chatExport";
 import { deriveThreadTimelineReadModel } from "./threadTimelineReadModel";
-import type { ChatMessage, Project, ProposedPlan, Thread, ThreadSession } from "./types";
+import type {
+  ChatMessage,
+  Project,
+  ProposedPlan,
+  Thread,
+  ThreadSession,
+  TurnDiffSummary,
+} from "./types";
 
 const BASE_TIME = "2026-04-13T15:30:00.000Z";
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -39,6 +46,8 @@ const INSTANCE_ID = ProviderInstanceId.make("codex");
 function message(overrides: Partial<ChatMessage> & Pick<ChatMessage, "id" | "role" | "text">) {
   return {
     createdAt: BASE_TIME,
+    updatedAt: BASE_TIME,
+    turnId: null,
     streaming: false,
     ...overrides,
   } satisfies ChatMessage;
@@ -58,12 +67,14 @@ function latestTurn(overrides: Partial<OrchestrationLatestTurn> = {}): Orchestra
 
 function session(overrides: Partial<ThreadSession> = {}): ThreadSession {
   return {
-    provider: ProviderDriverKind.make("codex"),
-    providerInstanceId: INSTANCE_ID,
+    threadId: THREAD_ID,
     status: "ready",
-    createdAt: BASE_TIME,
+    providerName: "codex",
+    providerInstanceId: INSTANCE_ID,
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
     updatedAt: BASE_TIME,
-    orchestrationStatus: "ready",
     ...overrides,
   };
 }
@@ -106,8 +117,8 @@ function project(overrides: Partial<Project> = {}): Project {
   return {
     id: PROJECT_ID,
     environmentId: ENVIRONMENT_ID,
-    name: "server",
-    cwd: "/workspace/server",
+    title: "server",
+    workspaceRoot: "/workspace/server",
     defaultRuntimeId: RUNTIME_ID,
     defaultModelSelection: {
       instanceId: INSTANCE_ID,
@@ -124,7 +135,6 @@ function thread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: THREAD_ID,
     environmentId: ENVIRONMENT_ID,
-    codexThreadId: null,
     projectId: PROJECT_ID,
     runtimeId: RUNTIME_ID,
     runtimeSelectionMode: "shared",
@@ -138,15 +148,15 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     session: session(),
     messages: [],
     proposedPlans: [],
-    error: null,
     createdAt: BASE_TIME,
     archivedAt: null,
+    deletedAt: null,
     updatedAt: "2026-04-13T15:31:00.000Z",
     latestTurn: null,
     branch: null,
     worktreePath: null,
-    turnDiffSummaries: [],
     activities: [],
+    checkpoints: [],
     ...overrides,
   };
 }
@@ -179,6 +189,7 @@ function providerSnapshot(overrides: Partial<ServerProvider> = {}): ServerProvid
 function buildExport(
   inputThread: Thread,
   inputProject: Project | null = project(),
+  turnDiffSummaries: Parameters<typeof buildChatExportReadModel>[0]["turnDiffSummaries"] = [],
 ): ChatExportReadModel {
   const timeline = deriveThreadTimelineReadModel({
     thread: inputThread,
@@ -190,7 +201,7 @@ function buildExport(
     project: inputProject,
     providerSnapshot: providerSnapshot(),
     timeline,
-    turnDiffSummaries: inputThread.turnDiffSummaries,
+    turnDiffSummaries,
   });
 }
 
@@ -212,19 +223,24 @@ describe("chatExport", () => {
             text: "The rack has three hosts.",
             turnId: TURN_ID,
             createdAt: "2026-04-13T15:31:00.000Z",
-            completedAt: "2026-04-13T15:31:00.000Z",
+            updatedAt: "2026-04-13T15:31:00.000Z",
           }),
         ],
         activities: [activity({ id: "tool-1" })],
         proposedPlans: [proposedPlan()],
-        turnDiffSummaries: [
-          {
-            turnId: TURN_ID,
-            completedAt: "2026-04-13T15:31:00.000Z",
-            files: [{ path: "docs/inventory.md", additions: 3, deletions: 0 }],
-          },
-        ],
       }),
+      project(),
+      [
+        {
+          turnId: TURN_ID,
+          checkpointTurnCount: 1,
+          checkpointRef: "checkpoint-1" as TurnDiffSummary["checkpointRef"],
+          status: "ready",
+          files: [{ path: "docs/inventory.md", kind: "modified", additions: 3, deletions: 0 }],
+          assistantMessageId: null,
+          completedAt: "2026-04-13T15:31:00.000Z",
+        },
+      ],
     );
 
     const exported = buildChatExportMarkdown(chatExport);
@@ -407,7 +423,6 @@ describe("chatExport", () => {
       thread({
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TURN_ID,
         }),
         latestTurn: latestTurn({
@@ -440,7 +455,6 @@ describe("chatExport", () => {
       thread({
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TURN_ID,
         }),
         latestTurn: latestTurn({
@@ -542,8 +556,8 @@ describe("chatExport", () => {
       }),
       project({
         id: standaloneProjectId,
-        name: "Standalone Threads",
-        cwd: "homelab://project/system%3Astandalone",
+        title: "Standalone Threads",
+        workspaceRoot: "homelab://project/system%3Astandalone",
         defaultRuntimeId: standaloneRuntimeId,
       }),
     );

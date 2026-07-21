@@ -1,9 +1,19 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, PositiveInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { HomelabEntityId, HomelabRelationId } from "./homelab.ts";
 import { HomelabSkill, HomelabSkillId } from "./homelabSkills.ts";
-import { ProjectMemoryEntry, ProjectMemoryId, ProjectMemoryPromotionStatus } from "./projectMemory.ts";
+import {
+  ProjectMemoryEntry,
+  ProjectMemoryId,
+  ProjectMemoryPromotionStatus,
+} from "./projectMemory.ts";
 
 /**
  * Knowledge curator wire contracts.

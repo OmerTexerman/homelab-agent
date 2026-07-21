@@ -1,9 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off preferSchemaOverJson:off
-import assert from "node:assert/strict";
-import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
-
+import * as NodeAssert from "node:assert/strict";
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
@@ -284,7 +283,12 @@ class FakeDockerRunner {
 }
 
 function makeCodexAuthDirPath(): string {
-  return path.join(os.tmpdir(), "homelab-agent-runtime-auth", crypto.randomUUID(), "codex");
+  return NodePath.join(
+    NodeOS.tmpdir(),
+    "homelab-agent-runtime-auth",
+    NodeCrypto.randomUUID(),
+    "codex",
+  );
 }
 
 function findRunCall(
@@ -396,10 +400,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const settings = yield* ServerSettingsService;
       const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
       const previousXdgDataHome = process.env.XDG_DATA_HOME;
-      const hostXdgDataHome = path.join(
-        os.tmpdir(),
+      const hostXdgDataHome = NodePath.join(
+        NodeOS.tmpdir(),
         "homelab-agent-opencode-auth",
-        crypto.randomUUID(),
+        NodeCrypto.randomUUID(),
       );
       process.env.XDG_DATA_HOME = hostXdgDataHome;
       yield* Effect.addFinalizer(() =>
@@ -413,15 +417,18 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       );
 
       yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
-      yield* fileSystem.writeFileString(path.join(codexAuthPath, "auth.json"), '{"token":"host"}');
       yield* fileSystem.writeFileString(
-        path.join(codexAuthPath, "config.toml"),
+        NodePath.join(codexAuthPath, "auth.json"),
+        '{"token":"host"}',
+      );
+      yield* fileSystem.writeFileString(
+        NodePath.join(codexAuthPath, "config.toml"),
         'model = "gpt-5"\n',
       );
-      const openCodeDataPath = path.join(hostXdgDataHome, "opencode");
+      const openCodeDataPath = NodePath.join(hostXdgDataHome, "opencode");
       yield* fileSystem.makeDirectory(openCodeDataPath, { recursive: true });
       yield* fileSystem.writeFileString(
-        path.join(openCodeDataPath, "auth.json"),
+        NodePath.join(openCodeDataPath, "auth.json"),
         '{"provider":"host"}',
       );
 
@@ -437,56 +444,62 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const runtimeHome = launchContext.hostHomePath;
       const runtimeWorkspace = launchContext.hostWorkspacePath;
 
-      assert.equal(started.status, "running");
-      assert.equal(started.env.CODEX_HOME, path.join(started.homePath, ".codex"));
-      assert.equal(launchContext.execution.cwd, executionContext.cwd);
-      assert.equal(launchContext.execution.workspacePath, executionContext.workspacePath);
-      assert.equal(launchContext.execution.homePath, executionContext.homePath);
-      assert.equal(launchContext.shellWrapperPath, path.join(runtimeRoot, "bin", "runtime-shell"));
+      NodeAssert.equal(started.status, "running");
+      NodeAssert.equal(started.env.CODEX_HOME, NodePath.join(started.homePath, ".codex"));
+      NodeAssert.equal(launchContext.execution.cwd, executionContext.cwd);
+      NodeAssert.equal(launchContext.execution.workspacePath, executionContext.workspacePath);
+      NodeAssert.equal(launchContext.execution.homePath, executionContext.homePath);
+      NodeAssert.equal(
+        launchContext.shellWrapperPath,
+        NodePath.join(runtimeRoot, "bin", "runtime-shell"),
+      );
 
-      const codexWrapperPath = path.join(runtimeRoot, "bin", "codex");
-      const claudeWrapperPath = path.join(runtimeRoot, "bin", "claude");
-      const cursorWrapperPath = path.join(runtimeRoot, "bin", "agent");
-      const openCodeWrapperPath = path.join(runtimeRoot, "bin", "opencode");
+      const codexWrapperPath = NodePath.join(runtimeRoot, "bin", "codex");
+      const claudeWrapperPath = NodePath.join(runtimeRoot, "bin", "claude");
+      const cursorWrapperPath = NodePath.join(runtimeRoot, "bin", "agent");
+      const openCodeWrapperPath = NodePath.join(runtimeRoot, "bin", "opencode");
       const shellWrapperPath = launchContext.shellWrapperPath;
-      const bashProfilePath = path.join(runtimeHome, ".bash_profile");
-      const bashRcPath = path.join(runtimeHome, ".bashrc");
-      const homelabCliPath = path.join(runtimeHome, ".homelab", "bin", "homelab");
-      const homelabSecretToFilePath = path.join(
+      const bashProfilePath = NodePath.join(runtimeHome, ".bash_profile");
+      const bashRcPath = NodePath.join(runtimeHome, ".bashrc");
+      const homelabCliPath = NodePath.join(runtimeHome, ".homelab", "bin", "homelab");
+      const homelabSecretToFilePath = NodePath.join(
         runtimeHome,
         ".homelab",
         "bin",
         "homelab-secret-to-file",
       );
-      const profilePath = path.join(runtimeHome, ".profile");
-      const zshEnvPath = path.join(runtimeHome, ".zshenv");
-      const agentsPath = path.join(runtimeWorkspace, "AGENTS.md");
-      const claudePath = path.join(runtimeWorkspace, "CLAUDE.md");
-      assert.equal(yield* fileSystem.exists(codexWrapperPath), true);
-      assert.equal(yield* fileSystem.exists(claudeWrapperPath), true);
-      assert.equal(yield* fileSystem.exists(cursorWrapperPath), true);
-      assert.equal(yield* fileSystem.exists(openCodeWrapperPath), true);
-      assert.equal(yield* fileSystem.exists(shellWrapperPath), true);
-      assert.equal(yield* fileSystem.exists(bashProfilePath), true);
-      assert.equal(yield* fileSystem.exists(bashRcPath), true);
-      assert.equal(yield* fileSystem.exists(homelabCliPath), true);
-      assert.equal(yield* fileSystem.exists(homelabSecretToFilePath), true);
-      assert.equal(yield* fileSystem.exists(profilePath), true);
-      assert.equal(yield* fileSystem.exists(zshEnvPath), true);
-      assert.equal(yield* fileSystem.exists(agentsPath), true);
-      assert.equal(yield* fileSystem.exists(claudePath), true);
+      const profilePath = NodePath.join(runtimeHome, ".profile");
+      const zshEnvPath = NodePath.join(runtimeHome, ".zshenv");
+      const agentsPath = NodePath.join(runtimeWorkspace, "AGENTS.md");
+      const claudePath = NodePath.join(runtimeWorkspace, "CLAUDE.md");
+      NodeAssert.equal(yield* fileSystem.exists(codexWrapperPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(claudeWrapperPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(cursorWrapperPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(openCodeWrapperPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(shellWrapperPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(bashProfilePath), true);
+      NodeAssert.equal(yield* fileSystem.exists(bashRcPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(homelabCliPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(homelabSecretToFilePath), true);
+      NodeAssert.equal(yield* fileSystem.exists(profilePath), true);
+      NodeAssert.equal(yield* fileSystem.exists(zshEnvPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(agentsPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(claudePath), true);
 
       const shellWrapperContents = yield* fileSystem.readFileString(shellWrapperPath);
-      assert.match(shellWrapperContents, /docker_args=\(exec -i -t -w "\$workdir"\)/);
-      assert.match(shellWrapperContents, /\/bin\/zsh/);
-      assert.match(shellWrapperContents, /BASH_ENV=\/runtime\/home\/\.homelab-runtime\.env/);
-      assert.match(shellWrapperContents, /container_workspace='\/workspace'/);
-      assert.match(
+      NodeAssert.match(shellWrapperContents, /docker_args=\(exec -i -t -w "\$workdir"\)/);
+      NodeAssert.match(shellWrapperContents, /\/bin\/zsh/);
+      NodeAssert.match(shellWrapperContents, /BASH_ENV=\/runtime\/home\/\.homelab-runtime\.env/);
+      NodeAssert.match(shellWrapperContents, /container_workspace='\/workspace'/);
+      NodeAssert.match(
         shellWrapperContents,
         /PATH=\/runtime\/home\/\.homelab\/bin:\/opt\/homelab\/bin:/,
       );
-      assert.match(yield* fileSystem.readFileString(bashRcPath), /__homelab_runtime_refresh_env/);
-      assert.match(
+      NodeAssert.match(
+        yield* fileSystem.readFileString(bashRcPath),
+        /__homelab_runtime_refresh_env/,
+      );
+      NodeAssert.match(
         yield* fileSystem.readFileString(zshEnvPath),
         /precmd_functions\+=\(__homelab_runtime_refresh_env\)/,
       );
@@ -499,133 +512,142 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const homelabSecretToFileContents = yield* fileSystem.readFileString(homelabSecretToFilePath);
       const agentsContents = yield* fileSystem.readFileString(agentsPath);
       const claudeContents = yield* fileSystem.readFileString(claudePath);
-      assert.match(codexWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/);
-      assert.match(claudeWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'claude'/);
-      assert.match(cursorWrapperContents, /sh '\/runtime\/home\/\.homelab-runtime\.env' 'agent'/);
-      assert.match(
+      NodeAssert.match(
+        codexWrapperContents,
+        /sh '\/runtime\/home\/\.homelab-runtime\.env' 'codex'/,
+      );
+      NodeAssert.match(
+        claudeWrapperContents,
+        /sh '\/runtime\/home\/\.homelab-runtime\.env' 'claude'/,
+      );
+      NodeAssert.match(
+        cursorWrapperContents,
+        /sh '\/runtime\/home\/\.homelab-runtime\.env' 'agent'/,
+      );
+      NodeAssert.match(
         openCodeWrapperContents,
         /sh '\/runtime\/home\/\.homelab-runtime\.env' 'opencode'/,
       );
-      assert.match(homelabCliContents, /--no-wait/);
-      assert.match(homelabCliContents, /--timeout-seconds/);
-      assert.match(homelabCliContents, /--example/);
-      assert.match(homelabCliContents, /--schema/);
-      assert.match(homelabCliContents, /memory/);
-      assert.match(homelabCliContents, /project-memory\/search/);
-      assert.match(homelabCliContents, /cmd_memory_propose/);
-      assert.match(homelabCliContents, /Waiting for secret/);
-      assert.match(homelabCliContents, /historical Project Runtime bootstrap materializations/);
-      assert.doesNotMatch(homelabCliContents, /shared runtime bootstrap descriptor/);
-      assert.match(
+      NodeAssert.match(homelabCliContents, /--no-wait/);
+      NodeAssert.match(homelabCliContents, /--timeout-seconds/);
+      NodeAssert.match(homelabCliContents, /--example/);
+      NodeAssert.match(homelabCliContents, /--schema/);
+      NodeAssert.match(homelabCliContents, /memory/);
+      NodeAssert.match(homelabCliContents, /project-memory\/search/);
+      NodeAssert.match(homelabCliContents, /cmd_memory_propose/);
+      NodeAssert.match(homelabCliContents, /Waiting for secret/);
+      NodeAssert.match(homelabCliContents, /historical Project Runtime bootstrap materializations/);
+      NodeAssert.doesNotMatch(homelabCliContents, /shared runtime bootstrap descriptor/);
+      NodeAssert.match(
         homelabCliContents,
         /Create or update a secret reference, open the secure UI prompt, and wait for the value/,
       );
-      assert.match(homelabCliContents, /"Submit a homelab promotion envelope\.\\n\\n"/);
-      assert.match(homelabCliContents, /"Examples:\\n"/);
-      assert.match(homelabSecretToFileContents, /BEGIN OPENSSH PRIVATE KEY/);
-      assert.match(
+      NodeAssert.match(homelabCliContents, /"Submit a homelab promotion envelope\.\\n\\n"/);
+      NodeAssert.match(homelabCliContents, /"Examples:\\n"/);
+      NodeAssert.match(homelabSecretToFileContents, /BEGIN OPENSSH PRIVATE KEY/);
+      NodeAssert.match(
         homelabSecretToFileContents,
         /base64-encoded file contents, and bare OpenSSH key payloads/,
       );
-      assert.match(agentsContents, /homelab secret-request/);
-      assert.match(
+      NodeAssert.match(agentsContents, /homelab secret-request/);
+      NodeAssert.match(
         agentsContents,
         /homelab-secret-to-file PROXMOX_ROOT_SSH_KEY ~\/\.ssh\/proxmox_root/,
       );
-      assert.match(agentsContents, /homelab --help\s+# Confirm the installed CLI surface/);
-      assert.match(
+      NodeAssert.match(agentsContents, /homelab --help\s+# Confirm the installed CLI surface/);
+      NodeAssert.match(
         agentsContents,
         /You have outbound network access\. Use web search, vendor docs, GitHub, package registries/,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /Write scratch scripts, temporary files, and quick repros inside the container/,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /When you identify a new service, runtime, platform, appliance, or tool in the user's homelab,/,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /search for its official docs, APIs, CLIs, SDKs, health endpoints, auth methods, and automation/,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /The workspace may be sparse\. Seeing only runtime helper files such as `AGENTS\.md` and/,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /Do not search the workspace for the CLI's\s+source code or wrapper scripts before using it\./,
       );
-      assert.match(agentsContents, /homelab promote --schema/);
-      assert.match(agentsContents, /"id": "host-main"/);
-      assert.match(agentsContents, /"status": "active"/);
-      assert.match(
+      NodeAssert.match(agentsContents, /homelab promote --schema/);
+      NodeAssert.match(agentsContents, /"id": "host-main"/);
+      NodeAssert.match(agentsContents, /"status": "active"/);
+      NodeAssert.match(
         agentsContents,
         /If a missing secret is blocking the task, run `homelab secret-request`\s+yourself immediately\./,
       );
-      assert.match(agentsContents, /Do not tell the user to run the command for you\./);
-      assert.match(
+      NodeAssert.match(agentsContents, /Do not tell the user to run the command for you\./);
+      NodeAssert.match(
         agentsContents,
         /If `homelab secrets` is empty, or a useful credential is missing from the\s+registry, create the missing secret references yourself/,
       );
-      assert.match(agentsContents, /Secret reference creation is normal work\./);
-      assert.match(
+      NodeAssert.match(agentsContents, /Secret reference creation is normal work\./);
+      NodeAssert.match(
         agentsContents,
         /The helper handles raw multiline secret contents, armored private keys, base64-\s+encoded file contents, and bare OpenSSH private-key payloads\./,
       );
-      assert.match(
+      NodeAssert.match(
         agentsContents,
         /`\/workspace` is the project runtime workspace inside the container\./,
       );
-      assert.match(agentsContents, /homelab memory search <query>/);
-      assert.match(agentsContents, /homelab memory propose/);
-      assert.match(
+      NodeAssert.match(agentsContents, /homelab memory search <query>/);
+      NodeAssert.match(agentsContents, /homelab memory propose/);
+      NodeAssert.match(
         claudeContents,
         /Don't avoid searching when current external information matters\./,
       );
-      assert.doesNotMatch(agentsContents, /ssh root@192\.168\.1\.60/);
+      NodeAssert.doesNotMatch(agentsContents, /ssh root@192\.168\.1\.60/);
 
       const runCall = findRunCall(docker.calls);
-      assert.ok(runCall);
+      NodeAssert.ok(runCall);
       const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
-      assert.notEqual(networkFlagIndex, -1);
-      assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      NodeAssert.notEqual(networkFlagIndex, -1);
+      NodeAssert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
       const openCodePortFlagIndex = runCall.findIndex((entry) => entry === "-p");
-      assert.notEqual(openCodePortFlagIndex, -1);
-      assert.equal(runCall[openCodePortFlagIndex + 1], "127.0.0.1::4096/tcp");
-      assert.deepEqual(started.managedOpenCodeServer, {
+      NodeAssert.notEqual(openCodePortFlagIndex, -1);
+      NodeAssert.equal(runCall[openCodePortFlagIndex + 1], "127.0.0.1::4096/tcp");
+      NodeAssert.deepEqual(started.managedOpenCodeServer, {
         containerPort: 4096,
         hostIp: "127.0.0.1",
         hostPort: 32_001,
       });
-      assert.deepEqual(launchContext.managedOpenCodeServer, started.managedOpenCodeServer);
-      const runtimeCodexHome = path.join(runtimeHome, ".codex");
-      assert.equal(
-        yield* fileSystem.readFileString(path.join(runtimeCodexHome, "auth.json")),
+      NodeAssert.deepEqual(launchContext.managedOpenCodeServer, started.managedOpenCodeServer);
+      const runtimeCodexHome = NodePath.join(runtimeHome, ".codex");
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(runtimeCodexHome, "auth.json")),
         '{"token":"host"}',
       );
-      assert.equal(
-        yield* fileSystem.readFileString(path.join(runtimeCodexHome, "config.toml")),
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(runtimeCodexHome, "config.toml")),
         'model = "gpt-5"\n',
       );
-      assert.equal(
+      NodeAssert.equal(
         yield* fileSystem.readFileString(
-          path.join(runtimeHome, ".local", "share", "opencode", "auth.json"),
+          NodePath.join(runtimeHome, ".local", "share", "opencode", "auth.json"),
         ),
         '{"provider":"host"}',
       );
       const authMount = `${codexAuthPath}:${runtimeCodexHome}:ro`;
-      assert.equal(runCall.includes(authMount), false);
-      assert.equal(
+      NodeAssert.equal(runCall.includes(authMount), false);
+      NodeAssert.equal(
         runCall.some((entry) => entry.endsWith(":/opt/homelab/bin/codex:ro")),
         false,
       );
-      assert.equal(
+      NodeAssert.equal(
         runCall.some((entry) => entry.endsWith(":/opt/homelab/bin/claude:ro")),
         false,
       );
-      assert.equal(
+      NodeAssert.equal(
         docker.calls.some((call) => call[0] === "build"),
         true,
       );
@@ -655,25 +677,25 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       // /workspace. A materialized runtime must therefore expose a baseline `.homelab`
       // workspace view, not only the home `~/.homelab/bin` CLI. Without it the generated
       // instructions point at files that do not exist and `.homelab` "looks empty".
-      const homelabReadmePath = path.join(runtimeWorkspace, ".homelab", "README.md");
-      const homelabThreadsIndexPath = path.join(
+      const homelabReadmePath = NodePath.join(runtimeWorkspace, ".homelab", "README.md");
+      const homelabThreadsIndexPath = NodePath.join(
         runtimeWorkspace,
         ".homelab",
         "threads",
         "index.jsonl",
       );
-      const homelabMemoryIndexPath = path.join(
+      const homelabMemoryIndexPath = NodePath.join(
         runtimeWorkspace,
         ".homelab",
         "memory",
         "index.jsonl",
       );
-      assert.equal(yield* fileSystem.exists(homelabReadmePath), true);
-      assert.equal(yield* fileSystem.exists(homelabThreadsIndexPath), true);
-      assert.equal(yield* fileSystem.exists(homelabMemoryIndexPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(homelabReadmePath), true);
+      NodeAssert.equal(yield* fileSystem.exists(homelabThreadsIndexPath), true);
+      NodeAssert.equal(yield* fileSystem.exists(homelabMemoryIndexPath), true);
 
       const homelabReadmeContents = yield* fileSystem.readFileString(homelabReadmePath);
-      assert.match(homelabReadmeContents, /homelab/i);
+      NodeAssert.match(homelabReadmeContents, /homelab/i);
     }).pipe(Effect.scoped),
   );
 
@@ -699,8 +721,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       // regenerates on turn start, wake, and memory writes. The baseline writer seeds
       // these same paths only when absent, so re-materializing the runtime must NOT
       // overwrite this content with the empty skeleton.
-      const homelabReadmePath = path.join(runtimeWorkspace, ".homelab", "README.md");
-      const homelabMemoryIndexPath = path.join(
+      const homelabReadmePath = NodePath.join(runtimeWorkspace, ".homelab", "README.md");
+      const homelabMemoryIndexPath = NodePath.join(
         runtimeWorkspace,
         ".homelab",
         "memory",
@@ -720,8 +742,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       });
       yield* runtime.startRuntime(descriptor.threadId);
 
-      assert.equal(yield* fileSystem.readFileString(homelabReadmePath), richReadmeContents);
-      assert.equal(yield* fileSystem.readFileString(homelabMemoryIndexPath), richMemoryEntry);
+      NodeAssert.equal(yield* fileSystem.readFileString(homelabReadmePath), richReadmeContents);
+      NodeAssert.equal(yield* fileSystem.readFileString(homelabMemoryIndexPath), richMemoryEntry);
     }).pipe(Effect.scoped),
   );
 
@@ -754,73 +776,76 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         const standaloneLaunch = yield* runtime.resolveLaunchContext(standaloneDescriptor.threadId);
 
         const projectAgents = yield* fileSystem.readFileString(
-          path.join(projectLaunch.hostWorkspacePath, "AGENTS.md"),
+          NodePath.join(projectLaunch.hostWorkspacePath, "AGENTS.md"),
         );
         const projectClaude = yield* fileSystem.readFileString(
-          path.join(projectLaunch.hostWorkspacePath, "CLAUDE.md"),
+          NodePath.join(projectLaunch.hostWorkspacePath, "CLAUDE.md"),
         );
         const standaloneAgents = yield* fileSystem.readFileString(
-          path.join(standaloneLaunch.hostWorkspacePath, "AGENTS.md"),
+          NodePath.join(standaloneLaunch.hostWorkspacePath, "AGENTS.md"),
         );
         const standaloneClaude = yield* fileSystem.readFileString(
-          path.join(standaloneLaunch.hostWorkspacePath, "CLAUDE.md"),
+          NodePath.join(standaloneLaunch.hostWorkspacePath, "CLAUDE.md"),
         );
 
         // The two personas must actually differ in their framing.
-        assert.notEqual(projectAgents, standaloneAgents);
+        NodeAssert.notEqual(projectAgents, standaloneAgents);
         // CLAUDE.md and AGENTS.md only differ by their one-line preamble.
-        assert.match(projectClaude, /Claude Code reads this file automatically\./);
-        assert.match(standaloneClaude, /Claude Code reads this file automatically\./);
+        NodeAssert.match(projectClaude, /Claude Code reads this file automatically\./);
+        NodeAssert.match(standaloneClaude, /Claude Code reads this file automatically\./);
 
         // Top-of-persona orientation line distinguishes the two without reading .homelab.
-        assert.match(projectAgents, /This is a thread inside (?:the .* project|a project)\./);
-        assert.match(standaloneAgents, /This is a one-off standalone \(scratch\) thread\./);
-        assert.doesNotMatch(
+        NodeAssert.match(projectAgents, /This is a thread inside (?:the .* project|a project)\./);
+        NodeAssert.match(standaloneAgents, /This is a one-off standalone \(scratch\) thread\./);
+        NodeAssert.doesNotMatch(
           standaloneAgents,
           /This is a thread inside (?:the .* project|a project)\./,
         );
-        assert.doesNotMatch(projectAgents, /one-off standalone \(scratch\) thread/);
+        NodeAssert.doesNotMatch(projectAgents, /one-off standalone \(scratch\) thread/);
 
         // Project persona keeps the shared-runtime + cross-thread + promotion framing.
-        assert.match(
+        NodeAssert.match(
           projectAgents,
           /This project runtime may be shared by multiple threads in the same project\./,
         );
-        assert.match(projectAgents, /Project-local memory and transcripts/);
-        assert.match(projectAgents, /lists discoverable threads in this project/);
-        assert.match(
+        NodeAssert.match(projectAgents, /Project-local memory and transcripts/);
+        NodeAssert.match(projectAgents, /lists discoverable threads in this project/);
+        NodeAssert.match(
           projectAgents,
           /Promotion from project memory to the global graph is explicit\./,
         );
-        assert.match(projectAgents, /so the next thread has it\./);
+        NodeAssert.match(projectAgents, /so the next thread has it\./);
 
         // Standalone persona removes the shared-runtime / cross-thread / project-promotion framing.
-        assert.doesNotMatch(
+        NodeAssert.doesNotMatch(
           standaloneAgents,
           /may be shared by multiple threads in the same project/,
         );
-        assert.doesNotMatch(standaloneAgents, /Project-local memory and transcripts/);
-        assert.doesNotMatch(standaloneAgents, /lists discoverable threads in this project/);
-        assert.doesNotMatch(standaloneAgents, /Promotion from project memory to the global graph/);
-        assert.doesNotMatch(standaloneAgents, /the project runtime workspace/);
-        assert.doesNotMatch(standaloneAgents, /Project Runtime/);
+        NodeAssert.doesNotMatch(standaloneAgents, /Project-local memory and transcripts/);
+        NodeAssert.doesNotMatch(standaloneAgents, /lists discoverable threads in this project/);
+        NodeAssert.doesNotMatch(
+          standaloneAgents,
+          /Promotion from project memory to the global graph/,
+        );
+        NodeAssert.doesNotMatch(standaloneAgents, /the project runtime workspace/);
+        NodeAssert.doesNotMatch(standaloneAgents, /Project Runtime/);
 
         // Standalone persona reframes around an isolated, thread-local scratch runtime.
-        assert.match(standaloneAgents, /Thread-local memory and transcripts/);
-        assert.match(
+        NodeAssert.match(standaloneAgents, /Thread-local memory and transcripts/);
+        NodeAssert.match(
           standaloneAgents,
           /This is a one-off standalone thread with its own runtime and filesystem\./,
         );
-        assert.match(standaloneAgents, /There is no project to propose or\npromote into/);
-        assert.match(standaloneAgents, /homelab skill list/);
+        NodeAssert.match(standaloneAgents, /There is no project to propose or\npromote into/);
+        NodeAssert.match(standaloneAgents, /homelab skill list/);
 
         // Both personas keep the still-correct orientation: workspace, .homelab distinction, CLI, secrets.
         for (const persona of [projectAgents, standaloneAgents]) {
-          assert.match(persona, /\/workspace\/\.homelab/);
-          assert.match(persona, /~\/\.homelab/);
-          assert.match(persona, /homelab --help/);
-          assert.match(persona, /homelab secret-request/);
-          assert.match(persona, /Always verify before acting\./);
+          NodeAssert.match(persona, /\/workspace\/\.homelab/);
+          NodeAssert.match(persona, /~\/\.homelab/);
+          NodeAssert.match(persona, /homelab --help/);
+          NodeAssert.match(persona, /homelab secret-request/);
+          NodeAssert.match(persona, /Always verify before acting\./);
         }
       }).pipe(Effect.scoped),
   );
@@ -850,37 +875,37 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         });
 
         // Guard: the runtimeId really is the isolated form (so the fallback would say "project").
-        assert.match(String(isolatedDescriptor.runtimeId), /^isolated-runtime:/);
+        NodeAssert.match(String(isolatedDescriptor.runtimeId), /^isolated-runtime:/);
 
         const isolatedLaunch = yield* runtime.resolveLaunchContext(isolatedDescriptor.threadId);
         const isolatedAgents = yield* fileSystem.readFileString(
-          path.join(isolatedLaunch.hostWorkspacePath, "AGENTS.md"),
+          NodePath.join(isolatedLaunch.hostWorkspacePath, "AGENTS.md"),
         );
 
         // It must render the STANDALONE persona, not the project persona.
-        assert.match(isolatedAgents, /This is a one-off standalone \(scratch\) thread\./);
-        assert.match(
+        NodeAssert.match(isolatedAgents, /This is a one-off standalone \(scratch\) thread\./);
+        NodeAssert.match(
           isolatedAgents,
           /This is a one-off standalone thread with its own runtime and filesystem\./,
         );
-        assert.match(isolatedAgents, /Thread-local memory and transcripts/);
-        assert.match(isolatedAgents, /There is no project to propose or\npromote into/);
-        assert.doesNotMatch(
+        NodeAssert.match(isolatedAgents, /Thread-local memory and transcripts/);
+        NodeAssert.match(isolatedAgents, /There is no project to propose or\npromote into/);
+        NodeAssert.doesNotMatch(
           isolatedAgents,
           /This is a thread inside (?:the .* project|a project)\./,
         );
-        assert.doesNotMatch(
+        NodeAssert.doesNotMatch(
           isolatedAgents,
           /may be shared by multiple threads in the same project/,
         );
-        assert.doesNotMatch(isolatedAgents, /Project-local memory and transcripts/);
+        NodeAssert.doesNotMatch(isolatedAgents, /Project-local memory and transcripts/);
 
         // The baseline .homelab README is titled with the scratch title, not "Project Runtime".
         const isolatedReadme = yield* fileSystem.readFileString(
-          path.join(isolatedLaunch.hostWorkspacePath, ".homelab", "README.md"),
+          NodePath.join(isolatedLaunch.hostWorkspacePath, ".homelab", "README.md"),
         );
-        assert.match(isolatedReadme, /^# Scratch Homelab Context/);
-        assert.doesNotMatch(isolatedReadme, /Project Runtime/);
+        NodeAssert.match(isolatedReadme, /^# Scratch Homelab Context/);
+        NodeAssert.doesNotMatch(isolatedReadme, /Project Runtime/);
       }).pipe(Effect.scoped),
   );
 
@@ -907,19 +932,19 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 
       const launch = yield* runtime.resolveLaunchContext(descriptor.threadId);
       const agents = yield* fileSystem.readFileString(
-        path.join(launch.hostWorkspacePath, "AGENTS.md"),
+        NodePath.join(launch.hostWorkspacePath, "AGENTS.md"),
       );
 
-      assert.match(
+      NodeAssert.match(
         agents,
         /This is an isolated \(parallel\) thread inside the "Edge Stack" project\./,
       );
-      assert.match(agents, /exact copy of the Project Runtime/);
-      assert.match(agents, /Merge into Project\nRuntime/);
-      assert.match(agents, /Project-local memory and transcripts/);
+      NodeAssert.match(agents, /exact copy of the Project Runtime/);
+      NodeAssert.match(agents, /Merge into Project\nRuntime/);
+      NodeAssert.match(agents, /Project-local memory and transcripts/);
       // It must not claim the shared-single-writer framing or the scratch framing.
-      assert.doesNotMatch(agents, /turns are queued so there is one active writer/);
-      assert.doesNotMatch(agents, /one-off standalone \(scratch\) thread/);
+      NodeAssert.doesNotMatch(agents, /turns are queued so there is one active writer/);
+      NodeAssert.doesNotMatch(agents, /one-off standalone \(scratch\) thread/);
     }).pipe(Effect.scoped),
   );
 
@@ -952,15 +977,15 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         const standaloneLaunch = yield* runtime.resolveLaunchContext(standaloneDescriptor.threadId);
 
         const projectReadme = yield* fileSystem.readFileString(
-          path.join(projectLaunch.hostWorkspacePath, ".homelab", "README.md"),
+          NodePath.join(projectLaunch.hostWorkspacePath, ".homelab", "README.md"),
         );
         const standaloneReadme = yield* fileSystem.readFileString(
-          path.join(standaloneLaunch.hostWorkspacePath, ".homelab", "README.md"),
+          NodePath.join(standaloneLaunch.hostWorkspacePath, ".homelab", "README.md"),
         );
 
-        assert.match(projectReadme, /^# Project Runtime Homelab Context/);
-        assert.match(standaloneReadme, /^# Scratch Homelab Context/);
-        assert.doesNotMatch(standaloneReadme, /Project Runtime/);
+        NodeAssert.match(projectReadme, /^# Project Runtime Homelab Context/);
+        NodeAssert.match(standaloneReadme, /^# Scratch Homelab Context/);
+        NodeAssert.doesNotMatch(standaloneReadme, /Project Runtime/);
       }).pipe(Effect.scoped),
   );
 
@@ -979,8 +1004,8 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         requestedCwd: createLogicalProjectWorkspaceRoot("project-alpha"),
       });
 
-      assert.equal(descriptor.cwd, "/workspace");
-      assert.equal(descriptor.workspacePath, "/workspace");
+      NodeAssert.equal(descriptor.cwd, "/workspace");
+      NodeAssert.equal(descriptor.workspacePath, "/workspace");
     }),
   );
 
@@ -1027,10 +1052,10 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         });
         const refreshed = yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
 
-        assert.equal(descriptor.bootstrapVersion, historicalVersion);
-        assert.equal(descriptor.env.HISTORICAL_TOOL_HOME, "/opt/historical");
-        assert.equal(refreshed.bootstrapVersion, historicalVersion);
-        assert.equal(refreshed.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+        NodeAssert.equal(descriptor.bootstrapVersion, historicalVersion);
+        NodeAssert.equal(descriptor.env.HISTORICAL_TOOL_HOME, "/opt/historical");
+        NodeAssert.equal(refreshed.bootstrapVersion, historicalVersion);
+        NodeAssert.equal(refreshed.env.HISTORICAL_TOOL_HOME, "/opt/historical");
       }),
   );
 
@@ -1051,16 +1076,16 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       });
       yield* runtime.startRuntime(descriptor.threadId);
       const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
-      const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+      const secretEnvPath = NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env");
       const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
       const runCall = findRunCall(docker.calls);
 
-      assert.ok(runCall);
+      NodeAssert.ok(runCall);
       const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
-      assert.notEqual(networkFlagIndex, -1);
-      assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
-      assert.equal(runCall.includes("--add-host"), true);
-      assert.match(
+      NodeAssert.notEqual(networkFlagIndex, -1);
+      NodeAssert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+      NodeAssert.equal(runCall.includes("--add-host"), true);
+      NodeAssert.match(
         secretEnvContents,
         /export HOMELAB_AGENT_SERVER_URL='http:\/\/host\.docker\.internal:0'/,
       );
@@ -1096,26 +1121,26 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         const sharedLaunch = yield* runtime.resolveLaunchContext(shared.threadId);
         const isolatedLaunch = yield* runtime.resolveLaunchContext(isolated.threadId);
 
-        assert.equal(shared.containerName, "runtime-cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
-        assert.equal(
+        NodeAssert.equal(shared.containerName, "runtime-cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE");
+        NodeAssert.equal(
           isolated.containerName,
           "runtime-aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
         );
-        assert.equal(
-          path.basename(sharedLaunch.hostRuntimePath),
+        NodeAssert.equal(
+          NodePath.basename(sharedLaunch.hostRuntimePath),
           "cHJvamVjdC1ydW50aW1lOnByb2plY3QtYWxwaGE",
         );
-        assert.equal(
-          path.basename(isolatedLaunch.hostRuntimePath),
+        NodeAssert.equal(
+          NodePath.basename(isolatedLaunch.hostRuntimePath),
           "aXNvbGF0ZWQtcnVudGltZTp0aHJlYWQtcnVudGltZS1pc29sYXRlZA",
         );
-        assert.equal(
+        NodeAssert.equal(
           sharedLaunch.hostWorkspacePath,
-          path.join(sharedLaunch.hostRuntimePath, "workspace"),
+          NodePath.join(sharedLaunch.hostRuntimePath, "workspace"),
         );
-        assert.equal(
+        NodeAssert.equal(
           isolatedLaunch.hostHomePath,
-          path.join(isolatedLaunch.hostRuntimePath, "home"),
+          NodePath.join(isolatedLaunch.hostRuntimePath, "home"),
         );
       }),
   );
@@ -1132,11 +1157,11 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
       yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
       yield* fileSystem.writeFileString(
-        path.join(codexAuthPath, "auth.json"),
+        NodePath.join(codexAuthPath, "auth.json"),
         '{"token":"host-1"}',
       );
       yield* fileSystem.writeFileString(
-        path.join(codexAuthPath, "config.toml"),
+        NodePath.join(codexAuthPath, "config.toml"),
         'model = "host"\n',
       );
 
@@ -1148,30 +1173,30 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       yield* runtime.startRuntime(descriptor.threadId);
       const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
       const runtimeHome = launchContext.hostHomePath;
-      const runtimeCodexHome = path.join(runtimeHome, ".codex");
+      const runtimeCodexHome = NodePath.join(runtimeHome, ".codex");
 
       yield* fileSystem.writeFileString(
-        path.join(runtimeCodexHome, "config.toml"),
+        NodePath.join(runtimeCodexHome, "config.toml"),
         'model = "runtime"\n',
       );
       yield* fileSystem.writeFileString(
-        path.join(codexAuthPath, "auth.json"),
+        NodePath.join(codexAuthPath, "auth.json"),
         '{"token":"host-2"}',
       );
       yield* fileSystem.writeFileString(
-        path.join(codexAuthPath, "config.toml"),
+        NodePath.join(codexAuthPath, "config.toml"),
         'model = "host-updated"\n',
       );
 
       yield* runtime.stopRuntime(descriptor.threadId);
       yield* runtime.startRuntime(descriptor.threadId);
 
-      assert.equal(
-        yield* fileSystem.readFileString(path.join(runtimeCodexHome, "auth.json")),
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(runtimeCodexHome, "auth.json")),
         '{"token":"host-2"}',
       );
-      assert.equal(
-        yield* fileSystem.readFileString(path.join(runtimeCodexHome, "config.toml")),
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(runtimeCodexHome, "config.toml")),
         'model = "runtime"\n',
       );
     }),
@@ -1201,23 +1226,23 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         yield* runtime.stopRuntime(descriptor.threadId);
 
         const container = docker.containers.get(firstStart.containerName);
-        assert.ok(container);
+        NodeAssert.ok(container);
         container.labels["homelab.runtime.fingerprint"] = "stale-runtime-image";
 
         docker.calls.length = 0;
         const restarted = yield* runtime.startRuntime(descriptor.threadId);
 
-        assert.equal(restarted.status, "running");
-        assert.notEqual(restarted.containerId, firstStart.containerId);
-        assert.equal(
+        NodeAssert.equal(restarted.status, "running");
+        NodeAssert.notEqual(restarted.containerId, firstStart.containerId);
+        NodeAssert.equal(
           docker.calls.some((call) => call[0] === "rm"),
           true,
         );
-        assert.equal(
+        NodeAssert.equal(
           docker.calls.some((call) => call[0] === "run"),
           true,
         );
-        assert.equal(
+        NodeAssert.equal(
           docker.calls.some((call) => call[0] === "start"),
           false,
         );
@@ -1248,21 +1273,21 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       docker.calls.length = 0;
       const restarted = yield* runtime.startRuntime(descriptor.threadId);
 
-      assert.equal(restarted.status, "running");
-      assert.equal(
+      NodeAssert.equal(restarted.status, "running");
+      NodeAssert.equal(
         docker.calls.some((call) => call[0] === "run"),
         false,
       );
-      assert.equal(
+      NodeAssert.equal(
         docker.calls.some((call) => call[0] === "start"),
         true,
       );
       // The stopped container has no live published port, so the runtime must
       // re-read the freshly assigned host port after `docker start` rather than
       // treating the absence as an incompatibility and recreating the container.
-      assert.ok(restarted.managedOpenCodeServer);
-      assert.equal(restarted.managedOpenCodeServer?.containerPort, 4096);
-      assert.notEqual(
+      NodeAssert.ok(restarted.managedOpenCodeServer);
+      NodeAssert.equal(restarted.managedOpenCodeServer?.containerPort, 4096);
+      NodeAssert.notEqual(
         restarted.managedOpenCodeServer?.hostPort,
         firstStart.managedOpenCodeServer?.hostPort,
       );
@@ -1293,9 +1318,9 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
 
       yield* runtime.destroyRuntime(descriptor.threadId);
 
-      assert.equal(docker.containers.size, 0);
-      assert.equal(yield* fileSystem.exists(runtimeRoot), false);
-      assert.equal(yield* runtime.getRuntime(descriptor.threadId), undefined);
+      NodeAssert.equal(docker.containers.size, 0);
+      NodeAssert.equal(yield* fileSystem.exists(runtimeRoot), false);
+      NodeAssert.equal(yield* runtime.getRuntime(descriptor.threadId), undefined);
     }),
   );
 });
@@ -1337,16 +1362,16 @@ runtimeLayerWithAutoNetwork("ThreadRuntimeLive Docker server connectivity", (it)
         });
         yield* runtime.startRuntime(descriptor.threadId);
         const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
-        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvPath = NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env");
         const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
         const runCall = findRunCall(docker.calls);
 
-        assert.ok(runCall);
+        NodeAssert.ok(runCall);
         const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
-        assert.notEqual(networkFlagIndex, -1);
-        assert.equal(runCall[networkFlagIndex + 1], "homelab-devcontainer-network");
-        assert.equal(runCall.includes("--add-host"), false);
-        assert.match(
+        NodeAssert.notEqual(networkFlagIndex, -1);
+        NodeAssert.equal(runCall[networkFlagIndex + 1], "homelab-devcontainer-network");
+        NodeAssert.equal(runCall.includes("--add-host"), false);
+        NodeAssert.match(
           secretEnvContents,
           /export HOMELAB_AGENT_SERVER_URL='http:\/\/172\.28\.0\.4:0'/,
         );
@@ -1383,16 +1408,16 @@ runtimeLayerWithServerUrlOverride("ThreadRuntimeLive Docker server URL override"
         });
         yield* runtime.startRuntime(descriptor.threadId);
         const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
-        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvPath = NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env");
         const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
         const runCall = findRunCall(docker.calls);
 
-        assert.ok(runCall);
+        NodeAssert.ok(runCall);
         const networkFlagIndex = runCall.findIndex((entry) => entry === "--network");
-        assert.notEqual(networkFlagIndex, -1);
-        assert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
-        assert.equal(runCall.includes("--add-host"), false);
-        assert.match(
+        NodeAssert.notEqual(networkFlagIndex, -1);
+        NodeAssert.equal(runCall[networkFlagIndex + 1], "homelab-agent-test");
+        NodeAssert.equal(runCall.includes("--add-host"), false);
+        NodeAssert.match(
           secretEnvContents,
           /export HOMELAB_AGENT_SERVER_URL='http:\/\/homelab-agent\.local:13773'/,
         );
@@ -1430,20 +1455,23 @@ runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
         });
         yield* runtime.startRuntime(descriptor.threadId);
         const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
-        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
-        const agentsPath = path.join(launchContext.hostWorkspacePath, "AGENTS.md");
-        const claudePath = path.join(launchContext.hostWorkspacePath, "CLAUDE.md");
+        const secretEnvPath = NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const agentsPath = NodePath.join(launchContext.hostWorkspacePath, "AGENTS.md");
+        const claudePath = NodePath.join(launchContext.hostWorkspacePath, "CLAUDE.md");
 
         const secretEnvContents = yield* fileSystem.readFileString(secretEnvPath);
-        assert.match(secretEnvContents, /export FIRST_REGISTERED_SECRET='first-secret-value'/);
-        assert.match(secretEnvContents, /export SECOND_REGISTERED_SECRET='second-secret-value'/);
+        NodeAssert.match(secretEnvContents, /export FIRST_REGISTERED_SECRET='first-secret-value'/);
+        NodeAssert.match(
+          secretEnvContents,
+          /export SECOND_REGISTERED_SECRET='second-secret-value'/,
+        );
 
         const generatedContext = [
           yield* fileSystem.readFileString(agentsPath),
           yield* fileSystem.readFileString(claudePath),
         ].join("\n");
-        assert.doesNotMatch(generatedContext, /first-secret-value/);
-        assert.doesNotMatch(generatedContext, /second-secret-value/);
+        NodeAssert.doesNotMatch(generatedContext, /first-secret-value/);
+        NodeAssert.doesNotMatch(generatedContext, /second-secret-value/);
       }),
   );
 
@@ -1466,9 +1494,9 @@ runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
         });
         yield* runtime.startRuntime(descriptor.threadId);
         const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
-        const secretEnvPath = path.join(launchContext.hostHomePath, ".homelab-runtime.env");
+        const secretEnvPath = NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env");
 
-        assert.equal(
+        NodeAssert.equal(
           (yield* fileSystem.readFileString(secretEnvPath)).includes("TEST_SECRET_FLOW"),
           false,
         );
@@ -1477,11 +1505,11 @@ runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
         mutableRuntimeSecretEnv = { TEST_SECRET_FLOW: "dummy-value" };
         yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
 
-        assert.match(
+        NodeAssert.match(
           yield* fileSystem.readFileString(secretEnvPath),
           /export TEST_SECRET_FLOW='dummy-value'/,
         );
-        assert.equal(
+        NodeAssert.equal(
           docker.calls.some((call) => call[0] === "run" || call[0] === "start"),
           false,
         );

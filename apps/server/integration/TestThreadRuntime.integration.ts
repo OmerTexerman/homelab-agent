@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off globalDate:off globalDateInEffect:off
-import os from "node:os";
-import path from "node:path";
-
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { RuntimeSessionId } from "@t3tools/contracts";
 import { Effect, Layer, Stream } from "effect";
 
@@ -42,8 +41,8 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
   ): ThreadRuntimeDescriptor => {
     const cwd = input.requestedCwd ?? process.cwd();
     const runtimeId = RuntimeSessionId.make(`runtime-${String(input.threadId)}`);
-    const homePath = path.join(
-      os.tmpdir(),
+    const homePath = NodePath.join(
+      NodeOS.tmpdir(),
       "homelab-agent-integration-home",
       String(input.threadId),
     );

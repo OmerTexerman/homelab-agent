@@ -1,9 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalConsole:off globalTimers:off
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { EventEmitter } from "node:events";
-import readline from "node:readline";
-
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeEvents from "node:events";
+import * as NodeReadline from "node:readline";
 import {
   ApprovalRequestId,
   EventId,
@@ -80,8 +79,8 @@ interface CodexUserInputAnswer {
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
-  child: ChildProcessWithoutNullStreams;
-  output: readline.Interface;
+  child: NodeChildProcess.ChildProcessWithoutNullStreams;
+  output: NodeReadline.Interface;
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
@@ -326,7 +325,7 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
  * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
  * entire process tree instead.
  */
-function killChildTree(child: ChildProcessWithoutNullStreams): void {
+function killChildTree(child: NodeChildProcess.ChildProcessWithoutNullStreams): void {
   killCodexChildProcess(child);
 }
 
@@ -444,7 +443,7 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
-export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
+export class CodexAppServerManager extends NodeEvents.EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
@@ -481,16 +480,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: processCwd,
         ...(resolvedCodexHomePath ? { homePath: resolvedCodexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = NodeChildProcess.spawn(codexBinaryPath, ["app-server"], {
         cwd: processCwd,
         env: {
           ...process.env,
           ...(resolvedCodexHomePath ? { CODEX_HOME: resolvedCodexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],
+        // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
         shell: process.platform === "win32",
       });
-      const output = readline.createInterface({ input: child.stdout });
+      const output = NodeReadline.createInterface({ input: child.stdout });
 
       context = {
         session,
@@ -652,7 +652,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.stopSession(threadId);
       } else {
         this.emitEvent({
-          id: EventId.make(randomUUID()),
+          id: EventId.make(NodeCrypto.randomUUID()),
           kind: "error",
           provider: CODEX_DRIVER_KIND,
           threadId,
@@ -852,7 +852,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
 
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "notification",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -891,7 +891,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
 
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "notification",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1073,7 +1073,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : undefined;
 
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "notification",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1146,7 +1146,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const requestKind = this.requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;
     if (requestKind) {
-      requestId = ApprovalRequestId.make(randomUUID());
+      requestId = ApprovalRequestId.make(NodeCrypto.randomUUID());
       const pendingRequest: PendingApprovalRequest = {
         requestId,
         jsonRpcId: request.id,
@@ -1165,7 +1165,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     if (request.method === "item/tool/requestUserInput") {
-      requestId = ApprovalRequestId.make(randomUUID());
+      requestId = ApprovalRequestId.make(NodeCrypto.randomUUID());
       context.pendingUserInputs.set(requestId, {
         requestId,
         jsonRpcId: request.id,
@@ -1176,7 +1176,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "request",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1266,7 +1266,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "session",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1278,7 +1278,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private emitErrorEvent(context: CodexSessionContext, method: string, message: string): void {
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "error",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1294,7 +1294,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     message: string,
   ): void {
     this.emitEvent({
-      id: EventId.make(randomUUID()),
+      id: EventId.make(NodeCrypto.randomUUID()),
       kind: "notification",
       provider: CODEX_DRIVER_KIND,
       threadId: context.session.threadId,
@@ -1545,13 +1545,14 @@ function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const result = NodeChildProcess.spawnSync(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env: {
       ...process.env,
       ...(input.homePath ? { CODEX_HOME: expandHomePath(input.homePath) } : {}),
     },
     encoding: "utf8",
+    // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
     shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,

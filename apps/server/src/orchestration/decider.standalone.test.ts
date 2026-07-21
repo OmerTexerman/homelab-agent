@@ -44,12 +44,14 @@ async function applyPlannedEvents(
   let sequence = next.snapshotSequence;
   for (const event of events) {
     sequence += 1;
+    // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
     next = await Effect.runPromise(projectEvent(next, { ...event, sequence }));
   }
   return next;
 }
 
 async function decide(command: OrchestrationCommand, readModel: OrchestrationReadModel) {
+  // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
   return Effect.runPromise(
     decideOrchestrationCommand({ command, readModel }).pipe(Effect.provide(NodeServices.layer)),
   );

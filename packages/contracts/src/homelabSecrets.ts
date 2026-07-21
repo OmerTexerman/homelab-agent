@@ -48,6 +48,6 @@ export class HomelabSecretError extends Schema.TaggedErrorClass<HomelabSecretErr
   "HomelabSecretError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

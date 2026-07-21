@@ -9,7 +9,7 @@ import {
   IsoDateTime,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Ref, Schema } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
@@ -239,7 +239,9 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
               ),
               Effect.map((value) => ({
                 key: secret.key,
-                ...(value !== null ? { value: Buffer.from(value).toString("utf8") } : {}),
+                ...(Option.isSome(value)
+                  ? { value: Buffer.from(value.value).toString("utf8") }
+                  : {}),
               })),
             ),
           { concurrency: 8 },

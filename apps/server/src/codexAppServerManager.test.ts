@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -1012,8 +1012,8 @@ describe("collab child conversation routing", () => {
 
 describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume", () => {
   it("keeps prior thread history when resuming with a changed runtime mode", async () => {
-    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-resume-"));
-    writeFileSync(path.join(workspaceDir, "README.md"), "hello\n", "utf8");
+    const workspaceDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-live-resume-"));
+    NodeFS.writeFileSync(NodePath.join(workspaceDir, "README.md"), "hello\n", "utf8");
 
     const manager = new CodexAppServerManager();
 
@@ -1029,7 +1029,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
 
       const firstTurn = await manager.sendTurn({
         threadId: firstSession.threadId,
-        input: `Reply with exactly the word ALPHA ${randomUUID()}`,
+        input: `Reply with exactly the word ALPHA ${NodeCrypto.randomUUID()}`,
       });
 
       expect(firstTurn.threadId).toBe(firstSession.threadId);
@@ -1066,7 +1066,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
 
       await manager.sendTurn({
         threadId: resumedSession.threadId,
-        input: `Reply with exactly the word BETA ${randomUUID()}`,
+        input: `Reply with exactly the word BETA ${NodeCrypto.randomUUID()}`,
       });
 
       await vi.waitFor(
@@ -1078,7 +1078,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       );
     } finally {
       manager.stopAll();
-      rmSync(workspaceDir, { recursive: true, force: true });
+      NodeFS.rmSync(workspaceDir, { recursive: true, force: true });
     }
   }, 180_000);
 });

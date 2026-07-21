@@ -21,8 +21,8 @@ function project(): Project {
   return {
     id: "project-media" as Project["id"],
     environmentId: ENVIRONMENT_ID,
-    name: "Media",
-    cwd: "homelab://project/project-media",
+    title: "Media",
+    workspaceRoot: "homelab://project/project-media",
     repositoryIdentity: null,
     defaultRuntimeId: "project-runtime:project-media" as RuntimeSessionId,
     defaultModelSelection: null,
@@ -40,6 +40,11 @@ function thread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSum
     runtimeId: "project-runtime:project-media" as RuntimeSessionId,
     runtimeSelectionMode: "shared",
     title: "Inspect Plex",
+    modelSelection: {
+      instanceId: "codex" as SidebarThreadSummary["modelSelection"]["instanceId"],
+      model: "gpt-5",
+    },
+    runtimeMode: "full-access",
     interactionMode: "default",
     session: null,
     createdAt: NOW,

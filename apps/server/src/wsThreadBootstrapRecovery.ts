@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import type { GitWorkflowServiceShape } from "./git/GitWorkflowService.ts";
+import type { GitWorkflowService } from "./git/GitWorkflowService.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
 
 /**
@@ -44,7 +44,7 @@ const hasBootstrapPriorTurnState = (
 
 export const makeThreadBootstrapRecovery = (deps: {
   readonly orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch" | "getReadModel">;
-  readonly gitWorkflow: Pick<GitWorkflowServiceShape, "removeWorktree">;
+  readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree">;
   readonly serverCommandId: (
     tag: string,
   ) => Effect.Effect<CommandId, OrchestrationDispatchCommandError>;

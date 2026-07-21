@@ -306,13 +306,13 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
   const thread = input.thread;
   const project = input.project ?? null;
   const projectId = project?.id ?? thread.projectId;
-  const workspaceRoot = project?.cwd ?? null;
+  const workspaceRoot = project?.workspaceRoot ?? null;
   const projectIsStandalone = isStandaloneProject({
     id: projectId,
     cwd: workspaceRoot,
   });
   const projectName =
-    project?.name ?? (projectIsStandalone ? STANDALONE_PROJECT_TITLE : "Unknown project");
+    project?.title ?? (projectIsStandalone ? STANDALONE_PROJECT_TITLE : "Unknown project");
   const providerSnapshot = input.providerSnapshot ?? null;
   const selectedModel = providerSnapshot?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -329,7 +329,7 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
     project: {
       id: projectId,
       environmentId: project?.environmentId ?? thread.environmentId,
-      name: project?.name ?? null,
+      name: project?.title ?? null,
       workspaceRoot,
       defaultRuntimeId: project?.defaultRuntimeId ?? null,
       createdAt: project?.createdAt ?? null,
@@ -375,10 +375,10 @@ export function buildChatExportReadModel(input: ChatExportInput): ChatExportRead
       },
       session: thread.session
         ? {
-            provider: thread.session.provider,
+            provider: thread.session.providerName ?? "unknown",
             providerInstanceId: thread.session.providerInstanceId ?? null,
             status: thread.session.status,
-            orchestrationStatus: thread.session.orchestrationStatus,
+            orchestrationStatus: thread.session.status,
           }
         : null,
       snapshot: providerSnapshot
@@ -835,7 +835,7 @@ function toExportMessage(message: ChatMessage): ChatExportMessage {
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     createdAt: message.createdAt,
-    completedAt: message.completedAt ?? null,
+    completedAt: message.streaming ? null : (message.updatedAt ?? null),
   };
 }
 

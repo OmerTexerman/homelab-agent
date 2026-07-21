@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import type {
   OrchestrationProject,
   OrchestrationThread,
@@ -500,8 +499,8 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
   const fileSystem = yield* FileSystem.FileSystem;
   const files = renderHomelabContextViewFiles(input);
   for (const file of files) {
-    const targetPath = nodePath.join(input.hostWorkspacePath, file.relativePath);
-    yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true });
+    const targetPath = NodePath.join(input.hostWorkspacePath, file.relativePath);
+    yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true });
     yield* fileSystem.writeFileString(targetPath, file.contents);
   }
 
@@ -527,18 +526,18 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     }
   }
 
-  const threadsDir = nodePath.join(input.hostWorkspacePath, ".homelab", "threads");
+  const threadsDir = NodePath.join(input.hostWorkspacePath, ".homelab", "threads");
   const threadEntries = yield* fileSystem
     .readDirectory(threadsDir, { recursive: false })
     .pipe(Effect.orElseSucceed(() => [] as Array<string>));
   yield* Effect.forEach(
     threadEntries.filter((name) => name.startsWith("thread_") && !expectedThreadDirs.has(name)),
     (name) =>
-      fileSystem.remove(nodePath.join(threadsDir, name), { recursive: true }).pipe(Effect.ignore),
+      fileSystem.remove(NodePath.join(threadsDir, name), { recursive: true }).pipe(Effect.ignore),
     { discard: true },
   );
 
-  const memoryLatestDir = nodePath.join(input.hostWorkspacePath, ".homelab", "memory", "latest");
+  const memoryLatestDir = NodePath.join(input.hostWorkspacePath, ".homelab", "memory", "latest");
   const memoryEntries = yield* fileSystem
     .readDirectory(memoryLatestDir, { recursive: false })
     .pipe(Effect.orElseSucceed(() => [] as Array<string>));
@@ -546,7 +545,7 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     memoryEntries.filter(
       (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
     ),
-    (name) => fileSystem.remove(nodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
+    (name) => fileSystem.remove(NodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
     { discard: true },
   );
 });

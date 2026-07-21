@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import readline from "node:readline";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeReadline from "node:readline";
 import type { ServerProviderSkill } from "@t3tools/contracts";
 import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount.ts";
 import { expandHomePath } from "../pathExpansion.ts";
@@ -94,10 +94,15 @@ export function buildCodexInitializeParams() {
   } as const;
 }
 
-export function killCodexChildProcess(child: ChildProcessWithoutNullStreams): void {
+export function killCodexChildProcess(
+  child: NodeChildProcess.ChildProcessWithoutNullStreams,
+): void {
+  // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      NodeChildProcess.spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
       return;
     } catch {
       // Fall through to direct kill when taskkill is unavailable.
@@ -114,15 +119,16 @@ export async function probeCodexDiscovery(input: {
   readonly signal?: AbortSignal;
 }): Promise<CodexDiscoverySnapshot> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(input.binaryPath, ["app-server"], {
+    const child = NodeChildProcess.spawn(input.binaryPath, ["app-server"], {
       env: {
         ...process.env,
         ...(input.homePath ? { CODEX_HOME: expandHomePath(input.homePath) } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
+      // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
       shell: process.platform === "win32",
     });
-    const output = readline.createInterface({ input: child.stdout });
+    const output = NodeReadline.createInterface({ input: child.stdout });
 
     let completed = false;
     let account: CodexAccountSnapshot | undefined;

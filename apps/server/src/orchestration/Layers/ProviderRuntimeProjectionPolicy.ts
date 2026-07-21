@@ -110,6 +110,9 @@ export function shouldApplyThreadLifecycleProjection(input: {
   readonly activeTurnId: TurnId | null;
   readonly event: ProviderRuntimeEvent;
   readonly eventTurnId: TurnId | undefined;
+  // True when a conflicting turn.started matches the server's own pending
+  // turn start for this thread (see projectRuntimeLifecycleSession callers).
+  readonly conflictingTurnStartIsPendingTurnStart?: boolean;
 }): boolean {
   if (!input.strictLifecycleGuard) {
     return true;
@@ -128,7 +131,13 @@ export function shouldApplyThreadLifecycleProjection(input: {
     case "thread.started":
       return true;
     case "turn.started":
-      return !conflictsWithActiveTurn;
+      // A turn.started that conflicts with the active turn is legitimate when
+      // the server itself has a turn start pending for this thread AND the
+      // provider session already tracks the event's turn as its active turn:
+      // steering a running turn makes some providers (e.g. opencode) open a
+      // new turn without ever completing the superseded one. A stale
+      // turn.started for some other turn id still gets rejected.
+      return !conflictsWithActiveTurn || input.conflictingTurnStartIsPendingTurnStart === true;
     case "turn.completed":
       if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
         return false;
@@ -142,12 +151,19 @@ export function shouldApplyThreadLifecycleProjection(input: {
   }
 }
 
+export function sessionStatusAllowsActiveTurn(
+  status: ReturnType<typeof orchestrationSessionStatusFromRuntimeState>,
+): boolean {
+  return status === "starting" || status === "running";
+}
+
 export function projectRuntimeLifecycleSession(input: {
   readonly event: ProviderRuntimeEvent;
   readonly activeTurnId: TurnId | null;
   readonly currentLastError: string | null;
   readonly currentRuntimeMode: RuntimeMode;
   readonly strictLifecycleGuard: boolean;
+  readonly conflictingTurnStartIsPendingTurnStart?: boolean;
 }):
   | {
       readonly eventTurnId: TurnId | undefined;
@@ -165,14 +181,11 @@ export function projectRuntimeLifecycleSession(input: {
     activeTurnId: input.activeTurnId,
     event: input.event,
     eventTurnId,
+    ...(input.conflictingTurnStartIsPendingTurnStart !== undefined
+      ? { conflictingTurnStartIsPendingTurnStart: input.conflictingTurnStartIsPendingTurnStart }
+      : {}),
   });
 
-  const nextActiveTurnId =
-    input.event.type === "turn.started"
-      ? (eventTurnId ?? null)
-      : input.event.type === "turn.completed" || input.event.type === "session.exited"
-        ? null
-        : input.activeTurnId;
   const status = (() => {
     switch (input.event.type) {
       case "session.state.changed":
@@ -190,6 +203,14 @@ export function projectRuntimeLifecycleSession(input: {
         return input.activeTurnId !== null ? "running" : "ready";
     }
   })();
+  const nextActiveTurnId =
+    input.event.type === "turn.started"
+      ? (eventTurnId ?? null)
+      : input.event.type === "turn.completed" || input.event.type === "session.exited"
+        ? null
+        : input.event.type === "session.state.changed" && !sessionStatusAllowsActiveTurn(status)
+          ? null
+          : input.activeTurnId;
   const lastError =
     input.event.type === "session.state.changed" && input.event.payload.state === "error"
       ? (input.event.payload.reason ?? input.currentLastError ?? "Provider session error")
@@ -360,6 +381,7 @@ function requestKindFromCanonicalRequestType(
 
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
+  taskTitle?: string,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   const maybeSequence = (() => {
     const eventWithSequence = event as ProviderRuntimeEvent & { sessionSequence?: number };
@@ -391,7 +413,7 @@ export function runtimeEventToActivities(
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail ? { detail: event.payload.detail } : {}),
           },
           turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -440,6 +462,26 @@ export function runtimeEventToActivities(
       ];
     }
 
+    case "tool.denied": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "error",
+          kind: "tool.denied",
+          summary: `Tool denied: ${event.payload.toolName}`,
+          payload: {
+            toolName: event.payload.toolName,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.reason ? { detail: truncateDetail(event.payload.reason) } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+          },
+          turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "runtime.warning": {
       return [
         {
@@ -447,7 +489,9 @@ export function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          // Use the adapter-supplied message as the row label so the work log
+          // shows what the warning was about, not a generic "Runtime warning".
+          summary: truncateDetail(event.payload.message, 120),
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
@@ -547,9 +591,15 @@ export function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary:
+            event.payload.description.trim().length > 0
+              ? truncateDetail(event.payload.description, 120)
+              : "Reasoning update",
           payload: {
             taskId: event.payload.taskId,
+            ...(event.payload.description.trim().length > 0
+              ? { title: truncateDetail(event.payload.description, 120) }
+              : {}),
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
@@ -577,7 +627,15 @@ export function runtimeEventToActivities(
           payload: {
             taskId: event.payload.taskId,
             status: event.payload.status,
-            ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+            ...(taskTitle ? { title: truncateDetail(taskTitle, 120) } : {}),
+            // summary + detail mirror task.progress: clients label the row from
+            // summary and keep detail for the preview/expanded body.
+            ...(event.payload.summary
+              ? {
+                  summary: truncateDetail(event.payload.summary),
+                  detail: truncateDetail(event.payload.summary),
+                }
+              : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
           turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,

@@ -1,6 +1,5 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import { parseLogicalProjectWorkspacePath } from "@t3tools/shared/workspace";
 
 export const CONTAINER_WORKSPACE_PATH = "/workspace";
@@ -10,22 +9,22 @@ function encodeThreadSegment(threadId: string): string {
 }
 
 export function runtimeRootPath(threadRuntimesDir: string, runtimeStorageId: string): string {
-  return nodePath.join(threadRuntimesDir, encodeThreadSegment(runtimeStorageId));
+  return NodePath.join(threadRuntimesDir, encodeThreadSegment(runtimeStorageId));
 }
 
 export function runtimeBinDirForThread(
   threadRuntimesDir: string,
   runtimeStorageId: string,
 ): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "bin");
+  return NodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "bin");
 }
 
 export function managedWorkspacePath(threadRuntimesDir: string, runtimeStorageId: string): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "workspace");
+  return NodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "workspace");
 }
 
 export function homePathForThread(threadRuntimesDir: string, runtimeStorageId: string): string {
-  return nodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "home");
+  return NodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "home");
 }
 
 export function isWithinContainerWorkspace(targetPath: string): boolean {
@@ -42,8 +41,8 @@ export function hostWorkspacePathForContainerPath(
     return managedWorkspace;
   }
 
-  const relativePath = nodePath.posix.relative(CONTAINER_WORKSPACE_PATH, containerPath);
-  return nodePath.join(managedWorkspace, ...relativePath.split("/"));
+  const relativePath = NodePath.posix.relative(CONTAINER_WORKSPACE_PATH, containerPath);
+  return NodePath.join(managedWorkspace, ...relativePath.split("/"));
 }
 
 export function normalizeRequestedCwd(
@@ -60,27 +59,27 @@ export function normalizeRequestedCwd(
     if (!logicalProjectPath.relativePath) {
       return CONTAINER_WORKSPACE_PATH;
     }
-    const mappedPath = nodePath.posix.normalize(
-      nodePath.posix.join(CONTAINER_WORKSPACE_PATH, logicalProjectPath.relativePath),
+    const mappedPath = NodePath.posix.normalize(
+      NodePath.posix.join(CONTAINER_WORKSPACE_PATH, logicalProjectPath.relativePath),
     );
     return isWithinContainerWorkspace(mappedPath) ? mappedPath : CONTAINER_WORKSPACE_PATH;
   }
 
-  const normalizedContainerPath = nodePath.posix.normalize(normalized.replace(/\\/g, "/"));
+  const normalizedContainerPath = NodePath.posix.normalize(normalized.replace(/\\/g, "/"));
   const managedWorkspace = managedWorkspacePath(threadRuntimesDir, runtimeStorageId);
-  const normalizedHostPath = nodePath.normalize(normalized);
+  const normalizedHostPath = NodePath.normalize(normalized);
 
   if (
     normalizedHostPath === managedWorkspace ||
-    normalizedHostPath.startsWith(`${managedWorkspace}${nodePath.sep}`)
+    normalizedHostPath.startsWith(`${managedWorkspace}${NodePath.sep}`)
   ) {
-    const relativePath = nodePath.relative(managedWorkspace, normalizedHostPath);
+    const relativePath = NodePath.relative(managedWorkspace, normalizedHostPath);
     return relativePath
-      ? nodePath.posix.join(CONTAINER_WORKSPACE_PATH, ...relativePath.split(nodePath.sep))
+      ? NodePath.posix.join(CONTAINER_WORKSPACE_PATH, ...relativePath.split(NodePath.sep))
       : CONTAINER_WORKSPACE_PATH;
   }
 
-  if (nodePath.isAbsolute(normalized)) {
+  if (NodePath.isAbsolute(normalized)) {
     if (
       normalizedContainerPath === CONTAINER_WORKSPACE_PATH ||
       normalizedContainerPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)
@@ -90,5 +89,5 @@ export function normalizeRequestedCwd(
     return CONTAINER_WORKSPACE_PATH;
   }
 
-  return nodePath.posix.join(CONTAINER_WORKSPACE_PATH, normalized.replace(/\\/g, "/"));
+  return NodePath.posix.join(CONTAINER_WORKSPACE_PATH, normalized.replace(/\\/g, "/"));
 }

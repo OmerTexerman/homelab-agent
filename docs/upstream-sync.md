@@ -113,21 +113,21 @@ regression surface even when upstream files churn.
 Minimum validation after an upstream sync:
 
 ```bash
-bun fmt
-bun lint
-bun typecheck
+pnpm fmt
+pnpm lint
+pnpm typecheck
 ```
 
-Run focused tests with `bun run test`, not `bun test`.
+Run focused tests with `pnpm run test` (or `vp test run <files>` for targeted runs).
 
 Recommended focused areas after provider/runtime conflicts:
 
 ```bash
-bun run test apps/server/src/provider
-bun run test apps/server/src/runtime
-bun run test apps/server/src/orchestration
-bun run test apps/server/src/terminal
-bun run test apps/web/src
+pnpm run test apps/server/src/provider
+pnpm run test apps/server/src/runtime
+pnpm run test apps/server/src/orchestration
+pnpm run test apps/server/src/terminal
+pnpm run test apps/web/src
 ```
 
 ## Automation Target

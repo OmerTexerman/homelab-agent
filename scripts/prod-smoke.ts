@@ -1,19 +1,18 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
 } from "@t3tools/contracts";
-import { createServer } from "node:net";
-
+import * as NodeNet from "node:net";
 interface ManagedProcess {
-  readonly child: ChildProcess;
+  readonly child: NodeChildProcess.ChildProcess;
   exited: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | null;
   output: string;
 }
@@ -25,8 +24,8 @@ interface SimpleHttpResponse {
   readonly json: () => Promise<unknown>;
 }
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const serverBinPath = resolve(repoRoot, "apps/server/dist/bin.mjs");
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
+const serverBinPath = NodePath.resolve(repoRoot, "apps/server/dist/bin.mjs");
 
 function log(message: string): void {
   console.log(`[prod-smoke] ${message}`);
@@ -40,7 +39,7 @@ function delay(ms: number): Promise<void> {
 
 function findOpenPort(): Promise<number> {
   return new Promise((resolvePort, rejectPort) => {
-    const server = createServer();
+    const server = NodeNet.createServer();
     server.on("error", rejectPort);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -67,7 +66,7 @@ async function fetchWithTimeout(
 ): Promise<SimpleHttpResponse> {
   const target = typeof url === "string" ? new URL(url) : url;
   return await new Promise((resolveResponse, rejectResponse) => {
-    const req = httpRequest(
+    const req = NodeHttp.request(
       target,
       {
         method: init?.method ?? "GET",
@@ -100,8 +99,8 @@ async function fetchWithTimeout(
 }
 
 function startServer(input: { readonly baseDir: string; readonly port: number }): ManagedProcess {
-  const child = spawn(
-    "bun",
+  const child = NodeChildProcess.spawn(
+    process.execPath,
     [
       serverBinPath,
       "serve",
@@ -235,14 +234,14 @@ async function exchangeStartupToken(input: {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(serverBinPath)) {
-    throw new Error(`Missing built server at ${serverBinPath}. Run bun run build:prod first.`);
+  if (!NodeFS.existsSync(serverBinPath)) {
+    throw new Error(`Missing built server at ${serverBinPath}. Run pnpm run build:prod first.`);
   }
-  if (!existsSync(resolve(repoRoot, "apps/server/dist/client/index.html"))) {
-    throw new Error("Missing bundled web client. Run bun run build:prod first.");
+  if (!NodeFS.existsSync(NodePath.resolve(repoRoot, "apps/server/dist/client/index.html"))) {
+    throw new Error("Missing bundled web client. Run pnpm run build:prod first.");
   }
 
-  const baseDir = mkdtempSync(join(tmpdir(), "homelab-prod-smoke-"));
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "homelab-prod-smoke-"));
   const port = await findOpenPort();
   const serverBaseUrl = `http://127.0.0.1:${port}`;
   const serverProcess = startServer({ baseDir, port });
@@ -299,7 +298,7 @@ async function main(): Promise<void> {
     );
   } finally {
     await stopServer(serverProcess);
-    rmSync(baseDir, { recursive: true, force: true });
+    NodeFS.rmSync(baseDir, { recursive: true, force: true });
   }
 }
 

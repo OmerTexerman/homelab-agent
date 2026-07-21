@@ -72,6 +72,6 @@ export class HomelabSkillError extends Schema.TaggedErrorClass<HomelabSkillError
   "HomelabSkillError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

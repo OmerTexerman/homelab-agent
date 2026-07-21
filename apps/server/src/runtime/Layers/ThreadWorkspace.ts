@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off schemaSyncInEffect:off
-import { Buffer } from "node:buffer";
-import nodePath from "node:path";
-
+import * as NodeBuffer from "node:buffer";
+import * as NodePath from "node:path";
 import {
   ThreadWorkspaceEntriesResult as ThreadWorkspaceEntriesResultSchema,
   ThreadWorkspaceReadFileResult as ThreadWorkspaceReadFileResultSchema,
@@ -239,26 +238,26 @@ function normalizeContainerPath(
     if (!logicalProjectPath.relativePath) {
       return workspaceRoot;
     }
-    const mappedPath = nodePath.posix.normalize(
-      nodePath.posix.join(workspaceRoot, logicalProjectPath.relativePath),
+    const mappedPath = NodePath.posix.normalize(
+      NodePath.posix.join(workspaceRoot, logicalProjectPath.relativePath),
     );
     return mappedPath === workspaceRoot || mappedPath.startsWith(`${workspaceRoot}/`)
       ? mappedPath
       : workspaceRoot;
   }
   if (trimmed === "~") {
-    return nodePath.posix.normalize(execution.homePath || DEFAULT_CONTAINER_HOME_PATH);
+    return NodePath.posix.normalize(execution.homePath || DEFAULT_CONTAINER_HOME_PATH);
   }
   if (trimmed.startsWith("~/")) {
-    return nodePath.posix.normalize(
-      nodePath.posix.join(execution.homePath || DEFAULT_CONTAINER_HOME_PATH, trimmed.slice(2)),
+    return NodePath.posix.normalize(
+      NodePath.posix.join(execution.homePath || DEFAULT_CONTAINER_HOME_PATH, trimmed.slice(2)),
     );
   }
   if (trimmed.startsWith("/")) {
-    return nodePath.posix.normalize(trimmed);
+    return NodePath.posix.normalize(trimmed);
   }
-  return nodePath.posix.normalize(
-    nodePath.posix.join(execution.workspacePath || DEFAULT_CONTAINER_WORKSPACE_PATH, trimmed),
+  return NodePath.posix.normalize(
+    NodePath.posix.join(execution.workspacePath || DEFAULT_CONTAINER_WORKSPACE_PATH, trimmed),
   );
 }
 
@@ -434,7 +433,7 @@ export const makeThreadWorkspace = Effect.gen(function* () {
     return {
       path: payload.path,
       name: payload.name,
-      bytes: Uint8Array.from(Buffer.from(payload.contentsBase64, "base64")),
+      bytes: Uint8Array.from(NodeBuffer.Buffer.from(payload.contentsBase64, "base64")),
     } satisfies ThreadWorkspaceDownloadFileResult;
   });
 

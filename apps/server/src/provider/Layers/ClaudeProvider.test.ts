@@ -10,9 +10,9 @@ describe("resolveClaudeApiModelId", () => {
   it("appends the [1m] suffix for models that offer the contextWindow option", () => {
     expect(
       resolveClaudeApiModelId(
-        createModelSelection(INSTANCE, "claude-opus-4-8", [{ id: "contextWindow", value: "1m" }]),
+        createModelSelection(INSTANCE, "claude-opus-4-6", [{ id: "contextWindow", value: "1m" }]),
       ),
-    ).toBe("claude-opus-4-8[1m]");
+    ).toBe("claude-opus-4-6[1m]");
   });
 
   it("returns the bare slug when no contextWindow selection is present", () => {

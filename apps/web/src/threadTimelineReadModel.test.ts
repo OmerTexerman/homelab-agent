@@ -22,6 +22,8 @@ const BASE_TIME = "2026-05-16T00:00:00.000Z";
 function message(overrides: Partial<ChatMessage> & Pick<ChatMessage, "id" | "role" | "text">) {
   return {
     createdAt: BASE_TIME,
+    updatedAt: BASE_TIME,
+    turnId: null,
     streaming: false,
     ...overrides,
   } satisfies ChatMessage;
@@ -41,12 +43,14 @@ function latestTurn(overrides: Partial<OrchestrationLatestTurn> = {}): Orchestra
 
 function session(overrides: Partial<ThreadSession> = {}): ThreadSession {
   return {
-    provider: ProviderDriverKind.make("codex"),
-    providerInstanceId: ProviderInstanceId.make("codex"),
+    threadId: ThreadId.make("thread-1"),
     status: "ready",
-    createdAt: BASE_TIME,
+    providerName: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
     updatedAt: BASE_TIME,
-    orchestrationStatus: "ready",
     ...overrides,
   };
 }
@@ -83,7 +87,6 @@ function thread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
     environmentId: EnvironmentId.make("environment-1"),
-    codexThreadId: null,
     projectId: ProjectId.make("project-1"),
     runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
     runtimeSelectionMode: "shared",
@@ -97,14 +100,15 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
-    error: null,
     createdAt: BASE_TIME,
+    updatedAt: BASE_TIME,
     archivedAt: null,
+    deletedAt: null,
     latestTurn: null,
     branch: null,
     worktreePath: null,
-    turnDiffSummaries: [],
     activities: [],
+    checkpoints: [],
     ...overrides,
   };
 }
@@ -162,7 +166,7 @@ describe("deriveThreadTimelineReadModel", () => {
             text: "Done",
             turnId: TurnId.make("turn-1"),
             createdAt: "2026-05-16T00:00:10.000Z",
-            completedAt: "2026-05-16T00:00:10.000Z",
+            updatedAt: "2026-05-16T00:00:10.000Z",
           }),
         ],
       }),
@@ -214,7 +218,6 @@ describe("deriveThreadTimelineReadModel", () => {
       thread: thread({
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TurnId.make("turn-1"),
         }),
         latestTurn: latestTurn({
@@ -256,7 +259,6 @@ describe("deriveThreadTimelineReadModel", () => {
       thread: thread({
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TurnId.make("turn-1"),
         }),
         latestTurn: latestTurn({
@@ -295,7 +297,6 @@ describe("deriveThreadTimelineReadModel", () => {
       thread: thread({
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TurnId.make("turn-1"),
         }),
         latestTurn: latestTurn({
@@ -319,10 +320,9 @@ describe("deriveThreadTimelineReadModel", () => {
   it("does not show a ghost spinner for failed turns that are no longer working", () => {
     const model = deriveThreadTimelineReadModel({
       thread: thread({
-        error: "Provider failed",
         session: session({
           status: "error",
-          orchestrationStatus: "ready",
+          lastError: "Provider failed",
         }),
         latestTurn: latestTurn({
           state: "error",
@@ -345,7 +345,6 @@ describe("deriveThreadTimelineReadModel", () => {
         interactionMode: "plan",
         session: session({
           status: "running",
-          orchestrationStatus: "running",
           activeTurnId: TurnId.make("turn-1"),
         }),
         latestTurn: latestTurn({

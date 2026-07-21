@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   ArchiveIcon,
   ArchiveX,
@@ -6,7 +7,7 @@ import {
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -17,12 +18,20 @@ import {
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ModelSelection,
+  ORCHESTRATION_WS_METHODS,
   type ProviderInstanceConfig,
   ProviderInstanceId,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import {
+  createEnvironmentRpcCommand,
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -48,32 +57,30 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
-import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
-import {
-  setDesktopUpdateStateQueryData,
-  useDesktopUpdateState,
-} from "../../lib/desktopUpdateReactQuery";
+import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
 } from "../../modelSelection";
 import {
+  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
-import { readEnvironmentApi } from "../../environmentApi";
 import { newCommandId, newMessageId, newThreadId } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { useShallow } from "zustand/react/shallow";
 import {
-  selectProjectsAcrossEnvironments,
-  selectSidebarThreadsAcrossEnvironments,
-  useStore,
-} from "../../store";
+  primaryServerObservabilityAtom,
+  primaryServerProvidersAtom,
+  serverEnvironment,
+} from "../../state/server";
+import { usePrimaryEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { useProjects, useThreadShells } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
-import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
+import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -103,8 +110,8 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { useServerObservability, useServerProviders } from "../../rpc/serverState";
-import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { connectionAtomRuntime } from "../../connection/runtime";
 import {
   homelabAllMemoryQueryOptions,
   homelabAllSkillsQueryOptions,
@@ -122,6 +129,14 @@ import {
   deriveProviderReadinessForInstance,
   deriveSetupReadiness,
 } from "../../setupReadinessReadModel";
+
+// Generic orchestration-command dispatch used by the homelab curator launch flow.
+// Mirrors the upstream environment RPC command atoms (see state/server.ts).
+const dispatchHomelabOrchestrationCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "homelab:settings:dispatch-orchestration-command",
+  tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+});
+
 const THEME_OPTIONS = [
   {
     value: "system",
@@ -167,10 +182,14 @@ const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
 
 function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }) {
   useRelativeTimeTick();
-  const lastCheckedRelative = lastCheckedAt ? formatRelativeTime(lastCheckedAt) : null;
+  const lastCheckedRelative = getRelativeTimeState(lastCheckedAt);
 
-  if (!lastCheckedRelative) {
+  if (lastCheckedRelative.status === "missing") {
     return null;
+  }
+
+  if (lastCheckedRelative.status === "invalid") {
+    return <span className="text-[11px] text-muted-foreground/50">Checked unavailable</span>;
   }
 
   return (
@@ -197,11 +216,9 @@ function AboutVersionTitle() {
 }
 
 function AboutVersionSection() {
-  const queryClient = useQueryClient();
-  const updateStateQuery = useDesktopUpdateState();
+  const updateState = useDesktopUpdateState();
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
 
-  const updateState = updateStateQuery.data ?? null;
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
   const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
@@ -220,9 +237,6 @@ function AboutVersionSection() {
       setIsChangingUpdateChannel(true);
       void bridge
         .setUpdateChannel(channel)
-        .then((state) => {
-          setDesktopUpdateStateQueryData(queryClient, state);
-        })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
@@ -236,7 +250,7 @@ function AboutVersionSection() {
           setIsChangingUpdateChannel(false);
         });
     },
-    [queryClient, selectedUpdateChannel],
+    [selectedUpdateChannel],
   );
 
   const handleButtonClick = useCallback(() => {
@@ -246,20 +260,15 @@ function AboutVersionSection() {
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
 
     if (action === "download") {
-      void bridge
-        .downloadUpdate()
-        .then((result) => {
-          setDesktopUpdateStateQueryData(queryClient, result.state);
-        })
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not download update",
-              description: error instanceof Error ? error.message : "Download failed.",
-            }),
-          );
-        });
+      void bridge.downloadUpdate().catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not download update",
+            description: error instanceof Error ? error.message : "Download failed.",
+          }),
+        );
+      });
       return;
     }
 
@@ -270,20 +279,15 @@ function AboutVersionSection() {
         ),
       );
       if (!confirmed) return;
-      void bridge
-        .installUpdate()
-        .then((result) => {
-          setDesktopUpdateStateQueryData(queryClient, result.state);
-        })
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "Install failed.",
-            }),
-          );
-        });
+      void bridge.installUpdate().catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not install update",
+            description: error instanceof Error ? error.message : "Install failed.",
+          }),
+        );
+      });
       return;
     }
 
@@ -291,7 +295,6 @@ function AboutVersionSection() {
     void bridge
       .checkForUpdate()
       .then((result) => {
-        setDesktopUpdateStateQueryData(queryClient, result.state);
         if (!result.checked) {
           toastManager.add(
             stackedThreadToast({
@@ -312,7 +315,7 @@ function AboutVersionSection() {
           }),
         );
       });
-  }, [queryClient, updateState]);
+  }, [updateState]);
 
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
@@ -423,8 +426,8 @@ function AboutVersionSection() {
 
 export function useSettingsRestore(onRestored?: () => void) {
   const { theme, setTheme } = useTheme();
-  const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
   const showThreadRuntimeIsolationSettings = shouldShowThreadRuntimeIsolationControls();
 
@@ -442,9 +445,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
-      ...(showSourceControlUi && settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
-        ? ["Diff line wrapping"]
-        : []),
+      ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(showSourceControlUi &&
       settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -455,6 +456,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
+      ...(settings.enableProviderUpdateChecks !==
+      DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
+        ? ["Provider update checks"]
+        : []),
       ...(showSourceControlUi &&
       Duration.toMillis(settings.automaticGitFetchInterval) !==
         Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
@@ -463,6 +468,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(showThreadRuntimeIsolationSettings &&
       settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? [HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle]
+        : []),
+      ...(settings.newWorktreesStartFromOrigin !==
+      DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
+        ? ["New worktrees start from origin"]
         : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Compatibility bootstrap path"]
@@ -484,12 +493,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
+      settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
-      settings.diffWordWrap,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
+      settings.enableProviderUpdateChecks,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
+      settings.wordWrap,
       theme,
     ],
   );
@@ -507,13 +518,15 @@ export function useSettingsRestore(onRestored?: () => void) {
     setTheme("system");
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
-      diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
+      wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
+      enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
+      newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
@@ -530,17 +543,17 @@ export function useSettingsRestore(onRestored?: () => void) {
 
 export function GeneralSettingsPanel() {
   const { theme, setTheme } = useTheme();
-  const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const serverProviders = useServerProviders();
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
   const textGenModelOptions = textGenerationModelSelection.options;
   const gitModelInstanceEntries = sortProviderInstanceEntries(
-    deriveProviderInstanceEntries(serverProviders),
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
   );
   const textGenInstanceEntry = gitModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
@@ -636,58 +649,56 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        {showSourceControlUi ? (
-          <>
-            <SettingsRow
-              title="Diff line wrapping"
-              description="Set the default wrap state when the diff panel opens."
-              resetAction={
-                settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
-                  <SettingResetButton
-                    label="diff line wrapping"
-                    onClick={() =>
-                      updateSettings({
-                        diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
-                      })
-                    }
-                  />
-                ) : null
-              }
-              control={
-                <Switch
-                  checked={settings.diffWordWrap}
-                  onCheckedChange={(checked) => updateSettings({ diffWordWrap: Boolean(checked) })}
-                  aria-label="Wrap diff lines by default"
-                />
-              }
+        <SettingsRow
+          title="Word wrap"
+          description="Wrap long lines in code blocks, tables, diffs, and file previews by default."
+          resetAction={
+            settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? (
+              <SettingResetButton
+                label="word wrapping"
+                onClick={() =>
+                  updateSettings({
+                    wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.wordWrap}
+              onCheckedChange={(checked) => updateSettings({ wordWrap: Boolean(checked) })}
+              aria-label="Wrap code, tables, diffs, and file previews by default"
             />
+          }
+        />
 
-            <SettingsRow
-              title="Hide whitespace changes"
-              description="Set whether the diff panel ignores whitespace-only edits by default."
-              resetAction={
-                settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
-                  <SettingResetButton
-                    label="diff whitespace changes"
-                    onClick={() =>
-                      updateSettings({
-                        diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
-                      })
-                    }
-                  />
-                ) : null
-              }
-              control={
-                <Switch
-                  checked={settings.diffIgnoreWhitespace}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
+        {showSourceControlUi ? (
+          <SettingsRow
+            title="Hide whitespace changes"
+            description="Set whether the diff panel ignores whitespace-only edits by default."
+            resetAction={
+              settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
+                <SettingResetButton
+                  label="diff whitespace changes"
+                  onClick={() =>
+                    updateSettings({
+                      diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
+                    })
                   }
-                  aria-label="Hide whitespace changes by default"
                 />
-              }
-            />
-          </>
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.diffIgnoreWhitespace}
+                onCheckedChange={(checked) =>
+                  updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
+                }
+                aria-label="Hide whitespace changes by default"
+              />
+            }
+          />
         ) : null}
 
         <SettingsRow
@@ -713,6 +724,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableAssistantStreaming: Boolean(checked) })
               }
               aria-label="Stream assistant messages"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Provider update checks"
+          description="Check installed provider CLIs for newer available versions."
+          resetAction={
+            settings.enableProviderUpdateChecks !==
+            DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (
+              <SettingResetButton
+                label="provider update checks"
+                onClick={() =>
+                  updateSettings({
+                    enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableProviderUpdateChecks}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
+              }
+              aria-label="Check provider versions"
             />
           }
         />
@@ -884,8 +922,8 @@ export function SecretsSettingsPanel() {
 }
 
 export function ProjectRuntimeSettingsPanel() {
-  const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
   const showThreadRuntimeIsolationControls = shouldShowThreadRuntimeIsolationControls();
 
   useEffect(() => {
@@ -966,10 +1004,13 @@ export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
   const { deleteThread } = useThreadActions();
-  const settings = useSettings();
-  const serverProviders = useServerProviders();
-  const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const allSidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const dispatchCuratorCommand = useAtomCommand(dispatchHomelabOrchestrationCommand, {
+    reportFailure: false,
+  });
+  const settings = usePrimarySettings();
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const allProjects = useProjects();
+  const allSidebarThreads = useThreadShells();
   const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
   // The kickoff prompt auto-sends on launch, so the model/effort choice has to happen
   // here — there is no empty-composer moment to change it before the first turn.
@@ -981,9 +1022,7 @@ export function MemoryKnowledgeSettingsPanel() {
       ),
     [allProjects, primaryEnvironmentId],
   );
-  const [pickedCuratorSelection, setPickedCuratorSelection] = useState<ModelSelection | null>(
-    null,
-  );
+  const [pickedCuratorSelection, setPickedCuratorSelection] = useState<ModelSelection | null>(null);
   const curatorModelSelection: ModelSelection = useMemo(
     () =>
       pickedCuratorSelection ??
@@ -1022,53 +1061,63 @@ export function MemoryKnowledgeSettingsPanel() {
     void (async () => {
       setIsStartingCuratorSession(true);
       try {
-        const api = readEnvironmentApi(primaryEnvironmentId);
-        if (!api) {
-          throw new Error(HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle);
-        }
         const threadId = newThreadId();
         const modelSelection = curatorModelSelection;
-        await api.orchestration.dispatchCommand({
-          type: "thread.curator.create",
-          commandId: newCommandId(),
-          threadId,
-          title: HOMELAB_PRODUCT_COPY.curator.sessionTitle,
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          createdAt: new Date().toISOString(),
+        const createResult = await dispatchCuratorCommand({
+          environmentId: primaryEnvironmentId,
+          input: {
+            type: "thread.curator.create",
+            commandId: newCommandId(),
+            threadId,
+            title: HOMELAB_PRODUCT_COPY.curator.sessionTitle,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: new Date().toISOString(),
+          },
         });
+        if (createResult._tag === "Failure") {
+          throw squashAtomCommandFailure(createResult);
+        }
         // Kick the session off immediately: the curator persona's first move is a
         // knowledge inventory, so the opening sweep starts without an empty-composer stop.
-        await api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: HOMELAB_PRODUCT_COPY.curator.kickoffPrompt,
-            attachments: [],
+        const startResult = await dispatchCuratorCommand({
+          environmentId: primaryEnvironmentId,
+          input: {
+            type: "thread.turn.start",
+            commandId: newCommandId(),
+            threadId,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: HOMELAB_PRODUCT_COPY.curator.kickoffPrompt,
+              attachments: [],
+            },
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: new Date().toISOString(),
           },
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          createdAt: new Date().toISOString(),
         });
+        if (startResult._tag === "Failure") {
+          throw squashAtomCommandFailure(startResult);
+        }
         // Remember the choice as the curator project default so the next session
         // starts from it (project creation only seeds the default on first launch).
         if (
           curatorProject &&
           !Equal.equals(curatorProject.defaultModelSelection ?? null, modelSelection)
         ) {
-          await api.orchestration
-            .dispatchCommand({
+          // Best effort: ignore failures updating the remembered default.
+          await dispatchCuratorCommand({
+            environmentId: primaryEnvironmentId,
+            input: {
               type: "project.meta.update",
               commandId: newCommandId(),
               projectId: curatorProject.id,
               defaultModelSelection: modelSelection,
-            })
-            .catch(() => {});
+            },
+          });
         }
         await navigate({
           to: "/$environmentId/$threadId",
@@ -1089,6 +1138,7 @@ export function MemoryKnowledgeSettingsPanel() {
   }, [
     curatorModelSelection,
     curatorProject,
+    dispatchCuratorCommand,
     isStartingCuratorSession,
     navigate,
     primaryEnvironmentId,
@@ -1127,7 +1177,7 @@ export function MemoryKnowledgeSettingsPanel() {
     homelabAllMemoryQuery.isLoading ||
     homelabAllSkillsQuery.isLoading;
   const projectNameById = useMemo(
-    () => new Map(allProjects.map((project) => [String(project.id), project.name])),
+    () => new Map(allProjects.map((project) => [String(project.id), project.title])),
     [allProjects],
   );
 
@@ -1293,9 +1343,9 @@ export function MemoryKnowledgeSettingsPanel() {
 }
 
 export function AdvancedSettingsPanel() {
-  const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
-  const observability = useServerObservability();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const observability = useAtomValue(primaryServerObservabilityAtom);
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
   const showCompatibilityHostPathProjectUi = shouldShowCompatibilityHostPathProjectUi();
   const diagnosticsDescription = formatDiagnosticsDescription({
@@ -1393,9 +1443,16 @@ export function AdvancedSettingsPanel() {
 }
 
 export function ProviderSettingsPanel() {
-  const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
-  const serverProviders = useServerProviders();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const primaryEnvironment = usePrimaryEnvironment();
+  const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
+    reportFailure: false,
+  });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
@@ -1431,49 +1488,65 @@ export function ProviderSettingsPanel() {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setIsRefreshingProviders(true);
-    void ensureLocalApi()
-      .server.refreshProviders()
-      .catch((error: unknown) => {
-        console.warn("Failed to refresh providers", error);
-      })
-      .finally(() => {
-        refreshingRef.current = false;
-        setIsRefreshingProviders(false);
-      });
-  }, []);
-
-  const runProviderUpdate = useCallback(async (candidate: ProviderUpdateCandidate) => {
-    let started = false;
-    setUpdatingProviderDrivers((previous) => {
-      if (previous.has(candidate.driver)) {
-        return previous;
-      }
-      started = true;
-      const next = new Set(previous);
-      next.add(candidate.driver);
-      return next;
-    });
-    if (!started) {
+    if (!primaryEnvironment) {
+      refreshingRef.current = false;
+      setIsRefreshingProviders(false);
       return;
     }
-
-    try {
-      await ensureLocalApi().server.updateProvider({
-        provider: candidate.driver,
-        instanceId: candidate.instanceId,
+    void (async () => {
+      const result = await refreshServerProviders({
+        environmentId: primaryEnvironment.environmentId,
+        input: {},
       });
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
-          description:
-            error instanceof Error
-              ? error.message
-              : "The provider update command could not be started.",
-        }),
-      );
-    } finally {
+      refreshingRef.current = false;
+      setIsRefreshingProviders(false);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        console.warn("Failed to refresh providers", {
+          operation: "refresh-providers",
+          environmentId: primaryEnvironment.environmentId,
+          ...safeErrorLogAttributes(squashAtomCommandFailure(result)),
+        });
+      }
+    })();
+  }, [primaryEnvironment, refreshServerProviders]);
+
+  const runProviderUpdate = useCallback(
+    async (candidate: ProviderUpdateCandidate) => {
+      if (!primaryEnvironment) return;
+      let started = false;
+      setUpdatingProviderDrivers((previous) => {
+        if (previous.has(candidate.driver)) {
+          return previous;
+        }
+        started = true;
+        const next = new Set(previous);
+        next.add(candidate.driver);
+        return next;
+      });
+      if (!started) {
+        return;
+      }
+
+      const result = await updateProvider({
+        environmentId: primaryEnvironment.environmentId,
+        input: {
+          provider: candidate.driver,
+          instanceId: candidate.instanceId,
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
+            description:
+              error instanceof Error
+                ? error.message
+                : "The provider update command could not be started.",
+          }),
+        );
+      }
       setUpdatingProviderDrivers((previous) => {
         if (!previous.has(candidate.driver)) {
           return previous;
@@ -1482,8 +1555,9 @@ export function ProviderSettingsPanel() {
         next.delete(candidate.driver);
         return next;
       });
-    }
-  }, []);
+    },
+    [primaryEnvironment, updateProvider],
+  );
 
   interface InstanceRow {
     readonly instanceId: ProviderInstanceId;
@@ -1826,16 +1900,15 @@ export function ProviderSettingsPanel() {
         })}
       </SettingsSection>
 
-      <AddProviderInstanceDialog
-        open={isAddInstanceDialogOpen}
-        onOpenChange={setIsAddInstanceDialogOpen}
-      />
+      {isAddInstanceDialogOpen ? (
+        <AddProviderInstanceDialog open onOpenChange={setIsAddInstanceDialogOpen} />
+      ) : null}
     </SettingsPageContainer>
   );
 }
 
 export function ArchivedThreadsPanel() {
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const projects = useProjects();
   const { unarchiveThread, confirmAndDeleteThread, deleteThread } = useThreadActions();
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
@@ -1911,10 +1984,11 @@ export function ArchivedThreadsPanel() {
       );
 
       if (clicked === "unarchive") {
-        try {
-          await unarchiveThread(threadRef);
+        const result = await unarchiveThread(threadRef);
+        if (result._tag === "Success") {
           refreshArchivedThreads();
-        } catch (error) {
+        } else if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
           toastManager.add(
             stackedThreadToast({
               type: "error",
@@ -1927,8 +2001,19 @@ export function ArchivedThreadsPanel() {
       }
 
       if (clicked === "delete") {
-        await confirmAndDeleteThread(threadRef);
-        refreshArchivedThreads();
+        const result = await confirmAndDeleteThread(threadRef);
+        if (result._tag === "Success") {
+          refreshArchivedThreads();
+        } else if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to delete thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
       }
     },
     [confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
@@ -1955,9 +2040,9 @@ export function ArchivedThreadsPanel() {
 
       const failures: string[] = [];
       for (const thread of threads) {
-        try {
-          await deleteThread(scopeThreadRef(thread.environmentId, thread.id));
-        } catch (error) {
+        const result = await deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
           failures.push(error instanceof Error ? error.message : String(error));
         }
       }
@@ -2033,13 +2118,28 @@ export function ArchivedThreadsPanel() {
                 key={thread.id}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  void handleArchivedThreadContextMenu(
-                    scopeThreadRef(thread.environmentId, thread.id),
-                    {
-                      x: event.clientX,
-                      y: event.clientY,
-                    },
-                  );
+                  void (async () => {
+                    const result = await settlePromise(() =>
+                      handleArchivedThreadContextMenu(
+                        scopeThreadRef(thread.environmentId, thread.id),
+                        {
+                          x: event.clientX,
+                          y: event.clientY,
+                        },
+                      ),
+                    );
+                    if (result._tag === "Failure") {
+                      const error = squashAtomCommandFailure(result);
+                      toastManager.add(
+                        stackedThreadToast({
+                          type: "error",
+                          title: "Archived thread action failed",
+                          description:
+                            error instanceof Error ? error.message : "An error occurred.",
+                        }),
+                      );
+                    }
+                  })();
                 }}
                 title={thread.title}
                 description={
@@ -2055,10 +2155,17 @@ export function ArchivedThreadsPanel() {
                     variant="outline"
                     size="sm"
                     className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
-                    onClick={() =>
-                      void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
-                        .then(() => refreshArchivedThreads())
-                        .catch((error) => {
+                    onClick={() => {
+                      void (async () => {
+                        const result = await unarchiveThread(
+                          scopeThreadRef(thread.environmentId, thread.id),
+                        );
+                        if (result._tag === "Success") {
+                          refreshArchivedThreads();
+                          return;
+                        }
+                        if (!isAtomCommandInterrupted(result)) {
+                          const error = squashAtomCommandFailure(result);
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
@@ -2067,8 +2174,9 @@ export function ArchivedThreadsPanel() {
                                 error instanceof Error ? error.message : "An error occurred.",
                             }),
                           );
-                        })
-                    }
+                        }
+                      })();
+                    }}
                   >
                     <ArchiveX className="size-3.5" />
                     <span>Unarchive</span>

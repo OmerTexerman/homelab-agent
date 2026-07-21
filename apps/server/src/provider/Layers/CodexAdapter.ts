@@ -34,10 +34,9 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import {
-  getModelSelectionBooleanOptionValue,
-  getModelSelectionStringOptionValue,
-} from "@t3tools/shared/model";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -62,13 +61,13 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   canonicalizeProviderRuntimeEvents,
-  itemTitle,
   makeProviderEventCanonicalizer,
-  toCanonicalItemType,
   toRequestTypeFromKind,
   toRequestTypeFromMethod,
 } from "./ProviderEventCanonicalizer.ts";
+import type { CanonicalItemType } from "@t3tools/contracts";
 import { resolveProviderRuntimeEnvironment } from "./runtimeLaunch.ts";
+import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -211,8 +210,78 @@ function toTurnStatus(
   }
 }
 
-function itemDetail(item: CodexLifecycleItem): string | undefined {
+function normalizeItemType(raw: string | undefined | null): string {
+  const type = trimText(raw);
+  if (!type) return "item";
+  return type
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[._/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType {
+  const type = normalizeItemType(raw);
+  if (type.includes("user")) return "user_message";
+  if (type.includes("agent message") || type.includes("assistant")) return "assistant_message";
+  if (type.includes("reasoning") || type.includes("thought")) return "reasoning";
+  if (type.includes("plan") || type.includes("todo")) return "plan";
+  if (type.includes("command")) return "command_execution";
+  if (type.includes("file change") || type.includes("patch") || type.includes("edit"))
+    return "file_change";
+  if (type.includes("mcp")) return "mcp_tool_call";
+  if (type.includes("dynamic tool")) return "dynamic_tool_call";
+  if (type.includes("collab")) return "collab_agent_tool_call";
+  if (type.includes("web search")) return "web_search";
+  if (type.includes("image")) return "image_view";
+  if (type.includes("review entered")) return "review_entered";
+  if (type.includes("review exited")) return "review_exited";
+  if (type.includes("compact")) return "context_compaction";
+  if (type.includes("error")) return "error";
+  return "unknown";
+}
+
+function itemTitle(itemType: CanonicalItemType, item?: CodexLifecycleItem): string | undefined {
+  if (itemType === "mcp_tool_call" && item?.type === "mcpToolCall") {
+    return `${item.server} · ${item.tool}`;
+  }
+  switch (itemType) {
+    case "assistant_message":
+      return "Assistant message";
+    case "user_message":
+      return "User message";
+    case "reasoning":
+      return "Reasoning";
+    case "plan":
+      return "Plan";
+    case "command_execution":
+      return "Ran command";
+    case "file_change":
+      return "File change";
+    case "mcp_tool_call":
+      return "MCP tool call";
+    case "dynamic_tool_call":
+      return "Tool call";
+    case "web_search":
+      return "Web search";
+    case "image_view":
+      return "Image view";
+    case "error":
+      return "Error";
+    default:
+      return undefined;
+  }
+}
+
+function itemDetail(itemType: CanonicalItemType, item: CodexLifecycleItem): string | undefined {
+  const itemRecord = item as Record<string, unknown>;
+  const action = itemRecord.action as Record<string, unknown> | undefined;
+  const actionQueries = Array.isArray(action?.queries) ? action.queries : [];
   const candidates = [
+    ...(itemType === "web_search"
+      ? [itemRecord.query, action?.query, ...actionQueries, action?.pattern, action?.url]
+      : []),
     "command" in item ? item.command : undefined,
     "title" in item ? item.title : undefined,
     "summary" in item ? item.summary : undefined,
@@ -220,6 +289,7 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
     "path" in item ? item.path : undefined,
     "prompt" in item ? item.prompt : undefined,
   ];
+
   for (const candidate of candidates) {
     const trimmed = typeof candidate === "string" ? trimText(candidate) : undefined;
     if (!trimmed) continue;
@@ -373,7 +443,7 @@ function mapItemLifecycle(
     return undefined;
   }
 
-  const detail = itemDetail(item);
+  const detail = itemDetail(itemType, item);
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -387,7 +457,7 @@ function mapItemLifecycle(
     payload: {
       itemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(itemTitle(itemType, item) ? { title: itemTitle(itemType, item) } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
@@ -747,7 +817,7 @@ function mapToRuntimeEvents(
     }
     const itemType = toCanonicalItemType(item.type);
     if (itemType === "plan") {
-      const detail = itemDetail(item);
+      const detail = itemDetail(itemType, item);
       if (!detail) {
         return [];
       }
@@ -1297,12 +1367,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           threadId: input.threadId,
           wrapperPathFor: runtimeCodexBinaryPath,
         });
+        const serviceTier =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? getCodexServiceTierOptionValue(input.modelSelection)
+            : undefined;
+        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: runtimeEnvironment?.providerCwd ?? input.cwd ?? process.cwd(),
           binaryPath: runtimeEnvironment?.commandPath ?? codexConfig.binaryPath,
           ...(runtimeEnvironment ? { processCwd: runtimeEnvironment.processCwd } : {}),
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(!runtimeEnvironment && codexConfig.homePath
             ? { homePath: codexConfig.homePath }
@@ -1314,9 +1390,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),
-          ...(input.modelSelection?.instanceId === boundInstanceId &&
-          getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true
-            ? { serviceTier: "fast" }
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(mcpSession
+            ? {
+                environment: {
+                  ...(options?.environment ?? process.env),
+                  T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
+                },
+                appServerArgs: [
+                  "-c",
+                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                  "-c",
+                  'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                ],
+              }
             : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
@@ -1436,9 +1523,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
         : undefined;
-    const fastMode =
+    const serviceTier =
       input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode")
+        ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
     return yield* session.runtime
       .sendTurn({
@@ -1451,7 +1538,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
             }
           : {}),
-        ...(fastMode === true ? { serviceTier: "fast" } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })

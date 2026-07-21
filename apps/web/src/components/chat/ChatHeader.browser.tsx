@@ -1,4 +1,5 @@
 import "../../index.css";
+import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
   EnvironmentId,
@@ -34,28 +35,27 @@ function renderHeader(
       activeProjectName={options.activeProjectName}
       isStandaloneThread={options.isStandaloneThread}
       runtimeSelectionMode={options.runtimeSelectionMode}
-      isGitRepo={false}
       openInCwd={null}
       activeProjectScripts={undefined as ProjectScript[] | undefined}
       preferredScriptId={null}
       keybindings={[]}
       availableEditors={[]}
-      terminalAvailable={false}
-      terminalOpen={false}
       workspaceExplorerAvailable={false}
       workspaceExplorerOpen={false}
-      terminalToggleShortcutLabel={null}
-      diffToggleShortcutLabel={null}
+      rightPanelOpen={false}
       gitCwd={null}
-      diffOpen={false}
       onRunProjectScript={vi.fn()}
-      onAddProjectScript={vi.fn(() => Promise.resolve())}
-      onUpdateProjectScript={vi.fn(() => Promise.resolve())}
-      onDeleteProjectScript={vi.fn(() => Promise.resolve())}
+      onAddProjectScript={vi.fn(() =>
+        Promise.resolve(AsyncResult.success<void, unknown>(undefined)),
+      )}
+      onUpdateProjectScript={vi.fn(() =>
+        Promise.resolve(AsyncResult.success<void, unknown>(undefined)),
+      )}
+      onDeleteProjectScript={vi.fn(() =>
+        Promise.resolve(AsyncResult.success<void, unknown>(undefined)),
+      )}
       onExportChat={onExportChat}
-      onToggleTerminal={vi.fn()}
       onToggleWorkspaceExplorer={vi.fn()}
-      onToggleDiff={vi.fn()}
     />,
   );
 }

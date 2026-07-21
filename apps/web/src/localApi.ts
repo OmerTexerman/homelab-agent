@@ -1,33 +1,16 @@
 import type { ContextMenuItem, LocalApi } from "@t3tools/contracts";
-import type { WsRpcClient } from "@t3tools/client-runtime";
 
-import { resetVcsStatusStateForTests } from "./lib/vcsStatusState";
-import { resetSourceControlDiscoveryStateForTests } from "./lib/sourceControlDiscoveryState";
 import { resetRequestLatencyStateForTests } from "./rpc/requestLatencyState";
-import { resetServerStateForTests } from "./rpc/serverState";
-import { resetWsConnectionStateForTests } from "./rpc/wsConnectionState";
-import {
-  resetSavedEnvironmentRegistryStoreForTests,
-  resetSavedEnvironmentRuntimeStoreForTests,
-} from "./environments/runtime";
-import {
-  getPrimaryEnvironmentConnection,
-  resetEnvironmentServiceForTests,
-} from "./environments/runtime";
 import { showContextMenuFallback } from "./contextMenuFallback";
-import {
-  readBrowserClientSettings,
-  readBrowserSavedEnvironmentRegistry,
-  readBrowserSavedEnvironmentSecret,
-  removeBrowserSavedEnvironmentSecret,
-  writeBrowserClientSettings,
-  writeBrowserSavedEnvironmentRegistry,
-  writeBrowserSavedEnvironmentSecret,
-} from "./clientPersistenceStorage";
+import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientPersistenceStorage";
 
 let cachedApi: LocalApi | undefined;
 
-export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
+function unavailableLocalBackendError(): Error {
+  return new Error("Local backend API is unavailable before a backend is paired.");
+}
+
+function createBrowserLocalApi(): LocalApi {
   return {
     dialogs: {
       pickFolder: async (options) => {
@@ -42,7 +25,7 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
       },
     },
     shell: {
-      openInEditor: (cwd, editor) => rpcClient.shell.openInEditor({ cwd, editor }),
+      openInEditor: () => Promise.reject(unavailableLocalBackendError()),
       openExternal: async (url) => {
         if (window.desktopBridge) {
           const opened = await window.desktopBridge.openExternal(url);
@@ -79,57 +62,29 @@ export function createLocalApi(rpcClient: WsRpcClient): LocalApi {
         }
         writeBrowserClientSettings(settings);
       },
-      getSavedEnvironmentRegistry: async () => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.getSavedEnvironmentRegistry();
-        }
-        return readBrowserSavedEnvironmentRegistry();
-      },
-      setSavedEnvironmentRegistry: async (records) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.setSavedEnvironmentRegistry(records);
-        }
-        writeBrowserSavedEnvironmentRegistry(records);
-      },
-      getSavedEnvironmentSecret: async (environmentId) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.getSavedEnvironmentSecret(environmentId);
-        }
-        return readBrowserSavedEnvironmentSecret(environmentId);
-      },
-      setSavedEnvironmentSecret: async (environmentId, secret) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.setSavedEnvironmentSecret(environmentId, secret);
-        }
-        return writeBrowserSavedEnvironmentSecret(environmentId, secret);
-      },
-      removeSavedEnvironmentSecret: async (environmentId) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.removeSavedEnvironmentSecret(environmentId);
-        }
-        removeBrowserSavedEnvironmentSecret(environmentId);
-      },
     },
     server: {
-      getConfig: rpcClient.server.getConfig,
-      refreshProviders: rpcClient.server.refreshProviders,
-      updateProvider: rpcClient.server.updateProvider,
-      upsertKeybinding: rpcClient.server.upsertKeybinding,
-      removeKeybinding: rpcClient.server.removeKeybinding,
-      getSettings: rpcClient.server.getSettings,
-      discoverSourceControl: rpcClient.server.discoverSourceControl,
-      getTraceDiagnostics: rpcClient.server.getTraceDiagnostics,
-      getProcessDiagnostics: rpcClient.server.getProcessDiagnostics,
-      getProcessResourceHistory: rpcClient.server.getProcessResourceHistory,
-      signalProcess: rpcClient.server.signalProcess,
-      listHomelabSecrets: rpcClient.server.listHomelabSecrets,
-      upsertHomelabSecret: rpcClient.server.upsertHomelabSecret,
-      deleteHomelabSecret: async (input) => {
-        await rpcClient.server.deleteHomelabSecret(input);
-      },
-      updateSettings: rpcClient.server.updateSettings,
+      getConfig: () => Promise.reject(unavailableLocalBackendError()),
+      refreshProviders: () => Promise.reject(unavailableLocalBackendError()),
+      updateProvider: () => Promise.reject(unavailableLocalBackendError()),
+      upsertKeybinding: () => Promise.reject(unavailableLocalBackendError()),
+      removeKeybinding: () => Promise.reject(unavailableLocalBackendError()),
+      getSettings: () => Promise.reject(unavailableLocalBackendError()),
+      updateSettings: () => Promise.reject(unavailableLocalBackendError()),
+      discoverSourceControl: () => Promise.reject(unavailableLocalBackendError()),
+      getTraceDiagnostics: () => Promise.reject(unavailableLocalBackendError()),
+      getProcessDiagnostics: () => Promise.reject(unavailableLocalBackendError()),
+      getProcessResourceHistory: () => Promise.reject(unavailableLocalBackendError()),
+      signalProcess: () => Promise.reject(unavailableLocalBackendError()),
+      listHomelabSecrets: () => Promise.reject(unavailableLocalBackendError()),
+      upsertHomelabSecret: () => Promise.reject(unavailableLocalBackendError()),
+      deleteHomelabSecret: () => Promise.reject(unavailableLocalBackendError()),
     },
   };
+}
+
+export function createLocalApi(): LocalApi {
+  return createBrowserLocalApi();
 }
 
 export function readLocalApi(): LocalApi | undefined {
@@ -141,7 +96,7 @@ export function readLocalApi(): LocalApi | undefined {
     return cachedApi;
   }
 
-  cachedApi = createLocalApi(getPrimaryEnvironmentConnection().client);
+  cachedApi = createBrowserLocalApi();
   return cachedApi;
 }
 
@@ -157,12 +112,5 @@ export async function __resetLocalApiForTests() {
   cachedApi = undefined;
   const { __resetClientSettingsPersistenceForTests } = await import("./hooks/useSettings");
   __resetClientSettingsPersistenceForTests();
-  await resetEnvironmentServiceForTests();
-  resetVcsStatusStateForTests();
-  resetSourceControlDiscoveryStateForTests();
   resetRequestLatencyStateForTests();
-  resetSavedEnvironmentRegistryStoreForTests();
-  resetSavedEnvironmentRuntimeStoreForTests();
-  resetServerStateForTests();
-  resetWsConnectionStateForTests();
 }

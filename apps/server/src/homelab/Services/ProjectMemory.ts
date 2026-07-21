@@ -86,7 +86,10 @@ export interface ProjectMemoryShape {
   /** Curator-only: delete an entry (any project). Returns whether it existed. */
   readonly remove: (
     memoryId: ProjectMemoryId,
-  ) => Effect.Effect<{ readonly removed: boolean; readonly entry: ProjectMemoryEntry | undefined }, ProjectMemoryError>;
+  ) => Effect.Effect<
+    { readonly removed: boolean; readonly entry: ProjectMemoryEntry | undefined },
+    ProjectMemoryError
+  >;
   readonly markPromoted: (
     input: ProjectMemoryPromoteResolvedInput,
   ) => Effect.Effect<ProjectMemoryEntry, ProjectMemoryError>;

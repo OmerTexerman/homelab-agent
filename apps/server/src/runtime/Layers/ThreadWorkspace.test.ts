@@ -1,8 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -17,25 +16,25 @@ import { ThreadWorkspace } from "../Services/ThreadWorkspace.ts";
 import { RuntimeWorkspaceLive } from "./RuntimeWorkspace.ts";
 import { ThreadWorkspaceLive } from "./ThreadWorkspace.ts";
 
-const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), "thread-workspace-runtime-"));
-const hostWorkspacePath = path.join(runtimeRoot, "workspace");
-const hostHomePath = path.join(runtimeRoot, "home");
-const hostBinDir = path.join(runtimeRoot, "bin");
-const shellWrapperPath = path.join(hostBinDir, "runtime-shell");
+const runtimeRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "thread-workspace-runtime-"));
+const hostWorkspacePath = NodePath.join(runtimeRoot, "workspace");
+const hostHomePath = NodePath.join(runtimeRoot, "home");
+const hostBinDir = NodePath.join(runtimeRoot, "bin");
+const shellWrapperPath = NodePath.join(hostBinDir, "runtime-shell");
 const threadId = ThreadId.make("thread-workspace-layer-test");
 
-mkdirSync(hostWorkspacePath, { recursive: true });
-mkdirSync(hostHomePath, { recursive: true });
-mkdirSync(hostBinDir, { recursive: true });
-writeFileSync(
+NodeFS.mkdirSync(hostWorkspacePath, { recursive: true });
+NodeFS.mkdirSync(hostHomePath, { recursive: true });
+NodeFS.mkdirSync(hostBinDir, { recursive: true });
+NodeFS.writeFileSync(
   shellWrapperPath,
   ["#!/usr/bin/env bash", "set -euo pipefail", 'exec /bin/bash "$@"', ""].join("\n"),
   "utf8",
 );
-chmodSync(shellWrapperPath, 0o755);
+NodeFS.chmodSync(shellWrapperPath, 0o755);
 
 afterAll(() => {
-  rmSync(runtimeRoot, { recursive: true, force: true });
+  NodeFS.rmSync(runtimeRoot, { recursive: true, force: true });
 });
 
 const runtimeId = RuntimeSessionId.make("runtime-thread-workspace-test");
@@ -105,18 +104,22 @@ const ThreadRuntimeTestLive = Layer.succeed(ThreadRuntime, {
 });
 
 const TestLayer = ThreadWorkspaceLive.pipe(
-  Layer.provideMerge(NodeServices.layer),
   Layer.provide(ProcessRunnerLive),
   Layer.provide(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeTestLive))),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
   describe("listEntries", () => {
     it.effect("lists direct children for the current container path", () =>
       Effect.gen(function* () {
-        writeFileSync(path.join(hostWorkspacePath, "notes.md"), "# hi\n", "utf8");
-        mkdirSync(path.join(hostWorkspacePath, "docs"), { recursive: true });
-        writeFileSync(path.join(hostWorkspacePath, "docs", "guide.md"), "guide\n", "utf8");
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "# hi\n", "utf8");
+        NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, "docs"), { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.join(hostWorkspacePath, "docs", "guide.md"),
+          "guide\n",
+          "utf8",
+        );
 
         const threadWorkspace = yield* ThreadWorkspace;
         const result = yield* threadWorkspace.listEntries({
@@ -132,9 +135,9 @@ it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
 
     it.effect("can jump to an arbitrary container directory", () =>
       Effect.gen(function* () {
-        const externalDir = path.join(runtimeRoot, "external");
-        mkdirSync(externalDir, { recursive: true });
-        writeFileSync(path.join(externalDir, "inventory.json"), "{}\n", "utf8");
+        const externalDir = NodePath.join(runtimeRoot, "external");
+        NodeFS.mkdirSync(externalDir, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(externalDir, "inventory.json"), "{}\n", "utf8");
 
         const threadWorkspace = yield* ThreadWorkspace;
         const result = yield* threadWorkspace.listEntries({
@@ -153,7 +156,7 @@ it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
   describe("readFile and writeFile", () => {
     it.effect("reads and writes files through the runtime shell boundary", () =>
       Effect.gen(function* () {
-        const targetPath = path.join(runtimeRoot, "etc", "config.txt");
+        const targetPath = NodePath.join(runtimeRoot, "etc", "config.txt");
         const threadWorkspace = yield* ThreadWorkspace;
 
         yield* threadWorkspace.writeFile({
@@ -185,10 +188,10 @@ it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
 
         const result = yield* threadWorkspace.readFile({
           threadId,
-          path: path.join(hostWorkspacePath, "notes.md"),
+          path: NodePath.join(hostWorkspacePath, "notes.md"),
         });
 
-        expect(result.path).toBe(path.join(hostWorkspacePath, "notes.md"));
+        expect(result.path).toBe(NodePath.join(hostWorkspacePath, "notes.md"));
         expect(result.contents).toBe("logical root write\n");
       }),
     );
@@ -197,9 +200,9 @@ it.layer(TestLayer)("ThreadWorkspaceLive", (it) => {
   describe("downloadFile", () => {
     it.effect("returns downloaded bytes for container files", () =>
       Effect.gen(function* () {
-        const targetPath = path.join(runtimeRoot, "exports", "chat.json");
-        mkdirSync(path.dirname(targetPath), { recursive: true });
-        writeFileSync(targetPath, '{"ok":true}\n', "utf8");
+        const targetPath = NodePath.join(runtimeRoot, "exports", "chat.json");
+        NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true });
+        NodeFS.writeFileSync(targetPath, '{"ok":true}\n', "utf8");
 
         const threadWorkspace = yield* ThreadWorkspace;
         const result = yield* threadWorkspace.downloadFile({

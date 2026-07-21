@@ -1,143 +1,48 @@
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
-import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
+import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  deriveLogicalProjectKey as deriveLogicalProjectKeyBase,
+  resolveProjectGroupingMode,
+  type ProjectGroupingSettings,
+} from "@t3tools/client-runtime/state/project-grouping";
 import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
-import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import { normalizeProjectPathForComparison } from "./lib/projectPaths";
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import type { Project } from "./types";
 
-export interface ProjectGroupingSettings {
-  sidebarProjectGroupingMode: SidebarProjectGroupingMode;
-  sidebarProjectGroupingOverrides: Record<string, SidebarProjectGroupingMode>;
-}
+export {
+  derivePhysicalProjectKey,
+  derivePhysicalProjectKeyFromPath,
+  deriveProjectGroupLabel,
+  deriveProjectGroupingOverrideKey,
+  getProjectOrderKey,
+  resolveProjectGroupingMode,
+  selectProjectGroupingSettings,
+  type ProjectGroupingMode,
+  type ProjectGroupingSettings,
+} from "@t3tools/client-runtime/state/project-grouping";
 
-export type ProjectGroupingMode = SidebarProjectGroupingMode;
+type LogicalProjectInput = Pick<
+  Project,
+  "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
+>;
 
-export function selectProjectGroupingSettings(settings: UnifiedSettings): ProjectGroupingSettings {
-  return {
-    sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
-    sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
-  };
-}
-
-function uniqueNonEmptyValues(values: ReadonlyArray<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
-  return unique;
-}
-
-function deriveRepositoryRelativeProjectPath(
-  project: Pick<Project, "cwd" | "repositoryIdentity">,
-): string | null {
-  const rootPath = project.repositoryIdentity?.rootPath?.trim();
-  if (!rootPath) {
-    return null;
-  }
-
-  const normalizedProjectPath = normalizeProjectPathForComparison(project.cwd);
-  const normalizedRootPath = normalizeProjectPathForComparison(rootPath);
-  if (normalizedProjectPath.length === 0 || normalizedRootPath.length === 0) {
-    return null;
-  }
-
-  if (normalizedProjectPath === normalizedRootPath) {
-    return "";
-  }
-
-  const separator = normalizedRootPath.includes("\\") ? "\\" : "/";
-  const rootPrefix = `${normalizedRootPath}${separator}`;
-  if (!normalizedProjectPath.startsWith(rootPrefix)) {
-    return null;
-  }
-
-  return normalizedProjectPath.slice(rootPrefix.length).replaceAll("\\", "/");
-}
-
-export function derivePhysicalProjectKeyFromPath(environmentId: string, cwd: string): string {
-  return `${environmentId}:${normalizeProjectPathForComparison(cwd)}`;
-}
-
-export function derivePhysicalProjectKey(project: Pick<Project, "environmentId" | "cwd">): string {
-  return derivePhysicalProjectKeyFromPath(project.environmentId, project.cwd);
-}
-
-export function deriveProjectGroupingOverrideKey(
-  project: Pick<Project, "environmentId" | "cwd">,
-): string {
-  return derivePhysicalProjectKey(project);
-}
-
-// Key under which a project's manual sort order (projectOrder) is stored.
-// Must stay aligned with the writer side in `uiStateStore.syncProjects` and
-// the drag handlers in `Sidebar` so readers and writers agree.
-export function getProjectOrderKey(project: Pick<Project, "environmentId" | "cwd">): string {
-  return derivePhysicalProjectKey(project);
-}
-
-export function resolveProjectGroupingMode(
-  project: Pick<Project, "environmentId" | "cwd">,
-  settings: ProjectGroupingSettings,
-): SidebarProjectGroupingMode {
-  return (
-    settings.sidebarProjectGroupingOverrides?.[deriveProjectGroupingOverrideKey(project)] ??
-    settings.sidebarProjectGroupingMode
-  );
-}
-
-function deriveRepositoryScopedKey(
-  project: Pick<Project, "cwd" | "repositoryIdentity">,
-  groupingMode: SidebarProjectGroupingMode,
-): string | null {
-  const canonicalKey = project.repositoryIdentity?.canonicalKey;
-  if (!canonicalKey) {
-    return null;
-  }
-
-  if (groupingMode === "repository") {
-    return canonicalKey;
-  }
-
-  const relativeProjectPath = deriveRepositoryRelativeProjectPath(project);
-  if (relativeProjectPath === null) {
-    return canonicalKey;
-  }
-
-  return relativeProjectPath.length === 0
-    ? canonicalKey
-    : `${canonicalKey}::${relativeProjectPath}`;
-}
-
+// Homelab fork: logical projects (e.g. the hidden standalone-thread namespace)
+// use synthetic `homelab://project/<id>` workspace roots. They must never be
+// grouped by repository identity or path — key them by their scoped ref.
 export function deriveLogicalProjectKey(
-  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity">,
+  project: LogicalProjectInput,
   options?: {
-    groupingMode?: SidebarProjectGroupingMode;
+    readonly groupingMode?: SidebarProjectGroupingMode;
   },
 ): string {
-  if (isLogicalProjectWorkspaceRoot(project.cwd)) {
+  if (isLogicalProjectWorkspaceRoot(project.workspaceRoot)) {
     return scopedProjectKey(scopeProjectRef(project.environmentId, project.id));
   }
 
-  const groupingMode = options?.groupingMode ?? "repository";
-  if (groupingMode === "separate") {
-    return derivePhysicalProjectKey(project);
-  }
-
-  return (
-    deriveRepositoryScopedKey(project, groupingMode) ??
-    derivePhysicalProjectKey(project) ??
-    scopedProjectKey(scopeProjectRef(project.environmentId, project.id))
-  );
+  return deriveLogicalProjectKeyBase(project, options);
 }
 
 export function deriveLogicalProjectKeyFromSettings(
-  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity">,
+  project: LogicalProjectInput,
   settings: ProjectGroupingSettings,
 ): string {
   return deriveLogicalProjectKey(project, {
@@ -147,31 +52,10 @@ export function deriveLogicalProjectKeyFromSettings(
 
 export function deriveLogicalProjectKeyFromRef(
   projectRef: ScopedProjectRef,
-  project: Pick<Project, "environmentId" | "id" | "cwd" | "repositoryIdentity"> | null | undefined,
+  project: LogicalProjectInput | null | undefined,
   options?: {
-    groupingMode?: SidebarProjectGroupingMode;
+    readonly groupingMode?: SidebarProjectGroupingMode;
   },
 ): string {
   return project ? deriveLogicalProjectKey(project, options) : scopedProjectKey(projectRef);
-}
-
-export function deriveProjectGroupLabel(input: {
-  representative: Pick<Project, "name" | "repositoryIdentity">;
-  members: ReadonlyArray<Pick<Project, "name" | "repositoryIdentity">>;
-}): string {
-  const sharedDisplayNames = uniqueNonEmptyValues(
-    input.members.map((member) => member.repositoryIdentity?.displayName),
-  );
-  if (sharedDisplayNames.length === 1) {
-    return sharedDisplayNames[0]!;
-  }
-
-  const sharedRepositoryNames = uniqueNonEmptyValues(
-    input.members.map((member) => member.repositoryIdentity?.name),
-  );
-  if (sharedRepositoryNames.length === 1) {
-    return sharedRepositoryNames[0]!;
-  }
-
-  return input.representative.name;
 }

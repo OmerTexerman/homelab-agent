@@ -18,8 +18,8 @@ function project(overrides: Partial<Project> = {}): Project {
   return {
     id,
     environmentId: ENVIRONMENT_ID,
-    name: "Media",
-    cwd: `homelab://project/${id}`,
+    title: "Media",
+    workspaceRoot: `homelab://project/${id}`,
     repositoryIdentity: null,
     defaultRuntimeId: `project-runtime:${id}` as RuntimeSessionId,
     defaultModelSelection: null,
@@ -38,6 +38,11 @@ function thread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSum
     runtimeId: "project-runtime:project-media" as RuntimeSessionId,
     runtimeSelectionMode: "shared",
     title: "Check Plex",
+    modelSelection: {
+      instanceId: "codex" as SidebarThreadSummary["modelSelection"]["instanceId"],
+      model: "gpt-5",
+    },
+    runtimeMode: "full-access",
     interactionMode: "default",
     session: null,
     createdAt: NOW,
@@ -56,13 +61,15 @@ function thread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSum
 
 function runningSession(): ThreadSession {
   return {
-    provider: "codex",
-    providerInstanceId: "codex",
+    threadId: "thread-1",
     status: "running",
-    createdAt: NOW,
+    providerName: "codex",
+    providerInstanceId: "codex",
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
     updatedAt: NOW,
-    orchestrationStatus: "running",
-  } as ThreadSession;
+  } as unknown as ThreadSession;
 }
 
 function provider(overrides: Record<string, unknown> = {}): ServerProvider {
@@ -383,12 +390,12 @@ describe("deriveHomeOverviewReadModel", () => {
       contextLabel: "Media",
       isScratch: false,
     });
-    expect(
-      model.recentThreads.find((entry) => entry.threadId === "thread-shared"),
-    ).toMatchObject({ isRunning: true });
-    expect(
-      model.recentThreads.find((entry) => entry.threadId === "thread-isolated"),
-    ).toMatchObject({ isIsolated: true, pendingReason: "Plan ready to review" });
+    expect(model.recentThreads.find((entry) => entry.threadId === "thread-shared")).toMatchObject({
+      isRunning: true,
+    });
+    expect(model.recentThreads.find((entry) => entry.threadId === "thread-isolated")).toMatchObject(
+      { isIsolated: true, pendingReason: "Plan ready to review" },
+    );
     expect(model.health.headline).toMatch(/waiting on you/);
     expect(model.setup.incompleteCount).toBe(0);
     expect(model.setup.steps).toEqual([]);
@@ -399,7 +406,7 @@ describe("deriveHomeOverviewReadModel", () => {
       projects: [
         project({
           id: "system:curator" as Project["id"],
-          name: "Knowledge Curator",
+          title: "Knowledge Curator",
         }),
       ],
       threads: [

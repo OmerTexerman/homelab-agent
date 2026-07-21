@@ -2,9 +2,11 @@
 
 ## Task Completion Requirements
 
-- All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
-  - If changing native mobile code, `bun lint:mobile` must also pass.
-- NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
+  - Use `vp test run <test-files>` for focused built-in Vite+ tests. Use `vp run test` only when the affected package specifically requires its `test` script.
+  - Backend changes must include and run focused tests for the changed behavior.
+  - Run targeted formatting, lint, and type checks for the affected scope when available.
+- Do not run repo-wide `vp check`, `vp run typecheck`, `vp run test`, or equivalent full-suite commands locally unless the user explicitly requests them. CI is responsible for the full verification suite.
 
 ## Project Snapshot
 
@@ -54,6 +56,8 @@ Long-term maintainability is a core priority.
   Shared schemas and transport contracts. Keep this package schema-only.
 - `packages/shared/src`
   Small shared runtime helpers.
+- `packages/client-runtime/src`
+  Shared client runtime code used across web and mobile surfaces.
 - `docker/runtime`
   Local runtime image used for thread containers.
 
@@ -125,8 +129,7 @@ agents.
 - Prefer examples and patterns from the vendored source code over generated guesses or web search results.
 - Do not edit files under `.repos/` unless explicitly asked.
 - Do not import from `.repos/`; application code must continue importing from normal package dependencies.
-- Manage vendored subtrees with `bun run sync:repos`; use `bun run sync:repos --repo <id>` to sync one
-  configured repository.
+- Manage vendored subtrees with `vpr sync:repos`; use `vpr sync:repos --repo <id>` to sync one configured repository.
 - When updating a dependency with a configured vendored subtree, sync that subtree in the same change so
   `.repos/` matches the installed dependency version.
 - When writing Effect code, read `.repos/effect-smol/LLMS.md` first and inspect `.repos/effect-smol/` for

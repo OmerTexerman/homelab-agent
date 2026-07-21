@@ -6,11 +6,10 @@ import {
   RefreshCwIcon,
   Settings2Icon,
 } from "lucide-react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useAtomValue } from "@effect/atom-react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, type ReactNode } from "react";
-import { useShallow } from "zustand/react/shallow";
-import type { ProjectRuntimeDetail } from "@t3tools/contracts";
 import { isCuratorProject } from "@t3tools/shared/curatorProject";
 import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 
@@ -19,9 +18,6 @@ import {
   homelabProjectMemoryQueryOptions,
   homelabSetupStatusQueryOptions,
 } from "../lib/homelabReactQuery";
-import { useServerProviders } from "../rpc/serverState";
-import { usePrimaryEnvironmentId } from "../environments/primary";
-import { readEnvironmentApi } from "../environmentApi";
 import {
   deriveHomeOverviewReadModel,
   type HomeOverviewAttentionItem,
@@ -32,26 +28,25 @@ import {
   type HomeOverviewSeverity,
   type HomeOverviewThreadRef,
 } from "../homeOverviewReadModel";
-import {
-  selectProjectsAcrossEnvironments,
-  selectSidebarThreadsAcrossEnvironments,
-  useStore,
-} from "../store";
+import { useProjects, useThreadShells } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
+import { primaryServerProvidersAtom } from "../state/server";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
+import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { Button } from "./ui/button";
-import { SidebarInset, SidebarTrigger } from "./ui/sidebar";
+import { SidebarInset } from "./ui/sidebar";
 
 const HOME_RUNTIME_PROJECT_LIMIT = 8;
 
 export function NoActiveThreadState() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const providerStatuses = useServerProviders();
-  const projects = useStore(useShallow((store) => selectProjectsAcrossEnvironments(store)));
-  const threads = useStore(useShallow((store) => selectSidebarThreadsAcrossEnvironments(store)));
+  const providerStatuses = useAtomValue(primaryServerProvidersAtom);
+  const projects = useProjects();
+  const threads = useThreadShells();
   const { defaultProjectRef, handleNewThread } = useHandleNewThread();
 
   const runtimeProjects = useMemo(
@@ -59,8 +54,8 @@ export function NoActiveThreadState() {
       projects
         .filter(
           (project) =>
-            !isStandaloneProject({ id: project.id, cwd: project.cwd }) &&
-            !isCuratorProject({ id: project.id, cwd: project.cwd }),
+            !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
+            !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
         )
         .slice(0, HOME_RUNTIME_PROJECT_LIMIT),
     [projects],
@@ -81,35 +76,15 @@ export function NoActiveThreadState() {
       limit: 50,
     }),
   );
-  const projectRuntimeQueries = useQueries({
-    queries: runtimeProjects.map((project) => ({
-      queryKey: [
-        "home-overview",
-        "project-runtime",
-        project.environmentId,
-        project.id,
-        project.defaultRuntimeId ?? null,
-      ] as const,
-      queryFn: async () => {
-        const api = readEnvironmentApi(project.environmentId);
-        if (!api) {
-          throw new Error("Project Runtime API is not available.");
-        }
-        const result = await api.projectRuntime.get({ projectId: project.id });
-        return result.runtime;
-      },
-      refetchInterval: 5_000,
-      refetchOnWindowFocus: true,
-      retry: false,
-      staleTime: 3_000,
-    })),
-  });
-
-  const runtimeDetails = runtimeProjects.map((project, index) => ({
+  // NOTE: live Project Runtime detail polling relied on the per-environment ws
+  // RPC client (`environmentApi`) that was removed in the upstream client-runtime
+  // refactor. Until projectRuntime atoms exist in @t3tools/client-runtime, the
+  // overview derives runtime rows from projects/threads alone (detail: null).
+  const runtimeDetails = runtimeProjects.map((project) => ({
     environmentId: project.environmentId,
     projectId: project.id,
     runtimeId: project.defaultRuntimeId ?? null,
-    detail: (projectRuntimeQueries[index]?.data as ProjectRuntimeDetail | undefined) ?? null,
+    detail: null,
   }));
   const model = deriveHomeOverviewReadModel({
     projects,
@@ -119,35 +94,27 @@ export function NoActiveThreadState() {
     projectMemoryEntries: projectMemoryQuery.data?.entries ?? [],
     projectRuntimeDetails: runtimeDetails,
   });
-  const runtimeQueryError = projectRuntimeQueries.find((query) => query.isError)?.error;
-  const errorMessage = [
-    homelabSetupStatusQuery.error,
-    projectMemoryQuery.error,
-    runtimeQueryError,
-  ].find((error): error is Error => error instanceof Error)?.message;
-  const isRefreshing =
-    homelabSetupStatusQuery.isFetching ||
-    projectMemoryQuery.isFetching ||
-    projectRuntimeQueries.some((query) => query.isFetching);
+  const errorMessage = [homelabSetupStatusQuery.error, projectMemoryQuery.error].find(
+    (error): error is Error => error instanceof Error,
+  )?.message;
+  const isRefreshing = homelabSetupStatusQuery.isFetching || projectMemoryQuery.isFetching;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <header
           className={cn(
-            "border-b border-border px-3 sm:px-5",
-            isElectron
-              ? "drag-region flex h-[52px] items-center wco:h-[env(titlebar-area-height)]"
-              : "py-2 sm:py-3",
+            "border-b border-border px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
+            isElectron ? "workspace-topbar drag-region" : "workspace-topbar",
+            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
           {isElectron ? (
-            <span className="text-xs text-muted-foreground/50 wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]">
+            <span className="text-xs text-muted-foreground/50 wco:pr-[var(--workspace-native-controls-inset)]">
               {model.title}
             </span>
           ) : (
             <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0 md:hidden" />
               <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
                 {model.title}
               </span>
@@ -177,9 +144,6 @@ export function NoActiveThreadState() {
           onRefresh={() => {
             void homelabSetupStatusQuery.refetch();
             void projectMemoryQuery.refetch();
-            for (const query of projectRuntimeQueries) {
-              void query.refetch();
-            }
           }}
         />
       </div>

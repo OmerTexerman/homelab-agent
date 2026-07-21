@@ -1,8 +1,7 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import crypto from "node:crypto";
-import nodeFs from "node:fs";
-import nodePath from "node:path";
-
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 const LOCAL_RUNTIME_IMAGE_FALLBACK = "homelab-agent-runtime:local";
 const LEGACY_RUNTIME_IMAGE_REFS = new Set(["ghcr.io/homelab-agent/runtime:latest", "ubuntu:24.04"]);
 
@@ -23,12 +22,12 @@ function walkBuildContext(rootPath: string): ReadonlyArray<string> {
   const entries: string[] = [];
 
   const visit = (currentPath: string) => {
-    const stat = nodeFs.statSync(currentPath);
+    const stat = NodeFS.statSync(currentPath);
     if (stat.isDirectory()) {
-      for (const child of nodeFs
-        .readdirSync(currentPath)
-        .toSorted((left, right) => left.localeCompare(right))) {
-        visit(nodePath.join(currentPath, child));
+      for (const child of NodeFS.readdirSync(currentPath).toSorted((left, right) =>
+        left.localeCompare(right),
+      )) {
+        visit(NodePath.join(currentPath, child));
       }
       return;
     }
@@ -43,33 +42,33 @@ function walkBuildContext(rootPath: string): ReadonlyArray<string> {
 }
 
 export function fingerprintBuildContext(contextPath: string): string | undefined {
-  if (!nodeFs.existsSync(contextPath)) {
+  if (!NodeFS.existsSync(contextPath)) {
     return undefined;
   }
 
-  const hash = crypto.createHash("sha256");
+  const hash = NodeCrypto.createHash("sha256");
   for (const filePath of walkBuildContext(contextPath)) {
-    const relativePath = nodePath.relative(contextPath, filePath);
+    const relativePath = NodePath.relative(contextPath, filePath);
     hash.update(relativePath);
     hash.update("\u0000");
-    hash.update(nodeFs.readFileSync(filePath));
+    hash.update(NodeFS.readFileSync(filePath));
     hash.update("\u0000");
   }
   return hash.digest("hex");
 }
 
 function findRuntimeContextPath(startDir: string): string {
-  let currentDir = nodePath.resolve(startDir);
+  let currentDir = NodePath.resolve(startDir);
 
   while (true) {
-    const candidate = nodePath.join(currentDir, "docker", "runtime");
-    if (nodeFs.existsSync(nodePath.join(candidate, "Dockerfile"))) {
+    const candidate = NodePath.join(currentDir, "docker", "runtime");
+    if (NodeFS.existsSync(NodePath.join(candidate, "Dockerfile"))) {
       return candidate;
     }
 
-    const parentDir = nodePath.dirname(currentDir);
+    const parentDir = NodePath.dirname(currentDir);
     if (parentDir === currentDir) {
-      return nodePath.join(startDir, "docker", "runtime");
+      return NodePath.join(startDir, "docker", "runtime");
     }
     currentDir = parentDir;
   }
@@ -95,7 +94,7 @@ export function resolveRuntimeBuildContextPath(repoRoot: string): string {
  * write here reliably changes the image fingerprint.
  */
 export function resolveRuntimeProviderVersionsManifestPath(repoRoot: string): string {
-  return nodePath.join(
+  return NodePath.join(
     resolveRuntimeBuildContextPath(repoRoot),
     RUNTIME_PROVIDER_VERSIONS_BASENAME,
   );
@@ -117,7 +116,7 @@ export function resolveLocalRuntimeImageBuildSpec(repoRoot: string): LocalRuntim
   const contextPath = resolveRuntimeBuildContextPath(repoRoot);
   const dockerfilePath =
     trimToUndefined(process.env.HOMELAB_AGENT_RUNTIME_DOCKERFILE) ??
-    nodePath.join(contextPath, "Dockerfile");
+    NodePath.join(contextPath, "Dockerfile");
   const fingerprint = fingerprintBuildContext(contextPath);
 
   return {

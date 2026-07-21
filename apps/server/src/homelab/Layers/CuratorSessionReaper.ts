@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalRandom:off
-import crypto from "node:crypto";
-
+import * as NodeCrypto from "node:crypto";
 import { CommandId, type ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
@@ -111,7 +110,7 @@ const makeCuratorSessionReaper = (options?: CuratorSessionReaperLiveOptions) =>
         const reaped = yield* orchestrationEngine
           .dispatch({
             type: "thread.delete",
-            commandId: CommandId.make(`curator-reaper-${crypto.randomUUID()}`),
+            commandId: CommandId.make(`curator-reaper-${NodeCrypto.randomUUID()}`),
             threadId,
           })
           .pipe(

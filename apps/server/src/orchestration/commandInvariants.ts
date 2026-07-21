@@ -1,5 +1,4 @@
 import type {
-  OrchestrationMessage,
   OrchestrationCommand,
   OrchestrationProject,
   OrchestrationReadModel,
@@ -7,6 +6,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Effect from "effect/Effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -88,6 +88,30 @@ export function requireProjectAbsent(input: {
   );
 }
 
+export function requireActiveProjectWorkspaceRootAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly workspaceRoot: string;
+  readonly exceptProjectId?: ProjectId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const normalizedWorkspaceRoot = normalizeProjectPathForComparison(input.workspaceRoot);
+  const existingProject = input.readModel.projects.find(
+    (project) =>
+      project.deletedAt === null &&
+      normalizeProjectPathForComparison(project.workspaceRoot) === normalizedWorkspaceRoot &&
+      project.id !== input.exceptProjectId,
+  );
+  if (existingProject === undefined) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Active project '${existingProject.id}' already exists for workspace root '${normalizedWorkspaceRoot}'.`,
+    ),
+  );
+}
+
 export function requireThread(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
@@ -156,41 +180,6 @@ export function requireThreadAbsent(input: {
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
     ),
-  );
-}
-
-function isPendingUserMessage(message: OrchestrationMessage | undefined): boolean {
-  return message?.role === "user" && message.turnId === null;
-}
-
-export function requireThreadReadyForTurnStart(input: {
-  readonly readModel: OrchestrationReadModel;
-  readonly command: OrchestrationCommand;
-  readonly threadId: ThreadId;
-}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
-  return requireThread(input).pipe(
-    Effect.flatMap((thread) => {
-      if (thread.session?.status === "starting" || thread.session?.status === "running") {
-        return Effect.fail(
-          invariantError(
-            input.command.type,
-            `Thread '${input.threadId}' already has an active turn and cannot start another one yet.`,
-          ),
-        );
-      }
-
-      const latestMessage = thread.messages.at(-1);
-      if (isPendingUserMessage(latestMessage)) {
-        return Effect.fail(
-          invariantError(
-            input.command.type,
-            `Thread '${input.threadId}' already has a pending user turn and cannot start another one yet.`,
-          ),
-        );
-      }
-
-      return Effect.succeed(thread);
-    }),
   );
 }
 

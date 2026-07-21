@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,7 +36,7 @@ describe("resolveProviderCliWorkingDirectory", () => {
 
   it.effect("fails for missing directories by default", () =>
     Effect.gen(function* () {
-      const missing = nodePath.join(process.cwd(), "does-not-exist-anywhere");
+      const missing = NodePath.join(process.cwd(), "does-not-exist-anywhere");
       const result = yield* resolveProviderCliWorkingDirectory({
         cwd: missing,
         operation: "generateCommitMessage",
@@ -49,7 +48,7 @@ describe("resolveProviderCliWorkingDirectory", () => {
   it.effect("falls back to the state dir for missing directories when requested", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig;
-      const missing = nodePath.join(process.cwd(), "does-not-exist-anywhere");
+      const missing = NodePath.join(process.cwd(), "does-not-exist-anywhere");
       const resolved = yield* resolveProviderCliWorkingDirectory({
         cwd: missing,
         operation: "generateThreadTitle",

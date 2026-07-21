@@ -1,13 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 interface ManagedProcess {
-  readonly child: ChildProcess;
+  readonly child: NodeChildProcess.ChildProcess;
   exited: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | null;
   output: string;
   stopping: boolean;
@@ -18,7 +17,7 @@ interface DevRunnerPorts {
   readonly webPort: number;
 }
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const fatalOutputPatterns = [
   /Failed running 'src\/bin\.ts'/u,
   /SQL error in ProjectionSnapshotQuery/u,
@@ -40,8 +39,8 @@ function startDev(input: {
   readonly baseDir: string;
   readonly devInstance: string;
 }): ManagedProcess {
-  const child = spawn(
-    "bun",
+  const child = NodeChildProcess.spawn(
+    "pnpm",
     [
       "run",
       "dev",
@@ -53,6 +52,7 @@ function startDev(input: {
     ],
     {
       cwd: repoRoot,
+      // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
       detached: process.platform !== "win32",
       env: {
         ...process.env,
@@ -93,6 +93,7 @@ async function stopProcess(processToStop: ManagedProcess): Promise<void> {
   }
 
   processToStop.stopping = true;
+  // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
   if (process.platform !== "win32" && processToStop.child.pid !== undefined) {
     try {
       process.kill(-processToStop.child.pid, "SIGTERM");
@@ -110,6 +111,7 @@ async function stopProcess(processToStop: ManagedProcess): Promise<void> {
     delay(5_000).then(() => false),
   ]);
   if (!stopped && !processToStop.exited) {
+    // eslint-disable-next-line t3code/no-global-process-runtime -- fork legacy host-platform read; migrate to HostProcessPlatform in a follow-up
     if (process.platform !== "win32" && processToStop.child.pid !== undefined) {
       try {
         process.kill(-processToStop.child.pid, "SIGKILL");
@@ -151,7 +153,7 @@ async function waitForPorts(processToWatch: ManagedProcess): Promise<DevRunnerPo
 
 async function fetchStatus(url: string, timeoutMs: number): Promise<number> {
   return await new Promise((resolveStatus, rejectStatus) => {
-    const req = httpRequest(url, (res) => {
+    const req = NodeHttp.request(url, (res) => {
       res.resume();
       res.on("end", () => resolveStatus(res.statusCode ?? 0));
     });
@@ -201,7 +203,7 @@ async function waitForHttp(input: {
 
 async function main(): Promise<void> {
   const keepState = process.argv.includes("--keep-state");
-  const baseDir = mkdtempSync(join(tmpdir(), "homelab-dev-smoke-"));
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "homelab-dev-smoke-"));
   const devInstance = `dev-smoke-${process.pid}-${Date.now().toString(36)}`;
   const devProcess = startDev({ baseDir, devInstance });
 
@@ -226,13 +228,13 @@ async function main(): Promise<void> {
       throw new Error(`dev output matched fatal pattern ${fatalPattern}`);
     }
 
-    log("Root bun run dev smoke passed.");
+    log("Root pnpm run dev smoke passed.");
   } finally {
     await stopProcess(devProcess);
     if (keepState) {
       log(`Kept disposable T3CODE_HOME ${baseDir}`);
     } else {
-      rmSync(baseDir, { recursive: true, force: true });
+      NodeFS.rmSync(baseDir, { recursive: true, force: true });
     }
   }
 }

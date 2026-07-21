@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import {
   MessageId,
   ProjectId,
@@ -272,7 +271,7 @@ describe("HomelabContextView", () => {
         prefix: "homelab-context-view-prune-",
       });
 
-      const join = (...segments: ReadonlyArray<string>) => nodePath.join(tempDir, ...segments);
+      const join = (...segments: ReadonlyArray<string>) => NodePath.join(tempDir, ...segments);
       const exists = (relative: string) =>
         fileSystem.exists(join(relative)).pipe(Effect.orElseSucceed(() => false));
 

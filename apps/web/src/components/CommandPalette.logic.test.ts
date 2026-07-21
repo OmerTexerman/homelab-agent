@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
@@ -17,23 +17,24 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
-    codexThreadId: null,
     projectId: PROJECT_ID,
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
+    runtimeId: null,
+    runtimeSelectionMode: "shared",
     interactionMode: "default",
     session: null,
     messages: [],
     proposedPlans: [],
-    error: null,
     createdAt: "2026-03-01T00:00:00.000Z",
     archivedAt: null,
+    deletedAt: null,
     updatedAt: "2026-03-01T00:00:00.000Z",
     latestTurn: null,
     branch: null,
     worktreePath: null,
-    turnDiffSummaries: [],
+    checkpoints: [],
     activities: [],
     ...overrides,
   };
@@ -46,10 +47,12 @@ describe("buildProjectActionItems", () => {
         {
           id: PROJECT_ID,
           environmentId: LOCAL_ENVIRONMENT_ID,
-          name: "Observability",
-          cwd: "/srv/repos/observability",
+          title: "Observability",
+          workspaceRoot: "/srv/repos/observability",
           defaultModelSelection: null,
           scripts: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
         },
       ],
       valuePrefix: "project",

@@ -58,6 +58,7 @@ describe("HomelabRelation", () => {
 
 describe("HomelabPromotionEnvelope", () => {
   it("captures a thread promotion bundle", async () => {
+    // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
     const parsed = await Effect.runPromise(
       Schema.decodeUnknownEffect(HomelabPromotionEnvelope)({
         id: "promotion:grafana-install",

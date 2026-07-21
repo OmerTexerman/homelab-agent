@@ -1,17 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { execFile as execFileCallback } from "node:child_process";
-import { promises as nodeFs } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import nodeOs from "node:os";
-import nodePath from "node:path";
-import { promisify } from "node:util";
-
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { renderHomelabCliScript } from "./ThreadRuntime.ts";
 
-const execFile = promisify(execFileCallback);
+const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
 interface RecordedCliRequest {
   readonly method: string;
@@ -20,18 +19,18 @@ interface RecordedCliRequest {
   readonly bodyJson?: unknown;
 }
 
-let server: Server | null = null;
+let server: NodeHttp.Server | null = null;
 let serverUrl = "";
 let tempDir = "";
 let cliPath = "";
 let requests: RecordedCliRequest[] = [];
 
-function respondJson(response: ServerResponse, payload: unknown): void {
+function respondJson(response: NodeHttp.ServerResponse, payload: unknown): void {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(payload));
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: NodeHttp.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -40,22 +39,24 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   return body.length > 0 ? (JSON.parse(body) as unknown) : undefined;
 }
 
-function createCliTestServer(): Server {
-  return createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handleCliTestRequest(request, response).catch((error) => {
-      response.writeHead(500, { "Content-Type": "application/json" });
-      response.end(
-        JSON.stringify({
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    });
-  });
+function createCliTestServer(): NodeHttp.Server {
+  return NodeHttp.createServer(
+    (request: NodeHttp.IncomingMessage, response: NodeHttp.ServerResponse) => {
+      void handleCliTestRequest(request, response).catch((error) => {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      });
+    },
+  );
 }
 
 async function handleCliTestRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
+  request: NodeHttp.IncomingMessage,
+  response: NodeHttp.ServerResponse,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", serverUrl);
   const bodyJson = await readJsonBody(request);
@@ -129,15 +130,15 @@ async function runHomelabCli(
 describe("generated homelab CLI", () => {
   beforeEach(async () => {
     requests = [];
-    tempDir = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "homelab-cli-"));
-    cliPath = nodePath.join(tempDir, "homelab");
-    await nodeFs.writeFile(cliPath, renderHomelabCliScript(), { mode: 0o755 });
+    tempDir = await NodeFS.promises.mkdtemp(NodePath.join(NodeOS.tmpdir(), "homelab-cli-"));
+    cliPath = NodePath.join(tempDir, "homelab");
+    await NodeFS.promises.writeFile(cliPath, renderHomelabCliScript(), { mode: 0o755 });
 
     server = createCliTestServer();
     await new Promise<void>((resolve) => {
       server?.listen(0, "127.0.0.1", resolve);
     });
-    const address = server.address() as AddressInfo;
+    const address = server.address() as NodeNet.AddressInfo;
     serverUrl = `http://127.0.0.1:${address.port}`;
   });
 
@@ -156,7 +157,7 @@ describe("generated homelab CLI", () => {
       });
     });
     server = null;
-    await nodeFs.rm(tempDir, { recursive: true, force: true });
+    await NodeFS.promises.rm(tempDir, { recursive: true, force: true });
   });
 
   it("reaches the server for snapshot, memory, secrets, and bootstrap commands", async () => {
@@ -219,10 +220,9 @@ describe("generated homelab CLI", () => {
       runHomelabCli(["curate", "memory", "--all"], { HOMELAB_AGENT_SCOPE: "curator" }),
     ).resolves.toContain('"entries"');
     await expect(
-      runHomelabCli(
-        ["curate", "memory-delete", "memory-1", "--reason", "duplicate of memory-2"],
-        { HOMELAB_AGENT_SCOPE: "curator" },
-      ),
+      runHomelabCli(["curate", "memory-delete", "memory-1", "--reason", "duplicate of memory-2"], {
+        HOMELAB_AGENT_SCOPE: "curator",
+      }),
     ).resolves.toContain('"removed"');
 
     expect(requests).toEqual([
@@ -251,10 +251,9 @@ describe("generated homelab CLI", () => {
 
   it("refuses memory proposals in curator scope", async () => {
     await expect(
-      runHomelabCli(
-        ["memory", "propose", "--summary", "A finding"],
-        { HOMELAB_AGENT_SCOPE: "curator" },
-      ),
+      runHomelabCli(["memory", "propose", "--summary", "A finding"], {
+        HOMELAB_AGENT_SCOPE: "curator",
+      }),
     ).rejects.toThrow(/curator session: there is no project to propose or promote into/);
     expect(requests).toEqual([]);
   });

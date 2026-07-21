@@ -145,10 +145,7 @@ function ExpandableRow(props: {
 }) {
   return (
     <div
-      className={cn(
-        "rounded-md border",
-        props.highlighted ? "border-primary/60" : "border-border",
-      )}
+      className={cn("rounded-md border", props.highlighted ? "border-primary/60" : "border-border")}
     >
       <button
         type="button"
@@ -816,11 +813,17 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                     rows={[
                       ["Id", String(entry.id)],
                       ["Tags", entry.tags.join(", ") || undefined],
-                      ["Source thread", entry.sourceThreadId ? String(entry.sourceThreadId) : undefined],
+                      [
+                        "Source thread",
+                        entry.sourceThreadId ? String(entry.sourceThreadId) : undefined,
+                      ],
                       ["Source file", entry.sourceFilePath],
                       ["Supersedes", entry.supersedes.map(String).join(", ") || undefined],
                       ["Replaces", entry.replaces.map(String).join(", ") || undefined],
-                      ["Promotion", entry.promotionStatus !== "none" ? entry.promotionStatus : undefined],
+                      [
+                        "Promotion",
+                        entry.promotionStatus !== "none" ? entry.promotionStatus : undefined,
+                      ],
                       ["Promoted", entry.promotedAt],
                       ["Created", entry.createdAt],
                       ["Updated", entry.updatedAt],
@@ -855,8 +858,16 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                   <DetailGrid
                     rows={[
                       ["Id", String(skill.id)],
-                      ["Project", skill.projectId ? projectDisplayName(String(skill.projectId), projectNameById) : undefined],
-                      ["Source thread", skill.sourceThreadId ? String(skill.sourceThreadId) : undefined],
+                      [
+                        "Project",
+                        skill.projectId
+                          ? projectDisplayName(String(skill.projectId), projectNameById)
+                          : undefined,
+                      ],
+                      [
+                        "Source thread",
+                        skill.sourceThreadId ? String(skill.sourceThreadId) : undefined,
+                      ],
                       ["Created", skill.createdAt],
                       ["Updated", skill.updatedAt],
                     ]}

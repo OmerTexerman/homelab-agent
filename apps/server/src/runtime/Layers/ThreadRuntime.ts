@@ -1,8 +1,7 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import nodeFs from "node:fs";
-import nodeOs from "node:os";
-import nodePath from "node:path";
-
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import {
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
@@ -36,7 +35,7 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
-import { ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
+import { layer as ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
@@ -259,11 +258,11 @@ function isLikelyRunningInsideContainer(): boolean {
   ) {
     return true;
   }
-  if (nodeFs.existsSync("/.dockerenv")) {
+  if (NodeFS.existsSync("/.dockerenv")) {
     return true;
   }
   try {
-    return /docker|containerd|kubepods|libpod/i.test(nodeFs.readFileSync("/proc/1/cgroup", "utf8"));
+    return /docker|containerd|kubepods|libpod/i.test(NodeFS.readFileSync("/proc/1/cgroup", "utf8"));
   } catch {
     return false;
   }
@@ -272,7 +271,7 @@ function isLikelyRunningInsideContainer(): boolean {
 function currentContainerNameCandidates(): ReadonlyArray<string> {
   return [
     trimToUndefined(process.env.HOSTNAME),
-    trimToUndefined(nodeOs.hostname()),
+    trimToUndefined(NodeOS.hostname()),
     trimToUndefined(process.env.CONTAINER_NAME),
   ].filter(
     (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
@@ -327,28 +326,28 @@ function parseDurationMs(value: string | undefined, fallback: number): number {
 }
 
 function copyPathSync(sourcePath: string, targetPath: string): void {
-  const stat = nodeFs.statSync(sourcePath);
-  nodeFs.mkdirSync(nodePath.dirname(targetPath), { recursive: true });
+  const stat = NodeFS.statSync(sourcePath);
+  NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true });
 
   if (stat.isDirectory()) {
-    nodeFs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
+    NodeFS.cpSync(sourcePath, targetPath, { recursive: true, force: true });
     return;
   }
 
-  nodeFs.copyFileSync(sourcePath, targetPath);
+  NodeFS.copyFileSync(sourcePath, targetPath);
 }
 
 function syncRuntimeAuthEntry(entry: RuntimeAuthSyncEntry): void {
-  if (!nodeFs.existsSync(entry.sourcePath)) {
+  if (!NodeFS.existsSync(entry.sourcePath)) {
     return;
   }
 
-  if (entry.mode === "if-missing" && nodeFs.existsSync(entry.targetPath)) {
+  if (entry.mode === "if-missing" && NodeFS.existsSync(entry.targetPath)) {
     return;
   }
 
   if (entry.mode === "overwrite") {
-    nodeFs.rmSync(entry.targetPath, { recursive: true, force: true });
+    NodeFS.rmSync(entry.targetPath, { recursive: true, force: true });
   }
 
   copyPathSync(entry.sourcePath, entry.targetPath);
@@ -2217,7 +2216,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeSemaphore = yield* Semaphore.make(1);
   const runtimeImageBuildSemaphore = yield* Semaphore.make(1);
   const events = yield* PubSub.unbounded<ThreadRuntimeEvent>();
-  const threadRuntimesDir = nodePath.join(stateDir, "thread-runtimes");
+  const threadRuntimesDir = NodePath.join(stateDir, "thread-runtimes");
   const statePath = path.join(stateDir, "thread-runtimes.json");
   const runtimeImageBuildStatePath = path.join(stateDir, "runtime-image-build.json");
   const dockerBinaryPath = options?.dockerBinaryPath ?? DEFAULT_DOCKER_BINARY_PATH;
@@ -2466,12 +2465,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const configuredCodexAuthPath =
         trimToUndefined(settings.providers.codex.homePath) ??
         trimToUndefined(process.env.CODEX_HOME) ??
-        nodePath.join(nodeOs.homedir(), ".codex");
-      const hostClaudeAuthPath = nodePath.join(nodeOs.homedir(), ".claude");
-      const hostClaudeAuthJsonPath = nodePath.join(nodeOs.homedir(), ".claude.json");
-      const hostOpenCodeDataPath = nodePath.join(
+        NodePath.join(NodeOS.homedir(), ".codex");
+      const hostClaudeAuthPath = NodePath.join(NodeOS.homedir(), ".claude");
+      const hostClaudeAuthJsonPath = NodePath.join(NodeOS.homedir(), ".claude.json");
+      const hostOpenCodeDataPath = NodePath.join(
         trimToUndefined(process.env.XDG_DATA_HOME) ??
-          nodePath.join(nodeOs.homedir(), ".local", "share"),
+          NodePath.join(NodeOS.homedir(), ".local", "share"),
         "opencode",
       );
       const sshAuthSockPath = trimToUndefined(process.env.SSH_AUTH_SOCK);
@@ -2604,12 +2603,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
 
     if (persisted) {
-      const verified = yield* sessionStore.value.verify(persisted.token).pipe(
-        Effect.catchTags({
-          SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
-          SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
-        }),
-      );
+      const verified = yield* sessionStore.value
+        .verify(persisted.token)
+        .pipe(Effect.orElseSucceed(() => undefined));
       if (
         verified &&
         verified.subject === expectedSubject &&
@@ -2622,7 +2618,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       if (verified) {
         yield* sessionStore.value
           .revoke(verified.sessionId)
-          .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
+          .pipe(Effect.orElseSucceed(() => false));
       }
     }
 
@@ -2670,19 +2666,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       return;
     }
 
-    const verified = yield* sessionStore.value.verify(persisted.token).pipe(
-      Effect.catchTags({
-        SessionCredentialInvalidError: () => Effect.as(Effect.void, undefined),
-        SessionCredentialInternalError: () => Effect.as(Effect.void, undefined),
-      }),
-    );
+    const verified = yield* sessionStore.value
+      .verify(persisted.token)
+      .pipe(Effect.orElseSucceed(() => undefined));
     if (!verified || verified.subject !== `thread-runtime:${runtime.threadId}`) {
       return;
     }
 
-    yield* sessionStore.value
-      .revoke(verified.sessionId)
-      .pipe(Effect.catchTag("SessionCredentialInternalError", () => Effect.succeed(false)));
+    yield* sessionStore.value.revoke(verified.sessionId).pipe(Effect.orElseSucceed(() => false));
   });
 
   const resolveHostGatewayRuntimeServerUrl = () =>
@@ -2833,8 +2824,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   ) {
     const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
     const homelabBinDir = runtimeHomelabBinPath(runtimeHomePath);
-    const homelabCliPath = nodePath.join(homelabBinDir, "homelab");
-    const homelabSecretToFilePath = nodePath.join(homelabBinDir, "homelab-secret-to-file");
+    const homelabCliPath = NodePath.join(homelabBinDir, "homelab");
+    const homelabSecretToFilePath = NodePath.join(homelabBinDir, "homelab-secret-to-file");
 
     yield* fileSystem.makeDirectory(homelabBinDir, { recursive: true }).pipe(
       Effect.mapError(
@@ -2871,8 +2862,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const writeRuntimeInstructionFiles = Effect.fn("threadRuntime.writeRuntimeInstructionFiles")(
     function* (runtime: ThreadRuntimeDescriptor) {
       const workspaceRoot = managedWorkspacePath(threadRuntimesDir, runtimeStorageIdFor(runtime));
-      const agentsPath = nodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
-      const claudePath = nodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
+      const agentsPath = NodePath.join(workspaceRoot, RUNTIME_AGENTS_FILENAME);
+      const claudePath = NodePath.join(workspaceRoot, RUNTIME_CLAUDE_FILENAME);
       const kind = resolveRuntimeInstructionKind(runtime);
 
       const writeInstructionFile = (
@@ -2937,22 +2928,22 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         const targetHome = homePathForThread(threadRuntimesDir, targetStorageId);
         const sourceWorkspace = managedWorkspacePath(threadRuntimesDir, sourceStorageId);
         const sourceHome = homePathForThread(threadRuntimesDir, sourceStorageId);
-        if (nodeFs.existsSync(targetWorkspace) || !nodeFs.existsSync(sourceWorkspace)) {
+        if (NodeFS.existsSync(targetWorkspace) || !NodeFS.existsSync(sourceWorkspace)) {
           return;
         }
-        nodeFs.mkdirSync(nodePath.dirname(targetWorkspace), { recursive: true });
-        nodeFs.cpSync(sourceWorkspace, targetWorkspace, { recursive: true });
-        if (nodeFs.existsSync(sourceHome)) {
-          nodeFs.cpSync(sourceHome, targetHome, {
+        NodeFS.mkdirSync(NodePath.dirname(targetWorkspace), { recursive: true });
+        NodeFS.cpSync(sourceWorkspace, targetWorkspace, { recursive: true });
+        if (NodeFS.existsSync(sourceHome)) {
+          NodeFS.cpSync(sourceHome, targetHome, {
             recursive: true,
             filter: (source) => {
-              const relative = nodePath.relative(sourceHome, source);
+              const relative = NodePath.relative(sourceHome, source);
               if (relative === "") {
                 return true;
               }
               return !SEED_EXCLUDED_HOME_RELATIVE_PATHS.some(
                 (excluded) =>
-                  relative === excluded || relative.startsWith(`${excluded}${nodePath.sep}`),
+                  relative === excluded || relative.startsWith(`${excluded}${NodePath.sep}`),
               );
             },
           });
@@ -3038,14 +3029,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ? standaloneProjectShortTitle()
       : "Project Runtime";
     for (const file of renderHomelabBaselineViewFiles(baselineTitle)) {
-      const targetPath = nodePath.join(workspaceRoot, file.relativePath);
+      const targetPath = NodePath.join(workspaceRoot, file.relativePath);
       const alreadyExists = yield* fileSystem
         .exists(targetPath)
         .pipe(Effect.orElseSucceed(() => false));
       if (alreadyExists) {
         continue;
       }
-      yield* fileSystem.makeDirectory(nodePath.dirname(targetPath), { recursive: true }).pipe(
+      yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true }).pipe(
         Effect.mapError(
           (cause) =>
             new ThreadRuntimeError({
@@ -3268,7 +3259,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       return;
     }
 
-    if (!expectedFingerprint || !nodeFs.existsSync(localRuntimeImageBuildSpec.dockerfilePath)) {
+    if (!expectedFingerprint || !NodeFS.existsSync(localRuntimeImageBuildSpec.dockerfilePath)) {
       return yield* new ThreadRuntimeError({
         message:
           `Local runtime image '${runtime.imageRef}' is configured but the Docker build context is incomplete. ` +

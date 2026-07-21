@@ -67,7 +67,7 @@ See [NOTICE.md](./NOTICE.md) for attribution details.
 
 ### Requirements
 
-- Bun `^1.3.9`
+- pnpm `^11.10.0`
 - Node `^24.13.1`
 - Docker
 - At least one authenticated provider on the host:
@@ -77,19 +77,19 @@ See [NOTICE.md](./NOTICE.md) for attribution details.
 ### Start
 
 ```bash
-bun install
-bun run dev
+pnpm install
+pnpm run dev
 ```
 
 ### Validation
 
 ```bash
-bun fmt
-bun lint
-bun typecheck
+pnpm fmt
+pnpm lint
+pnpm typecheck
 ```
 
-Use `bun run test` for tests. Do not use `bun test`.
+Use `pnpm run test` for tests.
 
 ## Runtime Notes
 

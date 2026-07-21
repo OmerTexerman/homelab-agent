@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import nodePath from "node:path";
-
+import * as NodePath from "node:path";
 import type { HomelabSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -80,28 +79,28 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
   input: HomelabSkillsViewInput,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const skillsDir = nodePath.join(input.workspaceRoot, ".homelab", "skills");
-  const claudeSkillsDir = nodePath.join(input.homeRoot, ".claude", "skills");
+  const skillsDir = NodePath.join(input.workspaceRoot, ".homelab", "skills");
+  const claudeSkillsDir = NodePath.join(input.homeRoot, ".claude", "skills");
 
   const expectedDirs = new Set(input.skills.map((skill) => safeSkillSegment(skill.name)));
 
   yield* fileSystem.makeDirectory(skillsDir, { recursive: true });
-  yield* fileSystem.writeFileString(nodePath.join(skillsDir, "README.md"), renderSkillsReadme());
+  yield* fileSystem.writeFileString(NodePath.join(skillsDir, "README.md"), renderSkillsReadme());
   yield* fileSystem.writeFileString(
-    nodePath.join(skillsDir, "index.jsonl"),
+    NodePath.join(skillsDir, "index.jsonl"),
     renderSkillsIndex(input.skills),
   );
 
   for (const skill of input.skills) {
     const segment = safeSkillSegment(skill.name);
     const markdown = renderSkillMarkdown(skill);
-    const workspaceSkillDir = nodePath.join(skillsDir, segment);
+    const workspaceSkillDir = NodePath.join(skillsDir, segment);
     yield* fileSystem.makeDirectory(workspaceSkillDir, { recursive: true });
-    yield* fileSystem.writeFileString(nodePath.join(workspaceSkillDir, "SKILL.md"), markdown);
+    yield* fileSystem.writeFileString(NodePath.join(workspaceSkillDir, "SKILL.md"), markdown);
 
-    const claudeSkillDir = nodePath.join(claudeSkillsDir, segment);
+    const claudeSkillDir = NodePath.join(claudeSkillsDir, segment);
     yield* fileSystem.makeDirectory(claudeSkillDir, { recursive: true });
-    yield* fileSystem.writeFileString(nodePath.join(claudeSkillDir, "SKILL.md"), markdown);
+    yield* fileSystem.writeFileString(NodePath.join(claudeSkillDir, "SKILL.md"), markdown);
   }
 
   // Reconcile the fully generated workspace view: prune skill dirs that no longer exist.
@@ -114,7 +113,7 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
     }
     if (!expectedDirs.has(entry)) {
       yield* fileSystem
-        .remove(nodePath.join(skillsDir, entry), { recursive: true })
+        .remove(NodePath.join(skillsDir, entry), { recursive: true })
         .pipe(Effect.orElseSucceed(() => undefined));
     }
   }

@@ -98,14 +98,16 @@ export function buildProjectActionItems(input: {
   additionalSearchTerms?: ReadonlyArray<string>;
   icon: (project: Project) => ReactNode;
   runProject: (project: Project) => Promise<void>;
+  shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.name, project.cwd, ...(input.additionalSearchTerms ?? [])],
-    title: project.name,
+    searchTerms: [project.title, project.workspaceRoot, ...(input.additionalSearchTerms ?? [])],
+    title: project.title,
     description: input.description ?? HOMELAB_PRODUCT_COPY.project.searchDescription,
     icon: input.icon(project),
+    ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
     run: async () => {
       await input.runProject(project);
     },
@@ -116,7 +118,7 @@ export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"
 > & {
-  updatedAt?: string | undefined;
+  updatedAt: string;
   latestUserMessageAt?: string | null;
 };
 

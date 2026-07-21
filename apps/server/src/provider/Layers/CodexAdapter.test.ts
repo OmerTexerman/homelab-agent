@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   CodexSettings,
@@ -84,10 +84,10 @@ function makeThreadRuntimeLaunchContext(input: {
       },
     },
     hostRuntimePath: input.baseDir,
-    hostWorkspacePath: path.join(input.baseDir, "workspace"),
-    hostHomePath: path.join(input.baseDir, "home"),
-    hostBinDir: path.join(input.baseDir, "bin"),
-    shellWrapperPath: path.join(input.baseDir, "bin", "runtime-shell"),
+    hostWorkspacePath: NodePath.join(input.baseDir, "workspace"),
+    hostHomePath: NodePath.join(input.baseDir, "home"),
+    hostBinDir: NodePath.join(input.baseDir, "bin"),
+    shellWrapperPath: NodePath.join(input.baseDir, "bin", "runtime-shell"),
   };
 }
 
@@ -301,8 +301,8 @@ validationLayer("CodexAdapterLive validation", (it) => {
         })
         .pipe(Effect.result);
 
-      assert.equal(result._tag, "Failure");
-      assert.deepStrictEqual(
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.deepStrictEqual(
         result.failure,
         new ProviderAdapterValidationError({
           provider: ProviderDriverKind.make("codex"),
@@ -310,7 +310,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
           issue: "Expected provider 'codex' but received 'claudeAgent'.",
         }),
       );
-      assert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
   it.effect("maps codex model options before starting a session", () =>
@@ -322,17 +322,18 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: ProviderDriverKind.make("codex"),
         threadId: asThreadId("thread-1"),
         modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
-          { id: "fastMode", value: true },
+          { id: "serviceTier", value: "priority" },
         ]),
         runtimeMode: "full-access",
       });
 
-      assert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
         binaryPath: "codex",
         cwd: process.cwd(),
+        launchArgs: "",
         model: "gpt-5.3-codex",
         providerInstanceId: ProviderInstanceId.make("codex"),
-        serviceTier: "fast",
+        serviceTier: "priority",
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
@@ -340,11 +341,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
   );
 
   it.effect("starts Codex through the project runtime wrapper when launch context exists", () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-runtime-wrapper-"));
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-runtime-wrapper-"));
     const threadId = asThreadId("thread-runtime-wrapper");
     const launchContext = makeThreadRuntimeLaunchContext({ baseDir, threadId });
-    fs.mkdirSync(launchContext.hostBinDir, { recursive: true });
-    fs.writeFileSync(path.join(launchContext.hostBinDir, "codex"), "#!/bin/sh\n");
+    NodeFS.mkdirSync(launchContext.hostBinDir, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(launchContext.hostBinDir, "codex"), "#!/bin/sh\n");
     const runtimeFactory = makeRuntimeFactory();
     const layer = Layer.effect(
       CodexAdapter,
@@ -375,15 +376,15 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
       const runtimeInput = runtimeFactory.factory.mock.calls[0]?.[0];
 
-      assert.ok(runtimeInput);
-      assert.equal(session.cwd, "/workspace");
-      assert.equal(runtimeInput.binaryPath, path.join(launchContext.hostBinDir, "codex"));
-      assert.equal(runtimeInput.cwd, "/workspace");
-      assert.equal(runtimeInput.processCwd, launchContext.hostWorkspacePath);
-      assert.equal("homePath" in runtimeInput, false);
+      NodeAssert.ok(runtimeInput);
+      NodeAssert.equal(session.cwd, "/workspace");
+      NodeAssert.equal(runtimeInput.binaryPath, NodePath.join(launchContext.hostBinDir, "codex"));
+      NodeAssert.equal(runtimeInput.cwd, "/workspace");
+      NodeAssert.equal(runtimeInput.processCwd, launchContext.hostWorkspacePath);
+      NodeAssert.equal("homePath" in runtimeInput, false);
     }).pipe(
       Effect.provide(layer),
-      Effect.ensuring(Effect.sync(() => fs.rmSync(baseDir, { recursive: true, force: true }))),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
     );
   });
 });
@@ -418,10 +419,10 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         })
         .pipe(Effect.result);
 
-      assert.equal(result._tag, "Failure");
-      assert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
-      assert.equal(result.failure.provider, "codex");
-      assert.equal(result.failure.threadId, "sess-missing");
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(result.failure._tag, "ProviderAdapterSessionNotFoundError");
+      NodeAssert.equal(result.failure.provider, "codex");
+      NodeAssert.equal(result.failure.threadId, "sess-missing");
     }),
   );
 
@@ -434,7 +435,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         runtimeMode: "full-access",
       });
       const runtime = sessionRuntimeFactory.lastRuntime;
-      assert.ok(runtime);
+      NodeAssert.ok(runtime);
       runtime.sendTurnImpl.mockClear();
 
       yield* Effect.ignore(
@@ -443,20 +444,83 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           input: "hello",
           modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
             { id: "reasoningEffort", value: "high" },
-            { id: "fastMode", value: true },
+            { id: "serviceTier", value: "priority" },
           ]),
           attachments: [],
         }),
       );
 
-      assert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
+      NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
         input: "hello",
         model: "gpt-5.3-codex",
         effort: "high",
-        serviceTier: "fast",
+        serviceTier: "priority",
       });
     }),
   );
+
+  it.effect("passes configured launch args into the session runtime", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({ launchArgs: "--strict-config --enable foo" });
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-launch-args"),
+        runtimeMode: "full-access",
+      });
+
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable foo");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for the session runtime", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({ launchArgs: "--enable settings-feature" });
+        return yield* makeCodexAdapter(codexConfig, {
+          environment: { T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --enable env-feature " },
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-launch-args-env"),
+        runtimeMode: "full-access",
+      });
+
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable env-feature");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("maps codex model options for the adapter's bound custom instance id", () => {
     const customInstanceId = ProviderInstanceId.make("codex_personal");
@@ -485,7 +549,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         runtimeMode: "full-access",
       });
       const runtime = customRuntimeFactory.lastRuntime;
-      assert.ok(runtime);
+      NodeAssert.ok(runtime);
       runtime.sendTurnImpl.mockClear();
 
       yield* Effect.ignore(
@@ -497,18 +561,18 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
             "gpt-5.3-codex",
             [
               { id: "reasoningEffort", value: "high" },
-              { id: "fastMode", value: true },
+              { id: "serviceTier", value: "flex" },
             ],
           ),
           attachments: [],
         }),
       );
 
-      assert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
+      NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
         input: "hello",
         model: "gpt-5.3-codex",
         effort: "high",
-        serviceTier: "fast",
+        serviceTier: "flex",
       });
     }).pipe(Effect.provide(customLayer));
   });
@@ -541,7 +605,7 @@ function startLifecycleRuntime() {
       runtimeMode: "full-access",
     });
     const runtime = lifecycleRuntimeFactory.lastRuntime;
-    assert.ok(runtime);
+    NodeAssert.ok(runtime);
     return { adapter, runtime };
   });
 }
@@ -576,17 +640,75 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "item.completed");
+      NodeAssert.equal(firstEvent.value.type, "item.completed");
       if (firstEvent.value.type !== "item.completed") {
         return;
       }
-      assert.equal(firstEvent.value.itemId, "msg_1");
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      NodeAssert.equal(firstEvent.value.itemId, "msg_1");
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("labels MCP lifecycle entries with server and tool names", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-mcp-complete"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_1",
+            server: "t3-code",
+            tool: "preview_status",
+            arguments: {},
+            durationMs: 12,
+            error: null,
+            result: { content: [{ type: "text", text: "attached" }] },
+            status: "completed",
+          },
+        },
+      });
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.payload.itemType, "mcp_tool_call");
+      NodeAssert.equal(firstEvent.value.payload.title, "t3-code · preview_status");
+      NodeAssert.deepStrictEqual(firstEvent.value.payload.data, {
+        completedAtMs: 1_778_000_000_000,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "mcpToolCall",
+          id: "mcp_1",
+          server: "t3-code",
+          tool: "preview_status",
+          arguments: {},
+          durationMs: 12,
+          error: null,
+          result: { content: [{ type: "text", text: "attached" }] },
+          status: "completed",
+        },
+      });
     }),
   );
 
@@ -619,16 +741,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "turn.proposed.completed");
+      NodeAssert.equal(firstEvent.value.type, "turn.proposed.completed");
       if (firstEvent.value.type !== "turn.proposed.completed") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.planMarkdown, "## Final plan\n\n- one\n- two");
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.planMarkdown, "## Final plan\n\n- one\n- two");
     }),
   );
 
@@ -656,16 +778,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "turn.proposed.delta");
+      NodeAssert.equal(firstEvent.value.type, "turn.proposed.delta");
       if (firstEvent.value.type !== "turn.proposed.delta") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.delta, "## Final plan");
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.delta, "## Final plan");
     }),
   );
 
@@ -741,12 +863,15 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       } satisfies ProviderEvent);
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
-      assert.deepEqual(
+      NodeAssert.deepEqual(
         events.map((event) => event.type),
         ["item.started", "item.completed", "turn.completed"],
       );
-      assert.equal(events[1]?.eventId, "evt-turn-completed-before-command:item-completed:cmd_1");
-      assert.equal(events[1]?.itemId, "cmd_1");
+      NodeAssert.equal(
+        events[1]?.eventId,
+        "evt-turn-completed-before-command:item-completed:cmd_1",
+      );
+      NodeAssert.equal(events[1]?.itemId, "cmd_1");
     }),
   );
 
@@ -768,16 +893,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "session.exited");
+      NodeAssert.equal(firstEvent.value.type, "session.exited");
       if (firstEvent.value.type !== "session.exited") {
         return;
       }
-      assert.equal(firstEvent.value.threadId, "thread-1");
-      assert.equal(firstEvent.value.payload.reason, "Session stopped");
+      NodeAssert.equal(firstEvent.value.threadId, "thread-1");
+      NodeAssert.equal(firstEvent.value.payload.reason, "Session stopped");
     }),
   );
 
@@ -806,16 +931,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "runtime.warning");
+      NodeAssert.equal(firstEvent.value.type, "runtime.warning");
       if (firstEvent.value.type !== "runtime.warning") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
     }),
   );
 
@@ -837,16 +962,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "runtime.warning");
+      NodeAssert.equal(firstEvent.value.type, "runtime.warning");
       if (firstEvent.value.type !== "runtime.warning") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(
         firstEvent.value.payload.message,
         "The filename or extension is too long. (os error 206)",
       );
@@ -874,16 +999,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "thread.realtime.started");
+      NodeAssert.equal(firstEvent.value.type, "thread.realtime.started");
       if (firstEvent.value.type !== "thread.realtime.started") {
         return;
       }
-      assert.equal(firstEvent.value.threadId, "thread-1");
-      assert.equal(firstEvent.value.payload.realtimeSessionId, "realtime-session-1");
+      NodeAssert.equal(firstEvent.value.threadId, "thread-1");
+      NodeAssert.equal(firstEvent.value.payload.realtimeSessionId, "realtime-session-1");
     }),
   );
 
@@ -906,17 +1031,17 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "runtime.error");
+      NodeAssert.equal(firstEvent.value.type, "runtime.error");
       if (firstEvent.value.type !== "runtime.error") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.class, "provider_error");
-      assert.equal(
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.class, "provider_error");
+      NodeAssert.equal(
         firstEvent.value.payload.message,
         "2026-03-31T18:14:06.833399Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 503 Service Unavailable, url: wss://chatgpt.com/backend-api/codex/responses",
       );
@@ -946,15 +1071,15 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "request.resolved");
+      NodeAssert.equal(firstEvent.value.type, "request.resolved");
       if (firstEvent.value.type !== "request.resolved") {
         return;
       }
-      assert.equal(firstEvent.value.payload.requestType, "command_execution_approval");
+      NodeAssert.equal(firstEvent.value.payload.requestType, "command_execution_approval");
     }),
   );
 
@@ -981,15 +1106,15 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "request.resolved");
+      NodeAssert.equal(firstEvent.value.type, "request.resolved");
       if (firstEvent.value.type !== "request.resolved") {
         return;
       }
-      assert.equal(firstEvent.value.payload.requestType, "file_read_approval");
+      NodeAssert.equal(firstEvent.value.payload.requestType, "file_read_approval");
     }),
   );
 
@@ -1017,15 +1142,15 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "user-input.resolved");
+      NodeAssert.equal(firstEvent.value.type, "user-input.resolved");
       if (firstEvent.value.type !== "user-input.resolved") {
         return;
       }
-      assert.deepEqual(firstEvent.value.payload.answers, {
+      NodeAssert.deepEqual(firstEvent.value.payload.answers, {
         scope: [],
       });
     }),
@@ -1056,20 +1181,20 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       yield* runtime.emit(event);
       const events = Array.from(yield* Fiber.join(eventsFiber));
 
-      assert.equal(events.length, 2);
+      NodeAssert.equal(events.length, 2);
 
       const firstEvent = events[0];
       const secondEvent = events[1];
 
-      assert.equal(firstEvent?.type, "session.state.changed");
+      NodeAssert.equal(firstEvent?.type, "session.state.changed");
       if (firstEvent?.type === "session.state.changed") {
-        assert.equal(firstEvent.payload.state, "error");
-        assert.equal(firstEvent.payload.reason, "Sandbox setup failed");
+        NodeAssert.equal(firstEvent.payload.state, "error");
+        NodeAssert.equal(firstEvent.payload.reason, "Sandbox setup failed");
       }
 
-      assert.equal(secondEvent?.type, "runtime.warning");
+      NodeAssert.equal(secondEvent?.type, "runtime.warning");
       if (secondEvent?.type === "runtime.warning") {
-        assert.equal(secondEvent.payload.message, "Sandbox setup failed");
+        NodeAssert.equal(secondEvent.payload.message, "Sandbox setup failed");
       }
     }),
   );
@@ -1128,17 +1253,17 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         } satisfies ProviderEvent);
 
         const events = Array.from(yield* Fiber.join(eventsFiber));
-        assert.equal(events[0]?.type, "user-input.requested");
+        NodeAssert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
-          assert.equal(events[0].requestId, "req-user-input-1");
-          assert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
-          assert.equal(events[0].payload.questions[0]?.multiSelect, false);
+          NodeAssert.equal(events[0].requestId, "req-user-input-1");
+          NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
+          NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);
         }
 
-        assert.equal(events[1]?.type, "user-input.resolved");
+        NodeAssert.equal(events[1]?.type, "user-input.resolved");
         if (events[1]?.type === "user-input.resolved") {
-          assert.equal(events[1].requestId, "req-user-input-1");
-          assert.deepEqual(events[1].payload.answers, {
+          NodeAssert.equal(events[1].requestId, "req-user-input-1");
+          NodeAssert.deepEqual(events[1].payload.answers, {
             sandbox_mode: "workspace-write",
           });
         }
@@ -1182,16 +1307,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       } satisfies ProviderEvent);
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
-      assert.equal(firstEvent._tag, "Some");
+      NodeAssert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") {
         return;
       }
-      assert.equal(firstEvent.value.type, "thread.token-usage.updated");
+      NodeAssert.equal(firstEvent.value.type, "thread.token-usage.updated");
       if (firstEvent.value.type !== "thread.token-usage.updated") {
         return;
       }
 
-      assert.deepEqual(firstEvent.value.payload.usage, {
+      NodeAssert.deepEqual(firstEvent.value.payload.usage, {
         usedTokens: 126,
         totalProcessedTokens: 11_839,
         maxTokens: 258_400,
@@ -1241,15 +1366,15 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
       });
 
       const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
-      assert.ok(runtime);
+      NodeAssert.ok(runtime);
 
       yield* adapter.stopSession(asThreadId("thread-stop"));
 
-      assert.equal(runtime.closeImpl.mock.calls.length, 1);
-      assert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+      NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [
         asThreadId("thread-stop"),
       ]);
-      assert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
+      NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
     }),
   );
 });
@@ -1286,20 +1411,22 @@ scopedFailureLayer("CodexAdapterLive scoped startup failure", (it) => {
         })
         .pipe(Effect.result);
 
-      assert.equal(result._tag, "Failure");
-      assert.equal(result.failure._tag, "ProviderAdapterProcessError");
-      assert.deepStrictEqual(scopedFailureRuntimeFactory.releasedThreadIds, [
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(result.failure._tag, "ProviderAdapterProcessError");
+      NodeAssert.deepStrictEqual(scopedFailureRuntimeFactory.releasedThreadIds, [
         asThreadId("thread-fail"),
       ]);
-      assert.equal(yield* adapter.hasSession(asThreadId("thread-fail")), false);
+      NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-fail")), false);
     }),
   );
 });
 
 it.effect("flushes managed native logs when the adapter layer shuts down", () =>
   Effect.gen(function* () {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-codex-adapter-native-log-"));
-    const basePath = path.join(tempDir, "provider-native.ndjson");
+    const tempDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-codex-adapter-native-log-"),
+    );
+    const basePath = NodePath.join(tempDir, "provider-native.ndjson");
     const runtimeFactory = makeRuntimeFactory();
     const scope = yield* Scope.make("sequential");
     let scopeClosed = false;
@@ -1330,7 +1457,7 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
       });
 
       const runtime = runtimeFactory.lastRuntime;
-      assert.ok(runtime);
+      NodeAssert.ok(runtime);
 
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
       yield* runtime.emit({
@@ -1347,15 +1474,15 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
       yield* Scope.close(scope, Exit.void);
       scopeClosed = true;
 
-      const threadLogPath = path.join(tempDir, "thread-logger.log");
-      assert.equal(fs.existsSync(threadLogPath), true);
-      const contents = fs.readFileSync(threadLogPath, "utf8");
-      assert.match(contents, /NTIVE: .*"message":"native flush test"/);
+      const threadLogPath = NodePath.join(tempDir, "thread-logger.log");
+      NodeAssert.equal(NodeFS.existsSync(threadLogPath), true);
+      const contents = NodeFS.readFileSync(threadLogPath, "utf8");
+      NodeAssert.match(contents, /NTIVE: .*"message":"native flush test"/);
     } finally {
       if (!scopeClosed) {
         yield* Scope.close(scope, Exit.void);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      NodeFS.rmSync(tempDir, { recursive: true, force: true });
     }
   }),
 );

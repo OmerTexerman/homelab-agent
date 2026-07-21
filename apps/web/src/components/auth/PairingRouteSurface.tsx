@@ -1,8 +1,9 @@
 import type { AuthSessionState } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
-import { addSavedEnvironment } from "../../environments/runtime";
+import { connectPairing } from "../../connection/onboarding";
 import {
   peekPairingTokenFromUrl,
   stripPairingTokenFromUrl,
@@ -12,6 +13,7 @@ import { readHostedPairingRequest } from "../../hostedPairing";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 export function PairingPendingSurface() {
   return (
@@ -151,6 +153,9 @@ export function PairingRouteSurface({
 }
 
 export function HostedPairingRouteSurface() {
+  const connectPairingEnvironment = useAtomCommand(connectPairing, {
+    reportFailure: false,
+  });
   const hostedPairingRequestRef = useRef(readHostedPairingRequest());
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(() =>
     hostedPairingRequestRef.current ? "pairing" : "error",
@@ -186,23 +191,23 @@ export function HostedPairingRouteSurface() {
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
-    try {
-      const record = await addSavedEnvironment({
-        label: request.label,
-        host: request.host,
-        pairingCode: request.token,
-      });
+    const result = await connectPairingEnvironment({
+      host: request.host,
+      pairingCode: request.token,
+    });
+    if (result._tag === "Success") {
       setStatus("paired");
-      setMessage(`${record.label} is saved in this browser.`);
-    } catch (error) {
-      tokenSubmittedRef.current = false;
-      setStatus("error");
-      setCanRetry(true);
-      setMessage(
-        `${errorMessageFromUnknown(error)} ${HOMELAB_PRODUCT_COPY.authPairing.hostedAcceptedTokenRetry}`,
-      );
+      setMessage(`${request.label || "The environment"} is saved in this browser.`);
+      return;
     }
-  }, []);
+
+    tokenSubmittedRef.current = false;
+    setStatus("error");
+    setCanRetry(true);
+    setMessage(
+      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} ${HOMELAB_PRODUCT_COPY.authPairing.hostedAcceptedTokenRetry}`,
+    );
+  }, [connectPairingEnvironment]);
 
   useEffect(() => {
     if (submitAttemptedRef.current) {

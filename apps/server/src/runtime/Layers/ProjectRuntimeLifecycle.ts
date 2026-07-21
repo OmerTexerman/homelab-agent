@@ -1,8 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off globalDate:off globalDateInEffect:off globalRandom:off
-import nodeFs from "node:fs";
-import nodePath from "node:path";
-import nodeCrypto from "node:crypto";
-
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeCrypto from "node:crypto";
 import {
   ProjectRuntimeError,
   ProjectRuntimeLifecycleState,
@@ -31,7 +30,7 @@ import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { TerminalManager } from "../../terminal/Services/Manager.ts";
+import { TerminalManager } from "../../terminal/Manager.ts";
 import {
   HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
   scopeHomelabContextViewToThread,
@@ -137,7 +136,7 @@ function snapshotRootForRuntime(
   runtimeId: RuntimeSessionIdModel,
   snapshotId: string,
 ): string {
-  return nodePath.join(
+  return NodePath.join(
     stateDir,
     SNAPSHOT_STATE_DIRNAME,
     encodeRuntimeSegment(String(runtimeId)),
@@ -150,7 +149,7 @@ function snapshotArchivePathFor(input: {
   readonly runtimeId: RuntimeSessionIdModel;
   readonly snapshotId: string;
 }): string {
-  return nodePath.join(
+  return NodePath.join(
     snapshotRootForRuntime(input.stateDir, input.runtimeId, input.snapshotId),
     SNAPSHOT_ARCHIVE_DIRNAME,
   );
@@ -163,7 +162,7 @@ function snapshotArchiveExists(input: {
 }): boolean {
   const archivePath = snapshotArchivePathFor(input);
   try {
-    return nodeFs.statSync(archivePath).isDirectory();
+    return NodeFS.statSync(archivePath).isDirectory();
   } catch {
     return false;
   }
@@ -175,7 +174,7 @@ function normalizeSnapshotRelativePath(relativePath: string): string {
 
 function shouldExcludeSnapshotPath(runtimeRootPath: string, sourcePath: string): boolean {
   const relativePath = normalizeSnapshotRelativePath(
-    nodePath.relative(runtimeRootPath, sourcePath),
+    NodePath.relative(runtimeRootPath, sourcePath),
   );
   return SNAPSHOT_EXCLUDED_RELATIVE_PATHS.some(
     (excludedPath) => relativePath === excludedPath || relativePath.startsWith(`${excludedPath}/`),
@@ -188,11 +187,11 @@ function assertManagedRuntimeRoot(input: {
   readonly projectId: ProjectId;
   readonly runtimeId: RuntimeSessionIdModel;
 }) {
-  const managedRuntimeParent = nodePath.resolve(input.stateDir, "thread-runtimes");
-  const runtimeRoot = nodePath.resolve(input.runtimeRootPath);
+  const managedRuntimeParent = NodePath.resolve(input.stateDir, "thread-runtimes");
+  const runtimeRoot = NodePath.resolve(input.runtimeRootPath);
   if (
     runtimeRoot === managedRuntimeParent ||
-    !runtimeRoot.startsWith(`${managedRuntimeParent}${nodePath.sep}`)
+    !runtimeRoot.startsWith(`${managedRuntimeParent}${NodePath.sep}`)
   ) {
     throw toProjectRuntimeError({
       message: "Refusing to modify runtime state outside the managed runtime directory.",
@@ -213,19 +212,19 @@ function copyRuntimeStateToArchive(input: {
   assertManagedRuntimeRoot(input);
 
   const snapshotRoot = snapshotRootForRuntime(input.stateDir, input.runtimeId, input.snapshotId);
-  const temporarySnapshotRoot = `${snapshotRoot}.tmp-${nodeCrypto.randomUUID()}`;
-  const temporaryArchivePath = nodePath.join(temporarySnapshotRoot, SNAPSHOT_ARCHIVE_DIRNAME);
-  nodeFs.rmSync(temporarySnapshotRoot, { recursive: true, force: true });
-  nodeFs.mkdirSync(temporaryArchivePath, { recursive: true });
+  const temporarySnapshotRoot = `${snapshotRoot}.tmp-${NodeCrypto.randomUUID()}`;
+  const temporaryArchivePath = NodePath.join(temporarySnapshotRoot, SNAPSHOT_ARCHIVE_DIRNAME);
+  NodeFS.rmSync(temporarySnapshotRoot, { recursive: true, force: true });
+  NodeFS.mkdirSync(temporaryArchivePath, { recursive: true });
 
   const includedRoots: Array<(typeof SNAPSHOT_ROOT_NAMES)[number]> = [];
   for (const rootName of SNAPSHOT_ROOT_NAMES) {
-    const sourcePath = nodePath.join(input.runtimeRootPath, rootName);
-    if (!nodeFs.existsSync(sourcePath)) {
+    const sourcePath = NodePath.join(input.runtimeRootPath, rootName);
+    if (!NodeFS.existsSync(sourcePath)) {
       continue;
     }
     includedRoots.push(rootName);
-    nodeFs.cpSync(sourcePath, nodePath.join(temporaryArchivePath, rootName), {
+    NodeFS.cpSync(sourcePath, NodePath.join(temporaryArchivePath, rootName), {
       recursive: true,
       force: true,
       filter: (source) => !shouldExcludeSnapshotPath(input.runtimeRootPath, source),
@@ -242,15 +241,15 @@ function copyRuntimeStateToArchive(input: {
     includedRoots,
     excludedRelativePaths: SNAPSHOT_EXCLUDED_RELATIVE_PATHS,
   };
-  nodeFs.writeFileSync(
-    nodePath.join(temporarySnapshotRoot, SNAPSHOT_MANIFEST_FILENAME),
+  NodeFS.writeFileSync(
+    NodePath.join(temporarySnapshotRoot, SNAPSHOT_MANIFEST_FILENAME),
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
 
-  nodeFs.rmSync(snapshotRoot, { recursive: true, force: true });
-  nodeFs.mkdirSync(nodePath.dirname(snapshotRoot), { recursive: true });
-  nodeFs.renameSync(temporarySnapshotRoot, snapshotRoot);
+  NodeFS.rmSync(snapshotRoot, { recursive: true, force: true });
+  NodeFS.mkdirSync(NodePath.dirname(snapshotRoot), { recursive: true });
+  NodeFS.renameSync(temporarySnapshotRoot, snapshotRoot);
 }
 
 function replaceRuntimeStateFromArchive(input: {
@@ -263,24 +262,24 @@ function replaceRuntimeStateFromArchive(input: {
   assertManagedRuntimeRoot(input);
 
   const archivePath = snapshotArchivePathFor(input);
-  const temporaryRuntimeRoot = `${input.runtimeRootPath}.restore-${nodeCrypto.randomUUID()}`;
-  nodeFs.rmSync(temporaryRuntimeRoot, { recursive: true, force: true });
-  nodeFs.mkdirSync(temporaryRuntimeRoot, { recursive: true });
+  const temporaryRuntimeRoot = `${input.runtimeRootPath}.restore-${NodeCrypto.randomUUID()}`;
+  NodeFS.rmSync(temporaryRuntimeRoot, { recursive: true, force: true });
+  NodeFS.mkdirSync(temporaryRuntimeRoot, { recursive: true });
 
   for (const rootName of SNAPSHOT_ROOT_NAMES) {
-    const sourcePath = nodePath.join(archivePath, rootName);
-    if (!nodeFs.existsSync(sourcePath)) {
+    const sourcePath = NodePath.join(archivePath, rootName);
+    if (!NodeFS.existsSync(sourcePath)) {
       continue;
     }
-    nodeFs.cpSync(sourcePath, nodePath.join(temporaryRuntimeRoot, rootName), {
+    NodeFS.cpSync(sourcePath, NodePath.join(temporaryRuntimeRoot, rootName), {
       recursive: true,
       force: true,
     });
   }
 
-  nodeFs.rmSync(input.runtimeRootPath, { recursive: true, force: true });
-  nodeFs.mkdirSync(nodePath.dirname(input.runtimeRootPath), { recursive: true });
-  nodeFs.renameSync(temporaryRuntimeRoot, input.runtimeRootPath);
+  NodeFS.rmSync(input.runtimeRootPath, { recursive: true, force: true });
+  NodeFS.mkdirSync(NodePath.dirname(input.runtimeRootPath), { recursive: true });
+  NodeFS.renameSync(temporaryRuntimeRoot, input.runtimeRootPath);
 }
 
 function mapThreadRuntimeStatus(
@@ -326,13 +325,13 @@ function removeScratchPath(workspacePath: string, relativePath: string): void {
     return;
   }
 
-  const targetPath = nodePath.resolve(workspacePath, relativePath);
-  const workspaceRoot = nodePath.resolve(workspacePath);
-  if (targetPath !== workspaceRoot && !targetPath.startsWith(`${workspaceRoot}${nodePath.sep}`)) {
+  const targetPath = NodePath.resolve(workspacePath, relativePath);
+  const workspaceRoot = NodePath.resolve(workspacePath);
+  if (targetPath !== workspaceRoot && !targetPath.startsWith(`${workspaceRoot}${NodePath.sep}`)) {
     return;
   }
 
-  nodeFs.rmSync(targetPath, { recursive: true, force: true });
+  NodeFS.rmSync(targetPath, { recursive: true, force: true });
 }
 
 export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
@@ -343,7 +342,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   const threadRuntime = yield* ThreadRuntime;
   const terminalManager = yield* TerminalManager;
   const queue = yield* ProjectRuntimeQueue;
-  const metadataPath = nodePath.join(config.stateDir, "project-runtime-lifecycle.json");
+  const metadataPath = NodePath.join(config.stateDir, "project-runtime-lifecycle.json");
   const writeSemaphore = yield* Semaphore.make(1);
 
   const loadMetadataFromDisk = Effect.gen(function* () {
@@ -986,7 +985,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         }),
       ),
     );
-    const snapshotId = `runtime-snapshot-${nodeCrypto.randomUUID()}`;
+    const snapshotId = `runtime-snapshot-${NodeCrypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
     yield* Effect.try({
       try: () =>
@@ -1197,13 +1196,13 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 48) || "thread";
-    const mergedPath = nodePath.join(
+    const mergedPath = NodePath.join(
       "merged",
       `${threadSlug}-${String(thread.id)
         .slice(-8)
         .replace(/[^a-zA-Z0-9]/g, "")}`,
     );
-    const targetPath = nodePath.join(targetLaunchContext.hostWorkspacePath, mergedPath);
+    const targetPath = NodePath.join(targetLaunchContext.hostWorkspacePath, mergedPath);
 
     // The copy is queued on the project runtime so no provider turn is writing mid-merge.
     yield* queue.run(
@@ -1216,19 +1215,19 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       },
       Effect.try({
         try: () => {
-          if (nodeFs.existsSync(targetPath)) {
+          if (NodeFS.existsSync(targetPath)) {
             throw new Error(`Merge target '${mergedPath}' already exists in the Project Runtime.`);
           }
-          nodeFs.mkdirSync(nodePath.dirname(targetPath), { recursive: true });
-          nodeFs.cpSync(sourceLaunchContext.hostWorkspacePath, targetPath, {
+          NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true });
+          NodeFS.cpSync(sourceLaunchContext.hostWorkspacePath, targetPath, {
             recursive: true,
             force: false,
             filter: (source) => {
-              const relative = nodePath.relative(sourceLaunchContext.hostWorkspacePath, source);
+              const relative = NodePath.relative(sourceLaunchContext.hostWorkspacePath, source);
               if (relative === "") {
                 return true;
               }
-              const [firstSegment] = relative.split(nodePath.sep);
+              const [firstSegment] = relative.split(NodePath.sep);
               return !MERGE_EXCLUDED_WORKSPACE_ENTRIES.has(firstSegment ?? "");
             },
           });

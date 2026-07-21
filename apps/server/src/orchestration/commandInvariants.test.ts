@@ -1,5 +1,4 @@
-// @effect-diagnostics importFromBarrel:off
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   MessageId,
   CommandId,
@@ -21,7 +20,6 @@ import {
   requireNonNegativeInteger,
   requireThread,
   requireThreadAbsent,
-  requireThreadReadyForTurnStart,
 } from "./commandInvariants.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
@@ -194,73 +192,6 @@ describe("commandInvariants", () => {
     ).rejects.toThrow("does not exist");
   });
 
-  it("rejects turn starts when a thread already has a pending user turn", async () => {
-    const pendingTurnReadModel: OrchestrationReadModel = {
-      ...readModel,
-      threads: readModel.threads.map((thread) =>
-        thread.id === ThreadId.make("thread-1")
-          ? {
-              ...thread,
-              messages: [
-                {
-                  id: MessageId.make("msg-pending"),
-                  role: "user",
-                  text: "still pending",
-                  attachments: [],
-                  turnId: null,
-                  streaming: false,
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-            }
-          : thread,
-      ),
-    };
-
-    await expect(
-      Effect.runPromise(
-        requireThreadReadyForTurnStart({
-          readModel: pendingTurnReadModel,
-          command: messageSendCommand,
-          threadId: ThreadId.make("thread-1"),
-        }),
-      ),
-    ).rejects.toThrow("already has a pending user turn");
-  });
-
-  it("rejects turn starts when a thread already has an active running turn", async () => {
-    const runningTurnReadModel: OrchestrationReadModel = {
-      ...readModel,
-      threads: readModel.threads.map((thread) =>
-        thread.id === ThreadId.make("thread-1")
-          ? {
-              ...thread,
-              session: {
-                threadId: ThreadId.make("thread-1"),
-                status: "running",
-                providerName: "codex",
-                runtimeMode: "full-access",
-                activeTurnId: TurnId.make("turn-running"),
-                lastError: null,
-                updatedAt: now,
-              },
-            }
-          : thread,
-      ),
-    };
-
-    await expect(
-      Effect.runPromise(
-        requireThreadReadyForTurnStart({
-          readModel: runningTurnReadModel,
-          command: messageSendCommand,
-          threadId: ThreadId.make("thread-1"),
-        }),
-      ),
-    ).rejects.toThrow("already has an active turn");
-  });
-
   it("treats deleted projects as absent for active command flows", async () => {
     await expect(
       Effect.runPromise(
@@ -308,6 +239,7 @@ describe("commandInvariants", () => {
   });
 
   it("requires missing thread for create flows", async () => {
+    // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
     await Effect.runPromise(
       requireThreadAbsent({
         readModel,
@@ -332,6 +264,7 @@ describe("commandInvariants", () => {
     );
 
     await expect(
+      // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
       Effect.runPromise(
         requireThreadAbsent({
           readModel,
@@ -356,6 +289,7 @@ describe("commandInvariants", () => {
       ),
     ).rejects.toThrow("already exists");
 
+    // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
     await Effect.runPromise(
       requireThreadAbsent({
         readModel,
@@ -382,6 +316,7 @@ describe("commandInvariants", () => {
 
   it("treats deleted threads as absent for active command flows", async () => {
     await expect(
+      // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
       Effect.runPromise(
         requireThread({
           readModel,
@@ -393,6 +328,7 @@ describe("commandInvariants", () => {
   });
 
   it("requires non-negative integers", async () => {
+    // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
     await Effect.runPromise(
       requireNonNegativeInteger({
         commandType: "thread.checkpoint.revert",
@@ -402,6 +338,7 @@ describe("commandInvariants", () => {
     );
 
     await expect(
+      // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- fork legacy test runner; migrate to @effect/vitest it.effect in a follow-up
       Effect.runPromise(
         requireNonNegativeInteger({
           commandType: "thread.checkpoint.revert",

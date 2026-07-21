@@ -1,7 +1,6 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import nodePath from "node:path";
-import { Buffer } from "node:buffer";
-
+import * as NodePath from "node:path";
+import * as NodeBuffer from "node:buffer";
 import type {
   ProviderKind as ProviderKindModel,
   RuntimeMode as RuntimeModeModel,
@@ -172,7 +171,7 @@ export interface ManagedOpenCodeRuntimeServerPlan {
 }
 
 export function encodeRuntimeSegment(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64url");
+  return NodeBuffer.Buffer.from(value, "utf8").toString("base64url");
 }
 
 export function runtimeNameFromRuntimeId(runtimeId: RuntimeSessionIdModel): string {
@@ -254,7 +253,7 @@ export function buildThreadRuntimeDescriptor(
     workspacePath,
     homePath: CONTAINER_HOME_PATH,
     cwd,
-    shell: nodePath.join(
+    shell: NodePath.join(
       runtimeBinDirForThread(input.threadRuntimesDir, storageId),
       SHELL_RUNTIME_WRAPPER,
     ),
@@ -319,51 +318,51 @@ export function toLaunchContext(input: {
 }
 
 export function runtimeCodexAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".codex");
+  return NodePath.join(homePath, ".codex");
 }
 
 export function runtimeClaudeAuthPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude");
+  return NodePath.join(homePath, ".claude");
 }
 
 export function runtimeClaudeAuthJsonPath(homePath: string): string {
-  return nodePath.join(homePath, ".claude.json");
+  return NodePath.join(homePath, ".claude.json");
 }
 
 export function runtimeOpenCodeDataPath(homePath: string): string {
-  return nodePath.join(homePath, ".local", "share", "opencode");
+  return NodePath.join(homePath, ".local", "share", "opencode");
 }
 
 export function runtimeSecretEnvPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_SECRET_ENV_BASENAME);
+  return NodePath.join(homePath, RUNTIME_SECRET_ENV_BASENAME);
 }
 
 export function runtimeAccessTokenPath(homePath: string): string {
-  return nodePath.join(homePath, RUNTIME_ACCESS_TOKEN_BASENAME);
+  return NodePath.join(homePath, RUNTIME_ACCESS_TOKEN_BASENAME);
 }
 
 export function runtimeHomelabRootPath(homePath: string): string {
-  return nodePath.join(homePath, ".homelab");
+  return NodePath.join(homePath, ".homelab");
 }
 
 export function runtimeHomelabBinPath(homePath: string): string {
-  return nodePath.join(runtimeHomelabRootPath(homePath), "bin");
+  return NodePath.join(runtimeHomelabRootPath(homePath), "bin");
 }
 
 export function runtimeBashProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".bash_profile");
+  return NodePath.join(homePath, ".bash_profile");
 }
 
 export function runtimeBashRcPath(homePath: string): string {
-  return nodePath.join(homePath, ".bashrc");
+  return NodePath.join(homePath, ".bashrc");
 }
 
 export function runtimeProfilePath(homePath: string): string {
-  return nodePath.join(homePath, ".profile");
+  return NodePath.join(homePath, ".profile");
 }
 
 export function runtimeZshEnvPath(homePath: string): string {
-  return nodePath.join(homePath, ".zshenv");
+  return NodePath.join(homePath, ".zshenv");
 }
 
 export function buildRuntimeEnvironment(
@@ -544,7 +543,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
 
   return [
     {
-      filePath: nodePath.join(layout.hostBinDir, CODEX_RUNTIME_WRAPPER),
+      filePath: NodePath.join(layout.hostBinDir, CODEX_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CODEX_RUNTIME_WRAPPER,
@@ -553,7 +552,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: nodePath.join(layout.hostBinDir, CLAUDE_RUNTIME_WRAPPER),
+      filePath: NodePath.join(layout.hostBinDir, CLAUDE_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CLAUDE_RUNTIME_WRAPPER,
@@ -566,7 +565,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: nodePath.join(layout.hostBinDir, CURSOR_RUNTIME_WRAPPER),
+      filePath: NodePath.join(layout.hostBinDir, CURSOR_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CURSOR_RUNTIME_WRAPPER,
@@ -575,7 +574,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: nodePath.join(layout.hostBinDir, OPENCODE_RUNTIME_WRAPPER),
+      filePath: NodePath.join(layout.hostBinDir, OPENCODE_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: OPENCODE_RUNTIME_WRAPPER,
@@ -584,7 +583,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: nodePath.join(layout.hostBinDir, SHELL_RUNTIME_WRAPPER),
+      filePath: NodePath.join(layout.hostBinDir, SHELL_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: input.containerShellPath,
@@ -835,16 +834,16 @@ function addRuntimeAuthSyncEntries(
 ): void {
   for (const relativePath of input.overwriteRelativePaths) {
     entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
+      sourcePath: NodePath.join(input.sourceRoot, relativePath),
+      targetPath: NodePath.join(input.targetRoot, relativePath),
       mode: "overwrite",
     });
   }
 
   for (const relativePath of input.ifMissingRelativePaths) {
     entries.push({
-      sourcePath: nodePath.join(input.sourceRoot, relativePath),
-      targetPath: nodePath.join(input.targetRoot, relativePath),
+      sourcePath: NodePath.join(input.sourceRoot, relativePath),
+      targetPath: NodePath.join(input.targetRoot, relativePath),
       mode: "if-missing",
     });
   }

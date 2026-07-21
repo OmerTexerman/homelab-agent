@@ -43,7 +43,11 @@ import {
 import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import { EnvironmentAuth } from "../auth/EnvironmentAuth.ts";
+import {
+  EnvironmentAuth,
+  isServerAuthCredentialError,
+  isServerAuthInternalError,
+} from "../auth/EnvironmentAuth.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
@@ -103,24 +107,24 @@ const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
     const request = yield* HttpServerRequest.HttpServerRequest;
     const environmentAuth = yield* EnvironmentAuth;
     const session = yield* environmentAuth.authenticateHttpRequest(request).pipe(
-      Effect.catchTags({
-        ServerAuthInvalidCredentialError: (error) =>
-          Effect.fail(
-            new HomelabHttpError({
-              message: "Authentication required.",
-              status: 401,
-              cause: error,
-            }),
-          ),
-        ServerAuthInternalError: (error) =>
-          Effect.fail(
-            new HomelabHttpError({
-              message: "Authentication failed.",
-              status: 500,
-              cause: error,
-            }),
-          ),
-      }),
+      Effect.catchIf(isServerAuthCredentialError, (error) =>
+        Effect.fail(
+          new HomelabHttpError({
+            message: "Authentication required.",
+            status: 401,
+            cause: error,
+          }),
+        ),
+      ),
+      Effect.catchIf(isServerAuthInternalError, (error) =>
+        Effect.fail(
+          new HomelabHttpError({
+            message: "Authentication failed.",
+            status: 500,
+            cause: error,
+          }),
+        ),
+      ),
     );
     if (!session.scopes.includes(requiredScope)) {
       return yield* new HomelabHttpError({
@@ -887,12 +891,14 @@ export const homelabCuratorOverviewRouteLayer = HttpRouter.add(
     const skills = yield* HomelabSkills;
     const snapshot = yield* knowledgeGraph.getSnapshot();
     const memoryEntries = yield* projectMemory.listAll({ limit: 10_000 });
-    const allSkills = yield* skills.listAll().pipe(
-      Effect.mapError(
-        (error) =>
-          new HomelabHttpError({ message: error.message, status: 500, cause: error.cause }),
-      ),
-    );
+    const allSkills = yield* skills
+      .listAll()
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new HomelabHttpError({ message: error.message, status: 500, cause: error.cause }),
+        ),
+      );
     const staleCutoff = Date.now() - CURATOR_STALENESS_WINDOW_DAYS * 24 * 60 * 60 * 1000;
     const staleEntityIds = snapshot.entities
       .filter((entity) => {

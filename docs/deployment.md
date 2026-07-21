@@ -8,19 +8,32 @@ containers on the same Docker host.
 Older root-level deployment notes may contain host-specific details, but this
 document should be the source of truth for current code paths.
 
+## Host Requirements
+
+The 2026-07 upstream sync moved the toolchain to pnpm + vite-plus and the
+server runtime to plain Node. Deployment hosts (including the LXC that runs
+`t3code.service`) need:
+
+- Node.js ^24.13 (the server uses `node:sqlite`; older Node versions fail the
+  startup check)
+- pnpm 11.x (`corepack enable` or a global install)
+- Docker (unchanged) for Project Runtime containers
+
+Bun is no longer required.
+
 ## Recommended Local Production Smoke
 
 From the repo root:
 
 ```bash
-bun install --frozen-lockfile
-bun run build:prod
+pnpm install --frozen-lockfile
+pnpm run build:prod
 
 export T3CODE_HOME="$PWD/.t3/prod"
 export T3CODE_HOST=127.0.0.1
 export T3CODE_PORT=13773
 export T3CODE_NO_BROWSER=1
-bun run start:prod
+pnpm run start:prod
 ```
 
 Open the printed pairing URL, or copy the printed token into `/pair`.
@@ -28,23 +41,23 @@ Open the printed pairing URL, or copy the printed token into `/pair`.
 For a disposable production-like server smoke:
 
 ```bash
-bun run smoke:prod
+pnpm run smoke:prod
 ```
 
 Runtime-container coverage is separate because it needs Docker access:
 
 ```bash
-bun run smoke:runtime -- --with-runtime
+pnpm run smoke:runtime -- --with-runtime
 ```
 
 ## First Deployment Checklist
 
 Before putting a persistent instance behind a reverse proxy:
 
-- Run `bun run build:prod`, `bun run smoke:prod`, and `bun run smoke:runtime`.
-- Run `bun run smoke:dev` before a release when dev startup or migration
+- Run `pnpm run build:prod`, `pnpm run smoke:prod`, and `pnpm run smoke:runtime`.
+- Run `pnpm run smoke:dev` before a release when dev startup or migration
   behavior changed.
-- Run `bun run smoke:runtime -- --with-runtime` on the Docker host that will run
+- Run `pnpm run smoke:runtime -- --with-runtime` on the Docker host that will run
   Project Runtimes.
 - Set an explicit `T3CODE_HOME` or `--base-dir` on persistent storage.
 - Confirm the server user can run `docker ps` and start containers.
@@ -83,8 +96,8 @@ sudo chown -R "$USER":"$USER" /opt/homelab-agent /var/lib/homelab-agent
 
 git clone https://github.com/OmerTexerman/homelab-agent.git /opt/homelab-agent
 cd /opt/homelab-agent
-bun install --frozen-lockfile
-bun run build:prod
+pnpm install --frozen-lockfile
+pnpm run build:prod
 
 mkdir -p ~/.config/systemd/user
 cp deploy/systemd/homelab-agent.service.example \
@@ -110,7 +123,7 @@ T3CODE_HOME=/var/lib/homelab-agent \
 
 ## Production Build And Start
 
-`bun run build:prod` builds:
+`pnpm run build:prod` builds:
 
 - `apps/web/dist`
 - `apps/server/dist/bin.mjs`
@@ -119,7 +132,7 @@ T3CODE_HOME=/var/lib/homelab-agent \
 The production server entry point is:
 
 ```bash
-bun run start:prod -- \
+pnpm run start:prod -- \
   --base-dir /var/lib/homelab-agent \
   --host 0.0.0.0 \
   --port 13773

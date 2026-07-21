@@ -20,7 +20,14 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
-import { readEnvironmentApi } from "~/environmentApi";
+import {
+  runAtomCommand,
+  squashAtomCommandFailure,
+  type AtomCommand,
+} from "@t3tools/client-runtime/state/runtime";
+
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { projectRuntimeEnvironment } from "~/state/homelabRuntime";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
@@ -32,6 +39,17 @@ import {
   projectRuntimeQueueSummary,
   projectRuntimeStatusLabel,
 } from "./ProjectRuntimePanel.logic";
+
+async function runProjectRuntimeCommand<W, A, E>(
+  command: AtomCommand<W, A, E>,
+  input: W,
+): Promise<A> {
+  const result = await runAtomCommand(appAtomRegistry, command, input, { reportFailure: false });
+  if (result._tag === "Failure") {
+    throw squashAtomCommandFailure(result);
+  }
+  return result.value;
+}
 
 type ProjectRuntimePanelOperation =
   | { type: "wake" }
@@ -121,11 +139,10 @@ export function ProjectRuntimePanel({
   const runtimeQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        throw new Error("Project Runtime API is not available.");
-      }
-      const result = await api.projectRuntime.get(operationInput);
+      const result = await runProjectRuntimeCommand(projectRuntimeEnvironment.get, {
+        environmentId,
+        input: operationInput,
+      });
       return result.runtime;
     },
     refetchInterval: 5_000,
@@ -134,31 +151,45 @@ export function ProjectRuntimePanel({
 
   const operationMutation = useMutation({
     mutationFn: async (operation: ProjectRuntimePanelOperation) => {
-      const api = readEnvironmentApi(environmentId);
-      if (!api) {
-        throw new Error("Project Runtime API is not available.");
-      }
       switch (operation.type) {
         case "wake":
-          return api.projectRuntime.wake(operationInput);
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.wake, {
+            environmentId,
+            input: operationInput,
+          });
         case "archive":
-          return api.projectRuntime.archive(operationInput);
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.archive, {
+            environmentId,
+            input: operationInput,
+          });
         case "reset":
-          return api.projectRuntime.reset(operationInput);
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.reset, {
+            environmentId,
+            input: operationInput,
+          });
         case "cleanupScratch":
-          return api.projectRuntime.cleanupScratch(operationInput);
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.cleanupScratch, {
+            environmentId,
+            input: operationInput,
+          });
         case "snapshot":
-          return api.projectRuntime.snapshot({ ...operationInput, name: operation.name });
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.snapshot, {
+            environmentId,
+            input: { ...operationInput, name: operation.name },
+          });
         case "restore":
-          return api.projectRuntime.restore({
-            ...operationInput,
-            snapshotId: operation.snapshotId,
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.restore, {
+            environmentId,
+            input: { ...operationInput, snapshotId: operation.snapshotId },
           });
         case "mergeIsolated": {
           if (!threadId) {
             throw new Error("Merging requires a thread context.");
           }
-          const merged = await api.projectRuntime.mergeIsolated({ projectId, threadId });
+          const merged = await runProjectRuntimeCommand(projectRuntimeEnvironment.mergeIsolated, {
+            environmentId,
+            input: { projectId, threadId },
+          });
           toastManager.add(
             stackedThreadToast({
               type: "success",

@@ -166,7 +166,7 @@ export class ProjectRuntimeError extends Schema.TaggedErrorClass<ProjectRuntimeE
     projectId: Schema.optional(ProjectId),
     runtimeId: Schema.optional(ProjectRuntimeId),
     threadId: Schema.optional(ThreadId),
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

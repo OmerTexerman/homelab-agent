@@ -1,256 +1,66 @@
-import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 
 import ChatView from "../components/ChatView";
-import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
-import {
-  DiffPanelHeaderSkeleton,
-  DiffPanelLoadingState,
-  DiffPanelShell,
-  type DiffPanelMode,
-} from "../components/DiffPanelShell";
+import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import {
-  type DiffRouteSearch,
-  parseDiffRouteSearch,
-  stripDiffSearchParams,
-} from "../diffRouteSearch";
-import { useMediaQuery } from "../hooks/useMediaQuery";
-import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
-import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
-import { Sheet, SheetPopup } from "../components/ui/sheet";
-import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
-import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
+import { resolveThreadRouteRef } from "../threadRoutes";
+import { SidebarInset } from "~/components/ui/sidebar";
+import { useEnvironmentThreadRefs, useThreadDetail, useThreadShell } from "../state/entities";
+import { useEnvironmentQuery } from "../state/query";
+import { environmentShell } from "../state/shell";
 
-const DiffPanel = lazy(() => import("../components/DiffPanel"));
-const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
-const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
-const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
-const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 // A freshly created thread (e.g. a standalone thread created via a dispatched
 // command) is not present in the local projection until its `thread.created`
 // shell event arrives. Wait this long before treating the thread as missing so
 // a just-created thread isn't bounced back to home while its event is in flight.
 const MISSING_THREAD_REDIRECT_GRACE_MS = 4_000;
 
-const DiffPanelSheet = (props: {
-  children: ReactNode;
-  diffOpen: boolean;
-  onCloseDiff: () => void;
-}) => {
-  return (
-    <Sheet
-      open={props.diffOpen}
-      onOpenChange={(open) => {
-        if (!open) {
-          props.onCloseDiff();
-        }
-      }}
-    >
-      <SheetPopup
-        side="right"
-        showCloseButton={false}
-        keepMounted
-        className="w-[min(88vw,820px)] max-w-[820px] p-0"
-      >
-        {props.children}
-      </SheetPopup>
-    </Sheet>
-  );
-};
-
-const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
-  return (
-    <DiffPanelShell mode={props.mode} header={<DiffPanelHeaderSkeleton />}>
-      <DiffPanelLoadingState label="Loading diff viewer..." />
-    </DiffPanelShell>
-  );
-};
-
-const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
-  return (
-    <DiffWorkerPoolProvider>
-      <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
-        <DiffPanel mode={props.mode} />
-      </Suspense>
-    </DiffWorkerPoolProvider>
-  );
-};
-
-const DiffPanelInlineSidebar = (props: {
-  diffOpen: boolean;
-  onCloseDiff: () => void;
-  onOpenDiff: () => void;
-  renderDiffContent: boolean;
-}) => {
-  const { diffOpen, onCloseDiff, onOpenDiff, renderDiffContent } = props;
-  const onOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) {
-        onOpenDiff();
-        return;
-      }
-      onCloseDiff();
-    },
-    [onCloseDiff, onOpenDiff],
-  );
-  const shouldAcceptInlineSidebarWidth = useCallback(
-    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
-      const composerForm = document.querySelector<HTMLElement>("[data-chat-composer-form='true']");
-      if (!composerForm) return true;
-      const composerViewport = composerForm.parentElement;
-      if (!composerViewport) return true;
-      const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
-      wrapper.style.setProperty("--sidebar-width", `${nextWidth}px`);
-
-      const viewportStyle = window.getComputedStyle(composerViewport);
-      const viewportPaddingLeft = Number.parseFloat(viewportStyle.paddingLeft) || 0;
-      const viewportPaddingRight = Number.parseFloat(viewportStyle.paddingRight) || 0;
-      const viewportContentWidth = Math.max(
-        0,
-        composerViewport.clientWidth - viewportPaddingLeft - viewportPaddingRight,
-      );
-      const formRect = composerForm.getBoundingClientRect();
-      const composerFooter = composerForm.querySelector<HTMLElement>(
-        "[data-chat-composer-footer='true']",
-      );
-      const composerRightActions = composerForm.querySelector<HTMLElement>(
-        "[data-chat-composer-actions='right']",
-      );
-      const composerRightActionsWidth = composerRightActions?.getBoundingClientRect().width ?? 0;
-      const composerFooterGap = composerFooter
-        ? Number.parseFloat(window.getComputedStyle(composerFooter).columnGap) ||
-          Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
-          0
-        : 0;
-      const minimumComposerWidth =
-        COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX + composerRightActionsWidth + composerFooterGap;
-      const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
-      const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
-      const violatesMinimumComposerWidth = composerForm.clientWidth + 0.5 < minimumComposerWidth;
-
-      if (previousSidebarWidth.length > 0) {
-        wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
-      } else {
-        wrapper.style.removeProperty("--sidebar-width");
-      }
-
-      return !hasComposerOverflow && !overflowsViewport && !violatesMinimumComposerWidth;
-    },
-    [],
-  );
-
-  return (
-    <SidebarProvider
-      defaultOpen={false}
-      open={diffOpen}
-      onOpenChange={onOpenChange}
-      className="w-auto min-h-0 flex-none bg-transparent"
-      style={{ "--sidebar-width": DIFF_INLINE_DEFAULT_WIDTH } as React.CSSProperties}
-    >
-      <Sidebar
-        side="right"
-        collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
-        resizable={{
-          minWidth: DIFF_INLINE_SIDEBAR_MIN_WIDTH,
-          shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
-        }}
-      >
-        {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
-        <SidebarRail />
-      </Sidebar>
-    </SidebarProvider>
-  );
-};
-
 function ChatThreadRouteView() {
   const navigate = useNavigate();
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
-  const search = Route.useSearch();
-  const bootstrapComplete = useStore(
-    (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).bootstrapComplete,
+  const shell = useEnvironmentQuery(
+    threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
-  const threadExists = useStore((store) => selectThreadExistsByRef(store, threadRef));
+  const serverThreadShell = useThreadShell(threadRef);
+  const serverThreadDetail = useThreadDetail(threadRef);
+  const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
+  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const threadExists = serverThreadShell !== null || serverThreadDetail !== null;
+  const environmentHasServerThreads = environmentThreadRefs.length > 0;
+  const draftThreadExists = useComposerDraftStore((store) =>
+    threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
+  );
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
-  const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const routeDiffOpen = search.diff === "1";
-  const diffOpen = showSourceControlUi && routeDiffOpen;
-  const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
+  const environmentHasDraftThreads = useComposerDraftStore((store) => {
+    if (!threadRef) {
+      return false;
+    }
+    return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
+  });
+  const routeThreadExists = threadExists || draftThreadExists;
+  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const redirectedMissingThreadKeyRef = useRef<string | null>(null);
-  const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
-    threadKey: currentThreadKey,
-    hasOpenedDiff: diffOpen,
-  }));
-  const hasOpenedDiff =
-    diffPanelMountState.threadKey === currentThreadKey
-      ? diffPanelMountState.hasOpenedDiff
-      : diffOpen;
-  const markDiffOpened = useCallback(() => {
-    setDiffPanelMountState((previous) => {
-      if (previous.threadKey === currentThreadKey && previous.hasOpenedDiff) {
-        return previous;
-      }
-      return {
-        threadKey: currentThreadKey,
-        hasOpenedDiff: true,
-      };
-    });
-  }, [currentThreadKey]);
-  const closeDiff = useCallback(() => {
-    if (!threadRef) {
-      return;
-    }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
-      search: { diff: undefined },
-    });
-  }, [navigate, threadRef]);
-  const openDiff = useCallback(() => {
-    if (!threadRef || !showSourceControlUi) {
-      return;
-    }
-    markDiffOpened();
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
-      search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return { ...rest, diff: "1" };
-      },
-    });
-  }, [markDiffOpened, navigate, showSourceControlUi, threadRef]);
-
-  useEffect(() => {
-    if (!routeDiffOpen || showSourceControlUi || !threadRef) {
-      return;
-    }
-
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(threadRef),
-      search: (previous) => stripDiffSearchParams(previous),
-      replace: true,
-    });
-  }, [navigate, routeDiffOpen, showSourceControlUi, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
       return;
     }
 
-    if (threadExists) {
+    if (routeThreadExists) {
       if (redirectedMissingThreadKeyRef.current === currentThreadKey) {
         redirectedMissingThreadKeyRef.current = null;
       }
+      return;
+    }
+
+    if (!environmentHasAnyThreads) {
       return;
     }
 
@@ -260,9 +70,9 @@ function ChatThreadRouteView() {
 
     // Grace period: a just-created thread may not be in the local projection
     // yet (the `thread.created` shell event is still in flight). If the thread
-    // shows up within the window this effect re-runs (threadExists dependency)
-    // and the timer is cleared before it fires; otherwise we treat it as a
-    // genuinely missing thread and redirect home.
+    // shows up within the window this effect re-runs (routeThreadExists
+    // dependency) and the timer is cleared before it fires; otherwise we treat
+    // it as a genuinely missing thread and redirect home.
     const redirectTimeoutId = window.setTimeout(() => {
       redirectedMissingThreadKeyRef.current = currentThreadKey;
       void navigate({ to: "/", replace: true });
@@ -271,63 +81,37 @@ function ChatThreadRouteView() {
     return () => {
       window.clearTimeout(redirectTimeoutId);
     };
-  }, [bootstrapComplete, currentThreadKey, navigate, threadExists, threadRef]);
+  }, [
+    bootstrapComplete,
+    currentThreadKey,
+    environmentHasAnyThreads,
+    navigate,
+    routeThreadExists,
+    threadRef,
+  ]);
 
   useEffect(() => {
-    if (!threadRef || !threadExists || !draftThread?.promotedTo) {
+    if (!threadRef || !serverThreadStarted || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
-  }, [draftThread?.promotedTo, threadExists, threadRef]);
+  }, [draftThread, serverThreadStarted, threadRef]);
 
-  if (!threadRef || !bootstrapComplete || !threadExists) {
+  if (!threadRef || !bootstrapComplete || !routeThreadExists) {
     return null;
   }
 
-  const shouldRenderDiffContent = showSourceControlUi && (diffOpen || hasOpenedDiff);
-
-  if (!shouldUseDiffSheet) {
-    return (
-      <>
-        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView
-            environmentId={threadRef.environmentId}
-            threadId={threadRef.threadId}
-            onDiffPanelOpen={markDiffOpened}
-            routeKind="server"
-          />
-        </SidebarInset>
-        <DiffPanelInlineSidebar
-          diffOpen={diffOpen}
-          onCloseDiff={closeDiff}
-          onOpenDiff={openDiff}
-          renderDiffContent={shouldRenderDiffContent}
-        />
-      </>
-    );
-  }
-
   return (
-    <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView
-          environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
-          onDiffPanelOpen={markDiffOpened}
-          routeKind="server"
-        />
-      </SidebarInset>
-      <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
-        {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
-      </DiffPanelSheet>
-    </>
+    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+      <ChatView
+        environmentId={threadRef.environmentId}
+        threadId={threadRef.threadId}
+        routeKind="server"
+      />
+    </SidebarInset>
   );
 }
 
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
-  validateSearch: (search) => parseDiffRouteSearch(search),
-  search: {
-    middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
-  },
   component: ChatThreadRouteView,
 });

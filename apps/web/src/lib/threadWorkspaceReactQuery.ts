@@ -6,7 +6,10 @@ import type {
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
-import { ensureEnvironmentApi } from "~/environmentApi";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { threadWorkspaceEnvironment } from "~/state/homelabRuntime";
 
 const EMPTY_THREAD_WORKSPACE_ENTRIES_RESULT: ThreadWorkspaceEntriesResult = {
   basePath: "/workspace",
@@ -66,13 +69,24 @@ export function threadWorkspaceEntriesQueryOptions(input: {
       if (!input.environmentId || !input.threadId) {
         throw new Error("Thread workspace is unavailable.");
       }
-      const api = ensureEnvironmentApi(input.environmentId);
-      return api.threadWorkspace.listEntries({
-        threadId: input.threadId,
-        query: input.query,
-        limit,
-        ...(input.basePath ? { basePath: input.basePath } : {}),
-      });
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        threadWorkspaceEnvironment.listEntries,
+        {
+          environmentId: input.environmentId,
+          input: {
+            threadId: input.threadId,
+            query: input.query,
+            limit,
+            ...(input.basePath ? { basePath: input.basePath } : {}),
+          },
+        },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure") {
+        throw squashAtomCommandFailure(result);
+      }
+      return result.value;
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.threadId !== null,
     staleTime: input.staleTime ?? 10_000,
@@ -94,11 +108,22 @@ export function threadWorkspaceReadFileQueryOptions(input: {
       if (!input.environmentId || !input.threadId || !input.path) {
         throw new Error("Thread workspace file is unavailable.");
       }
-      const api = ensureEnvironmentApi(input.environmentId);
-      return api.threadWorkspace.readFile({
-        threadId: input.threadId,
-        path: input.path,
-      });
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        threadWorkspaceEnvironment.readFile,
+        {
+          environmentId: input.environmentId,
+          input: {
+            threadId: input.threadId,
+            path: input.path,
+          },
+        },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure") {
+        throw squashAtomCommandFailure(result);
+      }
+      return result.value;
     },
     enabled:
       (input.enabled ?? true) &&

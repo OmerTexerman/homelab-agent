@@ -244,11 +244,7 @@ function runtimeSeverity(input: {
 }
 
 function isThreadRunning(thread: SidebarThreadSummary): boolean {
-  return (
-    thread.session?.status === "running" ||
-    thread.session?.status === "connecting" ||
-    thread.latestTurn?.state === "running"
-  );
+  return thread.session?.status === "running" || thread.latestTurn?.state === "running";
 }
 
 function latestThreadTimestamp(thread: SidebarThreadSummary): string {
@@ -286,7 +282,7 @@ function deriveRuntimeRows(input: {
 }): HomeOverviewRuntimeSummary {
   const activeThreads = input.threads.filter((thread) => thread.archivedAt === null);
   const normalProjects = input.projects.filter(
-    (project) => !isStandaloneProject({ id: project.id, cwd: project.cwd }),
+    (project) => !isStandaloneProject({ id: project.id, cwd: project.workspaceRoot }),
   );
   const detailsByProjectKey = new Map(
     input.details.map((entry) => [projectRuntimeDetailKey(entry), entry] as const),
@@ -343,7 +339,7 @@ function deriveRuntimeRows(input: {
       id: key,
       projectId: project.id,
       environmentId: project.environmentId,
-      projectName: project.name,
+      projectName: project.title,
       runtimeId: detail?.runtime.id ?? project.defaultRuntimeId ?? null,
       lifecycleState,
       statusLabel: runtimeLifecycleLabel(lifecycleState),
@@ -483,15 +479,9 @@ function deriveAttentionSummary(
     severity,
   });
   const items = [
-    ...pendingApprovalThreads.map((thread) =>
-      toItem(thread, "Approval requested", "attention"),
-    ),
-    ...pendingUserInputThreads.map((thread) =>
-      toItem(thread, "Waiting for input", "partial"),
-    ),
-    ...actionablePlanThreads.map((thread) =>
-      toItem(thread, "Plan ready to review", "partial"),
-    ),
+    ...pendingApprovalThreads.map((thread) => toItem(thread, "Approval requested", "attention")),
+    ...pendingUserInputThreads.map((thread) => toItem(thread, "Waiting for input", "partial")),
+    ...actionablePlanThreads.map((thread) => toItem(thread, "Plan ready to review", "partial")),
   ].slice(0, 6);
 
   return {
@@ -510,7 +500,7 @@ function deriveRecentThreads(input: {
 }): readonly HomeOverviewRecentThread[] {
   const projectNameByKey = new Map(
     input.projects.map(
-      (project) => [`${project.environmentId}:${project.id}`, project.name] as const,
+      (project) => [`${project.environmentId}:${project.id}`, project.title] as const,
     ),
   );
 
@@ -668,13 +658,11 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
   // The system:curator project is a hidden namespace; it must never surface
   // on the home overview alongside user projects and threads.
   const visibleProjects = input.projects.filter(
-    (project) => !isCuratorProject({ id: project.id, cwd: project.cwd }),
+    (project) => !isCuratorProject({ id: project.id, cwd: project.workspaceRoot }),
   );
-  const visibleThreads = input.threads.filter(
-    (thread) => !isCuratorProjectId(thread.projectId),
-  );
+  const visibleThreads = input.threads.filter((thread) => !isCuratorProjectId(thread.projectId));
   const normalProjects = visibleProjects.filter(
-    (project) => !isStandaloneProject({ id: project.id, cwd: project.cwd }),
+    (project) => !isStandaloneProject({ id: project.id, cwd: project.workspaceRoot }),
   );
   const activeThreads = visibleThreads.filter((thread) => thread.archivedAt === null);
   const standaloneThreads = activeThreads.filter((thread) =>

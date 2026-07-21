@@ -24,9 +24,7 @@ export type HomelabPromotionId = typeof HomelabPromotionId.Type;
  * suggested lists below are conventions agents should prefer before inventing new kinds —
  * they are not validation.
  */
-export const HomelabEntityKind = Schema.String.check(
-  Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/),
-);
+export const HomelabEntityKind = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/));
 export type HomelabEntityKind = typeof HomelabEntityKind.Type;
 
 export const SUGGESTED_HOMELAB_ENTITY_KINDS = [
@@ -48,9 +46,7 @@ export const SUGGESTED_HOMELAB_ENTITY_KINDS = [
 export const HomelabEntityStatus = Schema.Literals(["active", "planned", "deprecated", "unknown"]);
 export type HomelabEntityStatus = typeof HomelabEntityStatus.Type;
 
-export const HomelabRelationKind = Schema.String.check(
-  Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/),
-);
+export const HomelabRelationKind = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]{0,63}$/));
 export type HomelabRelationKind = typeof HomelabRelationKind.Type;
 
 export const SUGGESTED_HOMELAB_RELATION_KINDS = [

@@ -38,7 +38,10 @@ import {
   useState,
 } from "react";
 
-import { ensureEnvironmentApi } from "~/environmentApi";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { threadWorkspaceEnvironment } from "~/state/homelabRuntime";
 import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import {
@@ -54,7 +57,7 @@ import {
   threadWorkspaceReadFileQueryOptions,
 } from "~/lib/threadWorkspaceReactQuery";
 import { cn } from "~/lib/utils";
-import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -388,7 +391,7 @@ const WorkspaceTreeItem = memo(function WorkspaceTreeItem(props: {
             <FolderClosedIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
           )
         ) : (
-          <VscodeEntryIcon
+          <PierreEntryIcon
             pathValue={props.node.path}
             kind="file"
             theme={props.theme}
@@ -1282,12 +1285,23 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       if (!selectedPathRef.current) {
         throw new Error("Select a file before saving.");
       }
-      const api = ensureEnvironmentApi(props.environmentId);
-      return api.threadWorkspace.writeFile({
-        threadId: props.threadId,
-        path: selectedPathRef.current,
-        contents,
-      });
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        threadWorkspaceEnvironment.writeFile,
+        {
+          environmentId: props.environmentId,
+          input: {
+            threadId: props.threadId,
+            path: selectedPathRef.current,
+            contents,
+          },
+        },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure") {
+        throw squashAtomCommandFailure(result);
+      }
+      return result.value;
     },
     onSuccess: async () => {
       setSavedValue(editorValue);

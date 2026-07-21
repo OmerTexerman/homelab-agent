@@ -9,6 +9,7 @@ import {
   TurnId,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
@@ -42,6 +43,42 @@ import {
 } from "./ProviderRuntimeProjectionPolicy.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
+const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
+
+// Fallback when the in-memory description cache no longer has the task name
+// (server restart, session-exit sweep, TTL/capacity eviction): earlier
+// task.started/task.progress activities for the task are persisted with it.
+function findTaskTitleInActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity> | undefined,
+  taskId: string,
+): string | undefined {
+  if (!activities) {
+    return undefined;
+  }
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity || (activity.kind !== "task.started" && activity.kind !== "task.progress")) {
+      continue;
+    }
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as { taskId?: unknown; title?: unknown; detail?: unknown })
+        : undefined;
+    if (payload?.taskId !== taskId) {
+      continue;
+    }
+    const title =
+      typeof payload.title === "string"
+        ? payload.title
+        : activity.kind === "task.started" && typeof payload.detail === "string"
+          ? payload.detail
+          : undefined;
+    if (title && title.trim().length > 0) {
+      return title;
+    }
+  }
+  return undefined;
+}
 
 interface AssistantSegmentState {
   baseKey: string;
@@ -55,6 +92,8 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
+const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
@@ -202,6 +241,27 @@ const make = Effect.gen(function* () {
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
+
+  // Task names arrive on task.started/task.progress but not on task.completed,
+  // so remember them per task to title the completion activity.
+  const taskDescriptionByTaskKey = yield* Cache.make<string, string>({
+    capacity: TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY,
+    timeToLive: TASK_DESCRIPTION_BY_TASK_TTL,
+    lookup: () => Effect.succeed(""),
+  });
+
+  const rememberTaskDescription = (threadId: ThreadId, taskId: string, description: string) =>
+    Cache.set(taskDescriptionByTaskKey, providerTaskKey(threadId, taskId), description);
+
+  // Entries are left in place after completion so replayed or duplicate
+  // terminal events stay titled; TTL, capacity, and the session-exit sweep
+  // bound the cache.
+  const lookupTaskDescription = (threadId: ThreadId, taskId: string) =>
+    Cache.getOption(taskDescriptionByTaskKey, providerTaskKey(threadId, taskId)).pipe(
+      Effect.map((description) =>
+        Option.filter(description, (value) => value.length > 0).pipe(Option.getOrUndefined),
+      ),
+    );
 
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -627,6 +687,7 @@ const make = Effect.gen(function* () {
       const turnKeys = Array.from(yield* Cache.keys(turnMessageIdsByTurnKey));
       const assistantSegmentKeys = Array.from(yield* Cache.keys(assistantSegmentStateByTurnKey));
       const proposedPlanKeys = Array.from(yield* Cache.keys(bufferedProposedPlanById));
+      const taskDescriptionKeys = Array.from(yield* Cache.keys(taskDescriptionByTaskKey));
       yield* Effect.forEach(
         turnKeys,
         (key) =>
@@ -660,6 +721,12 @@ const make = Effect.gen(function* () {
           key.startsWith(proposedPlanPrefix)
             ? Cache.invalidate(bufferedProposedPlanById, key)
             : Effect.void,
+        { concurrency: 1 },
+      ).pipe(Effect.asVoid);
+      yield* Effect.forEach(
+        taskDescriptionKeys,
+        (key) =>
+          key.startsWith(prefix) ? Cache.invalidate(taskDescriptionByTaskKey, key) : Effect.void,
         { concurrency: 1 },
       ).pipe(Effect.asVoid);
     });
@@ -757,12 +824,30 @@ const make = Effect.gen(function* () {
 
       const now = event.createdAt;
       const activeTurnId = thread.session?.activeTurnId ?? null;
+      const guardEventTurnId = toTurnId(event.turnId);
+      const conflictsWithActiveTurn =
+        activeTurnId !== null &&
+        guardEventTurnId !== undefined &&
+        !sameRuntimeProjectionId(activeTurnId, guardEventTurnId);
+      const conflictingTurnStartIsPendingTurnStart =
+        event.type === "turn.started" && conflictsWithActiveTurn
+          ? sameRuntimeProjectionId(
+              yield* getExpectedProviderTurnIdForThread(thread.id),
+              guardEventTurnId,
+            ) &&
+            Option.isSome(
+              yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+                threadId: thread.id,
+              }),
+            )
+          : false;
       const lifecycleProjection = projectRuntimeLifecycleSession({
         event,
         activeTurnId,
         currentLastError: thread.session?.lastError ?? null,
         currentRuntimeMode: thread.session?.runtimeMode ?? "full-access",
         strictLifecycleGuard: STRICT_PROVIDER_LIFECYCLE_GUARD,
+        conflictingTurnStartIsPendingTurnStart,
       });
 
       const acceptedTurnStartedSourcePlan =
@@ -1093,7 +1178,22 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event);
+      if (event.type === "task.started" || event.type === "task.progress") {
+        const description = event.payload.description?.trim();
+        if (description) {
+          yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
+        }
+      }
+      let taskTitle: string | undefined;
+      if (event.type === "task.completed") {
+        taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);
+        if (!taskTitle) {
+          const threadDetail = yield* getLoadedThreadDetail();
+          taskTitle = findTaskTitleInActivities(threadDetail?.activities, event.payload.taskId);
+        }
+      }
+
+      const activities = runtimeEventToActivities(event, taskTitle);
       yield* Effect.forEach(activities, (activity) =>
         providerCommandId(event, "thread-activity-append").pipe(
           Effect.flatMap((commandId) =>

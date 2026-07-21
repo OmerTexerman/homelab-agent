@@ -1,6 +1,5 @@
 // @effect-diagnostics globalDate:off globalRandom:off
-import crypto from "node:crypto";
-
+import * as NodeCrypto from "node:crypto";
 import { HomelabSkill, HomelabSkillId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -171,7 +170,7 @@ const makeHomelabSkills = Effect.gen(function* () {
         ).pipe(Effect.mapError(toSkillsError("Failed to decode homelab skill.")));
       }
 
-      const skillId = HomelabSkillId.make(`homelab-skill:${crypto.randomUUID()}`);
+      const skillId = HomelabSkillId.make(`homelab-skill:${NodeCrypto.randomUUID()}`);
       yield* sql`
         INSERT INTO homelab_skills (
           skill_id, name, scope, project_id, source_thread_id,

@@ -250,12 +250,14 @@ export function HomelabSecretsSection() {
                       {secret.summary}
                     </p>
                   ) : null}
-                  <p className="text-[11px] text-muted-foreground">
-                    Updated{" "}
-                    {updatedRelative.suffix
-                      ? `${updatedRelative.value} ${updatedRelative.suffix}`
-                      : updatedRelative.value}
-                  </p>
+                  {updatedRelative ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Updated{" "}
+                      {updatedRelative.suffix
+                        ? `${updatedRelative.value} ${updatedRelative.suffix}`
+                        : updatedRelative.value}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="ghost" onClick={() => handleEdit(secret)}>

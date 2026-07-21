@@ -23,7 +23,7 @@ import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
-import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -33,7 +33,7 @@ import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
-import { WorkspaceEntries } from "../../workspace/Services/WorkspaceEntries.ts";
+import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import {
   decideCheckpointRevert,
   decidePlaceholderCheckpointCapture,
@@ -64,9 +64,9 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
-  const checkpointStore = yield* CheckpointStore;
+  const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const receiptBus = yield* RuntimeReceiptBus;
-  const workspaceEntries = yield* WorkspaceEntries;
+  const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
 
   const appendRevertFailureActivity = (input: {
@@ -235,9 +235,9 @@ const make = Effect.gen(function* () {
       checkpointRef: targetCheckpointRef,
     });
 
-    // Invalidate the workspace entry cache so the @-mention file picker
+    // Refresh the workspace entry index so the @-mention file picker
     // reflects files created or deleted during this turn.
-    yield* workspaceEntries.invalidate(input.cwd);
+    yield* workspaceEntries.refresh(input.cwd);
 
     const files = yield* checkpointStore
       .diffCheckpoints({
@@ -645,9 +645,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Invalidate the workspace entry cache so the @-mention file picker
+    // Refresh the workspace entry index so the @-mention file picker
     // reflects the reverted filesystem state.
-    yield* workspaceEntries.invalidate(sessionRuntime.value.cwd);
+    yield* workspaceEntries.refresh(sessionRuntime.value.cwd);
 
     if (decision.rolledBackTurns > 0) {
       yield* providerService.rollbackConversation({

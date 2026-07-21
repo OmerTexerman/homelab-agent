@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalRandom:off preferSchemaOverJson:off
-import crypto from "node:crypto";
-
+import * as NodeCrypto from "node:crypto";
 import {
   IsoDateTime,
   MessageId,
@@ -199,7 +198,7 @@ const makeProjectMemory = Effect.gen(function* () {
     Effect.gen(function* () {
       const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
       const entry: ProjectMemoryEntry = {
-        id: input.id ?? ProjectMemoryId.make(`project-memory:${crypto.randomUUID()}`),
+        id: input.id ?? ProjectMemoryId.make(`project-memory:${NodeCrypto.randomUUID()}`),
         projectId: input.projectId,
         runtimeId: input.runtimeId ?? null,
         sourceThreadId: input.sourceThreadId ?? null,
@@ -426,7 +425,7 @@ const makeProjectMemory = Effect.gen(function* () {
             Effect.gen(function* () {
               const copiedEntry: ProjectMemoryEntry = {
                 ...entry,
-                id: ProjectMemoryId.make(`project-memory:${crypto.randomUUID()}`),
+                id: ProjectMemoryId.make(`project-memory:${NodeCrypto.randomUUID()}`),
                 projectId: input.targetProjectId,
                 runtimeId: input.targetRuntimeId,
                 tags: withUniqueTag(entry.tags, "copied-from-standalone"),

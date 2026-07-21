@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFs from "node:fs";
-
+import * as NodeFS from "node:fs";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -14,7 +13,7 @@ export function watchDirectoryShallow(
   return Stream.callback<FileSystem.WatchEvent, PlatformError.PlatformError>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
-        const watcher = NodeFs.watch(
+        const watcher = NodeFS.watch(
           directoryPath,
           { recursive: false },
           (_eventType, fileName) => {

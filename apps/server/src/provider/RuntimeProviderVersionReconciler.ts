@@ -77,29 +77,26 @@ export const reconcileProviderVersionsIntoManifest = (input: {
     }
   });
 
-export const layer: Layer.Layer<
-  never,
-  never,
-  ProviderRegistry | RuntimeProviderVersionManifest
-> = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const registry = yield* ProviderRegistry;
-    const manifest = yield* RuntimeProviderVersionManifest;
+export const layer: Layer.Layer<never, never, ProviderRegistry | RuntimeProviderVersionManifest> =
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const registry = yield* ProviderRegistry;
+      const manifest = yield* RuntimeProviderVersionManifest;
 
-    const reconcile = (providers: ReadonlyArray<ServerProvider>) =>
-      reconcileProviderVersionsIntoManifest({
-        providers,
-        getCapabilities: registry.getProviderMaintenanceCapabilitiesForInstance,
-        recordInstalledVersion: manifest.recordInstalledVersion,
-      });
+      const reconcile = (providers: ReadonlyArray<ServerProvider>) =>
+        reconcileProviderVersionsIntoManifest({
+          providers,
+          getCapabilities: registry.getProviderMaintenanceCapabilitiesForInstance,
+          recordInstalledVersion: manifest.recordInstalledVersion,
+        });
 
-    // `streamChanges` has no replay, so seed with the current snapshot list —
-    // a steady host that never re-probes differently still gets one
-    // reconciliation pass per boot.
-    yield* Stream.concat(Stream.fromEffect(registry.getProviders), registry.streamChanges).pipe(
-      Stream.runForEach(reconcile),
-      Effect.ignoreCause({ log: true }),
-      Effect.forkScoped,
-    );
-  }),
-);
+      // `streamChanges` has no replay, so seed with the current snapshot list —
+      // a steady host that never re-probes differently still gets one
+      // reconciliation pass per boot.
+      yield* Stream.concat(Stream.fromEffect(registry.getProviders), registry.streamChanges).pipe(
+        Stream.runForEach(reconcile),
+        Effect.ignoreCause({ log: true }),
+        Effect.forkScoped,
+      );
+    }),
+  );

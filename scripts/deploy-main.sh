@@ -15,8 +15,8 @@ Environment:
   HOMELAB_AGENT_BRANCH            Branch to deploy. Default: main.
   HOMELAB_AGENT_SERVICE           Service name to restart. Default: homelab-agent.service.
   HOMELAB_AGENT_SERVICE_MANAGER   user, system, or none. Default: user.
-  HOMELAB_AGENT_SKIP_INSTALL      Set 1 to skip bun install --frozen-lockfile.
-  HOMELAB_AGENT_SKIP_SMOKE        Set 1 to skip bun run smoke:prod.
+  HOMELAB_AGENT_SKIP_INSTALL      Set 1 to skip pnpm install --frozen-lockfile.
+  HOMELAB_AGENT_SKIP_SMOKE        Set 1 to skip pnpm run smoke:prod.
   HOMELAB_AGENT_SKIP_BACKUP       Set 1 to skip T3CODE_HOME backup.
   HOMELAB_AGENT_BACKUP_DIR        Backup parent directory. Default: sibling <T3CODE_HOME>.backups.
   T3CODE_HOME                     Persistent state directory to back up.
@@ -177,13 +177,13 @@ fi
 run git merge --ff-only "$target_ref"
 
 if [[ "$skip_install" != "1" ]]; then
-  run bun install --frozen-lockfile
+  run pnpm install --frozen-lockfile
 fi
 
-run bun run build:prod
+run pnpm run build:prod
 
 if [[ "$skip_smoke" != "1" ]]; then
-  run bun run smoke:prod
+  run pnpm run smoke:prod
 fi
 
 backup_state
