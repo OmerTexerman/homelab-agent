@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
@@ -34,6 +35,7 @@ import {
   ThreadRuntimeNotFoundError,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeLaunchContext,
+  type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
 } from "../Services/ThreadRuntime.ts";
 import { encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
@@ -201,6 +203,7 @@ function makeHarness(input: {
   readonly threads?: ReadonlyArray<OrchestrationThread>;
   readonly descriptors?: ReadonlyArray<ThreadRuntimeDescriptor>;
   readonly project?: OrchestrationProject;
+  readonly runtimeEvents?: Stream.Stream<ThreadRuntimeEvent>;
 }) {
   const descriptors = new Map<string, ThreadRuntimeDescriptor>(
     (input.descriptors ?? [makeDescriptor({ threadId, status: "stopped" })]).map((descriptor) => [
@@ -317,7 +320,7 @@ function makeHarness(input: {
         return makeLaunchContext(descriptor, input.hostWorkspacePath);
       });
     },
-    streamEvents: Stream.empty,
+    streamEvents: input.runtimeEvents ?? Stream.empty,
   } satisfies ThreadRuntimeShape;
 
   const terminalManager = {
@@ -720,6 +723,71 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
 
         assert.equal(detail.runtime.runtime.projectId, projectId);
         assert.equal(detail.runtime.runtime.lifecycleState, "unprovisioned");
+      }),
+    ),
+  );
+
+  it.effect("reports a live container as running even when stale metadata says archived", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-stale-archive-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        yield* lifecycle.archive({ projectId });
+        // A thread starts work without going through wake(): the ThreadRuntime
+        // descriptor is the observed truth and must outrank the archive marker.
+        harness.descriptors.set(String(threadId), makeDescriptor({ threadId, status: "running" }));
+
+        const detail = yield* lifecycle.get({ projectId });
+        assert.equal(detail.runtime.runtime.lifecycleState, "running");
+      }),
+    ),
+  );
+
+  it.effect("clears the archived marker when a runtime.started event arrives", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-event-unarchive-",
+        });
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const events = yield* PubSub.unbounded<ThreadRuntimeEvent>();
+        const harness = makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          runtimeEvents: Stream.fromPubSub(events),
+        });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        yield* lifecycle.archive({ projectId });
+        yield* PubSub.publish(events, {
+          kind: "runtime.started",
+          threadId,
+          runtimeId,
+          createdAt: now,
+          payload: makeDescriptor({ threadId, status: "running" }),
+        });
+
+        // The reconciler consumes events on a forked fiber; the descriptor
+        // stays "stopped" here, so once the marker clears the derived state
+        // falls through to the descriptor instead of the stale "archived".
+        const settled = yield* Effect.gen(function* () {
+          for (let attempt = 0; attempt < 50; attempt += 1) {
+            const detail = yield* lifecycle.get({ projectId });
+            if (detail.runtime.runtime.lifecycleState !== "archived") {
+              return detail.runtime.runtime.lifecycleState;
+            }
+            yield* Effect.yieldNow;
+          }
+          return "archived" as const;
+        });
+        assert.equal(settled, "stopped");
       }),
     ),
   );

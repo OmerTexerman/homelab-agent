@@ -21,6 +21,7 @@ export * from "./homelab.ts";
 export * from "./homelabCurator.ts";
 export * from "./homelabHttp.ts";
 export * from "./homelabSecrets.ts";
+export * from "./providerCliStore.ts";
 export * from "./homelabSkills.ts";
 export * from "./projectMemory.ts";
 export * from "./orchestration.ts";

@@ -89,6 +89,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
+import { RuntimeCliUpdatesSection } from "./RuntimeCliUpdatesSection";
 import {
   canOneClickUpdateProviderCandidate,
   collectProviderUpdateCandidates,
@@ -936,6 +937,7 @@ export function ProjectRuntimeSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <RuntimeCliUpdatesSection />
       <SettingsSection title={HOMELAB_PRODUCT_COPY.projectRuntime.title}>
         <SettingsRow
           title={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}

@@ -4,11 +4,14 @@ import {
   AuthOrchestrationReadScope,
   type EnvironmentAuthorizationError,
   HomelabSecretError,
+  ProviderCliStoreError,
+  type ProviderCliStoreStatusView,
   type ThreadId,
   ThreadWorkspaceError,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
@@ -19,6 +22,7 @@ import {
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
 import type { ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
+import type { ProviderCliStoreShape } from "./runtime/ProviderCliStore.ts";
 
 /**
  * Fork-owned seam: the Homelab product's websocket RPC surface.
@@ -32,6 +36,8 @@ export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEn
   [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpsertHomelabSecret, AuthOrchestrationOperateScope],
   [WS_METHODS.serverDeleteHomelabSecret, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverGetProviderCliStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.serverApplyProviderCliUpdate, AuthOrchestrationOperateScope],
   [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],
   [WS_METHODS.threadWorkspaceReadFile, AuthOrchestrationReadScope],
   [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
@@ -56,6 +62,7 @@ export interface HomelabRpcHandlerDeps {
   readonly threadWorkspace: ThreadWorkspaceShape;
   readonly projectRuntimeLifecycle: ProjectRuntimeLifecycleShape;
   readonly homelabSecretRegistry: HomelabSecretRegistryShape;
+  readonly providerCliStore: Option.Option<ProviderCliStoreShape>;
 }
 
 export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
@@ -66,7 +73,48 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
     threadWorkspace,
     projectRuntimeLifecycle,
     homelabSecretRegistry,
+    providerCliStore,
   } = deps;
+
+  const emptyProviderCliStatus: ProviderCliStoreStatusView = {
+    available: false,
+    currentSetId: null,
+    currentLinkedAt: null,
+    currentVersions: {},
+    desiredSetId: null,
+    desiredVersions: {},
+    upToDate: true,
+    activeSessionThreadIds: [],
+  };
+
+  const activeSessionThreadIds = Effect.gen(function* () {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    return readModel.threads
+      .filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          (thread.session?.status === "starting" || thread.session?.status === "running"),
+      )
+      .map((thread) => thread.id);
+  });
+
+  const providerCliStatusView = Effect.gen(function* () {
+    if (Option.isNone(providerCliStore)) {
+      return emptyProviderCliStatus;
+    }
+    const status = yield* providerCliStore.value.readStatus;
+    const threadIds = yield* activeSessionThreadIds.pipe(Effect.orElseSucceed(() => []));
+    return {
+      available: true,
+      currentSetId: status.currentSetId,
+      currentLinkedAt: status.currentLinkedAt,
+      currentVersions: status.currentVersions,
+      desiredSetId: status.desiredSetId,
+      desiredVersions: status.desiredVersions,
+      upToDate: status.upToDate,
+      activeSessionThreadIds: threadIds,
+    } satisfies ProviderCliStoreStatusView;
+  });
 
   const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
     Effect.gen(function* () {
@@ -127,6 +175,22 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       );
 
   return {
+    [WS_METHODS.serverGetProviderCliStatus]: (_input: unknown) =>
+      observeRpcEffect(WS_METHODS.serverGetProviderCliStatus, providerCliStatusView, {
+        "rpc.aggregate": "server",
+      }),
+    [WS_METHODS.serverApplyProviderCliUpdate]: (_input: unknown) =>
+      observeRpcEffect(
+        WS_METHODS.serverApplyProviderCliUpdate,
+        Option.isNone(providerCliStore)
+          ? Effect.fail(
+              new ProviderCliStoreError({
+                message: "The provider CLI store is not available on this server.",
+              }),
+            )
+          : providerCliStore.value.ensureCurrent.pipe(Effect.andThen(providerCliStatusView)),
+        { "rpc.aggregate": "server" },
+      ),
     [WS_METHODS.serverListHomelabSecrets]: (_input: unknown) =>
       observeRpcEffect(
         WS_METHODS.serverListHomelabSecrets,

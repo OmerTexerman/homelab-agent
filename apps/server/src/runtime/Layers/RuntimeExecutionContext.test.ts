@@ -255,7 +255,7 @@ describe("runtime wrapper planning", () => {
     );
     expect(files.get("runtime-shell")?.contents).toContain("/bin/zsh");
     expect(files.get("runtime-shell")?.contents).toContain(
-      "PATH=/runtime/home/.homelab/bin:/opt/homelab/bin:",
+      "PATH=/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/opt/homelab/bin:",
     );
     expect(files.get("codex")?.mode).toBe(0o755);
   });

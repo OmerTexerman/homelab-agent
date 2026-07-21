@@ -139,6 +139,7 @@ import {
   HomelabSecretsListResult,
   HomelabSecretUpsertInput,
 } from "./homelabSecrets.ts";
+import { ProviderCliStoreError, ProviderCliStoreStatusView } from "./providerCliStore.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -253,6 +254,8 @@ export const WS_METHODS = {
   serverListHomelabSecrets: "server.listHomelabSecrets",
   serverUpsertHomelabSecret: "server.upsertHomelabSecret",
   serverDeleteHomelabSecret: "server.deleteHomelabSecret",
+  serverGetProviderCliStatus: "server.getProviderCliStatus",
+  serverApplyProviderCliUpdate: "server.applyProviderCliUpdate",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -346,6 +349,18 @@ export const WsServerDeleteHomelabSecretRpc = Rpc.make(WS_METHODS.serverDeleteHo
   payload: HomelabSecretDeleteInput,
   success: Schema.Struct({}),
   error: Schema.Union([HomelabSecretError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerGetProviderCliStatusRpc = Rpc.make(WS_METHODS.serverGetProviderCliStatus, {
+  payload: Schema.Struct({}),
+  success: ProviderCliStoreStatusView,
+  error: Schema.Union([ProviderCliStoreError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerApplyProviderCliUpdateRpc = Rpc.make(WS_METHODS.serverApplyProviderCliUpdate, {
+  payload: Schema.Struct({}),
+  success: ProviderCliStoreStatusView,
+  error: Schema.Union([ProviderCliStoreError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -823,6 +838,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerListHomelabSecretsRpc,
   WsServerUpsertHomelabSecretRpc,
   WsServerDeleteHomelabSecretRpc,
+  WsServerGetProviderCliStatusRpc,
+  WsServerApplyProviderCliUpdateRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

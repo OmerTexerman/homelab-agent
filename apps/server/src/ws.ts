@@ -101,6 +101,7 @@ import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ProjectRuntimeLifecycle } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry.ts";
+import { ProviderCliStore } from "./runtime/ProviderCliStore.ts";
 import { HOMELAB_RPC_REQUIRED_SCOPES, makeHomelabRpcHandlers } from "./wsHomelabRpc.ts";
 import {
   type AdoptedBootstrapThread,
@@ -447,6 +448,7 @@ const makeWsRpcLayer = (
       const projectRuntimeLifecycle = yield* ProjectRuntimeLifecycle;
       const threadWorkspace = yield* ThreadWorkspace;
       const homelabSecretRegistry = yield* HomelabSecretRegistry;
+      const providerCliStore = yield* Effect.serviceOption(ProviderCliStore);
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -1645,6 +1647,7 @@ const makeWsRpcLayer = (
           threadWorkspace,
           projectRuntimeLifecycle,
           homelabSecretRegistry,
+          providerCliStore,
         }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

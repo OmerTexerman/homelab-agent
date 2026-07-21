@@ -493,7 +493,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       NodeAssert.match(shellWrapperContents, /container_workspace='\/workspace'/);
       NodeAssert.match(
         shellWrapperContents,
-        /PATH=\/runtime\/home\/\.homelab\/bin:\/opt\/homelab\/bin:/,
+        /PATH=\/runtime\/provider-clis\/current\/bin:\/runtime\/home\/\.homelab\/bin:\/opt\/homelab\/bin:/,
       );
       NodeAssert.match(
         yield* fileSystem.readFileString(bashRcPath),

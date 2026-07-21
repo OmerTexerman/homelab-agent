@@ -17,6 +17,7 @@ import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { layer as ProcessRunnerLive } from "./processRunner.ts";
+import { ProviderCliStoreLive, ProviderCliStoreSyncLive } from "./runtime/ProviderCliStore.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -400,6 +401,8 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
   Layer.provideMerge(ProjectMemoryLive),
   Layer.provideMerge(HomelabSkillsLive),
   Layer.provideMerge(ThreadRuntimeLive),
+  Layer.provideMerge(ProviderCliStoreSyncLive),
+  Layer.provideMerge(ProviderCliStoreLive.pipe(Layer.provide(ProcessRunnerLive))),
   Layer.provideMerge(ProjectRuntimeQueueLive),
   Layer.provideMerge(ProjectRuntimeLifecycleLayerLive),
   Layer.provideMerge(RuntimeWorkspaceLive.pipe(Layer.provide(ThreadRuntimeLive))),

@@ -41,6 +41,11 @@ function walkBuildContext(rootPath: string): ReadonlyArray<string> {
   return entries;
 }
 
+// Provider versions ship via the mounted provider CLI store, so manifest
+// bumps must not change the image fingerprint (that would force a rebuild
+// plus a state-destroying container recreation on every provider update).
+const FINGERPRINT_EXCLUDED_FILES = new Set(["provider-versions.json"]);
+
 export function fingerprintBuildContext(contextPath: string): string | undefined {
   if (!NodeFS.existsSync(contextPath)) {
     return undefined;
@@ -49,6 +54,9 @@ export function fingerprintBuildContext(contextPath: string): string | undefined
   const hash = NodeCrypto.createHash("sha256");
   for (const filePath of walkBuildContext(contextPath)) {
     const relativePath = NodePath.relative(contextPath, filePath);
+    if (FINGERPRINT_EXCLUDED_FILES.has(relativePath)) {
+      continue;
+    }
     hash.update(relativePath);
     hash.update("\u0000");
     hash.update(NodeFS.readFileSync(filePath));

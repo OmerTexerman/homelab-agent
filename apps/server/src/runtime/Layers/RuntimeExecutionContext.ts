@@ -40,8 +40,11 @@ export const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
 export const OPENCODE_MANAGED_SERVER_CONTAINER_HOSTNAME = "0.0.0.0";
 export const OPENCODE_MANAGED_SERVER_CONTAINER_PORT = 4096;
 export const OPENCODE_MANAGED_SERVER_HOST_ENV = "HOMELAB_AGENT_OPENCODE_MANAGED_HOST";
+// The provider CLI store bin comes first so a store update (an atomic
+// `current` symlink flip on the host, visible through the bind mount)
+// immediately shadows the image-baked fallback CLIs for new processes.
 const DEFAULT_CONTAINER_PATH =
-  "/runtime/home/.homelab/bin:/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+  "/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
 const CODEX_AUTH_IF_MISSING_RELATIVE_PATHS = ["config.toml", "rules"];
 const CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS = [".credentials.json"];
@@ -141,6 +144,8 @@ export interface RuntimeMountContext {
   readonly runtimeStorageId: string;
   readonly workspacePath: string;
   readonly homePath: string;
+  /** Host path of the provider CLI store; omitted when the store is absent. */
+  readonly providerCliStoreHostPath?: string | undefined;
 }
 
 export interface RuntimeStorageLayout {
@@ -460,6 +465,15 @@ export function buildRuntimeMountSpecs(
       source: homePathForThread(context.threadRuntimesDir, context.runtimeStorageId),
       target: context.homePath,
     },
+    ...(context.providerCliStoreHostPath !== undefined
+      ? [
+          {
+            source: context.providerCliStoreHostPath,
+            target: "/runtime/provider-clis",
+            readOnly: true,
+          } satisfies DockerMountSpec,
+        ]
+      : []),
     ...(hostBindings.sshAuthSockPath
       ? [
           {

@@ -25,6 +25,7 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
@@ -286,12 +287,21 @@ function mapThreadRuntimeStatus(
   runtime: ThreadRuntimeDescriptor | undefined,
   metadata: ProjectRuntimeMetadataRecord | undefined,
 ): ProjectRuntimeLifecycleState {
+  // The ThreadRuntime descriptor is the authority on observed container
+  // state: a runtime that is actually running or being provisioned outranks
+  // stale terminal metadata (e.g. "archived" left behind after a thread
+  // simply started new work, or "stopped" written by an old reset). The
+  // metadata markers only speak for states the descriptor cannot observe:
+  // user intent (archived), in-flight destructive ops (reset-*), and the
+  // failure latch.
+  const runtimeIsLive = runtime?.status === "running" || runtime?.status === "provisioning";
   if (
-    metadata?.lifecycleState === "archived" ||
-    metadata?.lifecycleState === "reset-pending" ||
-    metadata?.lifecycleState === "resetting" ||
-    metadata?.lifecycleState === "stopped" ||
-    metadata?.lifecycleState === "failed"
+    !runtimeIsLive &&
+    (metadata?.lifecycleState === "archived" ||
+      metadata?.lifecycleState === "reset-pending" ||
+      metadata?.lifecycleState === "resetting" ||
+      metadata?.lifecycleState === "stopped" ||
+      metadata?.lifecycleState === "failed")
   ) {
     return metadata.lifecycleState;
   }
@@ -674,6 +684,50 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       lastError: input.lastError ?? null,
       snapshots: current?.snapshots ?? [],
     }));
+
+  const TERMINAL_METADATA_STATES: ReadonlyArray<ProjectRuntimeLifecycleState> = [
+    "archived",
+    "stopped",
+    "failed",
+    "reset-pending",
+    "resetting",
+  ];
+
+  // Runtime events are the single transition source: a container start clears
+  // stale terminal markers (a thread starting work implicitly un-archives its
+  // runtime) and a stop — the idle reaper included — records "stopped" instead
+  // of leaving "running" behind.
+  yield* Effect.forkScoped(
+    Stream.runForEach(threadRuntime.streamEvents, (event) =>
+      Effect.gen(function* () {
+        if (event.kind === "runtime.started") {
+          yield* updateMetadata(event.runtimeId, (current) =>
+            current === undefined || !TERMINAL_METADATA_STATES.includes(current.lifecycleState)
+              ? current
+              : {
+                  ...current,
+                  lifecycleState: "running",
+                  lastError: null,
+                  updatedAt: new Date().toISOString(),
+                },
+          );
+          return;
+        }
+        if (event.kind === "runtime.stopped") {
+          yield* updateMetadata(event.runtimeId, (current) =>
+            current === undefined ||
+            (current.lifecycleState !== "running" && current.lifecycleState !== "provisioning")
+              ? current
+              : {
+                  ...current,
+                  lifecycleState: "stopped",
+                  updatedAt: new Date().toISOString(),
+                },
+          );
+        }
+      }).pipe(Effect.ignoreCause({ log: true })),
+    ).pipe(Effect.ignoreCause({ log: true })),
+  );
 
   const closeRuntimeTerminals = (threadIds: ReadonlyArray<ThreadIdModel>) =>
     Effect.forEach(

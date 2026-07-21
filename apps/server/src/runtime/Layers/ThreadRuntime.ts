@@ -34,11 +34,17 @@ import { HomelabSkills, type HomelabSkillContext } from "../../homelab/Services/
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
-import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../../processRunner.ts";
+import {
+  layer as ProcessRunnerLayerLive,
+  runProcess,
+  type ProcessRunOptions,
+  type ProcessRunResult,
+} from "../../processRunner.ts";
 import { layer as ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
+import { ProviderCliStore, ProviderCliStoreLive } from "../ProviderCliStore.ts";
 import { RuntimeBootstrapResolverLive } from "./RuntimeBootstrapResolver.ts";
 import { renderHomelabBaselineViewFiles } from "../HomelabContextView.ts";
 import { isStandaloneRuntimeId, standaloneProjectShortTitle } from "../ProjectRuntimePolicy.ts";
@@ -2208,6 +2214,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   options?: ThreadRuntimeLiveOptions,
 ) {
   const serverConfig = yield* ServerConfig;
+  const providerCliStore = yield* Effect.serviceOption(ProviderCliStore);
   const { cwd, stateDir } = serverConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2512,6 +2519,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         runtimeStorageId: runtimeStorageIdFor(runtime),
         workspacePath: runtime.workspacePath,
         homePath: runtime.homePath,
+        ...(Option.isSome(providerCliStore)
+          ? { providerCliStoreHostPath: providerCliStore.value.storeRootPath }
+          : {}),
       },
       hostBindings,
     );
@@ -3592,9 +3602,34 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         yield* writeRuntimeSkillFiles(normalizedRuntime);
         yield* writeRuntimeToolScripts(normalizedRuntime);
         yield* writeRuntimeWrapperScripts(normalizedRuntime, hostBindings);
-        // Recompute the build-context fingerprint per start so a provider
-        // update (which rewrites the shared version manifest in the context)
-        // rebuilds the image and recreates this container on its next start.
+        // Materialize the provider CLI store before the container starts so
+        // the mounted `current` set matches the manifest. When provisioning
+        // fails but an older set is already linked, start anyway on the stale
+        // set (the sync daemon retries) rather than blocking the wake.
+        if (Option.isSome(providerCliStore)) {
+          yield* providerCliStore.value.ensureCurrent.pipe(
+            Effect.catchTag("ProviderCliStoreError", (error) =>
+              Effect.flatMap(providerCliStore.value.readStatus, (status) =>
+                status.currentSetId !== null
+                  ? Effect.logWarning(
+                      "Provider CLI store update failed; starting on the previous CLI set",
+                      { error: error.message, currentSetId: status.currentSetId },
+                    )
+                  : Effect.fail(
+                      new ThreadRuntimeError({
+                        message: `Provider CLI store is unavailable and no CLI set is provisioned. ${error.message}`,
+                        cause: error,
+                      }),
+                    ),
+              ),
+            ),
+          );
+        }
+        // Recompute the build-context fingerprint per start so genuine image
+        // context changes (Dockerfile, scripts) rebuild the image on the next
+        // start. Provider version bumps no longer participate: the manifest is
+        // excluded from the fingerprint because CLIs ship via the mounted
+        // provider CLI store, not the image.
         const currentImageFingerprint = yield* Effect.sync(() =>
           fingerprintBuildContext(localRuntimeImageBuildSpec.contextPath),
         );
@@ -3684,6 +3719,10 @@ export const ThreadRuntimeLive = Layer.effect(ThreadRuntime, makeThreadRuntime()
   Layer.provideMerge(RuntimeBootstrapResolverLive),
   Layer.provideMerge(RuntimeBootstrapRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
+  // The store is optional at the service level (tests and hosts without npm
+  // simply run without the mount), but production always wires it so every
+  // container start materializes the manifest's CLI set.
+  Layer.provide(ProviderCliStoreLive.pipe(Layer.provide(ProcessRunnerLayerLive))),
 );
 
 export function makeThreadRuntimeLive(options?: ThreadRuntimeLiveOptions) {

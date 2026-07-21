@@ -38,12 +38,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   nodejs \
   && rm -rf /var/lib/apt/lists/*
 
-# Provider CLI versions are pinned by a single source of truth that the host
-# shares with this image: docker/runtime/provider-versions.json. The host
-# update flow rewrites this file with the version it just installed, which
-# changes the build-context fingerprint and triggers a rebuild so the image
-# and host stay on the same versions. Keep this COPY + install in their own
-# layer so version bumps don't bust the (slow) apt/node layer above.
+# FALLBACK provider CLIs only. The live CLIs come from the host's provider
+# CLI store, bind-mounted at /runtime/provider-clis and resolved first on
+# PATH; these baked copies (whatever docker/runtime/provider-versions.json
+# said at build time) only serve containers whose store mount is missing.
+# The manifest is deliberately excluded from the build-context fingerprint,
+# so rewriting it does NOT rebuild this image — updates flow through the
+# store's atomic `current` symlink flip instead.
 COPY provider-versions.json /opt/homelab/provider-versions.json
 
 RUN set -eux; \

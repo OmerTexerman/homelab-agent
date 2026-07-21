@@ -44,6 +44,17 @@ export const projectRuntimeEnvironment = {
   }),
 };
 
+export const providerCliEnvironment = {
+  status: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "homelab:commands:provider-clis:status",
+    tag: WS_METHODS.serverGetProviderCliStatus,
+  }),
+  apply: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "homelab:commands:provider-clis:apply",
+    tag: WS_METHODS.serverApplyProviderCliUpdate,
+  }),
+};
+
 export const threadWorkspaceEnvironment = {
   listEntries: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "homelab:commands:thread-workspace:list-entries",
