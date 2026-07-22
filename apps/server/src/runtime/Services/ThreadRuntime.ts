@@ -185,6 +185,11 @@ export interface ThreadRuntimeShape {
     threadId: ThreadId,
   ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
 
+  /** Re-materialize the runtime's skill files (workspace + ~/.claude) without restarting. */
+  readonly refreshRuntimeSkills: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
+
   /** Destroy one runtime and any durable runtime-specific resources. */
   readonly destroyRuntime: (
     threadId: ThreadId,

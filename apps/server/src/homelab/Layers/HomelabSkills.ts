@@ -4,13 +4,16 @@ import { HomelabSkill, HomelabSkillId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
   HomelabSkills,
   HomelabSkillsError,
+  type HomelabSkillChangeEvent,
   type HomelabSkillContext,
   type HomelabSkillsShape,
 } from "../Services/HomelabSkills.ts";
@@ -59,6 +62,10 @@ function scopeContainer(context: HomelabSkillContext): {
 
 const makeHomelabSkills = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+
+  const changesPubSub = yield* PubSub.unbounded<HomelabSkillChangeEvent>();
+  const publishChange = (event: HomelabSkillChangeEvent) =>
+    PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
 
   const selectVisible = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -160,6 +167,7 @@ const makeHomelabSkills = Effect.gen(function* () {
               updated_at = ${now}
           WHERE skill_id = ${row.skillId}
         `.pipe(Effect.mapError(toSkillsError("Failed to update homelab skill.")));
+        yield* publishChange({ change: "upserted", skillName: String(input.name) });
         return yield* decodeSkill(
           toSkillCandidate({
             ...row,
@@ -181,6 +189,7 @@ const makeHomelabSkills = Effect.gen(function* () {
           ${input.description}, ${input.body}, ${now}, ${now}
         )
       `.pipe(Effect.mapError(toSkillsError("Failed to persist homelab skill.")));
+      yield* publishChange({ change: "upserted", skillName: String(input.name) });
       return yield* decodeSkill({
         id: String(skillId),
         name: String(input.name),
@@ -228,6 +237,7 @@ const makeHomelabSkills = Effect.gen(function* () {
             updated_at = ${now}
         WHERE skill_id = ${row.skillId}
       `.pipe(Effect.mapError(toSkillsError("Failed to promote homelab skill.")));
+      yield* publishChange({ change: "promoted", skillName: String(input.name) });
       return yield* decodeSkill(
         toSkillCandidate({ ...row, scope: "global", projectId: null, updatedAt: now }),
       ).pipe(Effect.mapError(toSkillsError("Failed to decode homelab skill.")));
@@ -249,6 +259,7 @@ const makeHomelabSkills = Effect.gen(function* () {
       const rows = yield* findAllForProject({ projectId: String(input.projectId) }).pipe(
         Effect.mapError(toSkillsError("Failed to list adopted skills.")),
       );
+      yield* publishChange({ change: "adopted" });
       return yield* decodeRows(rows);
     });
 
@@ -340,6 +351,7 @@ const makeHomelabSkills = Effect.gen(function* () {
             updated_at = ${now}
         WHERE skill_id = ${row.skillId}
       `.pipe(Effect.mapError(toSkillsError("Failed to update homelab skill.")));
+      yield* publishChange({ change: "updated", skillName: row.name });
       return yield* decodeSkill(
         toSkillCandidate({ ...row, description, body, updatedAt: now }),
       ).pipe(Effect.mapError(toSkillsError("Failed to decode homelab skill.")));
@@ -361,6 +373,7 @@ const makeHomelabSkills = Effect.gen(function* () {
         DELETE FROM homelab_skills
         WHERE skill_id = ${row.skillId}
       `.pipe(Effect.mapError(toSkillsError("Failed to delete homelab skill.")));
+      yield* publishChange({ change: "removed", skillName: row.name });
       return { removed: true, skill };
     });
 
@@ -372,6 +385,7 @@ const makeHomelabSkills = Effect.gen(function* () {
     updateById,
     removeById,
     adoptThreadSkillsIntoProject,
+    changes: Stream.fromPubSub(changesPubSub),
   } satisfies HomelabSkillsShape;
 });
 

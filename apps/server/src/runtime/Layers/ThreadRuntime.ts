@@ -3247,6 +3247,18 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     return refreshedRuntime;
   });
 
+  const refreshRuntimeSkills = Effect.fn("threadRuntime.refreshRuntimeSkills")(function* (
+    threadId: ThreadIdModel,
+  ) {
+    // Re-materialize the runtime's SKILL.md files in place (both the `.homelab/skills`
+    // workspace view and the `~/.claude/skills` auto-discovery dir) after a skill-catalog
+    // change, so authored/promoted/deleted skills reach a running container without waiting
+    // for the next turn start. Reuses the same scope-resolution + writer the launch path uses.
+    const runtime = yield* getRuntimeOrNotFound(threadId);
+    yield* writeRuntimeSkillFiles(runtime);
+    return runtime;
+  });
+
   const inspectContainerByName = Effect.fn("threadRuntime.inspectContainerByName")(function* (
     containerName: string,
   ): Effect.fn.Return<DockerContainerInspectResult | undefined, ThreadRuntimeError> {
@@ -3850,6 +3862,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     stopRuntime,
     touchRuntime,
     refreshRuntimeEnvironment,
+    refreshRuntimeSkills,
     destroyRuntime: (threadId) =>
       Effect.gen(function* () {
         const runtime = yield* getRuntimeOrNotFound(threadId);

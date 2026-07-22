@@ -9,6 +9,7 @@ import type {
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
 
 export class HomelabSkillsError extends Data.TaggedError("HomelabSkillsError")<{
   readonly message: string;
@@ -22,6 +23,19 @@ export class HomelabSkillsError extends Data.TaggedError("HomelabSkillsError")<{
 export type HomelabSkillContext =
   | { readonly kind: "scratch"; readonly threadId: ThreadId }
   | { readonly kind: "project"; readonly projectId: ProjectId };
+
+/**
+ * Emitted whenever the skill catalog changes (author/update/promote/delete/adopt).
+ * Consumed by the single view-materialization reactor so a running runtime's
+ * SKILL.md files are re-rendered without waiting for the next turn start — the
+ * skills equivalent of the secret change stream. The payload is advisory (for
+ * logging); the reactor re-materializes all running runtimes regardless, since
+ * per-runtime scope visibility is resolved at materialization time.
+ */
+export interface HomelabSkillChangeEvent {
+  readonly change: "upserted" | "promoted" | "updated" | "removed" | "adopted";
+  readonly skillName?: string | undefined;
+}
 
 export interface HomelabSkillsShape {
   /** Global skills plus the context's own scope, name-deduplicated (narrowest scope wins). */
@@ -71,6 +85,9 @@ export interface HomelabSkillsShape {
     readonly threadId: ThreadId;
     readonly projectId: ProjectId;
   }) => Effect.Effect<ReadonlyArray<HomelabSkill>, HomelabSkillsError>;
+
+  /** Catalog-change events for the runtime view reactor (see HomelabSkillChangeEvent). */
+  readonly changes: Stream.Stream<HomelabSkillChangeEvent>;
 }
 
 export class HomelabSkills extends Context.Service<HomelabSkills, HomelabSkillsShape>()(

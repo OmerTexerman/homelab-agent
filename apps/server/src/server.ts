@@ -68,6 +68,7 @@ import { layer as runtimeProviderVersionReconcilerLayer } from "./provider/Runti
 import { KnowledgeGraphLive } from "./homelab/Layers/KnowledgeGraph.ts";
 import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistry.ts";
 import { HomelabSecretRuntimeReactorLive } from "./homelab/Layers/HomelabSecretRuntimeReactor.ts";
+import { HomelabViewRuntimeReactorLive } from "./homelab/Layers/HomelabViewRuntimeReactor.ts";
 import { ProjectMemoryLive } from "./homelab/Layers/ProjectMemory.ts";
 import { HomelabSkillsLive } from "./homelab/Layers/HomelabSkills.ts";
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
@@ -336,6 +337,10 @@ const RuntimeCoreBaseLive = Layer.mergeAll(
   // changes into runtime env so no transport hand-rolls the refresh. Consumes
   // HomelabSecretRegistry + ThreadRuntime, both provided below.
   HomelabSecretRuntimeReactorLive,
+  // Single consumer of the knowledge services' change streams (skills today;
+  // memory + graph next): re-materializes the `.homelab` view of running
+  // runtimes so knowledge edits don't wait for a runtime restart.
+  HomelabViewRuntimeReactorLive,
 ).pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
