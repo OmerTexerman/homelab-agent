@@ -3,7 +3,9 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { freshnessMultiplier, mergeEntity } from "./KnowledgeGraph.ts";
 
-const entity = (over: Partial<HomelabEntity> & { id: string; name: string }): HomelabEntity => ({
+const entity = (
+  over: { id: string; name: string } & Partial<Omit<HomelabEntity, "id" | "name">>,
+): HomelabEntity => ({
   kind: "host",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",

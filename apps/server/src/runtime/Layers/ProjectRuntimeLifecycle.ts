@@ -202,30 +202,42 @@ function assertManagedRuntimeRoot(input: {
   }
 }
 
-function copyRuntimeStateToArchive(input: {
+async function pathExists(candidate: string): Promise<boolean> {
+  try {
+    await NodeFS.promises.stat(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Async so a large recursive workspace copy runs off the Node event loop —
+// cpSync/rmSync here would freeze the whole server (every WS connection, every
+// other thread) for the duration of the copy.
+async function copyRuntimeStateToArchive(input: {
   readonly stateDir: string;
   readonly runtimeRootPath: string;
   readonly runtimeId: RuntimeSessionIdModel;
   readonly projectId: ProjectId;
   readonly snapshotId: string;
   readonly createdAt: string;
-}): void {
+}): Promise<void> {
   assertManagedRuntimeRoot(input);
 
   const snapshotRoot = snapshotRootForRuntime(input.stateDir, input.runtimeId, input.snapshotId);
   const temporarySnapshotRoot = `${snapshotRoot}.tmp-${NodeCrypto.randomUUID()}`;
   const temporaryArchivePath = NodePath.join(temporarySnapshotRoot, SNAPSHOT_ARCHIVE_DIRNAME);
-  NodeFS.rmSync(temporarySnapshotRoot, { recursive: true, force: true });
-  NodeFS.mkdirSync(temporaryArchivePath, { recursive: true });
+  await NodeFS.promises.rm(temporarySnapshotRoot, { recursive: true, force: true });
+  await NodeFS.promises.mkdir(temporaryArchivePath, { recursive: true });
 
   const includedRoots: Array<(typeof SNAPSHOT_ROOT_NAMES)[number]> = [];
   for (const rootName of SNAPSHOT_ROOT_NAMES) {
     const sourcePath = NodePath.join(input.runtimeRootPath, rootName);
-    if (!NodeFS.existsSync(sourcePath)) {
+    if (!(await pathExists(sourcePath))) {
       continue;
     }
     includedRoots.push(rootName);
-    NodeFS.cpSync(sourcePath, NodePath.join(temporaryArchivePath, rootName), {
+    await NodeFS.promises.cp(sourcePath, NodePath.join(temporaryArchivePath, rootName), {
       recursive: true,
       force: true,
       filter: (source) => !shouldExcludeSnapshotPath(input.runtimeRootPath, source),
@@ -242,45 +254,45 @@ function copyRuntimeStateToArchive(input: {
     includedRoots,
     excludedRelativePaths: SNAPSHOT_EXCLUDED_RELATIVE_PATHS,
   };
-  NodeFS.writeFileSync(
+  await NodeFS.promises.writeFile(
     NodePath.join(temporarySnapshotRoot, SNAPSHOT_MANIFEST_FILENAME),
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
 
-  NodeFS.rmSync(snapshotRoot, { recursive: true, force: true });
-  NodeFS.mkdirSync(NodePath.dirname(snapshotRoot), { recursive: true });
-  NodeFS.renameSync(temporarySnapshotRoot, snapshotRoot);
+  await NodeFS.promises.rm(snapshotRoot, { recursive: true, force: true });
+  await NodeFS.promises.mkdir(NodePath.dirname(snapshotRoot), { recursive: true });
+  await NodeFS.promises.rename(temporarySnapshotRoot, snapshotRoot);
 }
 
-function replaceRuntimeStateFromArchive(input: {
+async function replaceRuntimeStateFromArchive(input: {
   readonly stateDir: string;
   readonly runtimeRootPath: string;
   readonly runtimeId: RuntimeSessionIdModel;
   readonly projectId: ProjectId;
   readonly snapshotId: string;
-}): void {
+}): Promise<void> {
   assertManagedRuntimeRoot(input);
 
   const archivePath = snapshotArchivePathFor(input);
   const temporaryRuntimeRoot = `${input.runtimeRootPath}.restore-${NodeCrypto.randomUUID()}`;
-  NodeFS.rmSync(temporaryRuntimeRoot, { recursive: true, force: true });
-  NodeFS.mkdirSync(temporaryRuntimeRoot, { recursive: true });
+  await NodeFS.promises.rm(temporaryRuntimeRoot, { recursive: true, force: true });
+  await NodeFS.promises.mkdir(temporaryRuntimeRoot, { recursive: true });
 
   for (const rootName of SNAPSHOT_ROOT_NAMES) {
     const sourcePath = NodePath.join(archivePath, rootName);
-    if (!NodeFS.existsSync(sourcePath)) {
+    if (!(await pathExists(sourcePath))) {
       continue;
     }
-    NodeFS.cpSync(sourcePath, NodePath.join(temporaryRuntimeRoot, rootName), {
+    await NodeFS.promises.cp(sourcePath, NodePath.join(temporaryRuntimeRoot, rootName), {
       recursive: true,
       force: true,
     });
   }
 
-  NodeFS.rmSync(input.runtimeRootPath, { recursive: true, force: true });
-  NodeFS.mkdirSync(NodePath.dirname(input.runtimeRootPath), { recursive: true });
-  NodeFS.renameSync(temporaryRuntimeRoot, input.runtimeRootPath);
+  await NodeFS.promises.rm(input.runtimeRootPath, { recursive: true, force: true });
+  await NodeFS.promises.mkdir(NodePath.dirname(input.runtimeRootPath), { recursive: true });
+  await NodeFS.promises.rename(temporaryRuntimeRoot, input.runtimeRootPath);
 }
 
 function mapThreadRuntimeStatus(
@@ -1117,7 +1129,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         );
         const snapshotId = `runtime-snapshot-${NodeCrypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
-        yield* Effect.try({
+        yield* Effect.tryPromise({
           try: () =>
             copyRuntimeStateToArchive({
               stateDir: config.stateDir,
@@ -1225,7 +1237,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
             fallbackThreadId: resolved.bindingThread.id,
             message: "Failed to invalidate project runtime before restore.",
           });
-          yield* Effect.try({
+          yield* Effect.tryPromise({
             try: () =>
               replaceRuntimeStateFromArchive({
                 stateDir: config.stateDir,
@@ -1351,13 +1363,13 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         threadId: input.threadId,
         label: "merge-isolated-runtime",
       },
-      Effect.try({
-        try: () => {
-          if (NodeFS.existsSync(targetPath)) {
+      Effect.tryPromise({
+        try: async () => {
+          if (await pathExists(targetPath)) {
             throw new Error(`Merge target '${mergedPath}' already exists in the Project Runtime.`);
           }
-          NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true });
-          NodeFS.cpSync(sourceLaunchContext.hostWorkspacePath, targetPath, {
+          await NodeFS.promises.mkdir(NodePath.dirname(targetPath), { recursive: true });
+          await NodeFS.promises.cp(sourceLaunchContext.hostWorkspacePath, targetPath, {
             recursive: true,
             force: false,
             filter: (source) => {

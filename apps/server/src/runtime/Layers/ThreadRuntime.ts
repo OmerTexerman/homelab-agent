@@ -2953,8 +2953,15 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     runtime: ThreadRuntimeDescriptor,
     seedFromRuntimeId: RuntimeSessionId,
   ) {
-    yield* Effect.try({
-      try: () => {
+    yield* Effect.tryPromise({
+      // Async so seeding a spinoff (copying the whole project workspace) doesn't
+      // block the Node event loop / freeze the server on a large workspace.
+      try: async () => {
+        const exists = (candidate: string) =>
+          NodeFS.promises.stat(candidate).then(
+            () => true,
+            () => false,
+          );
         const targetStorageId = runtimeStorageIdFor(runtime);
         const sourceStorageId = String(seedFromRuntimeId);
         if (targetStorageId === sourceStorageId) {
@@ -2964,13 +2971,13 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         const targetHome = homePathForThread(threadRuntimesDir, targetStorageId);
         const sourceWorkspace = managedWorkspacePath(threadRuntimesDir, sourceStorageId);
         const sourceHome = homePathForThread(threadRuntimesDir, sourceStorageId);
-        if (NodeFS.existsSync(targetWorkspace) || !NodeFS.existsSync(sourceWorkspace)) {
+        if ((await exists(targetWorkspace)) || !(await exists(sourceWorkspace))) {
           return;
         }
-        NodeFS.mkdirSync(NodePath.dirname(targetWorkspace), { recursive: true });
-        NodeFS.cpSync(sourceWorkspace, targetWorkspace, { recursive: true });
-        if (NodeFS.existsSync(sourceHome)) {
-          NodeFS.cpSync(sourceHome, targetHome, {
+        await NodeFS.promises.mkdir(NodePath.dirname(targetWorkspace), { recursive: true });
+        await NodeFS.promises.cp(sourceWorkspace, targetWorkspace, { recursive: true });
+        if (await exists(sourceHome)) {
+          await NodeFS.promises.cp(sourceHome, targetHome, {
             recursive: true,
             filter: (source) => {
               const relative = NodePath.relative(sourceHome, source);
