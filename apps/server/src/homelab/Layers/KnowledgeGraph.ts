@@ -82,7 +82,7 @@ function searchScore(candidate: string | undefined, query: string, baseScore: nu
  * better string match. Never returns 0 for a matched entity — deprecated/old
  * knowledge stays findable, just ranked below current knowledge.
  */
-function freshnessMultiplier(entity: HomelabEntity, now: number): number {
+export function freshnessMultiplier(entity: HomelabEntity, now: number): number {
   let factor = 1;
   if (entity.status === "deprecated") {
     factor *= 0.35;
@@ -119,6 +119,89 @@ function upsertById<T extends { readonly id: string }>(
   const nextValues = values.slice();
   nextValues[existingIndex] = nextValue;
   return nextValues;
+}
+
+function normalizeEntityName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function entityNaturalKey(entity: Pick<HomelabEntity, "kind" | "name">): string {
+  return `${entity.kind}:${normalizeEntityName(entity.name)}`;
+}
+
+function dedupeStrings(values: ReadonlyArray<string>): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Merge an incoming entity into an existing one that shares the same natural key
+ * (kind + normalized name), preserving the canonical id and folding in the
+ * other name as an alias. Incoming scalar fields win when provided; aliases,
+ * tags, and properties union. This is what stops every re-"discovery" of the
+ * same host/service (with a freshly minted id) from creating a duplicate.
+ */
+function mergeEntityInto(existing: HomelabEntity, incoming: HomelabEntity): HomelabEntity {
+  const aliases = dedupeStrings([
+    ...(existing.aliases ?? []),
+    ...(incoming.aliases ?? []),
+    ...(normalizeEntityName(incoming.name) !== normalizeEntityName(existing.name)
+      ? [incoming.name]
+      : []),
+  ]).filter((alias) => normalizeEntityName(alias) !== normalizeEntityName(existing.name));
+  const tags = dedupeStrings([...(existing.tags ?? []), ...(incoming.tags ?? [])]);
+  const properties = { ...(existing.properties ?? {}), ...(incoming.properties ?? {}) };
+  return {
+    ...existing,
+    ...(incoming.title !== undefined ? { title: incoming.title } : {}),
+    ...(incoming.summary !== undefined ? { summary: incoming.summary } : {}),
+    ...(incoming.status !== undefined ? { status: incoming.status } : {}),
+    ...(incoming.confidence !== undefined ? { confidence: incoming.confidence } : {}),
+    ...(incoming.observedAt !== undefined ? { observedAt: incoming.observedAt } : {}),
+    ...(incoming.lastVerifiedAt !== undefined ? { lastVerifiedAt: incoming.lastVerifiedAt } : {}),
+    ...(aliases.length > 0 ? { aliases } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    ...(Object.keys(properties).length > 0 ? { properties } : {}),
+    id: existing.id,
+    kind: existing.kind,
+    name: existing.name,
+    createdAt: existing.createdAt,
+    updatedAt: incoming.updatedAt,
+  };
+}
+
+/**
+ * Upsert an entity with natural-key dedup: exact id match replaces in place;
+ * otherwise an entity with the same (kind, normalized-name) is merged into
+ * rather than duplicated; only a genuinely new entity is appended.
+ */
+export function mergeEntity(
+  entities: ReadonlyArray<HomelabEntity>,
+  incoming: HomelabEntity,
+): ReadonlyArray<HomelabEntity> {
+  const idIndex = entities.findIndex((entity) => entity.id === incoming.id);
+  if (idIndex !== -1) {
+    const next = entities.slice();
+    next[idIndex] = incoming;
+    return next;
+  }
+  const key = entityNaturalKey(incoming);
+  const keyIndex = entities.findIndex((entity) => entityNaturalKey(entity) === key);
+  if (keyIndex !== -1) {
+    const next = entities.slice();
+    next[keyIndex] = mergeEntityInto(entities[keyIndex]!, incoming);
+    return next;
+  }
+  return [...entities, incoming];
 }
 
 function withSnapshotUpdatedAt(
@@ -339,7 +422,7 @@ const makeKnowledgeGraph = Effect.gen(function* () {
       mutateSnapshot((snapshot) => ({
         nextSnapshot: withSnapshotUpdatedAt({
           ...snapshot,
-          entities: upsertById(snapshot.entities, entity),
+          entities: mergeEntity(snapshot.entities, entity),
         }),
         result: undefined,
       })),
@@ -408,7 +491,7 @@ const makeKnowledgeGraph = Effect.gen(function* () {
         for (const entry of promotion.entries) {
           switch (entry.action) {
             case "upsert_entity": {
-              nextEntities = upsertById(nextEntities, entry.entity);
+              nextEntities = mergeEntity(nextEntities, entry.entity);
               break;
             }
             case "upsert_relation": {
