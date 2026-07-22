@@ -61,6 +61,7 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
+import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
 import { toastManager } from "./ui/toast";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import {
@@ -1732,10 +1733,11 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   </div>
                 </div>
               ) : (
-                <Textarea
+                <WorkspaceCodeEditor
                   value={editorValue}
-                  onChange={(event) => setEditorValue(event.target.value)}
-                  className="h-full min-h-full resize-none font-mono text-[12px] leading-5"
+                  path={selectedFilePath}
+                  theme={props.resolvedTheme}
+                  onChange={setEditorValue}
                 />
               )}
             </div>
