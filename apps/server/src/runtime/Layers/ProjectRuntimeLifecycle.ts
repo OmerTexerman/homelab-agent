@@ -355,6 +355,32 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   const metadataPath = NodePath.join(config.stateDir, "project-runtime-lifecycle.json");
   const writeSemaphore = yield* Semaphore.make(1);
 
+  /**
+   * Run a mutating lifecycle op under the runtime's single-writer lock so it
+   * cannot `docker stop` / copy / recreate the container while a shared provider
+   * turn is mid-write. Previously only `mergeIsolated` did this; snapshot/reset/
+   * restore/sleep stopped the container out from under an in-flight turn.
+   */
+  const runWithRuntimeWriteLock = <A, E, R>(
+    resolved: {
+      readonly runtimeId: RuntimeSessionIdModel;
+      readonly project: { readonly id: ProjectId };
+      readonly bindingThread: { readonly id: ThreadIdModel };
+    },
+    label: string,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    queue.run(
+      {
+        runtimeId: resolved.runtimeId,
+        policy: "shared-single-writer",
+        projectId: resolved.project.id,
+        threadId: resolved.bindingThread.id,
+        label,
+      },
+      effect,
+    );
+
   const loadMetadataFromDisk = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(metadataPath).pipe(Effect.orElseSucceed(() => false));
     if (!exists) {
@@ -902,27 +928,33 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   const sleep: ProjectRuntimeLifecycleShape["sleep"] = Effect.fn("projectRuntimeLifecycle.sleep")(
     function* (input) {
       const resolved = yield* resolveRuntime(input);
-      yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-      yield* threadRuntime.stopRuntime(resolved.bindingThread.id).pipe(
-        Effect.catchTags({
-          ThreadRuntimeNotFoundError: () => Effect.void,
-          ThreadRuntimeError: (cause) =>
-            Effect.fail(
-              toProjectRuntimeError({
-                message: "Failed to stop project runtime.",
-                projectId: resolved.project.id,
-                runtimeId: resolved.runtimeId,
-                threadId: resolved.bindingThread.id,
-                cause,
-              }),
-            ),
+      yield* runWithRuntimeWriteLock(
+        resolved,
+        "sleep",
+        Effect.gen(function* () {
+          yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+          yield* threadRuntime.stopRuntime(resolved.bindingThread.id).pipe(
+            Effect.catchTags({
+              ThreadRuntimeNotFoundError: () => Effect.void,
+              ThreadRuntimeError: (cause) =>
+                Effect.fail(
+                  toProjectRuntimeError({
+                    message: "Failed to stop project runtime.",
+                    projectId: resolved.project.id,
+                    runtimeId: resolved.runtimeId,
+                    threadId: resolved.bindingThread.id,
+                    cause,
+                  }),
+                ),
+            }),
+          );
+          yield* markLifecycleState({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            lifecycleState: "stopped",
+          });
         }),
       );
-      yield* markLifecycleState({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        lifecycleState: "stopped",
-      });
       return yield* describeRuntime(input);
     },
   );
@@ -931,74 +963,86 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     "projectRuntimeLifecycle.archive",
   )(function* (input) {
     const resolved = yield* resolveRuntime(input);
-    yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-    yield* threadRuntime.stopRuntime(resolved.bindingThread.id).pipe(
-      Effect.catchTags({
-        ThreadRuntimeNotFoundError: () => Effect.void,
-        ThreadRuntimeError: (cause) =>
-          Effect.fail(
-            toProjectRuntimeError({
-              message: "Failed to stop project runtime for archive.",
-              projectId: resolved.project.id,
-              runtimeId: resolved.runtimeId,
-              threadId: resolved.bindingThread.id,
-              cause,
-            }),
-          ),
+    yield* runWithRuntimeWriteLock(
+      resolved,
+      "archive",
+      Effect.gen(function* () {
+        yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+        yield* threadRuntime.stopRuntime(resolved.bindingThread.id).pipe(
+          Effect.catchTags({
+            ThreadRuntimeNotFoundError: () => Effect.void,
+            ThreadRuntimeError: (cause) =>
+              Effect.fail(
+                toProjectRuntimeError({
+                  message: "Failed to stop project runtime for archive.",
+                  projectId: resolved.project.id,
+                  runtimeId: resolved.runtimeId,
+                  threadId: resolved.bindingThread.id,
+                  cause,
+                }),
+              ),
+          }),
+        );
+        yield* markLifecycleState({
+          projectId: resolved.project.id,
+          runtimeId: resolved.runtimeId,
+          lifecycleState: "archived",
+        });
       }),
     );
-    yield* markLifecycleState({
-      projectId: resolved.project.id,
-      runtimeId: resolved.runtimeId,
-      lifecycleState: "archived",
-    });
     return yield* describeRuntime(input);
   });
 
   const reset: ProjectRuntimeLifecycleShape["reset"] = Effect.fn("projectRuntimeLifecycle.reset")(
     function* (input) {
       const resolved = yield* resolveRuntime(input);
-      yield* markLifecycleState({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        lifecycleState: "reset-pending",
-      });
-      yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-      yield* markLifecycleState({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        lifecycleState: "resetting",
-      });
-      const descriptors = yield* listRuntimeDescriptors(resolved.runtimeId);
-      const descriptorThreadIds =
-        descriptors.length > 0
-          ? descriptors.map((descriptor) => descriptor.threadId)
-          : [resolved.bindingThread.id];
-      yield* Effect.forEach(
-        descriptorThreadIds,
-        (threadId) =>
-          threadRuntime.destroyRuntime(threadId).pipe(
-            Effect.catchTags({
-              ThreadRuntimeNotFoundError: () => Effect.void,
-              ThreadRuntimeError: (cause) =>
-                Effect.fail(
-                  toProjectRuntimeError({
-                    message: "Failed to reset project runtime.",
-                    projectId: resolved.project.id,
-                    runtimeId: resolved.runtimeId,
-                    threadId,
-                    cause,
-                  }),
-                ),
-            }),
-          ),
-        { discard: true },
+      yield* runWithRuntimeWriteLock(
+        resolved,
+        "reset",
+        Effect.gen(function* () {
+          yield* markLifecycleState({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            lifecycleState: "reset-pending",
+          });
+          yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+          yield* markLifecycleState({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            lifecycleState: "resetting",
+          });
+          const descriptors = yield* listRuntimeDescriptors(resolved.runtimeId);
+          const descriptorThreadIds =
+            descriptors.length > 0
+              ? descriptors.map((descriptor) => descriptor.threadId)
+              : [resolved.bindingThread.id];
+          yield* Effect.forEach(
+            descriptorThreadIds,
+            (threadId) =>
+              threadRuntime.destroyRuntime(threadId).pipe(
+                Effect.catchTags({
+                  ThreadRuntimeNotFoundError: () => Effect.void,
+                  ThreadRuntimeError: (cause) =>
+                    Effect.fail(
+                      toProjectRuntimeError({
+                        message: "Failed to reset project runtime.",
+                        projectId: resolved.project.id,
+                        runtimeId: resolved.runtimeId,
+                        threadId,
+                        cause,
+                      }),
+                    ),
+                }),
+              ),
+            { discard: true },
+          );
+          yield* markLifecycleState({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            lifecycleState: "stopped",
+          });
+        }),
       );
-      yield* markLifecycleState({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        lifecycleState: "stopped",
-      });
       return yield* describeRuntime(input);
     },
   );
@@ -1047,65 +1091,71 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     "projectRuntimeLifecycle.createSnapshot",
   )(function* (input) {
     const resolved = yield* resolveRuntime(input);
-    const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
-    const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
-    yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-    yield* stopRuntimeDescriptors({
-      projectId: resolved.project.id,
-      runtimeId: resolved.runtimeId,
-      descriptors,
-      message: "Failed to stop project runtime before snapshot.",
-    });
-    const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
-      Effect.mapError((cause) =>
-        toProjectRuntimeError({
-          message: "Failed to resolve project runtime filesystem state for snapshot.",
+    yield* runWithRuntimeWriteLock(
+      resolved,
+      "snapshot",
+      Effect.gen(function* () {
+        const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
+        const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
+        yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+        yield* stopRuntimeDescriptors({
           projectId: resolved.project.id,
           runtimeId: resolved.runtimeId,
-          threadId: descriptorThreadId,
-          cause,
-        }),
-      ),
-    );
-    const snapshotId = `runtime-snapshot-${NodeCrypto.randomUUID()}`;
-    const createdAt = new Date().toISOString();
-    yield* Effect.try({
-      try: () =>
-        copyRuntimeStateToArchive({
-          stateDir: config.stateDir,
-          runtimeRootPath: launchContext.hostRuntimePath,
+          descriptors,
+          message: "Failed to stop project runtime before snapshot.",
+        });
+        const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
+          Effect.mapError((cause) =>
+            toProjectRuntimeError({
+              message: "Failed to resolve project runtime filesystem state for snapshot.",
+              projectId: resolved.project.id,
+              runtimeId: resolved.runtimeId,
+              threadId: descriptorThreadId,
+              cause,
+            }),
+          ),
+        );
+        const snapshotId = `runtime-snapshot-${NodeCrypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+        yield* Effect.try({
+          try: () =>
+            copyRuntimeStateToArchive({
+              stateDir: config.stateDir,
+              runtimeRootPath: launchContext.hostRuntimePath,
+              runtimeId: resolved.runtimeId,
+              projectId: resolved.project.id,
+              snapshotId,
+              createdAt,
+            }),
+          catch: (cause) =>
+            toProjectRuntimeError({
+              message: "Failed to archive project runtime filesystem state.",
+              projectId: resolved.project.id,
+              runtimeId: resolved.runtimeId,
+              threadId: resolved.bindingThread.id,
+              cause,
+            }),
+        });
+        const snapshot: ProjectRuntimeSnapshotRecord = {
+          id: snapshotId,
           runtimeId: resolved.runtimeId,
           projectId: resolved.project.id,
-          snapshotId,
+          name: input.name,
           createdAt,
-        }),
-      catch: (cause) =>
-        toProjectRuntimeError({
-          message: "Failed to archive project runtime filesystem state.",
-          projectId: resolved.project.id,
+          kind: "filesystem",
+          restoreAvailable: true,
+          note: FILESYSTEM_SNAPSHOT_NOTE,
+        };
+        yield* updateMetadata(resolved.runtimeId, (current) => ({
           runtimeId: resolved.runtimeId,
-          threadId: resolved.bindingThread.id,
-          cause,
-        }),
-    });
-    const snapshot: ProjectRuntimeSnapshotRecord = {
-      id: snapshotId,
-      runtimeId: resolved.runtimeId,
-      projectId: resolved.project.id,
-      name: input.name,
-      createdAt,
-      kind: "filesystem",
-      restoreAvailable: true,
-      note: FILESYSTEM_SNAPSHOT_NOTE,
-    };
-    yield* updateMetadata(resolved.runtimeId, (current) => ({
-      runtimeId: resolved.runtimeId,
-      projectId: resolved.project.id,
-      lifecycleState: current?.lifecycleState === "archived" ? "archived" : "stopped",
-      updatedAt: new Date().toISOString(),
-      lastError: null,
-      snapshots: [...(current?.snapshots ?? []), snapshot],
-    }));
+          projectId: resolved.project.id,
+          lifecycleState: current?.lifecycleState === "archived" ? "archived" : "stopped",
+          updatedAt: new Date().toISOString(),
+          lastError: null,
+          snapshots: [...(current?.snapshots ?? []), snapshot],
+        }));
+      }),
+    );
     return yield* describeRuntime(input);
   });
 
@@ -1137,77 +1187,83 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       });
     }
 
-    yield* markLifecycleState({
-      projectId: resolved.project.id,
-      runtimeId: resolved.runtimeId,
-      lifecycleState: "resetting",
-    });
-
-    yield* Effect.gen(function* () {
-      const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
-      const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
-      const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
-        Effect.mapError((cause) =>
-          toProjectRuntimeError({
-            message: "Failed to resolve project runtime filesystem state for restore.",
-            projectId: resolved.project.id,
-            runtimeId: resolved.runtimeId,
-            threadId: descriptorThreadId,
-            cause,
-          }),
-        ),
-      );
-      yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-      yield* stopRuntimeDescriptors({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        descriptors,
-        message: "Failed to stop project runtime before restore.",
-      });
-      yield* destroyRuntimeDescriptors({
-        projectId: resolved.project.id,
-        runtimeId: resolved.runtimeId,
-        descriptors,
-        fallbackThreadId: resolved.bindingThread.id,
-        message: "Failed to invalidate project runtime before restore.",
-      });
-      yield* Effect.try({
-        try: () =>
-          replaceRuntimeStateFromArchive({
-            stateDir: config.stateDir,
-            runtimeRootPath: launchContext.hostRuntimePath,
-            runtimeId: resolved.runtimeId,
-            projectId: resolved.project.id,
-            snapshotId: snapshot.id,
-          }),
-        catch: (cause) =>
-          toProjectRuntimeError({
-            message: "Failed to restore project runtime filesystem state.",
-            projectId: resolved.project.id,
-            runtimeId: resolved.runtimeId,
-            threadId: descriptorThreadId,
-            cause,
-          }),
-      });
-    }).pipe(
-      Effect.catchTag("ProjectRuntimeError", (error) =>
-        markLifecycleState({
+    yield* runWithRuntimeWriteLock(
+      resolved,
+      "restore",
+      Effect.gen(function* () {
+        yield* markLifecycleState({
           projectId: resolved.project.id,
           runtimeId: resolved.runtimeId,
-          lifecycleState: "failed",
-          lastError: error.message,
-        }).pipe(Effect.flatMap(() => Effect.fail(error))),
-      ),
-    );
+          lifecycleState: "resetting",
+        });
 
-    yield* updateMetadata(resolved.runtimeId, (current) => ({
-      runtimeId: resolved.runtimeId,
-      projectId: resolved.project.id,
-      lifecycleState: "stopped",
-      updatedAt: new Date().toISOString(),
-      lastError: null,
-      snapshots: current?.snapshots ?? metadata?.snapshots ?? [],
-    }));
+        yield* Effect.gen(function* () {
+          const descriptors = yield* ensureRuntimeDescriptorForOperation(resolved);
+          const descriptorThreadId = descriptors[0]?.threadId ?? resolved.bindingThread.id;
+          const launchContext = yield* threadRuntime.resolveLaunchContext(descriptorThreadId).pipe(
+            Effect.mapError((cause) =>
+              toProjectRuntimeError({
+                message: "Failed to resolve project runtime filesystem state for restore.",
+                projectId: resolved.project.id,
+                runtimeId: resolved.runtimeId,
+                threadId: descriptorThreadId,
+                cause,
+              }),
+            ),
+          );
+          yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+          yield* stopRuntimeDescriptors({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            descriptors,
+            message: "Failed to stop project runtime before restore.",
+          });
+          yield* destroyRuntimeDescriptors({
+            projectId: resolved.project.id,
+            runtimeId: resolved.runtimeId,
+            descriptors,
+            fallbackThreadId: resolved.bindingThread.id,
+            message: "Failed to invalidate project runtime before restore.",
+          });
+          yield* Effect.try({
+            try: () =>
+              replaceRuntimeStateFromArchive({
+                stateDir: config.stateDir,
+                runtimeRootPath: launchContext.hostRuntimePath,
+                runtimeId: resolved.runtimeId,
+                projectId: resolved.project.id,
+                snapshotId: snapshot.id,
+              }),
+            catch: (cause) =>
+              toProjectRuntimeError({
+                message: "Failed to restore project runtime filesystem state.",
+                projectId: resolved.project.id,
+                runtimeId: resolved.runtimeId,
+                threadId: descriptorThreadId,
+                cause,
+              }),
+          });
+        }).pipe(
+          Effect.catchTag("ProjectRuntimeError", (error) =>
+            markLifecycleState({
+              projectId: resolved.project.id,
+              runtimeId: resolved.runtimeId,
+              lifecycleState: "failed",
+              lastError: error.message,
+            }).pipe(Effect.flatMap(() => Effect.fail(error))),
+          ),
+        );
+
+        yield* updateMetadata(resolved.runtimeId, (current) => ({
+          runtimeId: resolved.runtimeId,
+          projectId: resolved.project.id,
+          lifecycleState: "stopped",
+          updatedAt: new Date().toISOString(),
+          lastError: null,
+          snapshots: current?.snapshots ?? metadata?.snapshots ?? [],
+        }));
+      }),
+    );
     return yield* describeRuntime(input);
   });
 
