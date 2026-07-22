@@ -2989,7 +2989,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         if (context.turnState) {
           yield* completeTurn(context, "interrupted", "Claude runtime interrupted.");
         }
-      } else {
+      } else if (context.turnState) {
         const failures = exit.cause.reasons.flatMap((reason) =>
           Cause.isFailReason(reason) ? [reason.error] : [],
         );
@@ -2999,6 +2999,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           failureTags: failures.map((failure) => failure._tag),
         });
         yield* completeTurn(context, "failed", message);
+      } else {
+        // No turn is in flight, so the CLI subprocess died between turns rather
+        // than failing one — almost always the idle reaper stopping the Project
+        // Runtime (SIGKILL -> "exited with code 137"), which is expected
+        // lifecycle. Surfacing it as a runtime error just spams the work log
+        // with a red row after a fully successful response, so only log it.
+        const failures = exit.cause.reasons.flatMap((reason) =>
+          Cause.isFailReason(reason) ? [reason.error] : [],
+        );
+        yield* Effect.logDebug("claude runtime stream ended with no active turn", {
+          threadId: context.session.threadId,
+          detail: failures[0]?.detail ?? "Claude runtime stream ended.",
+        });
       }
     } else if (context.turnState) {
       yield* completeTurn(context, "interrupted", "Claude runtime stream ended.");

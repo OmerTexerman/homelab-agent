@@ -1221,6 +1221,14 @@ function ChatViewContent(props: ChatViewProps) {
   const [localServerErrorsByThreadKey, setLocalServerErrorsByThreadKey] = useState<
     Record<string, LocalThreadErrorEntry>
   >({});
+  // The banner falls back to the server session's persisted `lastError`, so
+  // dismissing must remember which server error was dismissed (by its exact
+  // text) — otherwise clearing local state just lets the same `lastError` flow
+  // straight back in and the ✕ appears to do nothing. A different/newer error
+  // won't match the remembered signature, so it surfaces again as expected.
+  const [dismissedServerErrorByThreadKey, setDismissedServerErrorByThreadKey] = useState<
+    Record<string, string>
+  >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
@@ -1389,8 +1397,12 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const serverSessionLastError = serverThread?.session?.lastError ?? null;
+  const serverSessionErrorDismissed =
+    serverSessionLastError !== null &&
+    dismissedServerErrorByThreadKey[routeThreadKey] === serverSessionLastError;
   const threadError = isServerThread
-    ? (localServerError ?? serverThread?.session?.lastError ?? null)
+    ? (localServerError ?? (serverSessionErrorDismissed ? null : serverSessionLastError))
     : localDraftError;
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -5319,7 +5331,18 @@ function ChatViewContent(props: ChatViewProps) {
         <ProviderStatusBanner status={activeProviderStatus} />
         <ThreadErrorBanner
           error={threadError}
-          onDismiss={() => setThreadError(activeThread.id, null)}
+          onDismiss={() => {
+            setThreadError(activeThread.id, null);
+            // Also suppress the server session's persisted `lastError` (the
+            // banner's fallback source) so the ✕ actually sticks.
+            if (serverSessionLastError !== null) {
+              setDismissedServerErrorByThreadKey((existing) =>
+                existing[routeThreadKey] === serverSessionLastError
+                  ? existing
+                  : { ...existing, [routeThreadKey]: serverSessionLastError },
+              );
+            }
+          }}
         />
         {isServerThread && activeProject ? (
           <ProjectRuntimePanel
