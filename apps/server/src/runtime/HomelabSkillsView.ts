@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodePath from "node:path";
 import type { HomelabSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -13,8 +13,11 @@ import * as FileSystem from "effect/FileSystem";
  * - `<home>/.claude/skills/<name>/SKILL.md` — Claude Code's user-level skills directory,
  *   so skills are auto-discoverable there without extra prompting.
  *
- * The `.homelab/skills` subtree is reconciled (stale generated skill dirs are pruned);
- * `.claude/skills` is upsert-only because agents and host syncs may also write there.
+ * Both subtrees are reconciled: stale generated skill dirs are pruned. Because
+ * agents and host syncs may also write into `.claude/skills`, we only prune
+ * entries this view previously managed — tracked in a `.homelab-managed.json`
+ * manifest — so a renamed/deleted skill stops auto-loading without disturbing
+ * skills authored elsewhere.
  */
 
 export interface HomelabSkillsViewInput {
@@ -81,6 +84,7 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
   const fileSystem = yield* FileSystem.FileSystem;
   const skillsDir = NodePath.join(input.workspaceRoot, ".homelab", "skills");
   const claudeSkillsDir = NodePath.join(input.homeRoot, ".claude", "skills");
+  const claudeManifestPath = NodePath.join(claudeSkillsDir, ".homelab-managed.json");
 
   const expectedDirs = new Set(input.skills.map((skill) => safeSkillSegment(skill.name)));
 
@@ -117,4 +121,28 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
         .pipe(Effect.orElseSucceed(() => undefined));
     }
   }
+
+  // Reconcile Claude Code's user skills dir. Prune only the segments this view
+  // managed on a previous run (per the manifest) and are now gone — never touch
+  // skills authored by the agent or synced from the host. Without this, a
+  // deleted/renamed skill kept auto-loading from ~/.claude/skills forever.
+  const previouslyManaged = yield* fileSystem.readFileString(claudeManifestPath).pipe(
+    Effect.map((raw) => {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === "string")
+        : [];
+    }),
+    Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+  );
+  for (const segment of previouslyManaged) {
+    if (!expectedDirs.has(segment)) {
+      yield* fileSystem
+        .remove(NodePath.join(claudeSkillsDir, segment), { recursive: true })
+        .pipe(Effect.orElseSucceed(() => undefined));
+    }
+  }
+  yield* fileSystem
+    .writeFileString(claudeManifestPath, `${JSON.stringify([...expectedDirs].sort())}\n`)
+    .pipe(Effect.orElseSucceed(() => undefined));
 });
