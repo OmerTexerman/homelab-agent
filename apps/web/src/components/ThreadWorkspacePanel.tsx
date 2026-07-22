@@ -1045,7 +1045,13 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly resolvedTheme: "light" | "dark";
+  // "surface" renders the files browser + editor as content inside the unified
+  // right-panel surface (no standalone aside chrome, tab bar, or width resize;
+  // the surface owns those). The Memory tab is a separate surface, so surface
+  // mode is always the files view.
+  readonly variant?: "standalone" | "surface";
 }) {
+  const embedded = props.variant === "surface";
   const queryClient = useQueryClient();
   const [panelMode, setPanelMode] = useState<WorkspacePanelMode>("files");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1139,7 +1145,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       threadId: props.threadId,
       basePath: currentPath,
       query: searchQuery.trim(),
-      enabled: props.open && panelMode === "files",
+      enabled: props.open && (embedded || panelMode === "files"),
       limit: 1_000,
     }),
   );
@@ -1173,7 +1179,10 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       threadId: props.threadId,
       path: selectedKind === "file" ? selectedPath : null,
       enabled:
-        props.open && panelMode === "files" && selectedKind === "file" && selectedPath !== null,
+        props.open &&
+        (embedded || panelMode === "files") &&
+        selectedKind === "file" &&
+        selectedPath !== null,
     }),
   );
 
@@ -1326,7 +1335,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   });
 
   const isDirty = selectedKind === "file" && editorValue !== savedValue;
-  const editorOpen = panelMode === "files" && selectedKind === "file" && Boolean(selectedPath);
+  const editorOpen =
+    (embedded || panelMode === "files") && selectedKind === "file" && Boolean(selectedPath);
   const selectedFilePath = selectedPath ?? "";
   const selectedFileUnsupported =
     selectedKind === "file" ? fileQuery.data?.contents === null : false;
@@ -1462,18 +1472,23 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
 
   return (
     <aside
-      className="relative flex min-h-0 shrink-0 border-l border-border bg-background/96"
-      style={{ width: `${panelWidth}px` }}
+      className={cn(
+        "relative flex min-h-0",
+        embedded ? "size-full flex-1" : "shrink-0 border-l border-border bg-background/96",
+      )}
+      style={embedded ? undefined : { width: `${panelWidth}px` }}
     >
-      <button
-        type="button"
-        aria-label="Resize Runtime Workspace panel"
-        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
-        onPointerDown={handlePanelResizePointerDown}
-        onPointerMove={handlePanelResizePointerMove}
-        onPointerUp={handlePanelResizePointerEnd}
-        onPointerCancel={handlePanelResizePointerEnd}
-      />
+      {embedded ? null : (
+        <button
+          type="button"
+          aria-label="Resize Runtime Workspace panel"
+          className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-border/80 hover:after:bg-foreground/60"
+          onPointerDown={handlePanelResizePointerDown}
+          onPointerMove={handlePanelResizePointerMove}
+          onPointerUp={handlePanelResizePointerEnd}
+          onPointerCancel={handlePanelResizePointerEnd}
+        />
+      )}
       <div
         className={cn(
           "flex min-h-0 flex-col",
@@ -1481,70 +1496,72 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
         )}
         style={editorOpen ? { width: `${treeWidth}px` } : undefined}
       >
-        <div className="border-b border-border px-3 py-2">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-foreground">
-                {HOMELAB_PRODUCT_COPY.runtimeWorkspace.title}
+        {embedded ? null : (
+          <div className="border-b border-border px-3 py-2">
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-foreground">
+                  {HOMELAB_PRODUCT_COPY.runtimeWorkspace.title}
+                </div>
+                <div className="truncate text-[11px] text-muted-foreground">
+                  {HOMELAB_PRODUCT_COPY.runtimeWorkspace.subtitle}
+                </div>
               </div>
-              <div className="truncate text-[11px] text-muted-foreground">
-                {HOMELAB_PRODUCT_COPY.runtimeWorkspace.subtitle}
-              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={refreshWorkspace}
+                disabled={entriesQuery.isFetching}
+                aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.refreshAction}
+              >
+                {entriesQuery.isFetching ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCwIcon className="size-3.5" />
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={props.onClose}
+                aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.closeAction}
+              >
+                <XIcon className="size-3.5" />
+              </Button>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7"
-              onClick={refreshWorkspace}
-              disabled={entriesQuery.isFetching}
-              aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.refreshAction}
-            >
-              {entriesQuery.isFetching ? (
-                <LoaderIcon className="size-3.5 animate-spin" />
-              ) : (
-                <RefreshCwIcon className="size-3.5" />
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="size-7"
-              onClick={props.onClose}
-              aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.closeAction}
-            >
-              <XIcon className="size-3.5" />
-            </Button>
+            <div className="mt-2 grid grid-cols-2 rounded-md border border-border bg-muted/20 p-0.5">
+              <button
+                type="button"
+                className={cn(
+                  "rounded px-2 py-1 text-xs",
+                  panelMode === "files"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setPanelMode("files")}
+              >
+                Files
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "rounded px-2 py-1 text-xs",
+                  panelMode === "memory"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setPanelMode("memory")}
+              >
+                Memory
+              </button>
+            </div>
           </div>
-          <div className="mt-2 grid grid-cols-2 rounded-md border border-border bg-muted/20 p-0.5">
-            <button
-              type="button"
-              className={cn(
-                "rounded px-2 py-1 text-xs",
-                panelMode === "files"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setPanelMode("files")}
-            >
-              Files
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "rounded px-2 py-1 text-xs",
-                panelMode === "memory"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setPanelMode("memory")}
-            >
-              Memory
-            </button>
-          </div>
-        </div>
-        {panelMode === "files" ? (
+        )}
+        {embedded || panelMode === "files" ? (
           <>
             <div className="border-b border-border px-3 py-2">
               <form

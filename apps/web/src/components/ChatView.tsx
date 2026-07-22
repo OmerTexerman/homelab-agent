@@ -5246,6 +5246,19 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "files" && isServerThread && activeThread ? (
+      // Homelab: the workspace lives inside the per-thread runtime container, so
+      // the Files surface reads it via the container-backed panel (threadWorkspace
+      // RPCs + CodeMirror editor + download), not the upstream host-backed browser.
+      <ThreadWorkspacePanel
+        variant="surface"
+        environmentId={activeThread.environmentId}
+        projectId={activeThread.projectId}
+        threadId={activeThread.id}
+        open
+        onClose={() => {}}
+        resolvedTheme={resolvedTheme}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -5669,7 +5682,7 @@ function ChatViewContent(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
-          filesAvailable={activeProject !== null}
+          filesAvailable={isServerThread}
           browserHidden={!isPreviewSupportedInRuntime()}
           diffHidden={!shouldShowDiffSurface()}
         >
@@ -5698,7 +5711,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
-            filesAvailable={activeProject !== null}
+            filesAvailable={isServerThread}
             browserHidden={!isPreviewSupportedInRuntime()}
             diffHidden={!shouldShowDiffSurface()}
           >
