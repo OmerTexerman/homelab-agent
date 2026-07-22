@@ -57,43 +57,61 @@ function ProviderUpdateToastIcon({ provider }: { provider: ProviderDriverKind })
   );
 }
 
-function updateProviderUpdateToast(input: {
-  readonly toastId: ProviderUpdateToastId;
+/**
+ * Build the `toastManager.update` payload for a provider-update view.
+ *
+ * `toastManager.update` shallow-merges into the existing toast, so a view that
+ * should NOT offer an action must set `actionProps: undefined` explicitly —
+ * otherwise the initial "Update" button survives the merge and lingers on the
+ * running and "providers updated" toasts even though there is nothing left to
+ * update. Pure so the action-clearing is unit-testable without rendering.
+ */
+export function buildProviderUpdateToastPatch(input: {
   readonly view: ProviderUpdateToastView;
   readonly openSettings: () => void;
 }) {
   if (input.view.type === "loading" || input.view.type === "success") {
-    toastManager.update(input.toastId, {
+    return {
       type: input.view.type,
       title: input.view.title,
       description: input.view.description,
       timeout: 0,
+      // The render gates the action on `actionProps` being defined, so
+      // clearing it here removes the stale "Update" button.
+      actionProps: undefined,
       data: {
         hideCopyButton: true,
         ...(input.view.dismissAfterVisibleMs !== undefined
           ? { dismissAfterVisibleMs: input.view.dismissAfterVisibleMs }
           : {}),
       },
-    });
-    return;
+    };
   }
 
+  return stackedThreadToast({
+    type: input.view.type,
+    title: input.view.title,
+    description: input.view.description,
+    timeout: 0,
+    actionProps: {
+      children: "Settings",
+      onClick: input.openSettings,
+    },
+    actionVariant: "outline",
+    data: {
+      hideCopyButton: true,
+    },
+  });
+}
+
+function updateProviderUpdateToast(input: {
+  readonly toastId: ProviderUpdateToastId;
+  readonly view: ProviderUpdateToastView;
+  readonly openSettings: () => void;
+}) {
   toastManager.update(
     input.toastId,
-    stackedThreadToast({
-      type: input.view.type,
-      title: input.view.title,
-      description: input.view.description,
-      timeout: 0,
-      actionProps: {
-        children: "Settings",
-        onClick: input.openSettings,
-      },
-      actionVariant: "outline",
-      data: {
-        hideCopyButton: true,
-      },
-    }),
+    buildProviderUpdateToastPatch({ view: input.view, openSettings: input.openSettings }),
   );
 }
 
