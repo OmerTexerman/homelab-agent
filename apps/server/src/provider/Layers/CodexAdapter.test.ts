@@ -101,6 +101,8 @@ function makeThreadRuntimeTestLayer(launchContext: ThreadRuntimeLaunchContext) {
     touchRuntime: () => Effect.die(new Error("ThreadRuntime.touchRuntime is not used")),
     refreshRuntimeEnvironment: () =>
       Effect.die(new Error("ThreadRuntime.refreshRuntimeEnvironment is not used")),
+    refreshRuntimeSkills: () =>
+      Effect.die(new Error("ThreadRuntime.refreshRuntimeSkills is not used")),
     destroyRuntime: () => Effect.die(new Error("ThreadRuntime.destroyRuntime is not used")),
     resolveExecutionContext: () => Effect.succeed(launchContext.execution),
     resolveLaunchContext: () => Effect.succeed(launchContext),

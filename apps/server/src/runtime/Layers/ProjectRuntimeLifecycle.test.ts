@@ -293,6 +293,13 @@ function makeHarness(input: {
       }
       return Effect.succeed(descriptor);
     },
+    refreshRuntimeSkills: (id) => {
+      const descriptor = descriptors.get(String(id));
+      if (!descriptor) {
+        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
+      }
+      return Effect.succeed(descriptor);
+    },
     destroyRuntime: (id) =>
       Effect.sync(() => {
         const descriptor = descriptors.get(String(id));
@@ -349,6 +356,7 @@ function makeHarness(input: {
     remove: () => Effect.die("unused"),
     markPromoted: () => Effect.die("unused"),
     migrateStandaloneThreadEntries: () => Effect.die("unused"),
+    changes: Stream.empty,
   } satisfies ProjectMemoryShape;
 
   const layer = Layer.mergeAll(

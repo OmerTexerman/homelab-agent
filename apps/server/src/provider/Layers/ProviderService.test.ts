@@ -365,6 +365,7 @@ function makeThreadRuntimeServiceForProviderServiceTest(input: {
     stopRuntime: () => Effect.void,
     touchRuntime: () => Effect.void,
     refreshRuntimeEnvironment: (threadId) => Effect.succeed(descriptor(threadId)),
+    refreshRuntimeSkills: (threadId) => Effect.succeed(descriptor(threadId)),
     destroyRuntime: () => Effect.void,
     resolveExecutionContext: (threadId) =>
       Effect.succeed({

@@ -147,6 +147,18 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
         runtimes.set(key, runtime);
         return runtime;
       }),
+    refreshRuntimeSkills: (threadId) =>
+      Effect.sync(() => {
+        const key = String(threadId);
+        return (
+          runtimes.get(key) ??
+          makeDescriptor({
+            threadId,
+            provider: null,
+            runtimeMode: "full-access",
+          })
+        );
+      }),
     destroyRuntime: (threadId) =>
       Effect.sync(() => {
         runtimes.delete(String(threadId));

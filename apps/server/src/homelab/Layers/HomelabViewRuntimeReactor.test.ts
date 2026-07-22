@@ -104,7 +104,12 @@ describe("HomelabViewRuntimeReactor", () => {
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       };
-      const snapshot: HomelabSnapshot = { entities: [entity], relations: [], observations: [] };
+      const snapshot: HomelabSnapshot = {
+        entities: [entity],
+        relations: [],
+        observations: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
 
       const runtimeLayer = Layer.mock(ThreadRuntime)({
         listRuntimes: () => Effect.succeed([descriptor("thread-a")]),

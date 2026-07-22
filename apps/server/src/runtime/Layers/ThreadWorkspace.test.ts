@@ -68,6 +68,7 @@ const ThreadRuntimeTestLive = Layer.succeed(ThreadRuntime, {
   stopRuntime: () => Effect.die("unused"),
   touchRuntime: () => Effect.die("unused"),
   refreshRuntimeEnvironment: () => Effect.die("unused"),
+  refreshRuntimeSkills: () => Effect.die("unused"),
   destroyRuntime: () => Effect.die("unused"),
   resolveExecutionContext: () =>
     Effect.succeed({

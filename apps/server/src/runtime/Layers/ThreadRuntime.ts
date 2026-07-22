@@ -552,7 +552,10 @@ def request_json(method: str, path: str, payload=None, query=None):
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
-        fail(f"HTTP {error.code} {error.reason}: {detail or path}", error.code)
+        # Exit 1, not the HTTP status: process exit codes wrap mod 256 (404 -> 148,
+        # 500 -> 244), so using the status makes the shell exit code meaningless to
+        # the agent. The status stays in the message; success is read from the code.
+        fail(f"HTTP {error.code} {error.reason}: {detail or path}")
     except urllib.error.URLError as error:
         fail(f"Could not reach homelab server: {error.reason}")
     if not raw.strip():
@@ -878,6 +881,30 @@ def find_secret_descriptor(key: str):
     return None
 
 
+RUNTIME_ENV_PATH = os.path.expanduser("~/.homelab-runtime.env")
+
+
+def secret_present_in_runtime_env(key: str) -> bool:
+    # The registry having a value ("hasValue") does NOT mean the value has reached
+    # THIS runtime: the view/env reactor rewrites ~/.homelab-runtime.env asynchronously.
+    # Waiting only on the registry races that rewrite (and misreports success), so the
+    # authoritative "it is here" signal is the key appearing in the local env file.
+    try:
+        with open(RUNTIME_ENV_PATH, "r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                name = stripped.split("=", 1)[0].strip()
+                if name.startswith("export "):
+                    name = name[len("export "):].strip()
+                if name == key:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def cmd_secret_request(args):
     payload = {"key": args.key}
     if args.label:
@@ -885,20 +912,35 @@ def cmd_secret_request(args):
     if args.summary:
         payload["summary"] = args.summary
     secret = request_json("POST", "/api/homelab/secrets/request", payload=payload)
-    if args.no_wait or not isinstance(secret, dict) or secret.get("hasValue") is True:
+    already_ready = (
+        isinstance(secret, dict)
+        and secret.get("hasValue") is True
+        and secret_present_in_runtime_env(args.key)
+    )
+    if args.no_wait or already_ready:
         print_json(secret)
         return
 
     timeout_seconds = None if args.timeout_seconds <= 0 else args.timeout_seconds
     poll_started_at = time.monotonic()
     print(
-        f"Waiting for secret {args.key} to be supplied in the UI...",
+        f"Waiting for secret {args.key} to be supplied in the UI and materialized "
+        f"into this runtime...",
         file=sys.stderr,
     )
 
     while True:
         current = find_secret_descriptor(args.key)
-        if isinstance(current, dict) and current.get("hasValue") is True:
+        has_value = isinstance(current, dict) and current.get("hasValue") is True
+        # Require BOTH: the registry holds a value AND it has landed in this runtime's
+        # env file. Only then is the secret usable by a subsequent command here.
+        if has_value and secret_present_in_runtime_env(args.key):
+            print(
+                f"Secret {args.key} is now materialized in this runtime. It will be "
+                f"present in the environment of your NEXT command; to use it in the "
+                f"current shell run: source ~/.homelab-runtime.env",
+                file=sys.stderr,
+            )
             print_json(current)
             return
         if timeout_seconds is not None and time.monotonic() - poll_started_at >= timeout_seconds:
@@ -1011,7 +1053,8 @@ def cmd_skill_add(args):
     payload["body"] = body
     print_json(request_json("POST", "/api/homelab/skills", payload=payload))
     print(
-        "Skill saved. It is materialized into runtime skill folders on the next turn start.",
+        "Skill saved. It is materialized into running runtimes' skill folders "
+        "automatically (within a moment); no restart needed.",
         file=sys.stderr,
     )
 
