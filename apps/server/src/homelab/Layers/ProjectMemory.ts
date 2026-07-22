@@ -12,7 +12,9 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
@@ -21,6 +23,7 @@ import { ProjectMemoryEntryRepository } from "../../persistence/Services/Project
 import {
   ProjectMemory,
   ProjectMemoryError,
+  type ProjectMemoryChangeEvent,
   type ProjectMemoryListResolvedInput,
   type ProjectMemoryShape,
 } from "../Services/ProjectMemory.ts";
@@ -172,6 +175,10 @@ const makeProjectMemory = Effect.gen(function* () {
   const repository = yield* ProjectMemoryEntryRepository;
   const sql = yield* SqlClient.SqlClient;
 
+  const changesPubSub = yield* PubSub.unbounded<ProjectMemoryChangeEvent>();
+  const publishChange = (event: ProjectMemoryChangeEvent) =>
+    PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
+
   const listTranscriptRows = SqlSchema.findAll({
     Request: Schema.Struct({
       projectId: ProjectMemoryEntry.fields.projectId,
@@ -220,6 +227,7 @@ const makeProjectMemory = Effect.gen(function* () {
       yield* repository
         .upsert(entry)
         .pipe(Effect.mapError(toProjectMemoryError("Failed to persist project memory entry.")));
+      yield* publishChange({ projectId: entry.projectId });
       return entry;
     });
 
@@ -328,6 +336,7 @@ const makeProjectMemory = Effect.gen(function* () {
       yield* repository
         .upsert(updated)
         .pipe(Effect.mapError(toProjectMemoryError("Failed to update project memory entry.")));
+      yield* publishChange({ projectId: updated.projectId });
       return updated;
     });
 
@@ -340,6 +349,7 @@ const makeProjectMemory = Effect.gen(function* () {
       yield* repository
         .deleteById({ memoryId })
         .pipe(Effect.mapError(toProjectMemoryError("Failed to delete project memory entry.")));
+      yield* publishChange({ projectId: entry.projectId });
       return { removed: true, entry };
     });
 
@@ -372,6 +382,7 @@ const makeProjectMemory = Effect.gen(function* () {
           message: "Project memory entry disappeared after promotion update.",
         });
       }
+      yield* publishChange({ projectId: input.projectId });
       return updated;
     });
 
@@ -444,6 +455,7 @@ const makeProjectMemory = Effect.gen(function* () {
           { concurrency: 1 },
         );
 
+        yield* publishChange({ projectId: input.targetProjectId });
         return {
           copiedEntries,
           movedEntries: [],
@@ -473,6 +485,8 @@ const makeProjectMemory = Effect.gen(function* () {
         { concurrency: 1 },
       );
 
+      yield* publishChange({ projectId: input.sourceProjectId });
+      yield* publishChange({ projectId: input.targetProjectId });
       return {
         copiedEntries: [],
         movedEntries,
@@ -490,6 +504,7 @@ const makeProjectMemory = Effect.gen(function* () {
     remove,
     markPromoted,
     migrateStandaloneThreadEntries,
+    changes: Stream.fromPubSub(changesPubSub),
   } satisfies ProjectMemoryShape;
 });
 

@@ -14,11 +14,24 @@ import type {
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
 
 export class ProjectMemoryError extends Data.TaggedError("ProjectMemoryError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * Emitted whenever a project's memory changes (create/update/remove/promote/
+ * standalone-migrate). Consumed by the single view-materialization reactor so
+ * the affected project's running runtimes get their `.homelab/memory` view
+ * refreshed — replacing the per-route hand-rolled refresh that any new write
+ * path could forget. Carries the affected `projectId`; a standalone move emits
+ * one event per affected project.
+ */
+export interface ProjectMemoryChangeEvent {
+  readonly projectId: ProjectId;
+}
 
 export interface ProjectMemoryCreateResolvedInput extends ProjectMemoryCreateInput {
   readonly projectId: ProjectId;
@@ -96,6 +109,8 @@ export interface ProjectMemoryShape {
   readonly migrateStandaloneThreadEntries: (
     input: ProjectMemoryStandaloneMoveInput,
   ) => Effect.Effect<ProjectMemoryStandaloneMoveResult, ProjectMemoryError>;
+  /** Memory-change events for the runtime view reactor (see ProjectMemoryChangeEvent). */
+  readonly changes: Stream.Stream<ProjectMemoryChangeEvent>;
 }
 
 export class ProjectMemory extends Context.Service<ProjectMemory, ProjectMemoryShape>()(

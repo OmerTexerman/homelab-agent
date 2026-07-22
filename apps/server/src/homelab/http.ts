@@ -61,7 +61,6 @@ import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRun
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { refreshActiveProjectContextViews } from "./ProjectMemoryContextViews.ts";
 
 class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
   readonly message: string;
@@ -678,7 +677,6 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
       ...input,
       projectId,
     });
-    yield* refreshActiveProjectContextViews(projectId);
     return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
@@ -711,7 +709,6 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
     const projectMemory = yield* ProjectMemory;
     const recorded = yield* recordPromotedDiscoveries(input.promotion);
     const entry = yield* projectMemory.markPromoted({ ...input, projectId });
-    yield* refreshActiveProjectContextViews(projectId);
     return HttpServerResponse.jsonUnsafe(
       {
         entry,
@@ -1072,7 +1069,6 @@ export const homelabCuratorMemoryUpdateRouteLayer = HttpRouter.add(
       threadId: input.threadId,
       payload: { memoryId: input.memoryId, projectId: entry.projectId },
     });
-    yield* refreshActiveProjectContextViews(entry.projectId);
     return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
@@ -1111,9 +1107,6 @@ export const homelabCuratorMemoryDeleteRouteLayer = HttpRouter.add(
       threadId: input.threadId,
       payload: { memoryId: input.memoryId, projectId: result.entry?.projectId },
     });
-    if (result.entry) {
-      yield* refreshActiveProjectContextViews(result.entry.projectId);
-    }
     return HttpServerResponse.jsonUnsafe({ removed: true, entry: result.entry }, { status: 200 });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),

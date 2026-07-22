@@ -5,10 +5,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
+import { refreshActiveProjectContextViews } from "../ProjectMemoryContextViews.ts";
 import { writeHomelabGraphView } from "../../runtime/HomelabContextView.ts";
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import { HomelabSkills } from "../Services/HomelabSkills.ts";
+import { ProjectMemory } from "../Services/ProjectMemory.ts";
 import {
   HomelabViewRuntimeReactor,
   type HomelabViewRuntimeReactorShape,
@@ -26,6 +28,7 @@ const make = Effect.gen(function* () {
   const threadRuntime = yield* ThreadRuntime;
   const skills = yield* Effect.serviceOption(HomelabSkills);
   const knowledgeGraph = yield* Effect.serviceOption(KnowledgeGraph);
+  const projectMemory = yield* Effect.serviceOption(ProjectMemory);
   const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem);
 
   // Re-materialize every runtime's skills. Running containers pick up the new
@@ -106,9 +109,25 @@ const make = Effect.gen(function* () {
         );
       }
 
+      if (Option.isSome(projectMemory)) {
+        // Memory is project-scoped: refresh only the affected project's running
+        // runtimes. Not debounced globally — coalescing across distinct projects
+        // would drop the per-project targeting; refreshActiveProjectContextViews
+        // is idempotent, so per-event is correct.
+        yield* Effect.forkScoped(
+          projectMemory.value.changes.pipe(
+            Stream.runForEach((event) => refreshActiveProjectContextViews(event.projectId)),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("homelab.view-runtime-reactor.memory-failed", { cause }),
+            ),
+          ),
+        );
+      }
+
       yield* Effect.logInfo("homelab.view-runtime-reactor.started", {
         skills: Option.isSome(skills),
         graph: Option.isSome(knowledgeGraph),
+        memory: Option.isSome(projectMemory),
       });
     });
 
