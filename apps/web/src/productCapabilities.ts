@@ -128,7 +128,7 @@ export const HOMELAB_PRODUCT_COPY = {
       "This stops and hides the active runtime while preserving project memory and transcripts.",
     resetConfirmationTitle: "Reset this Project Runtime?",
     resetConfirmationDescription:
-      "This replaces Runtime Workspace state while preserving project memory and transcripts.",
+      "This wipes the runtime's workspace, home, and any installed tools and recreates it fresh. Durable project memory and transcripts are preserved.",
     cleanupConfirmationTitle: "Clean scratch files from this Project Runtime?",
     cleanupConfirmationDescription:
       "This removes temporary, cache, and build outputs while preserving .homelab, memory, and durable files.",

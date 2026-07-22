@@ -10,7 +10,6 @@ import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   GitMergeIcon,
-  ArchiveIcon,
   CameraIcon,
   EraserIcon,
   HistoryIcon,
@@ -55,7 +54,6 @@ async function runProjectRuntimeCommand<W, A, E>(
 type ProjectRuntimePanelOperation =
   | { type: "wake" }
   | { type: "sleep" }
-  | { type: "archive" }
   | { type: "reset" }
   | { type: "cleanupScratch" }
   | { type: "snapshot"; name: string }
@@ -164,11 +162,6 @@ export function ProjectRuntimePanel({
             environmentId,
             input: operationInput,
           });
-        case "archive":
-          return runProjectRuntimeCommand(projectRuntimeEnvironment.archive, {
-            environmentId,
-            input: operationInput,
-          });
         case "reset":
           return runProjectRuntimeCommand(projectRuntimeEnvironment.reset, {
             environmentId,
@@ -248,20 +241,6 @@ export function ProjectRuntimePanel({
 
   const mergeIsolatedRuntime = useCallback(() => {
     runOperation({ type: "mergeIsolated" });
-  }, [runOperation]);
-
-  const archiveRuntime = useCallback(() => {
-    void (async () => {
-      const confirmed = await confirmProjectRuntimeAction(
-        [
-          HOMELAB_PRODUCT_COPY.projectRuntime.archiveConfirmationTitle,
-          HOMELAB_PRODUCT_COPY.projectRuntime.archiveConfirmationDescription,
-        ].join("\n"),
-      );
-      if (confirmed) {
-        runOperation({ type: "archive" });
-      }
-    })();
   }, [runOperation]);
 
   const resetRuntime = useCallback(() => {
@@ -395,10 +374,6 @@ export function ProjectRuntimePanel({
               Wake
             </Button>
           )}
-          <Button size="xs" variant="outline" onClick={archiveRuntime} disabled={busy}>
-            <ArchiveIcon className="size-3.5" />
-            Archive
-          </Button>
           <Button size="xs" variant="destructive-outline" onClick={resetRuntime} disabled={busy}>
             <RotateCcwIcon className="size-3.5" />
             Reset
