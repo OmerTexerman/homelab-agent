@@ -572,13 +572,39 @@ export function renderHomelabContextViewFiles(
   // genuinely empty graph should mirror as empty), so "empty" and "not managed
   // here" stay distinct.
   if (shouldManageGraphSubtree(input)) {
-    const graphEntities = (input.graphEntities ?? []).toSorted((left, right) =>
-      `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`),
-    );
-    const graphRelations = input.graphRelations ?? [];
-    files.push({
+    files.push(...renderHomelabGraphFiles(input.graphEntities ?? [], input.graphRelations ?? []));
+  }
+
+  return files;
+}
+
+/**
+ * The graph subtree is managed by a render pass only when the caller supplies
+ * graph data. Callers that omit both `graphEntities` and `graphRelations` leave
+ * `.homelab/graph/**` exactly as it was on disk (no write, no prune).
+ */
+function shouldManageGraphSubtree(
+  input: Pick<HomelabContextViewInput, "graphEntities" | "graphRelations">,
+): boolean {
+  return input.graphEntities !== undefined || input.graphRelations !== undefined;
+}
+
+/**
+ * Render just the `.homelab/graph/**` subtree (index, relations, per-entity
+ * pages). Shared by the full context-view render and the graph-only
+ * {@link writeHomelabGraphView} so the two can never diverge on graph layout.
+ */
+export function renderHomelabGraphFiles(
+  graphEntities: ReadonlyArray<HomelabEntity>,
+  graphRelations: ReadonlyArray<HomelabRelation>,
+): HomelabViewFile[] {
+  const sortedEntities = graphEntities.toSorted((left, right) =>
+    `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`),
+  );
+  const files: HomelabViewFile[] = [
+    {
       relativePath: ".homelab/graph/index.jsonl",
-      contents: graphEntities
+      contents: sortedEntities
         .map((entity) =>
           jsonLine({
             id: entity.id,
@@ -595,8 +621,8 @@ export function renderHomelabContextViewFiles(
           }),
         )
         .join(""),
-    });
-    files.push({
+    },
+    {
       relativePath: ".homelab/graph/relations.jsonl",
       contents: graphRelations
         .map((relation) =>
@@ -609,27 +635,15 @@ export function renderHomelabContextViewFiles(
           }),
         )
         .join(""),
+    },
+  ];
+  for (const entity of sortedEntities) {
+    files.push({
+      relativePath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
+      contents: renderGraphEntityMarkdown(entity, graphRelations),
     });
-    for (const entity of graphEntities) {
-      files.push({
-        relativePath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
-        contents: renderGraphEntityMarkdown(entity, graphRelations),
-      });
-    }
   }
-
   return files;
-}
-
-/**
- * The graph subtree is managed by a render pass only when the caller supplies
- * graph data. Callers that omit both `graphEntities` and `graphRelations` leave
- * `.homelab/graph/**` exactly as it was on disk (no write, no prune).
- */
-function shouldManageGraphSubtree(
-  input: Pick<HomelabContextViewInput, "graphEntities" | "graphRelations">,
-): boolean {
-  return input.graphEntities !== undefined || input.graphRelations !== undefined;
 }
 
 export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextView")(function* (
@@ -698,21 +712,55 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
   // shouldManageGraphSubtree). A memory/thread-only refresh omits graph and must
   // leave every entity page in place — otherwise it deletes the whole mirror.
   if (shouldManageGraphSubtree(input)) {
-    const graphEntitiesDir = NodePath.join(
-      input.hostWorkspacePath,
-      ".homelab",
-      "graph",
-      "entities",
-    );
-    const graphEntityEntries = yield* fileSystem
-      .readDirectory(graphEntitiesDir, { recursive: false })
-      .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-    yield* Effect.forEach(
-      graphEntityEntries.filter(
-        (name) => name.endsWith(".md") && !expectedGraphEntityFiles.has(name),
-      ),
-      (name) => fileSystem.remove(NodePath.join(graphEntitiesDir, name)).pipe(Effect.ignore),
-      { discard: true },
-    );
+    yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
   }
+});
+
+/**
+ * Reconcile-and-prune the per-entity graph pages against the keep-set produced
+ * by {@link renderHomelabGraphFiles}. Shared by the full context-view writer and
+ * the graph-only {@link writeHomelabGraphView}. Tolerates a missing directory.
+ */
+const pruneHomelabGraphEntities = Effect.fn("runtime.pruneHomelabGraphEntities")(function* (
+  hostWorkspacePath: string,
+  expectedGraphEntityFiles: ReadonlySet<string>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const graphEntitiesDir = NodePath.join(hostWorkspacePath, ".homelab", "graph", "entities");
+  const entries = yield* fileSystem
+    .readDirectory(graphEntitiesDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    entries.filter((name) => name.endsWith(".md") && !expectedGraphEntityFiles.has(name)),
+    (name) => fileSystem.remove(NodePath.join(graphEntitiesDir, name)).pipe(Effect.ignore),
+    { discard: true },
+  );
+});
+
+/**
+ * Write ONLY the `.homelab/graph/**` subtree (index, relations, entity pages)
+ * and prune orphaned entity pages — leaving threads/memory/bootstrap untouched.
+ * This is what the knowledge reactor calls to propagate a graph change into a
+ * running runtime without re-rendering (and re-pruning) the rest of the view.
+ */
+export const writeHomelabGraphView = Effect.fn("runtime.writeHomelabGraphView")(function* (input: {
+  readonly hostWorkspacePath: string;
+  readonly graphEntities: ReadonlyArray<HomelabEntity>;
+  readonly graphRelations: ReadonlyArray<HomelabRelation>;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const files = renderHomelabGraphFiles(input.graphEntities, input.graphRelations);
+  for (const file of files) {
+    const targetPath = NodePath.join(input.hostWorkspacePath, file.relativePath);
+    yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true });
+    yield* fileSystem.writeFileString(targetPath, file.contents);
+  }
+  const expectedGraphEntityFiles = new Set<string>();
+  for (const file of files) {
+    const graphMatch = /^\.homelab\/graph\/entities\/([^/]+\.md)$/.exec(file.relativePath);
+    if (graphMatch?.[1]) {
+      expectedGraphEntityFiles.add(graphMatch[1]);
+    }
+  }
+  yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
 });

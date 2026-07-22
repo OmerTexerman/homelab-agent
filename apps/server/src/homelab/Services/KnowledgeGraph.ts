@@ -13,12 +13,24 @@ import {
   type HomelabSnapshot,
 } from "@t3tools/contracts";
 import { Context, Data } from "effect";
-import type { Effect } from "effect";
+import type { Effect, Stream } from "effect";
 
 export class KnowledgeGraphError extends Data.TaggedError("KnowledgeGraphError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * Emitted whenever the graph is mutated (entity/relation upsert or delete,
+ * observation, promotion). Consumed by the single view-materialization reactor
+ * so the `.homelab/graph` mirror of a running runtime is regenerated without
+ * waiting for a restart. The graph is global (unscoped), so the reactor
+ * re-materializes the graph subtree of every running runtime; the payload is
+ * advisory (for logging). Pure reads never emit.
+ */
+export interface KnowledgeGraphChangeEvent {
+  readonly change: "entity-upserted" | "entity-deleted" | "relation-upserted" | "relation-deleted";
+}
 
 export interface KnowledgeGraphShape {
   readonly getSnapshot: () => Effect.Effect<HomelabSnapshot, KnowledgeGraphError>;
@@ -61,6 +73,8 @@ export interface KnowledgeGraphShape {
   readonly applyPromotion: (
     promotion: HomelabPromotionEnvelope,
   ) => Effect.Effect<HomelabPromotionRecorded, KnowledgeGraphError>;
+  /** Graph-mutation events for the runtime view reactor (see KnowledgeGraphChangeEvent). */
+  readonly changes: Stream.Stream<KnowledgeGraphChangeEvent>;
 }
 
 export class KnowledgeGraph extends Context.Service<KnowledgeGraph, KnowledgeGraphShape>()(

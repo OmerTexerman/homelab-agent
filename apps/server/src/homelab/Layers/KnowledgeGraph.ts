@@ -11,7 +11,7 @@ import {
   type HomelabRelationId,
   type HomelabSnapshot as HomelabSnapshotModel,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
@@ -19,6 +19,7 @@ import { ServerConfig } from "../../config.ts";
 import {
   KnowledgeGraph,
   KnowledgeGraphError,
+  type KnowledgeGraphChangeEvent,
   type KnowledgeGraphShape,
 } from "../Services/KnowledgeGraph.ts";
 
@@ -305,6 +306,10 @@ const makeKnowledgeGraph = Effect.gen(function* () {
   const writeSemaphore = yield* Semaphore.make(1);
   const statePath = path.join(stateDir, "homelab-graph.json");
 
+  const changesPubSub = yield* PubSub.unbounded<KnowledgeGraphChangeEvent>();
+  const publishChange = (event: KnowledgeGraphChangeEvent) =>
+    PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
+
   const writeSnapshotAtomically = (snapshot: HomelabSnapshotModel) => {
     const persistedState: PersistedKnowledgeGraphState = { version: 1, snapshot };
 
@@ -425,7 +430,7 @@ const makeKnowledgeGraph = Effect.gen(function* () {
           entities: mergeEntity(snapshot.entities, entity),
         }),
         result: undefined,
-      })),
+      })).pipe(Effect.tap(() => publishChange({ change: "entity-upserted" }))),
     upsertRelation: (relation) =>
       mutateSnapshot((snapshot) => ({
         nextSnapshot: withSnapshotUpdatedAt({
@@ -433,7 +438,7 @@ const makeKnowledgeGraph = Effect.gen(function* () {
           relations: upsertById(snapshot.relations, relation),
         }),
         result: undefined,
-      })),
+      })).pipe(Effect.tap(() => publishChange({ change: "relation-upserted" }))),
     deleteEntity: (entityId) =>
       mutateSnapshot<{
         removed: boolean;
@@ -458,7 +463,13 @@ const makeKnowledgeGraph = Effect.gen(function* () {
           }),
           result: { removed, removedRelationIds },
         };
-      }),
+      }).pipe(
+        Effect.tap((result) =>
+          result.removed || result.removedRelationIds.length > 0
+            ? publishChange({ change: "entity-deleted" })
+            : Effect.void,
+        ),
+      ),
     deleteRelation: (relationId) =>
       mutateSnapshot<{ removed: boolean }>((snapshot) => {
         const removed = snapshot.relations.some((relation) => relation.id === relationId);
@@ -472,7 +483,11 @@ const makeKnowledgeGraph = Effect.gen(function* () {
           }),
           result: { removed },
         };
-      }),
+      }).pipe(
+        Effect.tap((result) =>
+          result.removed ? publishChange({ change: "relation-deleted" }) : Effect.void,
+        ),
+      ),
     recordObservation: (observation) =>
       mutateSnapshot((snapshot) => ({
         nextSnapshot: withSnapshotUpdatedAt({
@@ -517,7 +532,8 @@ const makeKnowledgeGraph = Effect.gen(function* () {
           ),
           result: recorded,
         };
-      }),
+      }).pipe(Effect.tap(() => publishChange({ change: "entity-upserted" }))),
+    changes: Stream.fromPubSub(changesPubSub),
   } satisfies KnowledgeGraphShape;
 });
 
