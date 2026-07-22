@@ -76,6 +76,37 @@ function searchScore(candidate: string | undefined, query: string, baseScore: nu
   return 0;
 }
 
+/**
+ * Bias substring-match scores by how trustworthy/fresh an entity is, so a stale
+ * or deprecated duplicate can't outrank the fresh canonical entry on a slightly
+ * better string match. Never returns 0 for a matched entity — deprecated/old
+ * knowledge stays findable, just ranked below current knowledge.
+ */
+function freshnessMultiplier(entity: HomelabEntity, now: number): number {
+  let factor = 1;
+  if (entity.status === "deprecated") {
+    factor *= 0.35;
+  } else if (entity.status === "planned" || entity.status === "unknown") {
+    factor *= 0.8;
+  }
+  if (typeof entity.confidence === "number") {
+    factor *= 0.6 + 0.4 * Math.max(0, Math.min(1, entity.confidence));
+  }
+  const freshnessStamp = entity.lastVerifiedAt ?? entity.observedAt ?? entity.updatedAt;
+  const stampMs = freshnessStamp ? Date.parse(freshnessStamp) : Number.NaN;
+  if (Number.isFinite(stampMs)) {
+    const ageDays = (now - stampMs) / 86_400_000;
+    if (ageDays <= 7) {
+      factor *= 1.15;
+    } else if (ageDays >= 90) {
+      factor *= 0.7;
+    } else if (ageDays >= 30) {
+      factor *= 0.85;
+    }
+  }
+  return factor;
+}
+
 function upsertById<T extends { readonly id: string }>(
   values: ReadonlyArray<T>,
   nextValue: T,
@@ -110,6 +141,7 @@ function searchEntities(
 ): ReadonlyArray<HomelabGraphSearchResult> {
   const query = input.query.trim().toLowerCase();
   const limit = input.limit ?? 10;
+  const now = Date.now();
 
   return snapshot.entities
     .filter((entity) => matchesKinds(entity, input.kinds))
@@ -127,7 +159,7 @@ function searchEntities(
         );
       });
 
-      const score = Math.max(
+      const matchScore = Math.max(
         searchScore(entity.name, query, 120),
         searchScore(entity.title, query, 110),
         ...(entity.aliases ?? []).map((alias) => searchScore(alias, query, 100)),
@@ -143,6 +175,9 @@ function searchEntities(
           ),
         ),
       );
+      // Weight the raw match by trust/freshness so fresh canonical entries beat
+      // stale or deprecated duplicates on comparable string matches.
+      const score = matchScore > 0 ? matchScore * freshnessMultiplier(entity, now) : 0;
 
       const result: {
         entity: HomelabEntity;
