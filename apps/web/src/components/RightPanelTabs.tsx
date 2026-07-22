@@ -1,6 +1,15 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { ClipboardList, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import {
+  Brain,
+  ClipboardList,
+  FileDiff,
+  Files,
+  Globe2,
+  Plus,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -44,9 +53,11 @@ interface RightPanelTabsProps {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddMemory: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  memoryAvailable: boolean;
   // Homelab fork: hide (not just disable) a surface the product doesn't offer —
   // Browser has no web runtime, and homelab threads aren't Git repos so Diff is
   // meaningless. Default false keeps upstream behaviour (card shown/disabled).
@@ -57,7 +68,8 @@ interface RightPanelTabsProps {
 
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
-  files: "Files are only available when a project is open.",
+  files: "Files are only available once the thread's runtime exists.",
+  memory: "Memory is only available once the thread's runtime exists.",
   diff: "Diff is only available for server threads in Git repositories.",
 } as const;
 
@@ -96,9 +108,11 @@ function RightPanelEmptyState(props: {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddMemory: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  memoryAvailable: boolean;
   browserHidden?: boolean;
   diffHidden?: boolean;
 }) {
@@ -129,6 +143,15 @@ function RightPanelEmptyState(props: {
       hidden: false,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
+    },
+    {
+      label: "Memory",
+      description: "Browse and promote this thread's memory.",
+      icon: Brain,
+      available: props.memoryAvailable,
+      hidden: false,
+      disabledReason: SURFACE_DISABLED_REASONS.memory,
+      onClick: props.onAddMemory,
     },
     {
       label: "Diff",
@@ -207,6 +230,8 @@ function surfaceTitle(
       return "Diff";
     case "files":
       return "Files";
+    case "memory":
+      return "Memory";
     case "file":
       return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
     case "terminal":
@@ -264,6 +289,8 @@ function SurfaceIcon({
       return <FileDiff className="size-3.5 shrink-0" />;
     case "files":
       return <Files className="size-3.5 shrink-0" />;
+    case "memory":
+      return <Brain className="size-3.5 shrink-0" />;
     case "file":
       return (
         <PierreEntryIcon
@@ -475,6 +502,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Files />
                     Files
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.memoryAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.memory}
+                    onClick={props.onAddMemory}
+                  >
+                    <Brain />
+                    Memory
+                  </SurfaceMenuItem>
                   {props.diffHidden ? null : (
                     <SurfaceMenuItem
                       available={props.diffAvailable}
@@ -499,9 +534,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddMemory={props.onAddMemory}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            memoryAvailable={props.memoryAvailable}
             browserHidden={props.browserHidden ?? false}
             diffHidden={props.diffHidden ?? false}
           />

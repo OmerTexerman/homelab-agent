@@ -215,7 +215,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
-import { ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
+import { ThreadProjectMemoryPanel, ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
 import { ProjectRuntimePanel } from "./ProjectRuntimePanel";
 import { resolveEffectiveEnvMode } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
@@ -2998,9 +2998,13 @@ function ChatViewContent(props: ChatViewProps) {
     planSidebarOpen,
   ]);
   const addFilesSurface = useCallback(() => {
-    if (!activeThreadRef || !activeProject) return;
+    if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
-  }, [activeProject, activeThreadRef]);
+  }, [activeThreadRef]);
+  const addMemorySurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "memory");
+  }, [activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -5246,6 +5250,13 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "memory" && isServerThread && activeThread ? (
+      <ThreadProjectMemoryPanel
+        environmentId={activeThread.environmentId}
+        projectId={activeThread.projectId}
+        open
+        onOpenSourcePath={() => addFilesSurface()}
+      />
     ) : activeRightPanelSurface?.kind === "files" && isServerThread && activeThread ? (
       // Homelab: the workspace lives inside the per-thread runtime container, so
       // the Files surface reads it via the container-backed panel (threadWorkspace
@@ -5680,9 +5691,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddMemory={addMemorySurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={isServerThread}
+          memoryAvailable={isServerThread}
           browserHidden={!isPreviewSupportedInRuntime()}
           diffHidden={!shouldShowDiffSurface()}
         >
@@ -5709,9 +5722,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddMemory={addMemorySurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={isServerThread}
+            memoryAvailable={isServerThread}
             browserHidden={!isPreviewSupportedInRuntime()}
             diffHidden={!shouldShowDiffSurface()}
           >

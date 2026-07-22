@@ -14,7 +14,15 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-export const RIGHT_PANEL_KINDS = ["plan", "diff", "files", "file", "preview", "terminal"] as const;
+export const RIGHT_PANEL_KINDS = [
+  "plan",
+  "diff",
+  "files",
+  "file",
+  "preview",
+  "terminal",
+  "memory",
+] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
@@ -30,6 +38,7 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
+  | { id: "memory"; kind: "memory" }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -90,6 +99,8 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
+    case "memory":
+      return { id: "memory", kind };
     case "plan":
       return { id: "plan", kind };
   }

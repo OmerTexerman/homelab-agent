@@ -536,7 +536,7 @@ function PromotionField(props: { readonly label: string; readonly children: Reac
   );
 }
 
-function ThreadProjectMemoryPanel(props: {
+export function ThreadProjectMemoryPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly open: boolean;
