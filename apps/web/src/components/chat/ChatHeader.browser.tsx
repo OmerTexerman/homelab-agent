@@ -40,8 +40,6 @@ function renderHeader(
       preferredScriptId={null}
       keybindings={[]}
       availableEditors={[]}
-      workspaceExplorerAvailable={false}
-      workspaceExplorerOpen={false}
       rightPanelOpen={false}
       gitCwd={null}
       onRunProjectScript={vi.fn()}
@@ -55,7 +53,6 @@ function renderHeader(
         Promise.resolve(AsyncResult.success<void, unknown>(undefined)),
       )}
       onExportChat={onExportChat}
-      onToggleWorkspaceExplorer={vi.fn()}
     />,
   );
 }

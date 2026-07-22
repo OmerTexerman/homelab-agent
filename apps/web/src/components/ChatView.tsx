@@ -266,14 +266,9 @@ import {
   resolveServerConfigVersionMismatch,
 } from "../versionSkew";
 import {
-  selectThreadWorkspacePanelOpen,
-  useWorkspacePanelStateStore,
-} from "../workspacePanelStateStore";
-import {
   HOMELAB_PRODUCT_COPY,
   shouldShowDiffSurface,
   shouldShowPrimarySourceControlUi,
-  shouldShowRuntimeWorkspaceExplorer,
 } from "../productCapabilities";
 import { useAssetUrls } from "../assets/assetUrls";
 
@@ -1410,7 +1405,6 @@ function ChatViewContent(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const showRuntimeWorkspaceExplorer = shouldShowRuntimeWorkspaceExplorer();
   const canCheckoutPullRequestIntoThread = showSourceControlUi && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -1584,31 +1578,6 @@ function ChatViewContent(props: ChatViewProps) {
     () => getConfiguredPreviewUrls(activeProject?.scripts),
     [activeProject?.scripts],
   );
-  const workspacePanelOpen = useWorkspacePanelStateStore((state) =>
-    selectThreadWorkspacePanelOpen(state.workspacePanelOpenByThreadKey, activeThreadRef),
-  );
-  const setWorkspacePanelOpen = useWorkspacePanelStateStore((state) => state.setWorkspacePanelOpen);
-  const toggleWorkspacePanel = useWorkspacePanelStateStore((state) => state.toggleWorkspacePanel);
-  const workspaceExplorerAvailable =
-    showRuntimeWorkspaceExplorer &&
-    isServerThread &&
-    activeThreadRef !== null &&
-    activeProject !== undefined;
-
-  const closeWorkspaceExplorer = useCallback(() => {
-    if (!activeThreadRef) {
-      return;
-    }
-    setWorkspacePanelOpen(activeThreadRef, false);
-  }, [activeThreadRef, setWorkspacePanelOpen]);
-
-  const toggleWorkspaceExplorer = useCallback(() => {
-    if (!activeThreadRef || !workspaceExplorerAvailable) {
-      return;
-    }
-    toggleWorkspacePanel(activeThreadRef);
-  }, [activeThreadRef, toggleWorkspacePanel, workspaceExplorerAvailable]);
-
   useEffect(() => {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
     useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
@@ -5339,8 +5308,6 @@ function ChatViewContent(props: ChatViewProps) {
             }
             keybindings={keybindings}
             availableEditors={availableEditors}
-            workspaceExplorerAvailable={workspaceExplorerAvailable}
-            workspaceExplorerOpen={workspacePanelOpen}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
             onRunProjectScript={runProjectScript}
@@ -5348,7 +5315,6 @@ function ChatViewContent(props: ChatViewProps) {
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
             onExportChat={exportActiveChat}
-            onToggleWorkspaceExplorer={toggleWorkspaceExplorer}
           />
         </header>
 
@@ -5638,17 +5604,6 @@ function ChatViewContent(props: ChatViewProps) {
             ) : null}
           </div>
           {/* end chat column */}
-
-          {showRuntimeWorkspaceExplorer && workspacePanelOpen && isServerThread ? (
-            <ThreadWorkspacePanel
-              environmentId={activeThread.environmentId}
-              projectId={activeThread.projectId}
-              threadId={activeThread.id}
-              open={workspacePanelOpen}
-              onClose={closeWorkspaceExplorer}
-              resolvedTheme={resolvedTheme}
-            />
-          ) : null}
         </div>
         {/* end horizontal flex container */}
 

@@ -16,13 +16,11 @@ import {
   DownloadIcon,
   FileJsonIcon,
   FileTextIcon,
-  FolderTreeIcon,
   GitBranchPlusIcon,
   PrinterIcon,
   TextIcon,
 } from "lucide-react";
 import { Badge } from "../ui/badge";
-import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -43,7 +41,6 @@ import {
   HOMELAB_PRODUCT_COPY,
   shouldShowEditorOpenInControls,
   shouldShowPrimarySourceControlUi,
-  shouldShowRuntimeWorkspaceExplorer,
 } from "../../productCapabilities";
 import type { ChatExportFormat } from "../../chatExport";
 import { cn } from "~/lib/utils";
@@ -63,8 +60,6 @@ interface ChatHeaderProps {
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  workspaceExplorerAvailable: boolean;
-  workspaceExplorerOpen: boolean;
   rightPanelOpen: boolean;
   gitCwd: string | null;
   onRunProjectScript: (script: ProjectScript) => void;
@@ -75,7 +70,6 @@ interface ChatHeaderProps {
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   onExportChat: (format: ChatExportFormat) => void;
-  onToggleWorkspaceExplorer: () => void;
 }
 
 export const CHAT_EXPORT_FORMAT_OPTIONS: ReadonlyArray<{
@@ -178,8 +172,6 @@ export const ChatHeader = memo(function ChatHeader({
   preferredScriptId,
   keybindings,
   availableEditors,
-  workspaceExplorerAvailable,
-  workspaceExplorerOpen,
   rightPanelOpen,
   gitCwd,
   onRunProjectScript,
@@ -187,11 +179,9 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onExportChat,
-  onToggleWorkspaceExplorer,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const showRuntimeWorkspaceExplorer = shouldShowRuntimeWorkspaceExplorer();
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName,
     activeThreadEnvironmentId,
@@ -330,30 +320,6 @@ export const ChatHeader = memo(function ChatHeader({
             </div>
           </PopoverPopup>
         </Popover>
-        {showRuntimeWorkspaceExplorer ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  className="shrink-0"
-                  pressed={workspaceExplorerOpen}
-                  onPressedChange={onToggleWorkspaceExplorer}
-                  aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.toggleAction}
-                  variant="outline"
-                  size="xs"
-                  disabled={!workspaceExplorerAvailable}
-                >
-                  <FolderTreeIcon className="size-3" />
-                </Toggle>
-              }
-            />
-            <TooltipPopup side="bottom">
-              {!workspaceExplorerAvailable
-                ? HOMELAB_PRODUCT_COPY.projectRuntime.workspaceExplorerUnavailableDescription
-                : HOMELAB_PRODUCT_COPY.runtimeWorkspace.toggleAction}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
       </div>
     </div>
   );
