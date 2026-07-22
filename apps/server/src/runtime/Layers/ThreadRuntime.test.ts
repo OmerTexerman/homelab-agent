@@ -11,7 +11,7 @@ import {
   isolatedThreadRuntimeId,
   standaloneProjectDefaultRuntimeId,
 } from "../ProjectRuntimePolicy.ts";
-import { Effect, FileSystem, Layer } from "effect";
+import { Effect, FileSystem, Layer, Stream } from "effect";
 
 import { type ProcessRunResult } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
@@ -381,6 +381,7 @@ const runtimeLayerWithSecrets = it.layer(
         requestSecret: () => Effect.die("unused"),
         deleteSecret: () => Effect.void,
         materializeEnvironment: () => Effect.succeed(mutableRuntimeSecretEnv),
+        changes: Stream.empty,
       }),
     ),
     Layer.provideMerge(NodeServices.layer),

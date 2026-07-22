@@ -67,6 +67,7 @@ import { layer as runtimeProviderVersionManifestLayer } from "./provider/Runtime
 import { layer as runtimeProviderVersionReconcilerLayer } from "./provider/RuntimeProviderVersionReconciler.ts";
 import { KnowledgeGraphLive } from "./homelab/Layers/KnowledgeGraph.ts";
 import { HomelabSecretRegistryLive } from "./homelab/Layers/HomelabSecretRegistry.ts";
+import { HomelabSecretRuntimeReactorLive } from "./homelab/Layers/HomelabSecretRuntimeReactor.ts";
 import { ProjectMemoryLive } from "./homelab/Layers/ProjectMemory.ts";
 import { HomelabSkillsLive } from "./homelab/Layers/HomelabSkills.ts";
 import { ThreadRuntimeLive } from "./runtime/Layers/ThreadRuntime.ts";
@@ -331,6 +332,10 @@ const RuntimeProviderVersionReconcilerLive = runtimeProviderVersionReconcilerLay
 const RuntimeCoreBaseLive = Layer.mergeAll(
   ReactorLayerLive,
   RuntimeProviderVersionReconcilerLive,
+  // Single consumer of HomelabSecretRegistry.changes: propagates secret value
+  // changes into runtime env so no transport hand-rolls the refresh. Consumes
+  // HomelabSecretRegistry + ThreadRuntime, both provided below.
+  HomelabSecretRuntimeReactorLive,
 ).pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),

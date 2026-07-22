@@ -159,22 +159,6 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
     });
 
-  const refreshHomelabSecretRuntimeEnvironments = () =>
-    threadRuntime
-      .listRuntimes()
-      .pipe(
-        Effect.flatMap((runtimes) =>
-          Effect.forEach(
-            runtimes,
-            (runtime) =>
-              threadRuntime
-                .refreshRuntimeEnvironment(runtime.threadId)
-                .pipe(Effect.catch(() => Effect.void)),
-            { discard: true, concurrency: 8 },
-          ),
-        ),
-      );
-
   return {
     [WS_METHODS.serverGetProviderCliStatus]: (_input: unknown) =>
       observeRpcEffect(WS_METHODS.serverGetProviderCliStatus, providerCliStatusView, {
@@ -213,7 +197,6 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       observeRpcEffect(
         WS_METHODS.serverUpsertHomelabSecret,
         homelabSecretRegistry.upsertSecret(input).pipe(
-          Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
           Effect.mapError(
             (cause) =>
               new HomelabSecretError({
@@ -230,7 +213,6 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       observeRpcEffect(
         WS_METHODS.serverDeleteHomelabSecret,
         homelabSecretRegistry.deleteSecret(input).pipe(
-          Effect.tap(() => refreshHomelabSecretRuntimeEnvironments()),
           Effect.as({}),
           Effect.mapError(
             (cause) =>

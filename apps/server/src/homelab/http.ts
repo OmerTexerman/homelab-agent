@@ -59,7 +59,6 @@ import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
 import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
-import { ThreadRuntime } from "../runtime/Services/ThreadRuntime.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { refreshActiveProjectContextViews } from "./ProjectMemoryContextViews.ts";
@@ -142,23 +141,6 @@ const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
 
 const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
 const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
-
-/**
- * Rewrite every running runtime's injected secret env file after a secret
- * changes, so a value the user just provided (or removed) is picked up by the
- * agent's next command WITHOUT a runtime restart. The WS secret handlers do
- * this; the HTTP secret routes (used by the web build) must too, or a secret
- * the broker has stored never reaches the live container. Best-effort.
- */
-const refreshRunningRuntimeSecretEnvironments = Effect.gen(function* () {
-  const threadRuntime = yield* ThreadRuntime;
-  const runtimes = yield* threadRuntime.listRuntimes();
-  yield* Effect.forEach(
-    runtimes,
-    (runtime) => threadRuntime.refreshRuntimeEnvironment(runtime.threadId).pipe(Effect.ignore),
-    { discard: true, concurrency: 8 },
-  );
-}).pipe(Effect.ignore);
 
 const getRequestUrl = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
@@ -376,7 +358,6 @@ export const homelabSecretUpsertRouteLayer = HttpRouter.add(
       ),
     );
     const secret = yield* registry.upsertSecret(input);
-    yield* refreshRunningRuntimeSecretEnvironments;
     return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
   }).pipe(
     Effect.catchTag("HomelabSecretRegistryError", (error) =>
@@ -409,7 +390,6 @@ export const homelabSecretDeleteRouteLayer = HttpRouter.add(
       ),
     );
     yield* registry.deleteSecret(input);
-    yield* refreshRunningRuntimeSecretEnvironments;
     return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
   }).pipe(
     Effect.catchTag("HomelabSecretRegistryError", (error) =>

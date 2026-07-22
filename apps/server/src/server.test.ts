@@ -1189,6 +1189,7 @@ const buildAppUnderTest = (options?: {
             }),
           deleteSecret: () => Effect.void,
           materializeEnvironment: () => Effect.succeed({}),
+          changes: Stream.empty,
           ...options?.layers?.homelabSecretRegistry,
         }),
       ),
@@ -4842,24 +4843,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("refreshes runtime env files after websocket rpc server.upsertHomelabSecret", () =>
+  // Runtime env propagation is no longer the WS handler's job: it is single-sourced
+  // through HomelabSecretRuntimeReactor, which consumes HomelabSecretRegistry.changes
+  // (covered in HomelabSecretRuntimeReactor.test.ts). This test only guards that the
+  // upsert RPC round-trips the stored secret.
+  it.effect("returns the stored secret from websocket rpc server.upsertHomelabSecret", () =>
     Effect.gen(function* () {
-      const refreshRuntimeEnvironment = vi.fn((threadId: ThreadId) =>
-        Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
-      );
-
-      yield* buildAppUnderTest({
-        layers: {
-          threadRuntime: {
-            listRuntimes: () =>
-              Effect.succeed([
-                makeMockThreadRuntimeDescriptor(ThreadId.make("thread-secret-1")),
-                makeMockThreadRuntimeDescriptor(ThreadId.make("thread-secret-2")),
-              ]),
-            refreshRuntimeEnvironment,
-          },
-        },
-      });
+      yield* buildAppUnderTest();
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const response = yield* Effect.scoped(
@@ -4874,10 +4864,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(response.key, "TEST_SECRET_FLOW");
-      assert.deepEqual(refreshRuntimeEnvironment.mock.calls, [
-        [ThreadId.make("thread-secret-1")],
-        [ThreadId.make("thread-secret-2")],
-      ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

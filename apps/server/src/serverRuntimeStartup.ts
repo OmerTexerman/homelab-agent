@@ -35,6 +35,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { CuratorSessionReaper } from "./homelab/Services/CuratorSessionReaper.ts";
+import { HomelabSecretRuntimeReactor } from "./homelab/Services/HomelabSecretRuntimeReactor.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -295,6 +296,7 @@ export const make = Effect.gen(function* () {
   const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
   const curatorSessionReaper = yield* CuratorSessionReaper;
+  const homelabSecretRuntimeReactor = yield* HomelabSecretRuntimeReactor;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -346,6 +348,7 @@ export const make = Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
         yield* curatorSessionReaper.start().pipe(Scope.provide(reactorScope));
+        yield* homelabSecretRuntimeReactor.start().pipe(Scope.provide(reactorScope));
       }),
     );
 

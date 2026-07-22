@@ -9,7 +9,7 @@ import {
   IsoDateTime,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Option, Path, Ref, Schema } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
@@ -19,6 +19,7 @@ import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import {
   HomelabSecretRegistry,
   HomelabSecretRegistryError,
+  type HomelabSecretChangeEvent,
   type HomelabSecretRegistryShape,
 } from "../Services/HomelabSecretRegistry.ts";
 
@@ -120,6 +121,9 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
   const path = yield* Path.Path;
   const secretStore = yield* ServerSecretStore;
   const writeSemaphore = yield* Semaphore.make(1);
+  const changesPubSub = yield* PubSub.unbounded<HomelabSecretChangeEvent>();
+  const publishChange = (event: HomelabSecretChangeEvent) =>
+    PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
   const statePath = path.join(stateDir, "homelab-secrets.json");
 
   const persistState = (secrets: ReadonlyArray<PersistedHomelabSecretMetadata>) => {
@@ -288,6 +292,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
         yield* persistState(nextSecrets);
         yield* Ref.set(secretsRef, nextSecrets);
         yield* maybeSyncKnowledgeGraph(nextSecret);
+        yield* publishChange({ key: input.key, change: "upserted" });
 
         return toDescriptor(nextSecret, true);
       }),
@@ -356,6 +361,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
             { deprecated: true },
           );
         }
+        yield* publishChange({ key: input.key, change: "deleted" });
       }),
     );
 
@@ -365,6 +371,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     requestSecret,
     deleteSecret,
     materializeEnvironment,
+    changes: Stream.fromPubSub(changesPubSub),
   } satisfies HomelabSecretRegistryShape;
 });
 
