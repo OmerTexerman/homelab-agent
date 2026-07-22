@@ -2792,8 +2792,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       // Benign notice fired when the available slash-command set changes (command
       // discovery at startup, or an MCP server connecting and registering
-      // commands). It carries only a non-scalar command list — no displayable
-      // text — so surfacing it would render an empty, error-styled work-log row.
+      // commands). Content-less, like other `*_changed` notices — see the
+      // default branch, which now drops any system message with no displayable
+      // content so new SDK notice subtypes don't spam the work log.
       case "commands_changed":
         return;
       case "permission_denied":
@@ -2815,13 +2816,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           message,
         );
         return;
-      default:
+      default: {
+        // Only surface an unmodeled system message if it actually carries
+        // human-readable content. The SDK emits a growing family of content-less
+        // notices (commands_changed, background_tasks_changed, mcp_status_changed,
+        // ...) that are pure discriminator keys; rendering them produced empty
+        // "(no displayable text content)" error-styled rows that just spam the
+        // work log. Keep them at debug for diagnosability instead.
+        const preview = previewUnknownSdkContent(message);
+        if (preview === undefined) {
+          yield* Effect.logDebug("claude system message with no displayable content", {
+            subtype: message.subtype,
+            threadId: context.session.threadId,
+          });
+          return;
+        }
         yield* emitRuntimeWarning(
           context,
-          describeUnknownSdkMessage(`Claude system message '${message.subtype}'`, message),
+          `Claude system message '${message.subtype}' — ${preview}`,
           message,
         );
         return;
+      }
     }
   });
 
