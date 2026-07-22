@@ -5,9 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   homelabSecretsQueryKeys,
   homelabSecretsQueryOptions,
+  upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
-import { ensureLocalApi } from "~/localApi";
 import { deriveDecisionQueueReadModel } from "~/decisionQueueReadModel";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -23,12 +24,13 @@ import { toastManager } from "./ui/toast";
 
 export function HomelabSecretRequestCoordinator() {
   const queryClient = useQueryClient();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledKeysRef = useRef(new Set<string>());
   const [activeSecretKey, setActiveSecretKey] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const secretsQuery = useQuery({
-    ...homelabSecretsQueryOptions(),
+    ...homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });
@@ -142,14 +144,24 @@ export function HomelabSecretRequestCoordinator() {
           <Button
             disabled={value.trim().length === 0 || isSaving}
             onClick={() => {
+              if (!primaryEnvironmentId) {
+                toastManager.add({
+                  type: "error",
+                  title: "Could not save secret",
+                  description: "No environment is available to store secrets.",
+                });
+                return;
+              }
               setIsSaving(true);
-              void ensureLocalApi()
-                .server.upsertHomelabSecret({
+              void upsertHomelabSecretRequest({
+                environmentId: primaryEnvironmentId,
+                secret: {
                   key: activeSecret.key,
                   value,
                   ...(activeSecret.label ? { label: activeSecret.label } : {}),
                   ...(activeSecret.summary ? { summary: activeSecret.summary } : {}),
-                })
+                },
+              })
                 .then(() =>
                   queryClient.invalidateQueries({
                     queryKey: homelabSecretsQueryKeys.all,

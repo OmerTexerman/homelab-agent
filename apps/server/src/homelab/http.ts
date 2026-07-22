@@ -18,7 +18,9 @@ import {
   HomelabGraphSearchInput,
   HomelabObservationId,
   HomelabPromotionEnvelope,
+  HomelabSecretDeleteInput,
   HomelabSecretRequestInput,
+  HomelabSecretUpsertInput,
   ProjectMemoryCreateInput,
   ProjectMemoryListInput,
   ProjectMemoryPromoteInput,
@@ -323,6 +325,70 @@ export const homelabSecretRequestsRouteLayer = HttpRouter.add(
     );
     const secret = yield* registry.requestSecret(input);
     return HttpServerResponse.jsonUnsafe(secret, { status: 201 });
+  }).pipe(
+    Effect.catchTag("HomelabSecretRegistryError", (error) =>
+      respondToHomelabHttpError(
+        new HomelabHttpError({
+          message: error.message,
+          status: 500,
+          cause: error.cause,
+        }),
+      ),
+    ),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabSecretUpsertRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/secrets",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const registry = yield* HomelabSecretRegistry;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretUpsertInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid homelab secret payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    const secret = yield* registry.upsertSecret(input);
+    return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
+  }).pipe(
+    Effect.catchTag("HomelabSecretRegistryError", (error) =>
+      respondToHomelabHttpError(
+        new HomelabHttpError({
+          message: error.message,
+          status: 500,
+          cause: error.cause,
+        }),
+      ),
+    ),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabSecretDeleteRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/secrets/delete",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const registry = yield* HomelabSecretRegistry;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretDeleteInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Invalid homelab secret delete payload.",
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+    yield* registry.deleteSecret(input);
+    return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
   }).pipe(
     Effect.catchTag("HomelabSecretRegistryError", (error) =>
       respondToHomelabHttpError(

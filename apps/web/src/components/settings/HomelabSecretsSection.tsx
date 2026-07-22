@@ -4,10 +4,13 @@ import { useCallback, useMemo, useState } from "react";
 
 import { formatRelativeTime } from "~/timestampFormat";
 import {
+  deleteHomelabSecretRequest,
   homelabSecretsQueryKeys,
   homelabSecretsQueryOptions,
+  upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
 import { ensureLocalApi } from "~/localApi";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
@@ -21,18 +24,25 @@ function normalizeOptionalValue(value: string): string | undefined {
 export function HomelabSecretsSection() {
   useRelativeTimeTick();
   const queryClient = useQueryClient();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [label, setLabel] = useState("");
   const [summary, setSummary] = useState("");
   const [value, setValue] = useState("");
 
-  const secretsQuery = useQuery(homelabSecretsQueryOptions());
+  const secretsQuery = useQuery(
+    homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
+  );
   const secrets = secretsQuery.data?.secrets ?? [];
 
   const upsertSecretMutation = useMutation({
-    mutationFn: async (input: { key: string; label?: string; summary?: string; value: string }) =>
-      ensureLocalApi().server.upsertHomelabSecret(input),
+    mutationFn: async (input: { key: string; label?: string; summary?: string; value: string }) => {
+      if (!primaryEnvironmentId) {
+        throw new Error("No environment is available to store secrets.");
+      }
+      return upsertHomelabSecretRequest({ environmentId: primaryEnvironmentId, secret: input });
+    },
     onSuccess: async (secret) => {
       await queryClient.invalidateQueries({ queryKey: homelabSecretsQueryKeys.all });
       setEditingKey(null);
@@ -56,8 +66,12 @@ export function HomelabSecretsSection() {
   });
 
   const deleteSecretMutation = useMutation({
-    mutationFn: async (secretKey: string) =>
-      ensureLocalApi().server.deleteHomelabSecret({ key: secretKey }),
+    mutationFn: async (secretKey: string) => {
+      if (!primaryEnvironmentId) {
+        throw new Error("No environment is available to remove secrets.");
+      }
+      return deleteHomelabSecretRequest({ environmentId: primaryEnvironmentId, key: secretKey });
+    },
     onSuccess: async (_, secretKey) => {
       await queryClient.invalidateQueries({ queryKey: homelabSecretsQueryKeys.all });
       if (editingKey === secretKey) {
