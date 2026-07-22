@@ -47,6 +47,11 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  // Homelab fork: hide (not just disable) a surface the product doesn't offer —
+  // Browser has no web runtime, and homelab threads aren't Git repos so Diff is
+  // meaningless. Default false keeps upstream behaviour (card shown/disabled).
+  browserHidden?: boolean;
+  diffHidden?: boolean;
   children: ReactNode;
 }
 
@@ -94,6 +99,8 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  browserHidden?: boolean;
+  diffHidden?: boolean;
 }) {
   const actions = [
     {
@@ -101,6 +108,7 @@ function RightPanelEmptyState(props: {
       description: "Open a local app or URL.",
       icon: Globe2,
       available: props.browserAvailable,
+      hidden: props.browserHidden ?? false,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
       onClick: props.onAddBrowser,
     },
@@ -109,6 +117,7 @@ function RightPanelEmptyState(props: {
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
       available: true,
+      hidden: false,
       disabledReason: null,
       onClick: props.onAddTerminal,
     },
@@ -117,6 +126,7 @@ function RightPanelEmptyState(props: {
       description: "Browse and read workspace files.",
       icon: Files,
       available: props.filesAvailable,
+      hidden: false,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
     },
@@ -125,10 +135,11 @@ function RightPanelEmptyState(props: {
       description: "Review changes in this thread.",
       icon: FileDiff,
       available: props.diffAvailable,
+      hidden: props.diffHidden ?? false,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
     },
-  ] as const;
+  ].filter((action) => !action.hidden);
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -175,7 +186,7 @@ function RightPanelEmptyState(props: {
             return (
               <DisabledReasonTooltip
                 key={action.label}
-                reason={action.disabledReason}
+                reason={action.disabledReason ?? ""}
                 trigger={disabledCard}
               />
             );
@@ -442,14 +453,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <Plus className="size-4" />
                 </MenuTrigger>
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
-                  <SurfaceMenuItem
-                    available={props.browserAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.browser}
-                    onClick={props.onAddBrowser}
-                  >
-                    <Globe2 />
-                    Browser
-                  </SurfaceMenuItem>
+                  {props.browserHidden ? null : (
+                    <SurfaceMenuItem
+                      available={props.browserAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.browser}
+                      onClick={props.onAddBrowser}
+                    >
+                      <Globe2 />
+                      Browser
+                    </SurfaceMenuItem>
+                  )}
                   <SurfaceMenuItem available onClick={props.onAddTerminal}>
                     <TerminalSquare />
                     Terminal
@@ -462,14 +475,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Files />
                     Files
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.diffAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.diff}
-                    onClick={props.onAddDiff}
-                  >
-                    <FileDiff />
-                    Diff
-                  </SurfaceMenuItem>
+                  {props.diffHidden ? null : (
+                    <SurfaceMenuItem
+                      available={props.diffAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.diff}
+                      onClick={props.onAddDiff}
+                    >
+                      <FileDiff />
+                      Diff
+                    </SurfaceMenuItem>
+                  )}
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -487,6 +502,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            browserHidden={props.browserHidden ?? false}
+            diffHidden={props.diffHidden ?? false}
           />
         ) : (
           props.children

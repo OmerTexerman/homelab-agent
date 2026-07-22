@@ -271,6 +271,7 @@ import {
 } from "../workspacePanelStateStore";
 import {
   HOMELAB_PRODUCT_COPY,
+  shouldShowDiffSurface,
   shouldShowPrimarySourceControlUi,
   shouldShowRuntimeWorkspaceExplorer,
 } from "../productCapabilities";
@@ -5669,6 +5670,8 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          browserHidden={!isPreviewSupportedInRuntime()}
+          diffHidden={!shouldShowDiffSurface()}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -5696,6 +5699,8 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            browserHidden={!isPreviewSupportedInRuntime()}
+            diffHidden={!shouldShowDiffSurface()}
           >
             {rightPanelContent}
           </RightPanelTabs>

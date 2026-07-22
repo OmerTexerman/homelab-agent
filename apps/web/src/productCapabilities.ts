@@ -13,6 +13,11 @@ export const HOMELAB_PRODUCT_CAPABILITIES = {
   remoteProjectCloneUi: false,
   compatibilityHostPathProjectUi: false,
   runtimeWorkspaceExplorer: true,
+  // Homelab threads run in Docker Project Runtimes, not Git checkouts, so the
+  // upstream right-panel "Diff" surface (Git working-tree review) has nothing to
+  // show. Hidden rather than disabled. The Browser surface is hidden separately
+  // via its runtime-support check (desktop-only Electron preview bridge).
+  rightPanelDiffSurface: false,
   sidebarProjectGroupingControls: false,
   threadRuntimeIsolationControls: true,
   // Gates the multi-backend "Connected servers" UI (pairing this client to
@@ -312,6 +317,10 @@ export function shouldShowCompatibilityHostPathProjectUi(): boolean {
 
 export function shouldShowRuntimeWorkspaceExplorer(): boolean {
   return HOMELAB_PRODUCT_CAPABILITIES.runtimeWorkspaceExplorer;
+}
+
+export function shouldShowDiffSurface(): boolean {
+  return HOMELAB_PRODUCT_CAPABILITIES.rightPanelDiffSurface;
 }
 
 export function shouldShowSidebarProjectGroupingControls(): boolean {
