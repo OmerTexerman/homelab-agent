@@ -5,6 +5,7 @@ import { useMemo } from "react";
 
 import { useOpenAddProjectCommandPalette } from "~/commandPaletteContext";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { HOMELAB_PRODUCT_COPY } from "~/productCapabilities";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import {
@@ -103,11 +104,15 @@ export function DraftHeroHeadline({
   return (
     <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
       {hasResolvedProject ? (
-        <>What should we build in {projectSelector}?</>
+        <>
+          {HOMELAB_PRODUCT_COPY.draftHero.withProject} {projectSelector}?
+        </>
       ) : canChooseProject ? (
-        <>{projectSelector} to start</>
+        <>
+          {projectSelector} {HOMELAB_PRODUCT_COPY.draftHero.chooseProjectSuffix}
+        </>
       ) : (
-        <>Add a project to start</>
+        <>{HOMELAB_PRODUCT_COPY.draftHero.noProject}</>
       )}
     </h1>
   );

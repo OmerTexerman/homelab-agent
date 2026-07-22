@@ -278,6 +278,13 @@ export const HOMELAB_PRODUCT_COPY = {
   preparingRuntimeEllipsis: "Preparing runtime...",
   runtimeWorkspaceTitle: "Runtime Workspace",
   runtimeWorkspaceSubtitle: "Files inside this Project Runtime",
+  draftHero: {
+    // Homelab Agent operates infrastructure; it does not "build" software.
+    // {project} is filled by the project selector at the call site.
+    withProject: "What should we work on in",
+    chooseProjectSuffix: "to start",
+    noProject: "Add a project to start",
+  },
   composer: {
     disconnectedPlaceholder: "Ask a follow-up, attach evidence, or describe the next operation",
     defaultPlaceholder: "Ask about services, runbooks, runtime files, or / for commands",
