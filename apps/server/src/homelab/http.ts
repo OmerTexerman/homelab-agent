@@ -15,6 +15,8 @@ import {
   type CuratorSkillListResult,
   HomelabEntityId,
   HomelabEntityKind,
+  HomelabEntityUpsertInput,
+  HomelabEntityVerifyInput,
   HomelabGraphSearchInput,
   HomelabObservationId,
   HomelabPromotionEnvelope,
@@ -1287,6 +1289,106 @@ export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
   ),
 );
 
+function normalizedEntityName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+export const homelabEntityUpsertRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/entity",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabEntityUpsertInput).pipe(
+      Effect.mapError(
+        (cause) => new HomelabHttpError({ message: "Invalid entity payload.", status: 400, cause }),
+      ),
+    );
+    const now = new Date().toISOString();
+    const slug = normalizedEntityName(input.name).replace(/\s+/g, "-");
+    const id = decodeHomelabEntityId(`${input.kind}:${slug}`);
+    // Preserve createdAt across re-captures (id or natural-key match).
+    const snapshot = yield* knowledgeGraph.getSnapshot();
+    const existing =
+      snapshot.entities.find((entity) => entity.id === id) ??
+      snapshot.entities.find(
+        (entity) =>
+          entity.kind === input.kind &&
+          normalizedEntityName(entity.name) === normalizedEntityName(input.name),
+      );
+    const entity: HomelabEntity = {
+      id,
+      kind: input.kind,
+      name: input.name,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.summary !== undefined ? { summary: input.summary } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.aliases !== undefined ? { aliases: input.aliases } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(input.properties !== undefined ? { properties: input.properties } : {}),
+      confidence: input.confidence ?? existing?.confidence ?? 0.7,
+      observedAt: now,
+      lastVerifiedAt: now,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    yield* knowledgeGraph.upsertEntity(entity);
+    return HttpServerResponse.jsonUnsafe(entity satisfies HomelabEntity, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
+export const homelabEntityVerifyRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/entity/verify",
+  Effect.gen(function* () {
+    yield* authenticateHomelabOperate;
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const input = yield* HttpServerRequest.schemaBodyJson(HomelabEntityVerifyInput).pipe(
+      Effect.mapError(
+        (cause) => new HomelabHttpError({ message: "Invalid verify payload.", status: 400, cause }),
+      ),
+    );
+    const snapshot = yield* knowledgeGraph.getSnapshot();
+    const target = normalizedEntityName(input.name);
+    const match = snapshot.entities.find(
+      (entity) =>
+        normalizedEntityName(entity.name) === target &&
+        (input.kind === undefined || entity.kind === input.kind),
+    );
+    if (!match) {
+      return yield* respondToHomelabHttpError(
+        new HomelabHttpError({
+          message: `No entity named '${input.name}' to verify.`,
+          status: 404,
+        }),
+      );
+    }
+    const now = new Date().toISOString();
+    const priorConfidence = match.confidence ?? 0.5;
+    const confidence = input.reachable
+      ? Math.min(1, priorConfidence + 0.2)
+      : Math.max(0, priorConfidence - 0.3);
+    const verified: HomelabEntity = {
+      ...match,
+      // A single failed probe drops confidence but does not force "deprecated";
+      // a reachable probe confirms the entity is active.
+      ...(input.reachable ? { status: "active" as const } : {}),
+      confidence,
+      lastVerifiedAt: now,
+      observedAt: now,
+      updatedAt: now,
+    };
+    yield* knowledgeGraph.upsertEntity(verified);
+    return HttpServerResponse.jsonUnsafe(verified satisfies HomelabEntity, { status: 200 });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
 /**
  * Fork-owned composite of every homelab HTTP route. Keeping the `Layer.mergeAll`
  * here (rather than re-listing all routes in the upstream `server.ts`) shrinks
@@ -1304,6 +1406,8 @@ export const homelabRoutesLayer = Layer.mergeAll(
   homelabCuratorSkillUpdateRouteLayer,
   homelabEntitiesRouteLayer,
   homelabEntityRouteLayer,
+  homelabEntityUpsertRouteLayer,
+  homelabEntityVerifyRouteLayer,
   homelabProjectMemoryCreateRouteLayer,
   homelabProjectMemoryListRouteLayer,
   homelabProjectMemoryPromoteRouteLayer,

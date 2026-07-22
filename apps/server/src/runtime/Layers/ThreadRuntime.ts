@@ -1036,6 +1036,40 @@ def cmd_promote(args):
     print_json(request_json("POST", "/api/homelab/promotions", payload=payload))
 
 
+def cmd_record(args):
+    payload = {"kind": args.kind, "name": args.name}
+    if args.title:
+        payload["title"] = args.title
+    if args.summary:
+        payload["summary"] = args.summary
+    if args.status:
+        payload["status"] = args.status
+    if args.alias:
+        payload["aliases"] = args.alias
+    if args.tag:
+        payload["tags"] = args.tag
+    if args.prop:
+        props = {}
+        for item in args.prop:
+            if "=" in item:
+                key, value = item.split("=", 1)
+                props[key.strip()] = value
+        if props:
+            payload["properties"] = props
+    if args.confidence is not None:
+        payload["confidence"] = args.confidence
+    print_json(request_json("POST", "/api/homelab/entity", payload=payload))
+
+
+def cmd_verify(args):
+    payload = {"name": args.name, "reachable": not args.unreachable}
+    if args.kind:
+        payload["kind"] = args.kind
+    if args.note:
+        payload["note"] = args.note
+    print_json(request_json("POST", "/api/homelab/entity/verify", payload=payload))
+
+
 def curator_mutation_payload(args, extra=None):
     payload = dict(extra or {})
     if THREAD_ID:
@@ -1334,6 +1368,35 @@ def build_parser():
         help="Print a machine-readable overview of the promotion envelope shape and exit.",
     )
     promote_parser.set_defaults(func=cmd_promote)
+
+    record_parser = subparsers.add_parser(
+        "record",
+        help="Record or update a single graph entity (host/service/...) without a full promotion envelope. Re-recording the same kind+name merges, never duplicates.",
+    )
+    record_parser.add_argument("--kind", required=True, help="Entity kind: host, service, stack, container, network, domain, endpoint, tool, ... .")
+    record_parser.add_argument("--name", required=True, help="Canonical name, e.g. nas01 or jellyfin.")
+    record_parser.add_argument("--title", help="Human-friendly title.")
+    record_parser.add_argument("--summary", help="What it is / what it does (include IPs, ports, purpose for findability).")
+    record_parser.add_argument(
+        "--status",
+        choices=["active", "planned", "deprecated", "unknown"],
+        help="Lifecycle status.",
+    )
+    record_parser.add_argument("--alias", action="append", help="Alternate name/spelling (repeatable).")
+    record_parser.add_argument("--tag", action="append", help="Tag (repeatable).")
+    record_parser.add_argument("--prop", action="append", help="key=value property, e.g. --prop ip=192.168.1.10 (repeatable).")
+    record_parser.add_argument("--confidence", type=float, help="Confidence 0..1 (default 0.7).")
+    record_parser.set_defaults(func=cmd_record)
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Stamp an entity as verified after you probe it (bumps its freshness and confidence so it ranks above stale entries).",
+    )
+    verify_parser.add_argument("name", help="Entity name you probed.")
+    verify_parser.add_argument("--kind", help="Disambiguate by kind if names collide.")
+    verify_parser.add_argument("--unreachable", action="store_true", help="The probe FAILED — lower confidence instead of raising it.")
+    verify_parser.add_argument("--note", help="Optional note about what you checked.")
+    verify_parser.set_defaults(func=cmd_verify)
 
     curate_parser = subparsers.add_parser(
         "curate",
@@ -1926,6 +1989,20 @@ Entity kinds are an open vocabulary. Common ones: \`host\`, \`service\`, \`stack
 \`tool\`, \`artifact\`, \`runbook\`, \`finding\`. Prefer a kind that already exists in
 the graph (check \`homelab snapshot\`) before inventing a new one — vocabulary drift is
 cleaned up later by the knowledge curator, but reuse keeps search and filters working now.
+
+### Recording (quick capture)
+
+Recording a single fact should be cheap — reach for these before hand-authoring a
+promotion envelope:
+
+| Command | What it does |
+|---------|-------------|
+| \`homelab record --kind host --name nas01 --summary "..." [--alias ...] [--tag ...] [--prop ip=192.168.1.10]\` | Create or update ONE entity. Re-recording the same kind+name merges — it never duplicates. |
+| \`homelab verify <name> [--kind ...] [--unreachable]\` | After you probe a service, stamp it verified so it stays fresh and outranks stale entries (use \`--unreachable\` if the probe failed). |
+
+Prefer \`homelab record\` for individual hosts/services/findings as you discover them, and
+\`homelab verify\` right after you confirm something is up. Use the full promotion envelope
+(below) only for bulk changes or when you must add relations/observations in one shot.
 
 ### Writing back (promotions)
 

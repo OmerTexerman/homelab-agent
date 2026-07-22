@@ -120,6 +120,38 @@ export const HomelabRelation = Schema.Struct({
 });
 export type HomelabRelation = typeof HomelabRelation.Type;
 
+/**
+ * Low-friction, flag-based entity capture for normal agent turns — the ergonomic
+ * alternative to hand-authoring a full promotion envelope. The server derives a
+ * deterministic id from (kind, name) so repeated captures merge rather than
+ * duplicate, and stamps timestamps/observedAt.
+ */
+export const HomelabEntityUpsertInput = Schema.Struct({
+  kind: HomelabEntityKind,
+  name: TrimmedNonEmptyString,
+  title: Schema.optional(TrimmedNonEmptyString),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  status: Schema.optional(HomelabEntityStatus),
+  aliases: Schema.optional(HomelabTags),
+  tags: Schema.optional(HomelabTags),
+  properties: Schema.optional(HomelabRecord),
+  confidence: Schema.optional(HomelabConfidenceScore),
+});
+export type HomelabEntityUpsertInput = typeof HomelabEntityUpsertInput.Type;
+
+/**
+ * Stamp an entity's verification freshness after an agent probes it. Feeds the
+ * recency/confidence-weighted graph search so verified-recently entities rank
+ * above stale ones.
+ */
+export const HomelabEntityVerifyInput = Schema.Struct({
+  kind: Schema.optional(HomelabEntityKind),
+  name: TrimmedNonEmptyString,
+  reachable: Schema.Boolean,
+  note: Schema.optional(TrimmedNonEmptyString),
+});
+export type HomelabEntityVerifyInput = typeof HomelabEntityVerifyInput.Type;
+
 export const HomelabObservation = Schema.Struct({
   id: HomelabObservationId,
   sourceKind: HomelabObservationSourceKind,
