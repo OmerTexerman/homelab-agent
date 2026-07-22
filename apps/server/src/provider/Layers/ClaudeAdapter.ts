@@ -2790,6 +2790,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       case "thinking_tokens":
         return;
+      // Benign notice fired when the available slash-command set changes (command
+      // discovery at startup, or an MCP server connecting and registering
+      // commands). It carries only a non-scalar command list — no displayable
+      // text — so surfacing it would render an empty, error-styled work-log row.
+      case "commands_changed":
+        return;
       case "permission_denied":
         yield* offerRuntimeEvent({
           ...base,
