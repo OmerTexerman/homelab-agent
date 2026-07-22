@@ -30,6 +30,7 @@ import * as Stream from "effect/Stream";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
+import { KnowledgeGraph } from "../../homelab/Services/KnowledgeGraph.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TerminalManager } from "../../terminal/Manager.ts";
 import {
@@ -607,6 +608,12 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
             Effect.catch(() => Effect.void),
           )
         : undefined;
+      // The knowledge graph is global (shared across threads/projects), so it is
+      // mirrored in full — not scoped like per-thread memory/transcripts.
+      const knowledgeGraph = yield* Effect.serviceOption(KnowledgeGraph);
+      const graphSnapshot = Option.isSome(knowledgeGraph)
+        ? yield* knowledgeGraph.value.getSnapshot().pipe(Effect.catch(() => Effect.succeed(null)))
+        : null;
 
       const scoped = scopeHomelabContextViewToThread({
         project: input.project,
@@ -620,6 +627,9 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
         threads: scoped.threads,
         memoryEntries: scoped.memoryEntries,
         ...(bootstrap !== undefined ? { bootstrap } : {}),
+        ...(graphSnapshot
+          ? { graphEntities: graphSnapshot.entities, graphRelations: graphSnapshot.relations }
+          : {}),
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.mapError((cause) =>

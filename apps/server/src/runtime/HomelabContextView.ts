@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 import type {
+  HomelabEntity,
+  HomelabRelation,
   OrchestrationProject,
   OrchestrationThread,
   ProjectMemoryEntry,
@@ -58,6 +60,10 @@ export interface HomelabContextViewInput {
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly memoryEntries?: ReadonlyArray<ProjectMemoryEntry>;
   readonly bootstrap?: HomelabRuntimeBootstrapView | undefined;
+  // Global knowledge graph, mirrored so the agent can grep infrastructure
+  // (hosts/services/relations) under .homelab instead of only via the CLI.
+  readonly graphEntities?: ReadonlyArray<HomelabEntity>;
+  readonly graphRelations?: ReadonlyArray<HomelabRelation>;
 }
 
 /**
@@ -210,10 +216,17 @@ function renderHomelabReadme(title: string): string {
     "Homelab Agent state. It is regenerated before each turn and after memory changes, so it",
     "may be sparse early in a project and fill in as memory and thread transcripts accrue.",
     "",
-    "Use normal search tools such as `rg`, `grep`, and `jq` to inspect project memory and",
-    "thread transcripts here. For live or durable server state that is not mirrored into these",
-    "files, use the `homelab` CLI — it is installed on your `PATH` (under `~/.homelab/bin`) and",
-    "talks to the app server. `~/.homelab` only contains that CLI; project context lives here.",
+    "Use normal search tools such as `rg`, `grep`, and `jq` to inspect the knowledge graph,",
+    "project memory, and thread transcripts here. Key subtrees:",
+    "",
+    "- `.homelab/graph/` — the knowledge graph: `index.jsonl` (every host/service/entity),",
+    "  `entities/<id>.md` (per-entity detail: status, confidence, last-verified, relations),",
+    "  and `relations.jsonl`. This is where you look up infrastructure.",
+    "- `.homelab/memory/` — durable project memory. `.homelab/threads/` — thread transcripts.",
+    "",
+    "For live server state or to write, use the `homelab` CLI — it is installed on your `PATH`",
+    "(under `~/.homelab/bin`) and talks to the app server. `~/.homelab` only contains that CLI;",
+    "project context lives here.",
     "",
     "Runtime bootstrap version history is available under `.homelab/bootstrap/` when the server",
     "exposes it.",
@@ -241,6 +254,8 @@ export function renderHomelabBaselineViewFiles(title = "Project Runtime"): Homel
     { relativePath: ".homelab/threads/index.jsonl", contents: "" },
     { relativePath: ".homelab/memory/index.jsonl", contents: "" },
     { relativePath: ".homelab/memory/latest/README.md", contents: HOMELAB_MEMORY_LATEST_README },
+    { relativePath: ".homelab/graph/index.jsonl", contents: "" },
+    { relativePath: ".homelab/graph/relations.jsonl", contents: "" },
     { relativePath: ".homelab/index/threads.jsonl", contents: "" },
     { relativePath: ".homelab/index/memory.jsonl", contents: "" },
     { relativePath: ".homelab/index/transcripts.jsonl", contents: "" },
@@ -280,6 +295,59 @@ function renderBootstrapMarkdown(input: HomelabRuntimeBootstrapView): string {
   }
   lines.push("");
 
+  return lines.join("\n");
+}
+
+function graphEntitySegment(entity: HomelabEntity): string {
+  return safeHomelabViewSegment(String(entity.id));
+}
+
+function renderGraphEntityMarkdown(
+  entity: HomelabEntity,
+  relations: ReadonlyArray<HomelabRelation>,
+): string {
+  const outgoing = relations.filter((relation) => relation.fromEntityId === entity.id);
+  const incoming = relations.filter((relation) => relation.toEntityId === entity.id);
+  const lines = [
+    `# ${entity.title ?? entity.name}`,
+    "",
+    `- Id: ${entity.id}`,
+    `- Kind: ${entity.kind}`,
+    `- Name: ${entity.name}`,
+    ...(entity.status ? [`- Status: ${entity.status}`] : []),
+    ...(typeof entity.confidence === "number" ? [`- Confidence: ${entity.confidence}`] : []),
+    ...(entity.lastVerifiedAt ? [`- Last verified: ${entity.lastVerifiedAt}`] : []),
+    ...(entity.observedAt ? [`- Observed: ${entity.observedAt}`] : []),
+    `- Updated: ${entity.updatedAt}`,
+    ...(entity.aliases && entity.aliases.length > 0
+      ? [`- Aliases: ${entity.aliases.join(", ")}`]
+      : []),
+    ...(entity.tags && entity.tags.length > 0 ? [`- Tags: ${entity.tags.join(", ")}`] : []),
+    "",
+  ];
+  if (entity.summary) {
+    lines.push("## Summary", "", entity.summary, "");
+  }
+  if (entity.properties && Object.keys(entity.properties).length > 0) {
+    lines.push(
+      "## Properties",
+      "",
+      "```json",
+      JSON.stringify(entity.properties, null, 2),
+      "```",
+      "",
+    );
+  }
+  if (outgoing.length > 0 || incoming.length > 0) {
+    lines.push("## Relations", "");
+    for (const relation of outgoing) {
+      lines.push(`- ${relation.kind} → ${relation.toEntityId}`);
+    }
+    for (const relation of incoming) {
+      lines.push(`- ${relation.fromEntityId} → ${relation.kind} (this)`);
+    }
+    lines.push("");
+  }
   return lines.join("\n");
 }
 
@@ -490,6 +558,53 @@ export function renderHomelabContextViewFiles(
     });
   }
 
+  // Mirror the global knowledge graph so `rg .homelab` surfaces infrastructure
+  // (hosts/services/relations) — the persona's primary "orient yourself" move.
+  const graphEntities = (input.graphEntities ?? []).toSorted((left, right) =>
+    `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`),
+  );
+  const graphRelations = input.graphRelations ?? [];
+  files.push({
+    relativePath: ".homelab/graph/index.jsonl",
+    contents: graphEntities
+      .map((entity) =>
+        jsonLine({
+          id: entity.id,
+          kind: entity.kind,
+          name: entity.name,
+          title: entity.title,
+          aliases: entity.aliases,
+          tags: entity.tags,
+          status: entity.status,
+          confidence: entity.confidence,
+          lastVerifiedAt: entity.lastVerifiedAt,
+          summary: entity.summary,
+          detailPath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
+        }),
+      )
+      .join(""),
+  });
+  files.push({
+    relativePath: ".homelab/graph/relations.jsonl",
+    contents: graphRelations
+      .map((relation) =>
+        jsonLine({
+          id: relation.id,
+          kind: relation.kind,
+          fromEntityId: relation.fromEntityId,
+          toEntityId: relation.toEntityId,
+          ...(relation.summary ? { summary: relation.summary } : {}),
+        }),
+      )
+      .join(""),
+  });
+  for (const entity of graphEntities) {
+    files.push({
+      relativePath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
+      contents: renderGraphEntityMarkdown(entity, graphRelations),
+    });
+  }
+
   return files;
 }
 
@@ -514,6 +629,7 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
   // making the first run (no pre-existing `.homelab`) a no-op.
   const expectedThreadDirs = new Set<string>();
   const expectedMemoryFiles = new Set<string>();
+  const expectedGraphEntityFiles = new Set<string>();
   for (const file of files) {
     const threadMatch = /^\.homelab\/threads\/(thread_[^/]+)\//.exec(file.relativePath);
     if (threadMatch?.[1]) {
@@ -523,6 +639,11 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     const memoryMatch = /^\.homelab\/memory\/latest\/([^/]+\.md)$/.exec(file.relativePath);
     if (memoryMatch?.[1]) {
       expectedMemoryFiles.add(memoryMatch[1]);
+      continue;
+    }
+    const graphMatch = /^\.homelab\/graph\/entities\/([^/]+\.md)$/.exec(file.relativePath);
+    if (graphMatch?.[1]) {
+      expectedGraphEntityFiles.add(graphMatch[1]);
     }
   }
 
@@ -546,6 +667,18 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
       (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
     ),
     (name) => fileSystem.remove(NodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
+    { discard: true },
+  );
+
+  const graphEntitiesDir = NodePath.join(input.hostWorkspacePath, ".homelab", "graph", "entities");
+  const graphEntityEntries = yield* fileSystem
+    .readDirectory(graphEntitiesDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  yield* Effect.forEach(
+    graphEntityEntries.filter(
+      (name) => name.endsWith(".md") && !expectedGraphEntityFiles.has(name),
+    ),
+    (name) => fileSystem.remove(NodePath.join(graphEntitiesDir, name)).pipe(Effect.ignore),
     { discard: true },
   );
 });

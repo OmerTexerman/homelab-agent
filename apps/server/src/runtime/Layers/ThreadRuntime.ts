@@ -1879,8 +1879,9 @@ homelab memory list     # See durable ${memoryScopeShort} memory
 homelab skill list      # See reusable skills available to this runtime
 homelab secrets         # See what credentials are available
 homelab bootstrap       # See active and historical runtime bootstrap data
+cat .homelab/graph/index.jsonl | jq .   # The knowledge graph, greppable on disk
+rg -n "query-or-host-or-service" .homelab/graph .homelab || true
 find .homelab -maxdepth 3 -type f | sort
-rg -n "query-or-host-or-service" .homelab || true
 pwd && ls -la           # See the runtime workspace you can use freely
 \`\`\`
 
