@@ -184,6 +184,7 @@ export const WS_METHODS = {
   threadWorkspaceWriteFile: "threadWorkspace.writeFile",
   projectRuntimeGet: "projectRuntime.get",
   projectRuntimeWake: "projectRuntime.wake",
+  projectRuntimeSleep: "projectRuntime.sleep",
   projectRuntimeArchive: "projectRuntime.archive",
   projectRuntimeReset: "projectRuntime.reset",
   projectRuntimeCleanupScratch: "projectRuntime.cleanupScratch",
@@ -482,6 +483,12 @@ export const WsProjectRuntimeGetRpc = Rpc.make(WS_METHODS.projectRuntimeGet, {
 });
 
 export const WsProjectRuntimeWakeRpc = Rpc.make(WS_METHODS.projectRuntimeWake, {
+  payload: ProjectRuntimeOperationInput,
+  success: ProjectRuntimeOperationResult,
+  error: Schema.Union([ProjectRuntimeError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectRuntimeSleepRpc = Rpc.make(WS_METHODS.projectRuntimeSleep, {
   payload: ProjectRuntimeOperationInput,
   success: ProjectRuntimeOperationResult,
   error: Schema.Union([ProjectRuntimeError, EnvironmentAuthorizationError]),
@@ -859,6 +866,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadWorkspaceWriteFileRpc,
   WsProjectRuntimeGetRpc,
   WsProjectRuntimeWakeRpc,
+  WsProjectRuntimeSleepRpc,
   WsProjectRuntimeArchiveRpc,
   WsProjectRuntimeResetRpc,
   WsProjectRuntimeCleanupScratchRpc,

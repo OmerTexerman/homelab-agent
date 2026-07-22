@@ -16,6 +16,7 @@ import {
   HistoryIcon,
   Loader2Icon,
   PowerIcon,
+  PowerOffIcon,
   RotateCcwIcon,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
@@ -53,6 +54,7 @@ async function runProjectRuntimeCommand<W, A, E>(
 
 type ProjectRuntimePanelOperation =
   | { type: "wake" }
+  | { type: "sleep" }
   | { type: "archive" }
   | { type: "reset" }
   | { type: "cleanupScratch" }
@@ -157,6 +159,11 @@ export function ProjectRuntimePanel({
             environmentId,
             input: operationInput,
           });
+        case "sleep":
+          return runProjectRuntimeCommand(projectRuntimeEnvironment.sleep, {
+            environmentId,
+            input: operationInput,
+          });
         case "archive":
           return runProjectRuntimeCommand(projectRuntimeEnvironment.archive, {
             environmentId,
@@ -233,6 +240,10 @@ export function ProjectRuntimePanel({
 
   const wakeRuntime = useCallback(() => {
     runOperation({ type: "wake" });
+  }, [runOperation]);
+
+  const sleepRuntime = useCallback(() => {
+    runOperation({ type: "sleep" });
   }, [runOperation]);
 
   const mergeIsolatedRuntime = useCallback(() => {
@@ -365,14 +376,25 @@ export function ProjectRuntimePanel({
           ) : null}
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <Button size="xs" variant="outline" onClick={wakeRuntime} disabled={busy}>
-            {operationMutation.isPending ? (
-              <Loader2Icon className="size-3.5 animate-spin" />
-            ) : (
-              <PowerIcon className="size-3.5" />
-            )}
-            Wake
-          </Button>
+          {lifecycleState === "running" || lifecycleState === "ready" ? (
+            <Button size="xs" variant="outline" onClick={sleepRuntime} disabled={busy}>
+              {operationMutation.isPending ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <PowerOffIcon className="size-3.5" />
+              )}
+              Sleep
+            </Button>
+          ) : (
+            <Button size="xs" variant="outline" onClick={wakeRuntime} disabled={busy}>
+              {operationMutation.isPending ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <PowerIcon className="size-3.5" />
+              )}
+              Wake
+            </Button>
+          )}
           <Button size="xs" variant="outline" onClick={archiveRuntime} disabled={busy}>
             <ArchiveIcon className="size-3.5" />
             Archive

@@ -17,6 +17,14 @@ export interface ProjectRuntimeLifecycleShape {
   readonly wake: (
     input: ProjectRuntimeOperationInput,
   ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;
+  /**
+   * Stop the runtime's container but keep it in the normal (non-archived) set,
+   * so it auto-wakes on the next turn. The manual counterpart to the idle
+   * reaper — distinct from `archive`, which marks the runtime dormant.
+   */
+  readonly sleep: (
+    input: ProjectRuntimeOperationInput,
+  ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;
   readonly archive: (
     input: ProjectRuntimeOperationInput,
   ) => Effect.Effect<ProjectRuntimeOperationResult, ProjectRuntimeError>;

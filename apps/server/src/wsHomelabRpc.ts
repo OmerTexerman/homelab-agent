@@ -43,6 +43,7 @@ export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEn
   [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeGet, AuthOrchestrationReadScope],
   [WS_METHODS.projectRuntimeWake, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectRuntimeSleep, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeArchive, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeReset, AuthOrchestrationOperateScope],
   [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
@@ -298,6 +299,12 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
       }),
     [WS_METHODS.projectRuntimeWake]: (input: Parameters<ProjectRuntimeLifecycleShape["wake"]>[0]) =>
       observeRpcEffect(WS_METHODS.projectRuntimeWake, projectRuntimeLifecycle.wake(input), {
+        "rpc.aggregate": "projectRuntime",
+      }),
+    [WS_METHODS.projectRuntimeSleep]: (
+      input: Parameters<ProjectRuntimeLifecycleShape["sleep"]>[0],
+    ) =>
+      observeRpcEffect(WS_METHODS.projectRuntimeSleep, projectRuntimeLifecycle.sleep(input), {
         "rpc.aggregate": "projectRuntime",
       }),
     [WS_METHODS.projectRuntimeArchive]: (

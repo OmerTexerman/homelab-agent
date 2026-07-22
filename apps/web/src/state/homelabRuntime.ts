@@ -18,6 +18,10 @@ export const projectRuntimeEnvironment = {
     label: "homelab:commands:project-runtime:wake",
     tag: WS_METHODS.projectRuntimeWake,
   }),
+  sleep: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "homelab:commands:project-runtime:sleep",
+    tag: WS_METHODS.projectRuntimeSleep,
+  }),
   archive: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "homelab:commands:project-runtime:archive",
     tag: WS_METHODS.projectRuntimeArchive,

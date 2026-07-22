@@ -899,6 +899,34 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
     },
   );
 
+  const sleep: ProjectRuntimeLifecycleShape["sleep"] = Effect.fn("projectRuntimeLifecycle.sleep")(
+    function* (input) {
+      const resolved = yield* resolveRuntime(input);
+      yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
+      yield* threadRuntime.stopRuntime(resolved.bindingThread.id).pipe(
+        Effect.catchTags({
+          ThreadRuntimeNotFoundError: () => Effect.void,
+          ThreadRuntimeError: (cause) =>
+            Effect.fail(
+              toProjectRuntimeError({
+                message: "Failed to stop project runtime.",
+                projectId: resolved.project.id,
+                runtimeId: resolved.runtimeId,
+                threadId: resolved.bindingThread.id,
+                cause,
+              }),
+            ),
+        }),
+      );
+      yield* markLifecycleState({
+        projectId: resolved.project.id,
+        runtimeId: resolved.runtimeId,
+        lifecycleState: "stopped",
+      });
+      return yield* describeRuntime(input);
+    },
+  );
+
   const archive: ProjectRuntimeLifecycleShape["archive"] = Effect.fn(
     "projectRuntimeLifecycle.archive",
   )(function* (input) {
@@ -1306,6 +1334,7 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   return {
     get: describeRuntime,
     wake,
+    sleep,
     archive,
     reset,
     cleanupScratch,
