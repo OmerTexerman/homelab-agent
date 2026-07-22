@@ -105,36 +105,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
-import {
-  homelabCuratorEntityDeleteRouteLayer,
-  homelabCuratorMemoryDeleteRouteLayer,
-  homelabCuratorMemoryListRouteLayer,
-  homelabCuratorMemoryUpdateRouteLayer,
-  homelabCuratorOverviewRouteLayer,
-  homelabCuratorRelationDeleteRouteLayer,
-  homelabCuratorSkillDeleteRouteLayer,
-  homelabCuratorSkillsListRouteLayer,
-  homelabCuratorSkillUpdateRouteLayer,
-  homelabEntitiesRouteLayer,
-  homelabEntityRouteLayer,
-  homelabProjectMemoryCreateRouteLayer,
-  homelabProjectMemoryListRouteLayer,
-  homelabProjectMemoryPromoteRouteLayer,
-  homelabProjectMemorySearchRouteLayer,
-  homelabPromotionsRouteLayer,
-  homelabRelationsRouteLayer,
-  homelabRuntimeBootstrapRouteLayer,
-  homelabSearchRouteLayer,
-  homelabSecretRequestsRouteLayer,
-  homelabSecretDeleteRouteLayer,
-  homelabSecretUpsertRouteLayer,
-  homelabSkillsCreateRouteLayer,
-  homelabSkillsListRouteLayer,
-  homelabSkillsPromoteRouteLayer,
-  homelabSecretsRouteLayer,
-  homelabSetupStatusRouteLayer,
-  homelabSnapshotRouteLayer,
-} from "./homelab/http.ts";
+import { homelabRoutesLayer } from "./homelab/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -443,37 +414,6 @@ const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-const HomelabRoutesLayer = Layer.mergeAll(
-  homelabCuratorEntityDeleteRouteLayer,
-  homelabCuratorMemoryDeleteRouteLayer,
-  homelabCuratorMemoryListRouteLayer,
-  homelabCuratorMemoryUpdateRouteLayer,
-  homelabCuratorOverviewRouteLayer,
-  homelabCuratorRelationDeleteRouteLayer,
-  homelabCuratorSkillDeleteRouteLayer,
-  homelabCuratorSkillsListRouteLayer,
-  homelabCuratorSkillUpdateRouteLayer,
-  homelabEntitiesRouteLayer,
-  homelabEntityRouteLayer,
-  homelabProjectMemoryCreateRouteLayer,
-  homelabProjectMemoryListRouteLayer,
-  homelabProjectMemoryPromoteRouteLayer,
-  homelabProjectMemorySearchRouteLayer,
-  homelabPromotionsRouteLayer,
-  homelabRelationsRouteLayer,
-  homelabRuntimeBootstrapRouteLayer,
-  homelabSearchRouteLayer,
-  homelabSecretRequestsRouteLayer,
-  homelabSecretDeleteRouteLayer,
-  homelabSecretUpsertRouteLayer,
-  homelabSkillsCreateRouteLayer,
-  homelabSkillsListRouteLayer,
-  homelabSkillsPromoteRouteLayer,
-  homelabSecretsRouteLayer,
-  homelabSetupStatusRouteLayer,
-  homelabSnapshotRouteLayer,
-);
-
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
@@ -489,7 +429,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     websocketRpcRouteLayer,
   ),
   threadWorkspaceFileRouteLayer,
-  HomelabRoutesLayer,
+  homelabRoutesLayer,
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
 

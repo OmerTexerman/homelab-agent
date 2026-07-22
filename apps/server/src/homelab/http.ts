@@ -42,7 +42,7 @@ import {
   HomelabSkillPromoteInput,
   type ThreadId,
 } from "@t3tools/contracts";
-import { Data, Effect, Option, Schema, SchemaIssue } from "effect";
+import { Data, Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -1285,4 +1285,40 @@ export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
     Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
+);
+
+/**
+ * Fork-owned composite of every homelab HTTP route. Keeping the `Layer.mergeAll`
+ * here (rather than re-listing all routes in the upstream `server.ts`) shrinks
+ * the fork's footprint in that hot upstream file to a single import + merge.
+ */
+export const homelabRoutesLayer = Layer.mergeAll(
+  homelabCuratorEntityDeleteRouteLayer,
+  homelabCuratorMemoryDeleteRouteLayer,
+  homelabCuratorMemoryListRouteLayer,
+  homelabCuratorMemoryUpdateRouteLayer,
+  homelabCuratorOverviewRouteLayer,
+  homelabCuratorRelationDeleteRouteLayer,
+  homelabCuratorSkillDeleteRouteLayer,
+  homelabCuratorSkillsListRouteLayer,
+  homelabCuratorSkillUpdateRouteLayer,
+  homelabEntitiesRouteLayer,
+  homelabEntityRouteLayer,
+  homelabProjectMemoryCreateRouteLayer,
+  homelabProjectMemoryListRouteLayer,
+  homelabProjectMemoryPromoteRouteLayer,
+  homelabProjectMemorySearchRouteLayer,
+  homelabPromotionsRouteLayer,
+  homelabRelationsRouteLayer,
+  homelabRuntimeBootstrapRouteLayer,
+  homelabSearchRouteLayer,
+  homelabSecretRequestsRouteLayer,
+  homelabSecretDeleteRouteLayer,
+  homelabSecretUpsertRouteLayer,
+  homelabSkillsCreateRouteLayer,
+  homelabSkillsListRouteLayer,
+  homelabSkillsPromoteRouteLayer,
+  homelabSecretsRouteLayer,
+  homelabSetupStatusRouteLayer,
+  homelabSnapshotRouteLayer,
 );
