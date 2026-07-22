@@ -3511,9 +3511,40 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
     const now = Date.now();
     const runtimes = yield* Ref.get(runtimesRef);
+
+    // Never reap a runtime whose thread has an in-flight provider turn: streaming
+    // turns don't bump `updatedAt`, so a long turn (>idle timeout) with no
+    // terminal I/O would otherwise be docker-stopped mid-stream. Best-effort —
+    // if the read model is unavailable we fall back to the updatedAt heuristic.
+    const activeThreadIds = yield* Effect.serviceOption(ProjectionSnapshotQuery).pipe(
+      Effect.flatMap((query) =>
+        Option.isNone(query)
+          ? Effect.succeed(new Set<string>())
+          : query.value.getSnapshot().pipe(
+              Effect.map(
+                (readModel) =>
+                  new Set(
+                    readModel.threads
+                      .filter(
+                        (thread) =>
+                          thread.deletedAt === null &&
+                          (thread.session?.status === "starting" ||
+                            thread.session?.status === "running"),
+                      )
+                      .map((thread) => String(thread.id)),
+                  ),
+              ),
+              Effect.orElseSucceed(() => new Set<string>()),
+            ),
+      ),
+    );
+
     const idleRuntimeIds = runtimes
       .filter((runtime) => {
         if (runtime.status !== "running") {
+          return false;
+        }
+        if (activeThreadIds.has(String(runtime.threadId))) {
           return false;
         }
 
