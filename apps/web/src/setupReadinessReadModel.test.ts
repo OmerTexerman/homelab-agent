@@ -157,6 +157,7 @@ describe("setup readiness read model", () => {
               key: "PLEX_TOKEN",
               placeholder: "secret://PLEX_TOKEN",
               hasValue: false,
+              pending: false,
               createdAt: NOW,
               updatedAt: NOW,
             },

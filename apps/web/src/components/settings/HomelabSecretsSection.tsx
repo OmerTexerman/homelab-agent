@@ -256,7 +256,7 @@ export function HomelabSecretsSection() {
                       {secret.label ?? secret.key}
                     </span>
                     <span className="rounded-full border border-border/70 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                      {secret.hasValue ? "Stored" : "Missing"}
+                      {secret.pending ? "Requested" : secret.hasValue ? "Stored" : "Missing"}
                     </span>
                   </div>
                   {secret.summary ? (

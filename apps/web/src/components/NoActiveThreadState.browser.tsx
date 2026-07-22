@@ -120,6 +120,7 @@ function setupStatus(): HomelabSetupStatus {
           key: "PLEX_TOKEN",
           placeholder: "secret://PLEX_TOKEN",
           hasValue: true,
+          pending: false,
           createdAt: NOW,
           updatedAt: NOW,
         },

@@ -51,10 +51,12 @@ const secret = (
   key: string,
   hasValue: boolean,
   updatedAt = "2026-01-01T00:00:00.000Z",
+  pending = false,
 ): HomelabSecretDescriptor => ({
   key: HomelabSecretKey.make(key),
   placeholder: `$${key}`,
   hasValue,
+  pending,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt,
 });
@@ -83,6 +85,30 @@ describe("deriveDecisionQueueReadModel", () => {
     expect(queue.activeDecision?.kind).toBe("provider-approval");
     expect(queue.activePendingApproval?.requestId).toBe(ApprovalRequestId.make("approval-1"));
     expect(queue.showPlanFollowUpPrompt).toBe(false);
+  });
+
+  it("surfaces a secret request for a pending rotation even when a value is already stored", () => {
+    const queue = deriveDecisionQueueReadModel({
+      secretRequests: {
+        // hasValue: true (a stale value is stored) but pending: true (a new
+        // value was requested via `secret-request`) — the rotation case.
+        secrets: [secret("PELICAN_API_KEY", true, "2026-01-01T00:00:00.000Z", true)],
+        dismissedSecretKeys: new Set(),
+      },
+    });
+
+    expect(queue.pendingEntries.map((decision) => decision.kind)).toEqual(["secret-request"]);
+  });
+
+  it("does not surface a request for a stored secret that is not pending", () => {
+    const queue = deriveDecisionQueueReadModel({
+      secretRequests: {
+        secrets: [secret("STORED_ONLY", true)],
+        dismissedSecretKeys: new Set(),
+      },
+    });
+
+    expect(queue.pendingEntries).toHaveLength(0);
   });
 
   it("lets a provider user-input prompt block the plan follow-up prompt", () => {

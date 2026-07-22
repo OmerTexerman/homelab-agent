@@ -26,6 +26,9 @@ const PersistedHomelabSecretMetadata = Schema.Struct({
   key: HomelabSecretKey,
   label: Schema.optional(TrimmedNonEmptyString),
   summary: Schema.optional(TrimmedNonEmptyString),
+  // Set by requestSecret (a value is wanted), cleared by upsertSecret (value
+  // supplied). Optional so pre-existing persisted state decodes unchanged.
+  requestedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -97,6 +100,7 @@ function toDescriptor(
     ...(secret.label !== undefined ? { label: secret.label } : {}),
     ...(secret.summary !== undefined ? { summary: secret.summary } : {}),
     hasValue,
+    pending: secret.requestedAt !== undefined,
     createdAt: secret.createdAt,
     updatedAt: secret.updatedAt,
   };
@@ -300,6 +304,9 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
         const nextSecret: PersistedHomelabSecretMetadata = {
           key: input.key,
           ...mergeOptionalSecretFields(existing, input),
+          // Mark the secret as awaiting a (new) value so the request/rotation
+          // dialog surfaces even when a stale value is already stored.
+          requestedAt: now,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };

@@ -14,6 +14,10 @@ export const HomelabSecretDescriptor = Schema.Struct({
   label: Schema.optional(TrimmedNonEmptyString),
   summary: Schema.optional(TrimmedNonEmptyString),
   hasValue: Schema.Boolean,
+  // True when a value has been requested but not (re)supplied since — set by
+  // `secret-request`, cleared on upsert. Lets the request/rotation dialog
+  // surface even for a secret that already has a (now-stale) value.
+  pending: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
