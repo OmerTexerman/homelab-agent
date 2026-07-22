@@ -1,12 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 import {
+  HomelabEntityId,
   MessageId,
   ProjectId,
   ProjectMemoryId,
   ProviderInstanceId,
   RuntimeSessionId,
   ThreadId,
+  type HomelabEntity,
   type OrchestrationProject,
   type ProjectMemoryEntry,
   type OrchestrationThread,
@@ -313,6 +315,61 @@ describe("HomelabContextView", () => {
       expect(yield* exists(".homelab/memory/latest/README.md")).toBe(true);
       expect(yield* exists(".homelab/threads/index.jsonl")).toBe(true);
       expect(yield* exists(".homelab/memory/index.jsonl")).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+  });
+
+  it("leaves the graph subtree untouched when a caller omits graph data, and manages it when supplied", async () => {
+    const entity: HomelabEntity = {
+      id: HomelabEntityId.make("host:proxmox"),
+      kind: "host",
+      name: "proxmox",
+      title: "Proxmox host",
+      summary: "Primary hypervisor",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "homelab-context-view-graph-",
+      });
+      const join = (...segments: ReadonlyArray<string>) => NodePath.join(tempDir, ...segments);
+      const exists = (relative: string) =>
+        fileSystem.exists(join(relative)).pipe(Effect.orElseSucceed(() => false));
+
+      // 1) A pass that supplies the graph materializes the entity page + index.
+      yield* writeHomelabContextView({
+        hostWorkspacePath: tempDir,
+        project,
+        threads: [],
+        memoryEntries: [],
+        graphEntities: [entity],
+        graphRelations: [],
+      });
+      expect(yield* exists(".homelab/graph/entities/host_proxmox.md")).toBe(true);
+      expect(yield* exists(".homelab/graph/index.jsonl")).toBe(true);
+
+      // 2) A memory/thread-only refresh (omits graph) MUST NOT touch the mirror.
+      // This is the regression: the renderer used to blank + prune graph here.
+      yield* writeHomelabContextView({
+        hostWorkspacePath: tempDir,
+        project,
+        threads: [],
+        memoryEntries: [],
+      });
+      expect(yield* exists(".homelab/graph/entities/host_proxmox.md")).toBe(true);
+
+      // 3) An explicit empty graph is "managed empty": the entity page is pruned.
+      yield* writeHomelabContextView({
+        hostWorkspacePath: tempDir,
+        project,
+        threads: [],
+        memoryEntries: [],
+        graphEntities: [],
+        graphRelations: [],
+      });
+      expect(yield* exists(".homelab/graph/entities/host_proxmox.md")).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
   });
 });

@@ -560,52 +560,76 @@ export function renderHomelabContextViewFiles(
 
   // Mirror the global knowledge graph so `rg .homelab` surfaces infrastructure
   // (hosts/services/relations) — the persona's primary "orient yourself" move.
-  const graphEntities = (input.graphEntities ?? []).toSorted((left, right) =>
-    `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`),
-  );
-  const graphRelations = input.graphRelations ?? [];
-  files.push({
-    relativePath: ".homelab/graph/index.jsonl",
-    contents: graphEntities
-      .map((entity) =>
-        jsonLine({
-          id: entity.id,
-          kind: entity.kind,
-          name: entity.name,
-          title: entity.title,
-          aliases: entity.aliases,
-          tags: entity.tags,
-          status: entity.status,
-          confidence: entity.confidence,
-          lastVerifiedAt: entity.lastVerifiedAt,
-          summary: entity.summary,
-          detailPath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
-        }),
-      )
-      .join(""),
-  });
-  files.push({
-    relativePath: ".homelab/graph/relations.jsonl",
-    contents: graphRelations
-      .map((relation) =>
-        jsonLine({
-          id: relation.id,
-          kind: relation.kind,
-          fromEntityId: relation.fromEntityId,
-          toEntityId: relation.toEntityId,
-          ...(relation.summary ? { summary: relation.summary } : {}),
-        }),
-      )
-      .join(""),
-  });
-  for (const entity of graphEntities) {
+  //
+  // The graph is a CONDITIONALLY-managed subtree: it is rendered (and, in the
+  // writer, pruned) only when the caller actually supplies graph data. This is
+  // load-bearing. The renderer always rewrote graph/* from `graphEntities ?? []`,
+  // so any caller that omitted graph (the per-turn and memory-write refreshes did)
+  // blanked the index and pruned every entity page — the graph mirror only ever
+  // survived the wake path that passes it. Gating on presence lets memory/thread
+  // refreshes leave the graph subtree untouched; the wake path and the knowledge
+  // reactor own it. Passing an explicit `[]` still renders an empty graph (a
+  // genuinely empty graph should mirror as empty), so "empty" and "not managed
+  // here" stay distinct.
+  if (shouldManageGraphSubtree(input)) {
+    const graphEntities = (input.graphEntities ?? []).toSorted((left, right) =>
+      `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`),
+    );
+    const graphRelations = input.graphRelations ?? [];
     files.push({
-      relativePath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
-      contents: renderGraphEntityMarkdown(entity, graphRelations),
+      relativePath: ".homelab/graph/index.jsonl",
+      contents: graphEntities
+        .map((entity) =>
+          jsonLine({
+            id: entity.id,
+            kind: entity.kind,
+            name: entity.name,
+            title: entity.title,
+            aliases: entity.aliases,
+            tags: entity.tags,
+            status: entity.status,
+            confidence: entity.confidence,
+            lastVerifiedAt: entity.lastVerifiedAt,
+            summary: entity.summary,
+            detailPath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
+          }),
+        )
+        .join(""),
     });
+    files.push({
+      relativePath: ".homelab/graph/relations.jsonl",
+      contents: graphRelations
+        .map((relation) =>
+          jsonLine({
+            id: relation.id,
+            kind: relation.kind,
+            fromEntityId: relation.fromEntityId,
+            toEntityId: relation.toEntityId,
+            ...(relation.summary ? { summary: relation.summary } : {}),
+          }),
+        )
+        .join(""),
+    });
+    for (const entity of graphEntities) {
+      files.push({
+        relativePath: `.homelab/graph/entities/${graphEntitySegment(entity)}.md`,
+        contents: renderGraphEntityMarkdown(entity, graphRelations),
+      });
+    }
   }
 
   return files;
+}
+
+/**
+ * The graph subtree is managed by a render pass only when the caller supplies
+ * graph data. Callers that omit both `graphEntities` and `graphRelations` leave
+ * `.homelab/graph/**` exactly as it was on disk (no write, no prune).
+ */
+function shouldManageGraphSubtree(
+  input: Pick<HomelabContextViewInput, "graphEntities" | "graphRelations">,
+): boolean {
+  return input.graphEntities !== undefined || input.graphRelations !== undefined;
 }
 
 export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextView")(function* (
@@ -670,15 +694,25 @@ export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextVie
     { discard: true },
   );
 
-  const graphEntitiesDir = NodePath.join(input.hostWorkspacePath, ".homelab", "graph", "entities");
-  const graphEntityEntries = yield* fileSystem
-    .readDirectory(graphEntitiesDir, { recursive: false })
-    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-  yield* Effect.forEach(
-    graphEntityEntries.filter(
-      (name) => name.endsWith(".md") && !expectedGraphEntityFiles.has(name),
-    ),
-    (name) => fileSystem.remove(NodePath.join(graphEntitiesDir, name)).pipe(Effect.ignore),
-    { discard: true },
-  );
+  // Prune the graph subtree ONLY when this pass managed it (see
+  // shouldManageGraphSubtree). A memory/thread-only refresh omits graph and must
+  // leave every entity page in place — otherwise it deletes the whole mirror.
+  if (shouldManageGraphSubtree(input)) {
+    const graphEntitiesDir = NodePath.join(
+      input.hostWorkspacePath,
+      ".homelab",
+      "graph",
+      "entities",
+    );
+    const graphEntityEntries = yield* fileSystem
+      .readDirectory(graphEntitiesDir, { recursive: false })
+      .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+    yield* Effect.forEach(
+      graphEntityEntries.filter(
+        (name) => name.endsWith(".md") && !expectedGraphEntityFiles.has(name),
+      ),
+      (name) => fileSystem.remove(NodePath.join(graphEntitiesDir, name)).pipe(Effect.ignore),
+      { discard: true },
+    );
+  }
 });
