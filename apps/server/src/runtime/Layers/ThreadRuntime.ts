@@ -3208,6 +3208,39 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     }
   });
 
+  // The agent runs inside the container as root, so files it writes into the
+  // bind-mounted runtime root are root-owned on the host. The server runs as a
+  // non-root user and cannot unlink them, so a plain fs remove fails with
+  // EACCES and orphans the directory. Only ever called on true runtime
+  // destruction (project/thread deletion) — never on stop/idle — a short-lived
+  // root container removes the directory. Best-effort; the caller still runs a
+  // plain fs remove as a fallback (e.g. when no image is available in tests).
+  const removeRuntimeRootAsRoot = Effect.fn("threadRuntime.removeRuntimeRootAsRoot")(function* (
+    runtimeRoot: string,
+    imageRef: string,
+  ) {
+    const parent = NodePath.dirname(runtimeRoot);
+    const target = NodePath.basename(runtimeRoot);
+    if (parent === runtimeRoot || target.length === 0 || target === "." || target === "..") {
+      return;
+    }
+    yield* dockerRunner(
+      [
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "-v",
+        `${parent}:/parent`,
+        imageRef,
+        "rm",
+        "-rf",
+        `/parent/${target}`,
+      ],
+      { timeoutMs: 60_000, maxBufferBytes: 256 * 1024 },
+    ).pipe(Effect.ignore({ log: true }));
+  });
+
   const startExistingContainer = Effect.fn("threadRuntime.startExistingContainer")(function* (
     containerName: string,
   ) {
@@ -3750,6 +3783,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         if (remainingBindings.length === 0) {
           yield* removeContainerIfPresent(runtime.containerName);
           yield* revokeRuntimeAccessToken(runtime);
+          // Remove root-owned files via a root helper first, then a plain fs
+          // remove as fallback/cleanup for anything the server user does own.
+          yield* removeRuntimeRootAsRoot(runtimeRoot, runtime.imageRef);
           yield* fileSystem
             .remove(runtimeRoot, { recursive: true, force: true })
             .pipe(Effect.ignore({ log: true }));
