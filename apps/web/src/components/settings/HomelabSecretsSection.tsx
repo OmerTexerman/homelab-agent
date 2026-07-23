@@ -1,3 +1,4 @@
+import { AuthHomelabSecretsAdminScope } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRoundIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -10,6 +11,7 @@ import {
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
 import { ensureLocalApi } from "~/localApi";
+import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -25,6 +27,14 @@ export function HomelabSecretsSection() {
   useRelativeTimeTick();
   const queryClient = useQueryClient();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const sessionState = usePrimarySessionState();
+  // Writing secrets needs homelab:secrets-admin (server-enforced on the HTTP
+  // routes). Gate the write UI on it too so a device paired without the scope
+  // sees a read-only view instead of a 403 toast on save. Optimistic while the
+  // session scopes are still loading, to avoid a disabled-state flash.
+  const sessionScopes = sessionState.data?.scopes;
+  const canManageSecrets =
+    sessionScopes === undefined || sessionScopes.includes(AuthHomelabSecretsAdminScope);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [label, setLabel] = useState("");
@@ -159,7 +169,17 @@ export function HomelabSecretsSection() {
         description="Store API keys, SSH tokens, and other values once, then inject them into every Project Runtime as environment variables."
         status="Agents and terminals receive these as env vars like $API_KEY. The raw values stay out of chat history."
       >
-        <div className="mt-4 grid gap-3 border-t border-border/60 py-4 sm:grid-cols-2">
+        {canManageSecrets ? null : (
+          <div className="mt-4 rounded-lg border border-border/60 bg-muted/25 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+            This device can view secret references but can't add, edit, or remove them. Pair it with
+            the <span className="font-medium text-foreground">Manage secrets</span> permission to
+            change secret values.
+          </div>
+        )}
+        <div
+          className="mt-4 grid gap-3 border-t border-border/60 py-4 sm:grid-cols-2"
+          hidden={!canManageSecrets}
+        >
           <label className="space-y-1.5">
             <span className="text-xs font-medium text-foreground">Key</span>
             <Input
@@ -273,24 +293,26 @@ export function HomelabSecretsSection() {
                     </p>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => handleEdit(secret)}>
-                    <PencilIcon className="size-3.5" />
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-destructive hover:text-destructive"
-                    disabled={deleteSecretMutation.isPending && deletingKey === secret.key}
-                    onClick={() => void handleDelete(secret.key)}
-                  >
-                    <Trash2Icon className="size-3.5" />
-                    {deleteSecretMutation.isPending && deletingKey === secret.key
-                      ? "Removing..."
-                      : "Delete"}
-                  </Button>
-                </div>
+                {canManageSecrets ? (
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => handleEdit(secret)}>
+                      <PencilIcon className="size-3.5" />
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      disabled={deleteSecretMutation.isPending && deletingKey === secret.key}
+                      onClick={() => void handleDelete(secret.key)}
+                    >
+                      <Trash2Icon className="size-3.5" />
+                      {deleteSecretMutation.isPending && deletingKey === secret.key
+                        ? "Removing..."
+                        : "Delete"}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </div>
           );
