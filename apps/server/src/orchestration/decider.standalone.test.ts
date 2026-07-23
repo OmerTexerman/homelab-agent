@@ -336,7 +336,7 @@ describe("standalone thread orchestration", () => {
     });
   });
 
-  it("moves a scratch thread into an existing project as an isolated thread keeping its runtime", async () => {
+  it("adopts the scratch runtime as the project default when moving into a fresh project", async () => {
     const targetProjectId = asProjectId("project-existing");
     const initial = createEmptyReadModel(now);
     const withStandalone = await applyPlannedEvents(
@@ -364,15 +364,25 @@ describe("standalone thread orchestration", () => {
     const events = Array.isArray(result) ? result : [result];
     const moved = await applyPlannedEvents(withTargetProject, events);
 
-    expect(events.map((event) => event.type)).toEqual(["thread.meta-updated"]);
+    // Fresh target project: the move rewrites the project default to the scratch
+    // runtime and joins the thread as a SHARED thread on it (no parallel runtime).
+    expect(events.map((event) => event.type)).toEqual([
+      "project.meta-updated",
+      "thread.meta-updated",
+    ]);
     expect(events[0]).toMatchObject({
+      aggregateKind: "project",
+      aggregateId: targetProjectId,
+      payload: { projectId: targetProjectId, defaultRuntimeId: threadRuntimeId },
+    });
+    expect(events[1]).toMatchObject({
       aggregateKind: "thread",
       aggregateId: asThreadId("thread-standalone-1"),
       payload: {
         threadId: asThreadId("thread-standalone-1"),
         projectId: targetProjectId,
         runtimeId: threadRuntimeId,
-        runtimeSelectionMode: "isolated",
+        runtimeSelectionMode: "shared",
       },
     });
     expect(
@@ -381,11 +391,15 @@ describe("standalone thread orchestration", () => {
       id: asThreadId("thread-standalone-1"),
       projectId: targetProjectId,
       runtimeId: threadRuntimeId,
-      runtimeSelectionMode: "isolated",
+      runtimeSelectionMode: "shared",
+    });
+    expect(moved.projects.find((project) => project.id === targetProjectId)).toMatchObject({
+      id: targetProjectId,
+      defaultRuntimeId: threadRuntimeId,
     });
   });
 
-  it("preserves isolated runtime identity when moving an isolated standalone thread", async () => {
+  it("preserves the scratch runtime identity as the adopted project default", async () => {
     const targetProjectId = asProjectId("project-existing-isolated");
     const threadId = asThreadId("thread-standalone-isolated-move");
     const initial = createEmptyReadModel(now);
@@ -417,13 +431,84 @@ describe("standalone thread orchestration", () => {
     );
     const events = Array.isArray(result) ? result : [result];
 
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.type)).toEqual([
+      "project.meta-updated",
+      "thread.meta-updated",
+    ]);
+    expect(events[1]).toMatchObject({
       type: "thread.meta-updated",
       payload: {
         threadId,
         projectId: targetProjectId,
         runtimeId: isolatedThreadRuntimeId(threadId),
-        runtimeSelectionMode: "isolated",
+        runtimeSelectionMode: "shared",
+      },
+    });
+  });
+
+  it("joins the established project default instead of a parallel runtime on a second move", async () => {
+    const targetProjectId = asProjectId("project-established");
+    const firstThreadId = asThreadId("thread-standalone-first");
+    const secondThreadId = asThreadId("thread-standalone-second");
+    const initial = createEmptyReadModel(now);
+
+    // Fresh project + first scratch thread moved in: adopts firstThread's runtime as default.
+    let state = await applyPlannedEvents(
+      initial,
+      await decide(standaloneCreateCommand({ threadId: firstThreadId }), initial),
+    );
+    state = await applyPlannedEvents(state, projectCreatedEvent(targetProjectId));
+    state = await applyPlannedEvents(
+      state,
+      await decide(
+        {
+          type: "thread.standalone.move-to-project",
+          commandId: asCommandId("cmd-move-first"),
+          threadId: firstThreadId,
+          projectId: targetProjectId,
+          memoryMigration: { mode: "none" },
+          runtimeHandling: { filesystem: "no-merge" },
+          createdAt: now,
+        },
+        state,
+      ),
+    );
+    const adoptedRuntimeId = isolatedThreadRuntimeId(firstThreadId);
+
+    // Second scratch thread moved into the now-established project: JOIN the shared
+    // default (no project rewrite, no parallel isolated runtime).
+    state = await applyPlannedEvents(
+      state,
+      await decide(
+        standaloneCreateCommand({
+          threadId: secondThreadId,
+          commandId: asCommandId("cmd-standalone-create-2"),
+        }),
+        state,
+      ),
+    );
+    const result = await decide(
+      {
+        type: "thread.standalone.move-to-project",
+        commandId: asCommandId("cmd-move-second"),
+        threadId: secondThreadId,
+        projectId: targetProjectId,
+        memoryMigration: { mode: "none" },
+        runtimeHandling: { filesystem: "no-merge" },
+        createdAt: now,
+      },
+      state,
+    );
+    const events = Array.isArray(result) ? result : [result];
+
+    expect(events.map((event) => event.type)).toEqual(["thread.meta-updated"]);
+    expect(events[0]).toMatchObject({
+      type: "thread.meta-updated",
+      payload: {
+        threadId: secondThreadId,
+        projectId: targetProjectId,
+        runtimeId: adoptedRuntimeId,
+        runtimeSelectionMode: "shared",
       },
     });
   });

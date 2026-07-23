@@ -555,14 +555,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      // A scratch thread arrives in the target project as an isolated (parallel) thread:
-      // its runtime id derives from the thread id, so the same container and workspace
-      // follow it across the move. Joining the project's shared runtime stays an explicit
-      // follow-up step.
-      const runtimeSelectionMode = "isolated" as const;
-      const runtimeId = isolatedThreadRuntimeId(thread.id);
+      // A moved scratch thread always joins the project as a SHARED thread — never a
+      // parallel isolated runtime. Which shared runtime it lands on depends on whether
+      // the target project has an established shared runtime yet:
+      //   - Fresh project (no existing shared thread): ADOPT the thread's own runtime as
+      //     the project's default, mirroring promote-to-project. The scratch container and
+      //     workspace stay in place and become the project's shared runtime, so future
+      //     shared threads derive onto it.
+      //   - Established project (already has a shared thread on its default runtime):
+      //     JOIN that existing default instead, so the move doesn't re-point the project's
+      //     other shared threads onto the incoming scratch container.
+      const targetHasEstablishedSharedRuntime = listThreadsByProjectId(
+        readModel,
+        targetProject.id,
+      ).some(
+        (candidate) =>
+          candidate.deletedAt === null &&
+          (candidate.runtimeSelectionMode ?? DEFAULT_THREAD_RUNTIME_MODE) !== "isolated",
+      );
+      const runtimeSelectionMode = "shared" as const;
+      const adoptedRuntimeId = isolatedThreadRuntimeId(thread.id);
+      const runtimeId = targetHasEstablishedSharedRuntime
+        ? defaultRuntimeIdForProject(targetProject)
+        : adoptedRuntimeId;
 
-      return {
+      const threadMovedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -578,6 +595,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+
+      // Only rewrite the project default when adopting into a fresh project.
+      if (targetHasEstablishedSharedRuntime) {
+        return threadMovedEvent;
+      }
+      return [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: targetProject.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "project.meta-updated",
+          payload: {
+            projectId: targetProject.id,
+            defaultRuntimeId: adoptedRuntimeId,
+            updatedAt: command.createdAt,
+          },
+        },
+        threadMovedEvent,
+      ];
     }
 
     case "thread.delete": {
