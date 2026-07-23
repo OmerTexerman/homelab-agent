@@ -113,7 +113,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readonly committedEvents: ReadonlyArray<OrchestrationEvent>;
   }) =>
     Effect.gen(function* () {
-      if (input.command.type !== "thread.standalone.move-to-project") {
+      if (
+        input.command.type !== "thread.standalone.move-to-project" &&
+        input.command.type !== "thread.standalone.promote-to-project"
+      ) {
         return;
       }
       const command = input.command;
@@ -186,7 +189,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const refreshStandaloneMoveContextViews = (input: { readonly command: OrchestrationCommand }) =>
     Effect.gen(function* () {
-      if (input.command.type !== "thread.standalone.move-to-project") {
+      if (
+        input.command.type !== "thread.standalone.move-to-project" &&
+        input.command.type !== "thread.standalone.promote-to-project"
+      ) {
         return;
       }
       const command = input.command;

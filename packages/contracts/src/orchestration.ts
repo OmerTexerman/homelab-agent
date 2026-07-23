@@ -588,16 +588,6 @@ const ThreadCuratorCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
-  type: Schema.Literal("thread.standalone.promote-to-project"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  projectId: ProjectId,
-  title: TrimmedNonEmptyString,
-  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
-  createdAt: IsoDateTime,
-});
-
 export const StandaloneThreadMoveMemoryMigrationMode = Schema.Literals(["none", "copy", "move"]);
 export type StandaloneThreadMoveMemoryMigrationMode =
   typeof StandaloneThreadMoveMemoryMigrationMode.Type;
@@ -607,6 +597,19 @@ export const StandaloneThreadMoveMemoryMigration = Schema.Struct({
   memoryIds: Schema.optional(Schema.Array(ProjectMemoryId)),
 });
 export type StandaloneThreadMoveMemoryMigration = typeof StandaloneThreadMoveMemoryMigration.Type;
+
+const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.promote-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  // Durable Scratch memory follows the thread into its new project (the thread is
+  // leaving the standalone namespace entirely). Same shape/handling as move-to-project.
+  memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
+  createdAt: IsoDateTime,
+});
 
 const ThreadStandaloneMoveToProjectCommand = Schema.Struct({
   type: Schema.Literal("thread.standalone.move-to-project"),
