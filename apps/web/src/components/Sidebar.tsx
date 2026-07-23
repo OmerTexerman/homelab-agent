@@ -1441,6 +1441,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   >([]);
   const [isMoveStandaloneMemoryLoading, setIsMoveStandaloneMemoryLoading] = useState(false);
   const [isMoveStandaloneSubmitting, setIsMoveStandaloneSubmitting] = useState(false);
+  // Promote-to-project: turn a scratch thread's world into a new named project.
+  // Simpler than move (no target picker, all-relevant memory migration).
+  const [promoteStandaloneTarget, setPromoteStandaloneTarget] =
+    useState<MoveStandaloneThreadDialogTarget | null>(null);
+  const [promoteStandaloneName, setPromoteStandaloneName] = useState("");
+  const [promoteStandaloneMemoryMode, setPromoteStandaloneMemoryMode] =
+    useState<StandaloneThreadMoveMemoryMigrationMode>("move");
+  const [isPromoteStandaloneSubmitting, setIsPromoteStandaloneSubmitting] = useState(false);
   const moveStandaloneHttpBaseUrl = useEnvironmentHttpBaseUrl(
     moveStandaloneTarget?.thread.environmentId ?? null,
   );
@@ -1713,6 +1721,77 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [allProjects],
   );
+
+  const closePromoteStandaloneDialog = useCallback(() => {
+    setPromoteStandaloneTarget(null);
+    setPromoteStandaloneName("");
+    setPromoteStandaloneMemoryMode("move");
+    setIsPromoteStandaloneSubmitting(false);
+  }, []);
+
+  const openPromoteStandaloneDialog = useCallback(
+    (thread: SidebarThreadSummary, threadKey: string) => {
+      setPromoteStandaloneTarget({ thread, threadKey });
+      setPromoteStandaloneName(thread.title ?? "");
+      setPromoteStandaloneMemoryMode("move");
+    },
+    [],
+  );
+
+  const submitPromoteStandalone = useCallback(async () => {
+    if (!promoteStandaloneTarget || isPromoteStandaloneSubmitting) {
+      return;
+    }
+    const thread = promoteStandaloneTarget.thread;
+    const title = promoteStandaloneName.trim().replace(/\s+/g, " ");
+    if (!title) {
+      toastManager.add({ type: "warning", title: "Enter a project name" });
+      return;
+    }
+    setIsPromoteStandaloneSubmitting(true);
+    try {
+      const result = await promoteStandaloneThread({
+        environmentId: thread.environmentId,
+        input: {
+          type: "thread.standalone.promote-to-project",
+          commandId: newCommandId(),
+          threadId: thread.id,
+          projectId: newProjectId(),
+          title,
+          memoryMigration: { mode: promoteStandaloneMemoryMode },
+          createdAt: new Date().toISOString(),
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to promote thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Thread promoted to project",
+        description: title,
+      });
+      closePromoteStandaloneDialog();
+    } finally {
+      setIsPromoteStandaloneSubmitting(false);
+    }
+  }, [
+    promoteStandaloneTarget,
+    promoteStandaloneName,
+    promoteStandaloneMemoryMode,
+    isPromoteStandaloneSubmitting,
+    promoteStandaloneThread,
+    closePromoteStandaloneDialog,
+  ]);
 
   useEffect(() => {
     if (!moveStandaloneTarget) {
@@ -2835,39 +2914,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "promote-to-project") {
-        const title = window.prompt("Project name", thread.title)?.trim().replace(/\s+/g, " ");
-        if (!title) {
-          return;
-        }
-        const result = await promoteStandaloneThread({
-          environmentId: thread.environmentId,
-          input: {
-            type: "thread.standalone.promote-to-project",
-            commandId: newCommandId(),
-            threadId: thread.id,
-            projectId: newProjectId(),
-            title,
-            createdAt: new Date().toISOString(),
-          },
-        });
-        if (result._tag === "Failure") {
-          if (!isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to promote thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
-        }
-        toastManager.add({
-          type: "success",
-          title: "Thread promoted to project",
-          description: title,
-        });
+        openPromoteStandaloneDialog(thread, threadKey);
         return;
       }
 
@@ -3458,6 +3505,95 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               }
             >
               {isMoveStandaloneSubmitting ? "Moving..." : "Move"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
+      <Dialog
+        open={promoteStandaloneTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closePromoteStandaloneDialog();
+          }
+        }}
+      >
+        <DialogPopup className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{HOMELAB_PRODUCT_COPY.standalone.promoteAction}</DialogTitle>
+            <DialogDescription>
+              {promoteStandaloneTarget
+                ? `Turn "${promoteStandaloneTarget.thread.title}" into a new project. Its runtime workspace and skills become the project's shared defaults, so future threads reuse them.`
+                : HOMELAB_PRODUCT_COPY.standalone.promoteDescription}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            <div className="grid gap-1.5">
+              <span className="text-xs font-medium text-foreground">Project name</span>
+              <Input
+                value={promoteStandaloneName}
+                onChange={(event) => setPromoteStandaloneName(event.target.value)}
+                placeholder="Project name"
+                autoFocus
+                spellCheck={false}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void submitPromoteStandalone();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="grid gap-1.5">
+              <span className="text-xs font-medium text-foreground">Scratch memory</span>
+              <Select
+                value={promoteStandaloneMemoryMode}
+                onValueChange={(value) => {
+                  if (value === "none" || value === "copy" || value === "move") {
+                    setPromoteStandaloneMemoryMode(value);
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label="Scratch memory handling">
+                  <SelectValue>
+                    {promoteStandaloneMemoryMode === "none"
+                      ? "Leave memory in Scratch"
+                      : promoteStandaloneMemoryMode === "copy"
+                        ? "Copy memory into the project"
+                        : "Move memory into the project"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="move">
+                    Move memory into the project
+                  </SelectItem>
+                  <SelectItem hideIndicator value="copy">
+                    Copy memory into the project
+                  </SelectItem>
+                  <SelectItem hideIndicator value="none">
+                    Leave memory in Scratch
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {promoteStandaloneMemoryMode === "none"
+                  ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory stays behind."
+                  : promoteStandaloneMemoryMode === "copy"
+                    ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory is copied in."
+                    : "The chat transcript, runtime workspace, skills, and durable Scratch memory all move into the project."}
+              </p>
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" onClick={closePromoteStandaloneDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitPromoteStandalone()}
+              disabled={isPromoteStandaloneSubmitting || promoteStandaloneName.trim().length === 0}
+            >
+              {isPromoteStandaloneSubmitting ? "Promoting..." : "Promote"}
             </Button>
           </DialogFooter>
         </DialogPopup>
