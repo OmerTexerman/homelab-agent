@@ -654,6 +654,7 @@ const makeWsRpcLayer = (
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
         switch (event.type) {
+          case "project.created":
           case "project.meta-updated":
             return projectUpsertOrRemove(event.payload.projectId, event.sequence);
           case "project.deleted":
