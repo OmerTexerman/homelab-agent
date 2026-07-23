@@ -608,18 +608,14 @@ export const StandaloneThreadMoveMemoryMigration = Schema.Struct({
 });
 export type StandaloneThreadMoveMemoryMigration = typeof StandaloneThreadMoveMemoryMigration.Type;
 
-export const StandaloneThreadMoveRuntimeHandling = Schema.Struct({
-  filesystem: Schema.Literal("no-merge"),
-});
-export type StandaloneThreadMoveRuntimeHandling = typeof StandaloneThreadMoveRuntimeHandling.Type;
-
 const ThreadStandaloneMoveToProjectCommand = Schema.Struct({
   type: Schema.Literal("thread.standalone.move-to-project"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
   memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
-  runtimeHandling: Schema.optional(StandaloneThreadMoveRuntimeHandling),
+  // Runtime placement is derived server-side from target-project freshness
+  // (adopt vs join) — the client no longer specifies runtime handling.
   createdAt: IsoDateTime,
 });
 

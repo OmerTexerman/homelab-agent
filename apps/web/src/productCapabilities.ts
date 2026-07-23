@@ -55,11 +55,11 @@ export const HOMELAB_PRODUCT_COPY = {
     promoteDescription: "Move this thread into a new named logical project.",
     moveAction: "Move to project",
     moveDescription:
-      "Move this chat transcript into an existing project. Memory and runtime files are handled explicitly.",
+      "Move this chat transcript into an existing project. Choose how Scratch memory migrates; the thread joins the project's runtime automatically.",
     moveActiveDescription:
-      "Move the active chat transcript. Scratch memory and runtime files stay put until you choose how to handle them.",
+      "Move the active chat transcript into a project. Choose how Scratch memory migrates; the thread joins the project's runtime automatically.",
     moveActiveSubmenuDescription:
-      "Move the active chat transcript to an existing Project. Scratch memory and runtime files stay put until you choose how to handle them.",
+      "Move the active chat transcript to an existing Project. Choose how Scratch memory migrates; the thread joins the project's runtime automatically.",
   },
   curator: {
     title: "Knowledge Curator",

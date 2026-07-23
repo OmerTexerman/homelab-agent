@@ -2727,7 +2727,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             selection: moveStandaloneMemorySelection,
             selectedMemoryIds,
           }),
-          runtimeHandling: { filesystem: "no-merge" },
           createdAt: new Date().toISOString(),
         },
       });
@@ -3287,11 +3286,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           <DialogPanel className="space-y-4">
             <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               <p>Chat transcript and thread identity move automatically.</p>
-              <p className="mt-1">
-                {standaloneThreadMoveRuntimeDescription(
-                  moveStandaloneTarget?.thread.runtimeSelectionMode,
-                )}
-              </p>
+              <p className="mt-1">{standaloneThreadMoveRuntimeDescription()}</p>
             </div>
 
             <div className="grid gap-1.5">

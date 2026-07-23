@@ -240,9 +240,6 @@ it.effect("decodes standalone move-to-project commands with memory controls", ()
         mode: "copy",
         memoryIds: ["memory-router", "memory-dashboard"],
       },
-      runtimeHandling: {
-        filesystem: "no-merge",
-      },
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -254,9 +251,6 @@ it.effect("decodes standalone move-to-project commands with memory controls", ()
     assert.deepStrictEqual(parsed.memoryMigration, {
       mode: "copy",
       memoryIds: [ProjectMemoryId.make("memory-router"), ProjectMemoryId.make("memory-dashboard")],
-    });
-    assert.deepStrictEqual(parsed.runtimeHandling, {
-      filesystem: "no-merge",
     });
   }),
 );

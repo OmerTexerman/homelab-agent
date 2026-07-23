@@ -99,12 +99,10 @@ describe("standalone thread move helpers", () => {
     expect(standaloneThreadMoveMemoryDescription("copy", "selected")).toContain(
       "selected Scratch memory entries are copied",
     );
-    expect(standaloneThreadMoveRuntimeDescription("shared")).toContain(
-      "Runtime filesystem state is not merged",
+    expect(standaloneThreadMoveRuntimeDescription()).toContain(
+      "joins the project as a shared thread",
     );
-    expect(standaloneThreadMoveRuntimeDescription("isolated")).toContain(
-      "keeps its isolated runtime",
-    );
+    expect(standaloneThreadMoveRuntimeDescription()).toContain("becomes the project's default");
   });
 });
 

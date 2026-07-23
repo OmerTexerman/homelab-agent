@@ -816,7 +816,6 @@ function OpenCommandPaletteDialog(props: {
             threadId: activeThread.id,
             projectId: project.id,
             memoryMigration: { mode: "none" },
-            runtimeHandling: { filesystem: "no-merge" },
             createdAt: new Date().toISOString(),
           },
         });

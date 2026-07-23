@@ -204,7 +204,6 @@ describe("curator session orchestration", () => {
           threadId: asThreadId("thread-standalone-1"),
           projectId: curatorProjectId(),
           memoryMigration: { mode: "none" },
-          runtimeHandling: { filesystem: "no-merge" },
           createdAt: now,
         },
         readModel,

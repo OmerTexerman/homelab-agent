@@ -282,7 +282,9 @@ function deriveRuntimeRows(input: {
 }): HomeOverviewRuntimeSummary {
   const activeThreads = input.threads.filter((thread) => thread.archivedAt === null);
   const normalProjects = input.projects.filter(
-    (project) => !isStandaloneProject({ id: project.id, cwd: project.workspaceRoot }),
+    (project) =>
+      !isStandaloneProject({ id: project.id, cwd: project.workspaceRoot }) &&
+      !isCuratorProject({ id: project.id, cwd: project.workspaceRoot }),
   );
   const detailsByProjectKey = new Map(
     input.details.map((entry) => [projectRuntimeDetailKey(entry), entry] as const),

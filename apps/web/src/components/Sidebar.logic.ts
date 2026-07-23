@@ -85,14 +85,12 @@ export function sidebarThreadCreationRuntimeCopy(
   };
 }
 
-export function standaloneThreadMoveRuntimeDescription(
-  runtimeSelectionMode: ThreadRuntimeMode | null | undefined,
-): string {
-  if (runtimeSelectionMode === "isolated") {
-    return "This isolated thread keeps its isolated runtime. Runtime filesystem state is not merged into the target Project Runtime.";
-  }
-
-  return "This shared thread switches to the target Project Runtime. Runtime filesystem state is not merged from Scratch.";
+export function standaloneThreadMoveRuntimeDescription(): string {
+  // A moved scratch thread always joins the project as a shared thread. If the
+  // project has no runtime yet, this thread's Scratch runtime becomes the project
+  // default (its files are kept in place); otherwise the thread switches to the
+  // project's existing runtime and Scratch files are not merged.
+  return "This thread joins the project as a shared thread. If the project has no runtime yet, its Scratch runtime becomes the project's default and its files are kept in place; otherwise it switches to the project's existing runtime (Scratch files are not merged).";
 }
 
 export function standaloneThreadMoveMemoryDescription(
