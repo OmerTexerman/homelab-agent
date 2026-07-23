@@ -1253,53 +1253,57 @@ export function MemoryKnowledgeSettingsPanel() {
             )
           }
         >
-          {curatorSessions.length > 0 ? (
-            <div className="mt-3 space-y-1 border-t border-border/60 pt-3">
-              <div className="text-[11px] font-medium text-muted-foreground">
-                {HOMELAB_PRODUCT_COPY.curator.recentSessionsLabel}
-              </div>
-              {curatorSessions.slice(0, 8).map((thread) => (
-                <div
-                  key={`${thread.environmentId}:${thread.id}`}
-                  className="flex items-center gap-1 rounded-md border border-border pr-1 hover:bg-accent/50"
-                >
-                  <Link
-                    to="/$environmentId/$threadId"
-                    params={buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id))}
-                    className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-xs"
-                  >
-                    <span className="min-w-0 truncate text-foreground">{thread.title}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
-                    </span>
-                  </Link>
-                  {canCurate ? (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Delete "${thread.title}"`}
-                      className="shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => {
-                        // Deleting the session destroys its isolated runtime container and
-                        // storage server-side; the sidebar hides curator threads, so this is
-                        // the cleanup surface.
-                        void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
-                      }}
+          {canCurate ? (
+            <>
+              {curatorSessions.length > 0 ? (
+                <div className="mt-3 space-y-1 border-t border-border/60 pt-3">
+                  <div className="text-[11px] font-medium text-muted-foreground">
+                    {HOMELAB_PRODUCT_COPY.curator.recentSessionsLabel}
+                  </div>
+                  {curatorSessions.slice(0, 8).map((thread) => (
+                    <div
+                      key={`${thread.environmentId}:${thread.id}`}
+                      className="flex items-center gap-1 rounded-md border border-border pr-1 hover:bg-accent/50"
                     >
-                      <Trash2Icon className="size-3.5" />
-                    </Button>
-                  ) : null}
+                      <Link
+                        to="/$environmentId/$threadId"
+                        params={buildThreadRouteParams(
+                          scopeThreadRef(thread.environmentId, thread.id),
+                        )}
+                        className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-xs"
+                      >
+                        <span className="min-w-0 truncate text-foreground">{thread.title}</span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
+                        </span>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete "${thread.title}"`}
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => {
+                          // Deleting the session destroys its isolated runtime container and
+                          // storage server-side; the sidebar hides curator threads, so this is
+                          // the cleanup surface.
+                          void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+                        }}
+                      >
+                        <Trash2Icon className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
-              {HOMELAB_PRODUCT_COPY.curator.emptySessionsLabel}
-            </div>
-          )}
-          <div className="mt-2 text-[11px] text-muted-foreground/80">
-            {HOMELAB_PRODUCT_COPY.curator.autoCleanupNote}
-          </div>
+              ) : (
+                <div className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+                  {HOMELAB_PRODUCT_COPY.curator.emptySessionsLabel}
+                </div>
+              )}
+              <div className="mt-2 text-[11px] text-muted-foreground/80">
+                {HOMELAB_PRODUCT_COPY.curator.autoCleanupNote}
+              </div>
+            </>
+          ) : null}
         </SettingsRow>
         <SettingsRow
           title="Knowledge estate"
