@@ -5651,6 +5651,7 @@ function ChatViewContent(props: ChatViewProps) {
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={isServerThread}
           memoryAvailable={isServerThread}
+          terminalAvailable={isServerThread}
           browserHidden={!isPreviewSupportedInRuntime()}
           diffHidden={!shouldShowDiffSurface()}
         >
@@ -5682,6 +5683,7 @@ function ChatViewContent(props: ChatViewProps) {
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={isServerThread}
             memoryAvailable={isServerThread}
+            terminalAvailable={isServerThread}
             browserHidden={!isPreviewSupportedInRuntime()}
             diffHidden={!shouldShowDiffSurface()}
           >

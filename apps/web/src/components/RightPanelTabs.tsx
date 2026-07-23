@@ -58,6 +58,7 @@ interface RightPanelTabsProps {
   diffAvailable: boolean;
   filesAvailable: boolean;
   memoryAvailable: boolean;
+  terminalAvailable: boolean;
   // Homelab fork: hide (not just disable) a surface the product doesn't offer —
   // Browser has no web runtime, and homelab threads aren't Git repos so Diff is
   // meaningless. Default false keeps upstream behaviour (card shown/disabled).
@@ -68,8 +69,9 @@ interface RightPanelTabsProps {
 
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
-  files: "Files are only available once the thread's runtime exists.",
-  memory: "Memory is only available once the thread's runtime exists.",
+  terminal: "Terminals are only available once the thread has started.",
+  files: "Files are only available once the thread has started.",
+  memory: "Memory is only available once the thread has started.",
   diff: "Diff is only available for server threads in Git repositories.",
 } as const;
 
@@ -113,6 +115,7 @@ function RightPanelEmptyState(props: {
   diffAvailable: boolean;
   filesAvailable: boolean;
   memoryAvailable: boolean;
+  terminalAvailable: boolean;
   browserHidden?: boolean;
   diffHidden?: boolean;
 }) {
@@ -130,9 +133,9 @@ function RightPanelEmptyState(props: {
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
-      available: true,
+      available: props.terminalAvailable,
       hidden: false,
-      disabledReason: null,
+      disabledReason: SURFACE_DISABLED_REASONS.terminal,
       onClick: props.onAddTerminal,
     },
     {
@@ -490,7 +493,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       Browser
                     </SurfaceMenuItem>
                   )}
-                  <SurfaceMenuItem available onClick={props.onAddTerminal}>
+                  <SurfaceMenuItem
+                    available={props.terminalAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.terminal}
+                    onClick={props.onAddTerminal}
+                  >
                     <TerminalSquare />
                     Terminal
                   </SurfaceMenuItem>
@@ -539,6 +546,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             memoryAvailable={props.memoryAvailable}
+            terminalAvailable={props.terminalAvailable}
             browserHidden={props.browserHidden ?? false}
             diffHidden={props.diffHidden ?? false}
           />
