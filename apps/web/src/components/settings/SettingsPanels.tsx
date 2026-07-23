@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AuthHomelabCurateScope,
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -78,6 +79,7 @@ import {
   serverEnvironment,
 } from "../../state/server";
 import { usePrimaryEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
@@ -1005,6 +1007,12 @@ export function ProjectRuntimeSettingsPanel() {
 export function MemoryKnowledgeSettingsPanel() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
+  const sessionState = usePrimarySessionState();
+  // Launching/managing curator sessions needs homelab:curate (the scope curator
+  // runtimes carry and that gates the /curate/* routes). Gate the launcher UI on
+  // it too — optimistic while scopes load, to avoid a disabled-state flash.
+  const curateScopes = sessionState.data?.scopes;
+  const canCurate = curateScopes === undefined || curateScopes.includes(AuthHomelabCurateScope);
   const { deleteThread } = useThreadActions();
   const dispatchCuratorCommand = useAtomCommand(dispatchHomelabOrchestrationCommand, {
     reportFailure: false,
@@ -1190,52 +1198,59 @@ export function MemoryKnowledgeSettingsPanel() {
           title={HOMELAB_PRODUCT_COPY.curator.settingsCardTitle}
           description={HOMELAB_PRODUCT_COPY.curator.settingsCardDescription}
           control={
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <ProviderModelPicker
-                activeInstanceId={curatorModelSelection.instanceId}
-                model={curatorModelSelection.model}
-                lockedProvider={null}
-                instanceEntries={curatorInstanceEntries}
-                modelOptionsByInstance={curatorModelOptionsByInstance}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onInstanceModelChange={(instanceId, model) => {
-                  setPickedCuratorSelection(createModelSelection(instanceId, model));
-                }}
-              />
-              <TraitsPicker
-                provider={curatorInstanceEntry?.driverKind ?? ProviderDriverKind.make("codex")}
-                models={curatorInstanceEntry?.models ?? []}
-                model={curatorModelSelection.model}
-                prompt=""
-                onPromptChange={() => {}}
-                modelOptions={curatorModelSelection.options ?? []}
-                allowPromptInjectedEffort={false}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onModelOptionsChange={(nextOptions) => {
-                  setPickedCuratorSelection(
-                    createModelSelection(
-                      curatorModelSelection.instanceId,
-                      curatorModelSelection.model,
-                      nextOptions,
-                    ),
-                  );
-                }}
-              />
-              <Button
-                size="sm"
-                onClick={startCuratorSession}
-                disabled={primaryEnvironmentId === null || isStartingCuratorSession}
-              >
-                {isStartingCuratorSession ? (
-                  <LoaderIcon className="size-3.5 animate-spin" />
-                ) : (
-                  <PlusIcon className="size-3.5" />
-                )}
-                {HOMELAB_PRODUCT_COPY.curator.newSessionAction}
-              </Button>
-            </div>
+            !canCurate ? (
+              <span className="text-[11px] text-muted-foreground">
+                Requires the <span className="font-medium text-foreground">Curate knowledge</span>{" "}
+                permission on this device.
+              </span>
+            ) : (
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <ProviderModelPicker
+                  activeInstanceId={curatorModelSelection.instanceId}
+                  model={curatorModelSelection.model}
+                  lockedProvider={null}
+                  instanceEntries={curatorInstanceEntries}
+                  modelOptionsByInstance={curatorModelOptionsByInstance}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onInstanceModelChange={(instanceId, model) => {
+                    setPickedCuratorSelection(createModelSelection(instanceId, model));
+                  }}
+                />
+                <TraitsPicker
+                  provider={curatorInstanceEntry?.driverKind ?? ProviderDriverKind.make("codex")}
+                  models={curatorInstanceEntry?.models ?? []}
+                  model={curatorModelSelection.model}
+                  prompt=""
+                  onPromptChange={() => {}}
+                  modelOptions={curatorModelSelection.options ?? []}
+                  allowPromptInjectedEffort={false}
+                  triggerVariant="outline"
+                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  onModelOptionsChange={(nextOptions) => {
+                    setPickedCuratorSelection(
+                      createModelSelection(
+                        curatorModelSelection.instanceId,
+                        curatorModelSelection.model,
+                        nextOptions,
+                      ),
+                    );
+                  }}
+                />
+                <Button
+                  size="sm"
+                  onClick={startCuratorSession}
+                  disabled={primaryEnvironmentId === null || isStartingCuratorSession}
+                >
+                  {isStartingCuratorSession ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <PlusIcon className="size-3.5" />
+                  )}
+                  {HOMELAB_PRODUCT_COPY.curator.newSessionAction}
+                </Button>
+              </div>
+            )
           }
         >
           {curatorSessions.length > 0 ? (
@@ -1258,20 +1273,22 @@ export function MemoryKnowledgeSettingsPanel() {
                       {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
                     </span>
                   </Link>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Delete "${thread.title}"`}
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => {
-                      // Deleting the session destroys its isolated runtime container and
-                      // storage server-side; the sidebar hides curator threads, so this is
-                      // the cleanup surface.
-                      void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
-                    }}
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </Button>
+                  {canCurate ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete "${thread.title}"`}
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => {
+                        // Deleting the session destroys its isolated runtime container and
+                        // storage server-side; the sidebar hides curator threads, so this is
+                        // the cleanup surface.
+                        void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+                      }}
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </Button>
+                  ) : null}
                 </div>
               ))}
             </div>

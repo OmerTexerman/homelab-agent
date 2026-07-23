@@ -1,5 +1,6 @@
 import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { FolderPlusIcon } from "lucide-react";
 import { useMemo } from "react";
 
@@ -33,7 +34,13 @@ export function DraftHeroHeadline({
   const openAddProject = useOpenAddProjectCommandPalette();
 
   const orderedProjects = useMemo(
-    () => sortScopedProjectsForSidebar(projects, threads, "updated_at"),
+    // The Knowledge Curator is a hidden system namespace reached only from
+    // Settings -> Memory & Knowledge, never a normal project you switch into
+    // (the sidebar filters it the same way).
+    () =>
+      sortScopedProjectsForSidebar(projects, threads, "updated_at").filter(
+        (project) => !isCuratorProjectId(project.id),
+      ),
     [projects, threads],
   );
   const projectByKey = useMemo(
