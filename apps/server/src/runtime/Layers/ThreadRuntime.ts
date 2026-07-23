@@ -3,12 +3,14 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import {
-  AuthAccessWriteScope,
-  AuthAdministrativeScopes,
+  AuthHomelabCurateScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   ProviderKind,
   RuntimeMode,
   RuntimeSessionId,
   ThreadId,
+  type AuthEnvironmentScope,
   type ProviderKind as ProviderKindModel,
   type RuntimeMode as RuntimeModeModel,
   type RuntimeSessionId as RuntimeSessionIdModel,
@@ -2746,6 +2748,30 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
+  // Least-privilege scopes for the in-container runtime token. Every runtime can
+  // read/write graph, memory, and skills and request secrets (orchestration:*).
+  // ONLY a knowledge-curator runtime additionally gets the curator surface. NO
+  // runtime ever receives homelab:secrets-admin (set/delete secret values) or the
+  // access/relay admin scopes — so a prompt-injected agent can't bypass the CLI to
+  // wipe global knowledge or write secret values by calling the HTTP routes directly.
+  const runtimeAccessScopes = (
+    runtime: ThreadRuntimeDescriptor,
+  ): ReadonlyArray<AuthEnvironmentScope> =>
+    runtime.runtimeKind === "curator"
+      ? [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthHomelabCurateScope]
+      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
+
+  const scopeSetsMatch = (
+    left: ReadonlyArray<string>,
+    right: ReadonlyArray<AuthEnvironmentScope>,
+  ): boolean => {
+    if (left.length !== right.length) {
+      return false;
+    }
+    const leftSet = new Set(left);
+    return right.every((scope) => leftSet.has(scope));
+  };
+
   const resolveRuntimeAccessToken = Effect.fn("threadRuntime.resolveRuntimeAccessToken")(function* (
     runtime: ThreadRuntimeDescriptor,
   ): Effect.fn.Return<string | undefined, ThreadRuntimeError> {
@@ -2755,6 +2781,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     }
 
     const expectedSubject = `thread-runtime:${runtime.threadId}`;
+    const expectedScopes = runtimeAccessScopes(runtime);
     const persisted = yield* readRuntimeAccessTokenState(runtime).pipe(
       Effect.catchTag("ThreadRuntimeError", () => Effect.as(Effect.void, undefined)),
     );
@@ -2763,11 +2790,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const verified = yield* sessionStore.value
         .verify(persisted.token)
         .pipe(Effect.orElseSucceed(() => undefined));
+      // Re-mint when the scope set no longer matches this runtime kind: this both
+      // migrates legacy over-scoped (administrative) tokens down and revokes a token
+      // whose runtime changed kind. Exact-match, so extra scopes never linger.
       if (
         verified &&
         verified.subject === expectedSubject &&
         verified.method === "bearer-access-token" &&
-        verified.scopes.includes(AuthAccessWriteScope)
+        scopeSetsMatch(verified.scopes, expectedScopes)
       ) {
         return persisted.token;
       }
@@ -2782,7 +2812,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     const issued = yield* sessionStore.value
       .issue({
         method: "bearer-access-token",
-        scopes: AuthAdministrativeScopes,
+        scopes: expectedScopes,
         subject: expectedSubject,
         visibility: "internal",
         client: {

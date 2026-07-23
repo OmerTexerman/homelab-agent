@@ -1,5 +1,7 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import {
+  AuthHomelabCurateScope,
+  AuthHomelabSecretsAdminScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
@@ -140,6 +142,10 @@ const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
 
 const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
 const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
+// Curator surface: only human UI clients and curator RUNTIME tokens hold this scope.
+const authenticateHomelabCurate = authenticateHomelabScope(AuthHomelabCurateScope);
+// Setting/deleting secret values: human UI clients only; no runtime token holds this.
+const authenticateHomelabSecretsAdmin = authenticateHomelabScope(AuthHomelabSecretsAdminScope);
 
 const getRequestUrl = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
@@ -344,7 +350,7 @@ export const homelabSecretUpsertRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabSecretsAdmin;
     const registry = yield* HomelabSecretRegistry;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretUpsertInput).pipe(
       Effect.mapError(
@@ -376,7 +382,7 @@ export const homelabSecretDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets/delete",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabSecretsAdmin;
     const registry = yield* HomelabSecretRegistry;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretDeleteInput).pipe(
       Effect.mapError(
@@ -950,7 +956,7 @@ export const homelabCuratorOverviewRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/curate/overview",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    yield* authenticateHomelabCurate;
     const knowledgeGraph = yield* KnowledgeGraph;
     const projectMemory = yield* ProjectMemory;
     const skills = yield* HomelabSkills;
@@ -1000,7 +1006,7 @@ export const homelabCuratorMemoryListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/curate/memory",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    yield* authenticateHomelabCurate;
     const url = yield* getRequestUrl;
     const input = yield* decodeCuratorMemoryListInput({
       ...(url.searchParams.get("projectId")
@@ -1044,7 +1050,7 @@ export const homelabCuratorMemoryUpdateRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/memory/update",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorMemoryUpdateInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -1081,7 +1087,7 @@ export const homelabCuratorMemoryDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/memory/delete",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorMemoryDeleteInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -1119,7 +1125,7 @@ export const homelabCuratorEntityDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/entity/delete",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorEntityDeleteInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -1159,7 +1165,7 @@ export const homelabCuratorRelationDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/relation/delete",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorRelationDeleteInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -1196,7 +1202,7 @@ export const homelabCuratorSkillsListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/curate/skills",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    yield* authenticateHomelabCurate;
     const skills = yield* HomelabSkills;
     const entries = yield* skills.listAll();
     return HttpServerResponse.jsonUnsafe({ skills: entries } satisfies CuratorSkillListResult, {
@@ -1212,7 +1218,7 @@ export const homelabCuratorSkillUpdateRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/skill/update",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorSkillUpdateInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -1248,7 +1254,7 @@ export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/curate/skill/delete",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    yield* authenticateHomelabCurate;
     const input = yield* HttpServerRequest.schemaBodyJson(CuratorSkillDeleteInput).pipe(
       Effect.mapError(
         (cause) =>

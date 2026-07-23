@@ -1476,7 +1476,7 @@ const exchangeAccessToken = (
         requested_token_type: AuthAccessTokenType,
         scope:
           options?.scope ??
-          "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+          "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write homelab:curate homelab:secrets-admin",
         ...(options?.clientMetadata?.label ? { client_label: options.clientMetadata.label } : {}),
         ...(options?.clientMetadata?.deviceType
           ? { client_device_type: options.clientMetadata.deviceType }
@@ -1957,7 +1957,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(tokenBody.token_type, "Bearer");
       assert.equal(
         tokenBody.scope,
-        "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+        "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write homelab:curate homelab:secrets-admin",
       );
       assert.equal(typeof tokenBody.access_token, "string");
 
@@ -1985,7 +1985,49 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "access:read",
         "access:write",
         "relay:write",
+        "homelab:curate",
+        "homelab:secrets-admin",
       ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("denies a scoped runtime token the curator and secret-admin homelab routes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      // Exactly what resolveRuntimeAccessToken mints for a non-curator runtime.
+      const { body: runtimeToken } = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+        scope: "orchestration:read orchestration:operate",
+      });
+      const runtimeAuth = { authorization: `Bearer ${runtimeToken.access_token ?? ""}` };
+
+      const curateResponse = yield* HttpClient.get("/api/homelab/curate/overview", {
+        headers: runtimeAuth,
+      });
+      assert.equal(curateResponse.status, 403);
+
+      const secretUpsertResponse = yield* HttpClient.post("/api/homelab/secrets", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "RUNTIME_BLOCKED", value: "nope" }),
+      });
+      assert.equal(secretUpsertResponse.status, 403);
+
+      const secretDeleteResponse = yield* HttpClient.post("/api/homelab/secrets/delete", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "RUNTIME_BLOCKED" }),
+      });
+      assert.equal(secretDeleteResponse.status, 403);
+
+      // A curator runtime token additionally holds homelab:curate, so the curator
+      // surface is reachable (not 403) — proving the gate is capability-based, not
+      // a blanket block.
+      const { body: curatorToken } = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+        scope: "orchestration:read orchestration:operate homelab:curate",
+      });
+      const curatorResponse = yield* HttpClient.get("/api/homelab/curate/overview", {
+        headers: { authorization: `Bearer ${curatorToken.access_token ?? ""}` },
+      });
+      assert.notEqual(curatorResponse.status, 403);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

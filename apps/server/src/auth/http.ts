@@ -1,6 +1,8 @@
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthHomelabCurateScope,
+  AuthHomelabSecretsAdminScope,
   AuthStandardClientScopes,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -271,6 +273,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                       AuthAccessWriteScope,
                       AuthRelayReadScope,
                       AuthRelayWriteScope,
+                      AuthHomelabCurateScope,
+                      AuthHomelabSecretsAdminScope,
                     ]),
                   });
             if (requestedScopes === null) {

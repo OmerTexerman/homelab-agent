@@ -81,6 +81,21 @@ export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
 export const AuthRelayReadScope = "relay:read" as const;
 export const AuthRelayWriteScope = "relay:write" as const;
+/**
+ * Curator surface (`/api/homelab/curate/*`): audits and mutates ALL projects'
+ * memory, the full knowledge graph, and skills at every scope. Held by human UI
+ * clients and by knowledge-curator RUNTIME tokens only — an ordinary project or
+ * scratch runtime token is minted WITHOUT it, so a prompt-injected agent in a
+ * normal thread cannot delete global knowledge by calling the routes directly.
+ */
+export const AuthHomelabCurateScope = "homelab:curate" as const;
+/**
+ * Setting/deleting secret VALUES (`POST /api/homelab/secrets`, `.../secrets/delete`).
+ * Held by human UI clients only; NO runtime token ever gets it. Agents request
+ * secrets (`orchestration:operate`) and consume them as injected env, but can
+ * never write or remove a value over the API.
+ */
+export const AuthHomelabSecretsAdminScope = "homelab:secrets-admin" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -90,6 +105,8 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthAccessWriteScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthHomelabCurateScope,
+  AuthHomelabSecretsAdminScope,
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
@@ -101,6 +118,9 @@ export const AuthStandardClientScopes = [
   AuthTerminalOperateScope,
   AuthReviewWriteScope,
   AuthRelayReadScope,
+  // Human clients manage the durable record and secret values from the UI.
+  AuthHomelabCurateScope,
+  AuthHomelabSecretsAdminScope,
 ] as const;
 export const AuthAdministrativeScopes = [
   ...AuthStandardClientScopes,
