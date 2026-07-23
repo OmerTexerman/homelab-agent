@@ -58,7 +58,6 @@ interface RightPanelTabsProps {
   diffAvailable: boolean;
   filesAvailable: boolean;
   memoryAvailable: boolean;
-  terminalAvailable: boolean;
   // Homelab fork: hide (not just disable) a surface the product doesn't offer —
   // Browser has no web runtime, and homelab threads aren't Git repos so Diff is
   // meaningless. Default false keeps upstream behaviour (card shown/disabled).
@@ -69,9 +68,6 @@ interface RightPanelTabsProps {
 
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
-  terminal: "Terminals are only available once the thread has started.",
-  files: "Files are only available once the thread has started.",
-  memory: "Memory is only available once the thread has started.",
   diff: "Diff is only available for server threads in Git repositories.",
 } as const;
 
@@ -115,7 +111,6 @@ function RightPanelEmptyState(props: {
   diffAvailable: boolean;
   filesAvailable: boolean;
   memoryAvailable: boolean;
-  terminalAvailable: boolean;
   browserHidden?: boolean;
   diffHidden?: boolean;
 }) {
@@ -129,13 +124,16 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_DISABLED_REASONS.browser,
       onClick: props.onAddBrowser,
     },
+    // Homelab fork: Terminal/Files/Memory stay openable even before the thread
+    // exists server-side — each panel renders a "waiting for the thread to start"
+    // state and fills in on its own, which beats staring at greyed-out cards.
     {
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
-      available: props.terminalAvailable,
+      available: true,
       hidden: false,
-      disabledReason: SURFACE_DISABLED_REASONS.terminal,
+      disabledReason: null,
       onClick: props.onAddTerminal,
     },
     {
@@ -144,7 +142,7 @@ function RightPanelEmptyState(props: {
       icon: Files,
       available: props.filesAvailable,
       hidden: false,
-      disabledReason: SURFACE_DISABLED_REASONS.files,
+      disabledReason: null,
       onClick: props.onAddFiles,
     },
     {
@@ -153,7 +151,7 @@ function RightPanelEmptyState(props: {
       icon: Brain,
       available: props.memoryAvailable,
       hidden: false,
-      disabledReason: SURFACE_DISABLED_REASONS.memory,
+      disabledReason: null,
       onClick: props.onAddMemory,
     },
     {
@@ -493,27 +491,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       Browser
                     </SurfaceMenuItem>
                   )}
-                  <SurfaceMenuItem
-                    available={props.terminalAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.terminal}
-                    onClick={props.onAddTerminal}
-                  >
+                  <SurfaceMenuItem available onClick={props.onAddTerminal}>
                     <TerminalSquare />
                     Terminal
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.filesAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.files}
-                    onClick={props.onAddFiles}
-                  >
+                  <SurfaceMenuItem available={props.filesAvailable} onClick={props.onAddFiles}>
                     <Files />
                     Files
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.memoryAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.memory}
-                    onClick={props.onAddMemory}
-                  >
+                  <SurfaceMenuItem available={props.memoryAvailable} onClick={props.onAddMemory}>
                     <Brain />
                     Memory
                   </SurfaceMenuItem>
@@ -546,7 +532,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             memoryAvailable={props.memoryAvailable}
-            terminalAvailable={props.terminalAvailable}
             browserHidden={props.browserHidden ?? false}
             diffHidden={props.diffHidden ?? false}
           />

@@ -142,7 +142,7 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import { ChevronDownIcon, LoaderIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -5169,8 +5169,28 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  // Terminal/Files/Memory are openable before the thread exists server-side, so the
+  // surface shows this instead of an empty or broken panel; it swaps to the real
+  // panel on its own once the thread starts (isServerThread flips).
+  const surfaceWaitingForThread =
+    !isServerThread &&
+    (activeRightPanelSurface?.kind === "terminal" ||
+      activeRightPanelSurface?.kind === "files" ||
+      activeRightPanelSurface?.kind === "memory");
+
   const rightPanelContent = activeThreadRef ? (
-    activeRightPanelSurface?.kind === "preview" ? (
+    surfaceWaitingForThread ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <div className="max-w-xs text-center">
+          <LoaderIcon className="mx-auto mb-3 size-5 animate-spin text-muted-foreground" />
+          <p className="text-sm font-medium text-foreground">Waiting for this thread to start</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Send your first message to start the thread. This panel opens automatically once its
+            runtime is up.
+          </p>
+        </div>
+      </div>
+    ) : activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
           mode="embedded"
@@ -5649,9 +5669,9 @@ function ChatViewContent(props: ChatViewProps) {
           onAddMemory={addMemorySurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
-          filesAvailable={isServerThread}
-          memoryAvailable={isServerThread}
-          terminalAvailable={isServerThread}
+          // Always openable: the panels render a "waiting for the thread to start" state.
+          filesAvailable
+          memoryAvailable
           browserHidden={!isPreviewSupportedInRuntime()}
           diffHidden={!shouldShowDiffSurface()}
         >
@@ -5681,9 +5701,9 @@ function ChatViewContent(props: ChatViewProps) {
             onAddMemory={addMemorySurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
-            filesAvailable={isServerThread}
-            memoryAvailable={isServerThread}
-            terminalAvailable={isServerThread}
+            // Always openable: the panels render a "waiting for the thread to start" state.
+            filesAvailable
+            memoryAvailable
             browserHidden={!isPreviewSupportedInRuntime()}
             diffHidden={!shouldShowDiffSurface()}
           >
