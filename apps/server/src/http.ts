@@ -45,8 +45,10 @@ import {
   browserApiCorsAllowedMethods,
   isBrowserApiCorsOriginAllowed,
 } from "./httpCors.ts";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
+import { wakeThreadWorkspaceRuntime } from "./runtime/wakeThreadWorkspaceRuntime.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -247,11 +249,15 @@ export const threadWorkspaceFileRouteLayer = HttpRouter.add(
 
     const threadId = ThreadId.make(threadIdParam);
     const threadRuntime = yield* ThreadRuntime;
-    const runtime = yield* threadRuntime.getRuntime(threadId);
-    if (runtime) {
-      yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-      yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-    }
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    // Same create-if-missing wake as the WS workspace ops, so downloading a file
+    // from a thread whose runtime was reaped (or never started) succeeds instead
+    // of 400-ing on a missing container.
+    yield* wakeThreadWorkspaceRuntime({
+      threadId,
+      threadRuntime,
+      getReadModel: orchestrationEngine.getReadModel,
+    });
 
     const threadWorkspace = yield* ThreadWorkspace;
     const downloadExit = yield* Effect.exit(

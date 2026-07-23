@@ -86,6 +86,11 @@ import {
   type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
 } from "../Services/ThreadRuntime.ts";
+// Resolved via serviceOption in the idle reaper only (no hard layer dependency):
+// TerminalManager depends on the ThreadRuntime SERVICE, so a value lookup here is
+// cycle-free while letting the reaper close terminals the way explicit lifecycle
+// actions already do.
+import { TerminalManager } from "../../terminal/Manager.ts";
 
 export interface ThreadRuntimeLiveOptions {
   readonly dockerBinaryPath?: string;
@@ -3782,17 +3787,28 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       })
       .map((runtime) => runtime.threadId);
 
+    // Close any open terminals before stopping, mirroring the explicit lifecycle
+    // actions (sleep/reset/archive). Without this the idle reaper stops the
+    // container out from under a registered terminal session, leaving stale
+    // terminal metadata that only self-heals when the dead PTY process is noticed.
+    const terminalManager = yield* Effect.serviceOption(TerminalManager);
+
     yield* Effect.forEach(idleRuntimeIds, (threadId) =>
-      stopRuntime(threadId).pipe(
-        Effect.catchTags({
-          ThreadRuntimeError: (error) =>
-            Effect.logWarning("failed to stop idle thread runtime", {
-              threadId,
-              error: error.message,
-            }),
-          ThreadRuntimeNotFoundError: () => Effect.void,
-        }),
-      ),
+      Effect.gen(function* () {
+        if (Option.isSome(terminalManager)) {
+          yield* terminalManager.value.close({ threadId }).pipe(Effect.catch(() => Effect.void));
+        }
+        yield* stopRuntime(threadId).pipe(
+          Effect.catchTags({
+            ThreadRuntimeError: (error) =>
+              Effect.logWarning("failed to stop idle thread runtime", {
+                threadId,
+                error: error.message,
+              }),
+            ThreadRuntimeNotFoundError: () => Effect.void,
+          }),
+        );
+      }),
     );
   });
 

@@ -15,10 +15,7 @@ import * as Option from "effect/Option";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
-import {
-  defaultRuntimeIdForProject,
-  resolveProjectRuntimeAssignment,
-} from "./runtime/ProjectRuntimePolicy.ts";
+import { wakeThreadWorkspaceRuntime as wakeThreadWorkspaceRuntimeShared } from "./runtime/wakeThreadWorkspaceRuntime.ts";
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
 import type { ThreadWorkspaceShape } from "./runtime/Services/ThreadWorkspace.ts";
@@ -118,45 +115,10 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
   });
 
   const wakeThreadWorkspaceRuntime = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const existingRuntime = yield* threadRuntime
-        .getRuntime(threadId)
-        .pipe(Effect.catch(() => Effect.void));
-
-      if (!existingRuntime) {
-        const readModel = yield* orchestrationEngine.getReadModel();
-        const thread = readModel.threads.find(
-          (entry) => entry.id === threadId && entry.deletedAt === null,
-        );
-        if (!thread) {
-          return;
-        }
-
-        const project = readModel.projects.find(
-          (entry) => entry.id === thread.projectId && entry.deletedAt === null,
-        );
-        if (!project) {
-          return;
-        }
-        const assignment = resolveProjectRuntimeAssignment({ project, thread });
-
-        yield* threadRuntime
-          .ensureRuntime({
-            threadId,
-            runtimeId: assignment.runtimeId,
-            provider: null,
-            runtimeMode: thread.runtimeMode,
-            isStandalone: assignment.kind === "scratch",
-            runtimeKind: assignment.kind,
-            ...(assignment.kind === "project-isolated"
-              ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
-              : {}),
-          })
-          .pipe(Effect.catch(() => Effect.void));
-      }
-
-      yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-      yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+    wakeThreadWorkspaceRuntimeShared({
+      threadId,
+      threadRuntime,
+      getReadModel: orchestrationEngine.getReadModel,
     });
 
   return {
