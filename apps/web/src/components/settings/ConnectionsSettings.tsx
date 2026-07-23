@@ -12,6 +12,8 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthHomelabCurateScope,
+  AuthHomelabSecretsAdminScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -182,6 +184,16 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthReviewWriteScope,
     title: "Write reviews",
     description: "Create comments while reviewing changes.",
+  },
+  {
+    scope: AuthHomelabSecretsAdminScope,
+    title: "Manage secrets",
+    description: "Create, update, and delete secret values.",
+  },
+  {
+    scope: AuthHomelabCurateScope,
+    title: "Curate knowledge",
+    description: "Audit and edit all memory, the knowledge graph, and skills.",
   },
   {
     scope: AuthAccessReadScope,
