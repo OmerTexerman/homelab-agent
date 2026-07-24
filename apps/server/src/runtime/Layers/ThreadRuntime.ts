@@ -3746,10 +3746,14 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     const now = Date.now();
     const runtimes = yield* Ref.get(runtimesRef);
 
-    // Never reap a runtime whose thread has an in-flight provider turn: streaming
-    // turns don't bump `updatedAt`, so a long turn (>idle timeout) with no
-    // terminal I/O would otherwise be docker-stopped mid-stream. Best-effort —
-    // if the read model is unavailable we fall back to the updatedAt heuristic.
+    // Secondary guard against reaping a runtime whose thread has an in-flight
+    // provider turn. The PRIMARY protection lives in ProviderService, which
+    // touches the runtime on a heartbeat for the duration of every turn so
+    // `updatedAt` never goes stale mid-stream (see runtimeTouchHeartbeats).
+    // This read-model check is best-effort defense in depth and is a no-op
+    // unless ProjectionSnapshotQuery happens to be in the reaper's context
+    // (e.g. tests); in production the forked reaper fiber has no such service
+    // and relies on the heartbeat-kept `updatedAt` heuristic below.
     const activeThreadIds = yield* Effect.serviceOption(ProjectionSnapshotQuery).pipe(
       Effect.flatMap((query) =>
         Option.isNone(query)

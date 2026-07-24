@@ -29,6 +29,7 @@ import {
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -69,6 +70,12 @@ const isModelSelection = Schema.is(ModelSelection);
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  /**
+   * How often an in-flight turn touches its ThreadRuntime to keep the idle
+   * reaper from stopping the container mid-stream. Defaults to 60s; overridable
+   * so tests can exercise the heartbeat without real-time waits.
+   */
+  readonly runtimeTouchHeartbeatIntervalMs?: number;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -230,6 +237,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry);
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
+  const serviceScope = yield* Effect.scope;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
@@ -255,6 +263,85 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.flatMap((canonicalEvent) => PubSub.publish(runtimeEventPubSub, canonicalEvent)),
       Effect.asVoid,
     );
+
+  // ---------------------------------------------------------------------------
+  // Idle-reaper keepalive for in-flight turns
+  //
+  // The ThreadRuntime idle reaper `docker stop`s a container after N minutes of
+  // inactivity, and stopping the container SIGKILLs the exec'd provider CLI —
+  // which surfaces to the user as "...process exited with code 137". A runtime's
+  // `updatedAt` staleness clock is only bumped at turn start, wake, and terminal
+  // I/O, never while a turn is streaming, so any turn that runs longer than the
+  // idle timeout (a long agent task, or a single slow tool call such as a deploy
+  // that emits no output for minutes) would be reaped out from under the live
+  // stream. While a turn is in flight we touch the runtime on a timer so the
+  // reaper always sees it as active; the heartbeat stops at turn end so a
+  // genuinely-idle container is still reclaimed as intended. Provider-agnostic:
+  // every adapter emits turn.started/turn.completed through this path.
+  const RUNTIME_TOUCH_HEARTBEAT_INTERVAL_MS = options?.runtimeTouchHeartbeatIntervalMs ?? 60_000;
+  const runtimeTouchHeartbeats = yield* Ref.make(new Map<ThreadId, Fiber.Fiber<void, never>>());
+
+  const stopRuntimeTouchHeartbeat = (threadId: ThreadId): Effect.Effect<void> =>
+    Ref.modify(runtimeTouchHeartbeats, (map) => {
+      const fiber = map.get(threadId);
+      if (fiber === undefined) {
+        return [undefined, map] as const;
+      }
+      const next = new Map(map);
+      next.delete(threadId);
+      return [fiber, next] as const;
+    }).pipe(Effect.flatMap((fiber) => (fiber ? Fiber.interrupt(fiber) : Effect.void)));
+
+  const startRuntimeTouchHeartbeat = (threadId: ThreadId): Effect.Effect<void> =>
+    Option.isNone(threadRuntime)
+      ? Effect.void
+      : Effect.gen(function* () {
+          if ((yield* Ref.get(runtimeTouchHeartbeats)).has(threadId)) {
+            return;
+          }
+          const runtime = threadRuntime.value;
+          const fiber = yield* Effect.forkIn(serviceScope)(
+            Effect.forever(
+              Effect.sleep(RUNTIME_TOUCH_HEARTBEAT_INTERVAL_MS).pipe(
+                Effect.flatMap(() =>
+                  runtime.touchRuntime(threadId).pipe(
+                    Effect.catchTags({
+                      ThreadRuntimeError: () => Effect.void,
+                      ThreadRuntimeNotFoundError: () => Effect.void,
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
+          // Runtime events for a single thread are processed sequentially, but
+          // claim the slot atomically anyway: if another heartbeat beat us to it,
+          // interrupt the fiber we just forked rather than leak it.
+          const claimed = yield* Ref.modify(runtimeTouchHeartbeats, (map) => {
+            if (map.has(threadId)) {
+              return [false, map] as const;
+            }
+            const next = new Map(map);
+            next.set(threadId, fiber);
+            return [true, next] as const;
+          });
+          if (!claimed) {
+            yield* Fiber.interrupt(fiber);
+          }
+        });
+
+  const maintainRuntimeTouchHeartbeat = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+    switch (event.type) {
+      case "turn.started":
+        return startRuntimeTouchHeartbeat(event.threadId);
+      case "turn.completed":
+      case "turn.aborted":
+      case "session.exited":
+        return stopRuntimeTouchHeartbeat(event.threadId);
+      default:
+        return Effect.void;
+    }
+  };
 
   const requireBindingInstanceId = (
     operation: string,
@@ -311,7 +398,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        }).pipe(
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+          Effect.andThen(maintainRuntimeTouchHeartbeat(canonicalEvent)),
+        ),
       ),
     );
 

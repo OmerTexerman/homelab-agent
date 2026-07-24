@@ -329,6 +329,7 @@ function makeProviderServiceLayer() {
 function makeThreadRuntimeServiceForProviderServiceTest(input: {
   readonly runtimeId: RuntimeSessionId;
   readonly ensureCalls: Array<ThreadRuntimeLaunchInput>;
+  readonly touchCalls?: Array<ThreadId>;
 }): ThreadRuntimeShape {
   const descriptor = (threadId: ThreadId): ThreadRuntimeDescriptor => ({
     threadId,
@@ -363,7 +364,10 @@ function makeThreadRuntimeServiceForProviderServiceTest(input: {
     listRuntimes: () => Effect.succeed([]),
     startRuntime: (threadId) => Effect.succeed(descriptor(threadId)),
     stopRuntime: () => Effect.void,
-    touchRuntime: () => Effect.void,
+    touchRuntime: (threadId) =>
+      Effect.sync(() => {
+        input.touchCalls?.push(threadId);
+      }),
     refreshRuntimeEnvironment: (threadId) => Effect.succeed(descriptor(threadId)),
     refreshRuntimeSkills: (threadId) => Effect.succeed(descriptor(threadId)),
     destroyRuntime: () => Effect.void,
@@ -836,6 +840,99 @@ it.effect("ProviderServiceLive writes canonical events to the emitting thread se
     assert.equal(canonicalEvents[0]?.threadId, "thread-canonical-thread-segment");
     assert.deepEqual(canonicalThreadIds, ["thread-canonical-thread-segment"]);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "ProviderServiceLive touches the runtime on a heartbeat while a turn is in flight and stops at turn end",
+  () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter();
+      const touchCalls: Array<ThreadId> = [];
+      const ensureCalls: Array<ThreadRuntimeLaunchInput> = [];
+      const runtimeId = RuntimeSessionId.make("runtime-heartbeat");
+      const registry = makeAdapterRegistryMock({
+        [CODEX_DRIVER]: codex.adapter,
+      });
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = makeProviderServiceLive({
+        runtimeTouchHeartbeatIntervalMs: 1_000,
+      }).pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+        Layer.provide(
+          Layer.succeed(
+            ThreadRuntime,
+            makeThreadRuntimeServiceForProviderServiceTest({ runtimeId, ensureCalls, touchCalls }),
+          ),
+        ),
+      );
+
+      const threadId = asThreadId("thread-heartbeat");
+
+      yield* Effect.gen(function* () {
+        yield* ProviderService.ProviderService;
+        // Let the adapter event subscription fork before emitting.
+        yield* advanceTestClock(10);
+
+        // A turn starts: the heartbeat begins but has not ticked yet.
+        codex.emit({
+          eventId: asEventId("evt-heartbeat-turn-started"),
+          provider: CODEX_DRIVER,
+          threadId,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          type: "turn.started",
+          payload: {},
+        });
+        yield* advanceTestClock(10);
+        assert.equal(touchCalls.length, 0, "no touch before the first interval elapses");
+
+        // Each interval tick touches the runtime, even without any streamed
+        // output (the long-quiet-tool-call case that previously got reaped).
+        yield* advanceTestClock(1_100);
+        yield* advanceTestClock(1_100);
+        yield* advanceTestClock(1_100);
+        const touchesDuringTurn = touchCalls.length;
+        assert.equal(
+          touchesDuringTurn >= 3,
+          true,
+          `expected repeated touches during the turn, got ${touchesDuringTurn}`,
+        );
+        assert.equal(
+          touchCalls.every((id) => id === threadId),
+          true,
+          "heartbeat touched the turn's own thread",
+        );
+
+        // The turn ends: the heartbeat stops so a genuinely idle container is
+        // still reclaimable.
+        codex.emit({
+          eventId: asEventId("evt-heartbeat-turn-completed"),
+          provider: CODEX_DRIVER,
+          threadId,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          type: "turn.completed",
+          payload: { state: "completed" },
+        });
+        yield* advanceTestClock(10);
+        const touchesAtTurnEnd = touchCalls.length;
+
+        yield* advanceTestClock(5_000);
+        assert.equal(touchCalls.length, touchesAtTurnEnd, "no further touches after the turn ends");
+      }).pipe(Effect.provide(providerLayer));
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
