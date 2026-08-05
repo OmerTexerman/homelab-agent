@@ -13,6 +13,8 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import { isCuratorProject, isCuratorProjectId } from "@t3tools/shared/curatorProject";
+import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -1189,9 +1191,30 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 });
 
 export default function SidebarV2() {
-  const projects = useProjects();
+  const allProjects = useProjects();
+  // Hidden system projects (system:standalone scratch container, system:curator)
+  // must never surface as project entries — same normalProjects rule as the
+  // classic Sidebar and the CommandPalette. Scratch THREADS stay visible below:
+  // Sidebar V2 renders flat thread lists, so they appear as plain rows without
+  // a project label rather than via a dedicated scratch section.
+  const projects = useMemo(
+    () =>
+      allProjects.filter(
+        (project) =>
+          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
+          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
+      ),
+    [allProjects],
+  );
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const allThreads = useThreadShells();
+  // Curator sessions live in Settings -> Memory & Knowledge, not the sidebar
+  // (mirrors the classic Sidebar's thread filter). Standalone scratch threads
+  // are NOT filtered: they remain reachable as ordinary thread rows.
+  const threads = useMemo(
+    () => allThreads.filter((thread) => !isCuratorProjectId(thread.projectId)),
+    [allThreads],
+  );
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

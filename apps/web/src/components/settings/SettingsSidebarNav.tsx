@@ -51,14 +51,9 @@ import {
 
 // The Homelab settings shell keeps its own curated nav (see
 // productCapabilities.test.ts) while upstream's search index can still reach
-// every registered settings route.
-export type SettingsSectionPath =
-  | SettingsPath
-  | "/settings/secrets"
-  | "/settings/devices"
-  | "/settings/project-runtime"
-  | "/settings/memory"
-  | "/settings/advanced";
+// every registered settings route. The homelab routes live in SettingsPath
+// itself so the search catalog and this nav share one path type.
+export type SettingsSectionPath = SettingsPath;
 
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
@@ -71,6 +66,11 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/connections": Link2Icon,
   "/settings/beta": FlaskConicalIcon,
   "/settings/archived": ArchiveIcon,
+  "/settings/secrets": KeyRoundIcon,
+  "/settings/devices": MonitorSmartphoneIcon,
+  "/settings/project-runtime": ServerIcon,
+  "/settings/memory": BrainIcon,
+  "/settings/advanced": WrenchIcon,
 };
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
@@ -79,6 +79,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
+  { label: "Appearance", to: "/settings/appearance", icon: PaletteIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Secrets", to: "/settings/secrets", icon: KeyRoundIcon },
   {

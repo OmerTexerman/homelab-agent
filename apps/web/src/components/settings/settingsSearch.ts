@@ -6,7 +6,13 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/beta"
-  | "/settings/archived";
+  | "/settings/archived"
+  // Homelab fork sections.
+  | "/settings/secrets"
+  | "/settings/devices"
+  | "/settings/project-runtime"
+  | "/settings/memory"
+  | "/settings/advanced";
 
 export interface SettingsSearchItem {
   readonly id: string;
@@ -28,6 +34,11 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/connections": "Connections",
   "/settings/beta": "Beta",
   "/settings/archived": "Archive",
+  "/settings/secrets": "Secrets",
+  "/settings/devices": "Devices & Sessions",
+  "/settings/project-runtime": "Project Runtime",
+  "/settings/memory": "Memory & Knowledge",
+  "/settings/advanced": "Advanced",
 };
 
 /**
@@ -116,22 +127,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "new-threads",
-    title: "New threads",
-    to: "/settings/general",
-  },
-  {
-    id: "start-from-origin",
-    title: "Start from origin",
-    to: "/settings/general",
-    targetId: "new-threads",
-  },
-  {
-    id: "add-project-starts-in",
-    title: "Add project starts in",
-    to: "/settings/general",
-  },
-  {
     id: "archive-confirmation",
     title: "Archive confirmation",
     to: "/settings/general",
@@ -147,9 +142,35 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    // The fork's diagnostics row lives in the Advanced panel, not General.
     id: "diagnostics",
     title: "Diagnostics",
-    to: "/settings/general",
+    to: "/settings/advanced",
+  },
+  {
+    id: "secrets",
+    title: "Secrets",
+    to: "/settings/secrets",
+  },
+  {
+    id: "devices-and-sessions",
+    title: "Devices & Sessions",
+    to: "/settings/devices",
+  },
+  {
+    id: "project-runtime",
+    title: "Project Runtime",
+    to: "/settings/project-runtime",
+  },
+  {
+    id: "memory-and-knowledge",
+    title: "Memory & Knowledge",
+    to: "/settings/memory",
+  },
+  {
+    id: "advanced",
+    title: "Advanced",
+    to: "/settings/advanced",
   },
   {
     id: "keybindings",
