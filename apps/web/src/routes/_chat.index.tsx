@@ -1,4 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { isCuratorProject } from "@t3tools/shared/curatorProject";
+import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -44,12 +46,24 @@ function IndexDraftLanding() {
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
+  // System-namespace projects (Scratch, Curator) never take the landing draft:
+  // regular thread.create is rejected for them server-side, so a standalone
+  // thread being the most recent activity must not capture the home screen.
+  const draftableProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
+          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
+      ),
+    [projects],
+  );
   const mostRecentProject = useMemo(
     () =>
       bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        ? (sortScopedProjectsForSidebar(draftableProjects, threads, "updated_at")[0] ?? null)
         : null,
-    [bootstrapped, projects, threads],
+    [bootstrapped, draftableProjects, threads],
   );
 
   useEffect(() => {

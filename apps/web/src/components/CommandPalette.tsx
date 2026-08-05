@@ -17,13 +17,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  DEFAULT_MODEL,
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
-  ProviderInstanceId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -93,6 +91,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { resolveFallbackModelSelection } from "../lib/defaultModelSelection";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -607,6 +606,10 @@ function OpenCommandPaletteDialog(props: {
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const fallbackModelSelection = useMemo(
+    () => resolveFallbackModelSelection(providers),
+    [providers],
+  );
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const environmentIds = useMemo(
@@ -1581,10 +1584,7 @@ function OpenCommandPaletteDialog(props: {
         commandId: newCommandId(),
         threadId,
         title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_MODEL,
-        },
+        modelSelection: fallbackModelSelection,
         runtimeMode: "full-access",
         interactionMode: "default",
         createdAt: new Date().toISOString(),
@@ -1608,7 +1608,13 @@ function OpenCommandPaletteDialog(props: {
       params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
     });
     setOpen(false);
-  }, [defaultAddProjectEnvironmentId, dispatchOrchestrationCommand, navigate, setOpen]);
+  }, [
+    defaultAddProjectEnvironmentId,
+    dispatchOrchestrationCommand,
+    fallbackModelSelection,
+    navigate,
+    setOpen,
+  ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
@@ -1845,10 +1851,7 @@ function OpenCommandPaletteDialog(props: {
         projectId,
         title,
         workspaceRoot: createLogicalProjectWorkspaceRoot(projectId),
-        defaultModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_MODEL,
-        },
+        defaultModelSelection: fallbackModelSelection,
       },
     });
     if (createResult._tag === "Failure") {
@@ -1872,6 +1875,7 @@ function OpenCommandPaletteDialog(props: {
     setOpen(false);
   }, [
     createProject,
+    fallbackModelSelection,
     handleNewThread,
     newProjectEnvironmentId,
     query,

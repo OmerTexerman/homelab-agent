@@ -44,12 +44,10 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  DEFAULT_MODEL,
   type ContextMenuItem,
   ProjectId,
   type ProjectMemoryEntry,
   type ProjectMemoryId,
-  ProviderInstanceId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
@@ -82,6 +80,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { resolveFallbackModelSelection } from "../lib/defaultModelSelection";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
@@ -218,7 +217,11 @@ import { sortThreads } from "../lib/threadSort";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
-import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
+import {
+  primaryServerConfigAtom,
+  primaryServerKeybindingsAtom,
+  primaryServerProvidersAtom,
+} from "../state/server";
 import {
   derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
@@ -2010,6 +2013,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject, showCompatibilityWorkspaceControls],
   );
 
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const memberFallbackModelSelection = useMemo(
+    () => resolveFallbackModelSelection(serverProviders),
+    [serverProviders],
+  );
   const createStandaloneThreadForMember = useCallback(
     (member: SidebarProjectGroupMember) => {
       void (async () => {
@@ -2021,10 +2029,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             commandId: newCommandId(),
             threadId,
             title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
-            modelSelection: member.defaultModelSelection ?? {
-              instanceId: ProviderInstanceId.make("codex"),
-              model: DEFAULT_MODEL,
-            },
+            modelSelection: member.defaultModelSelection ?? memberFallbackModelSelection,
             runtimeMode: "full-access",
             interactionMode: "default",
             createdAt: new Date().toISOString(),
@@ -2052,7 +2057,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         });
       })();
     },
-    [createStandaloneThread, isMobile, router, setOpenMobile],
+    [createStandaloneThread, isMobile, memberFallbackModelSelection, router, setOpenMobile],
   );
 
   const handleProjectButtonContextMenu = useCallback(
@@ -4043,6 +4048,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
+  const scratchServerProviders = useAtomValue(primaryServerProvidersAtom);
+  const scratchFallbackModelSelection = useMemo(
+    () => resolveFallbackModelSelection(scratchServerProviders),
+    [scratchServerProviders],
+  );
   const createScratchThread = useCallback(async () => {
     if (primaryEnvironmentId === null) {
       toastManager.add(
@@ -4063,10 +4073,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         commandId: newCommandId(),
         threadId,
         title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_MODEL,
-        },
+        modelSelection: scratchFallbackModelSelection,
         runtimeMode: "full-access",
         interactionMode: "default",
         createdAt: new Date().toISOString(),
@@ -4092,7 +4099,14 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
     });
-  }, [createScratchThreadCommand, isMobile, navigate, primaryEnvironmentId, setOpenMobile]);
+  }, [
+    createScratchThreadCommand,
+    isMobile,
+    navigate,
+    primaryEnvironmentId,
+    scratchFallbackModelSelection,
+    setOpenMobile,
+  ]);
 
   return (
     <SidebarContent

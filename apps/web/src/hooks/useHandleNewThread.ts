@@ -9,6 +9,8 @@ import {
   type ScopedProjectRef,
   type ThreadRuntimeMode,
 } from "@t3tools/contracts";
+import { isCuratorProject } from "@t3tools/shared/curatorProject";
+import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -320,7 +322,13 @@ export function useHandleNewThread() {
   const projects = useProjects();
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
-      items: projects,
+      // System-namespace projects (Scratch, Curator) are not valid targets for
+      // regular thread.create, so they never become the default project.
+      items: projects.filter(
+        (project) =>
+          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
+          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
+      ),
       preferredIds: projectOrder,
       getId: getProjectOrderKey,
       getPreferenceIds: (project) => [
