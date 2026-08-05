@@ -32,6 +32,7 @@ import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
+import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   projectRuntimeErrorSession,
@@ -825,6 +826,12 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const guardEventTurnId = toTurnId(event.turnId);
+      const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: thread.id,
+      });
+      const hasPendingTurnStart =
+        Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+
       const conflictsWithActiveTurn =
         activeTurnId !== null &&
         guardEventTurnId !== undefined &&
@@ -834,12 +841,7 @@ const make = Effect.gen(function* () {
           ? sameRuntimeProjectionId(
               yield* getExpectedProviderTurnIdForThread(thread.id),
               guardEventTurnId,
-            ) &&
-            Option.isSome(
-              yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-                threadId: thread.id,
-              }),
-            )
+            ) && Option.isSome(pendingTurnStart)
           : false;
       const lifecycleProjection = projectRuntimeLifecycleSession({
         event,
@@ -889,11 +891,27 @@ const make = Effect.gen(function* () {
       }
 
       if (lifecycleProjection?.shouldApply === true) {
+        // Upstream fix (#4101): session start / state-changed notifications can
+        // arrive while the server still has a turn start pending for this
+        // thread; keep the projected status at "starting" instead of dropping
+        // back to "ready" so the connecting state survives until the turn runs.
+        const preservePendingTurnStartStatus =
+          hasPendingTurnStart &&
+          lifecycleProjection.session.status === "ready" &&
+          (event.type === "session.state.changed" ||
+            event.type === "session.started" ||
+            event.type === "thread.started");
         yield* orchestrationEngine.dispatch({
           type: "thread.session.set",
           commandId: yield* providerCommandId(event, "thread-session-set"),
           threadId: thread.id,
-          session: lifecycleProjection.session,
+          session: preservePendingTurnStartStatus
+            ? {
+                ...lifecycleProjection.session,
+                status: "starting",
+                lastError: thread.session?.lastError ?? null,
+              }
+            : lifecycleProjection.session,
           createdAt: now,
         });
       }
@@ -1233,12 +1251,12 @@ const make = Effect.gen(function* () {
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
-      yield* Effect.forkScoped(
+      yield* forkParked(
         Stream.runForEach(providerService.streamEvents, (event) =>
           worker.enqueue({ source: "runtime", event }),
         ),
       );
-      yield* Effect.forkScoped(
+      yield* forkParked(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
           if (event.type !== "thread.turn-start-requested") {
             return Effect.void;

@@ -52,8 +52,11 @@ describe("HomelabViewRuntimeReactor", () => {
         expect([...calls].sort()).toEqual(["thread-a", "thread-b"]);
       }).pipe(
         Effect.scoped,
-        Effect.provide(HomelabViewRuntimeReactorLive),
-        Effect.provide(Layer.mergeAll(runtimeLayer, skillsLayer)),
+        Effect.provide(
+          HomelabViewRuntimeReactorLive.pipe(
+            Layer.provide(Layer.mergeAll(runtimeLayer, skillsLayer)),
+          ),
+        ),
       );
     }),
   );
@@ -84,8 +87,11 @@ describe("HomelabViewRuntimeReactor", () => {
         expect(yield* Ref.get(sweeps)).toEqual(1);
       }).pipe(
         Effect.scoped,
-        Effect.provide(HomelabViewRuntimeReactorLive),
-        Effect.provide(Layer.mergeAll(runtimeLayer, skillsLayer)),
+        Effect.provide(
+          HomelabViewRuntimeReactorLive.pipe(
+            Layer.provide(Layer.mergeAll(runtimeLayer, skillsLayer)),
+          ),
+        ),
       );
     }),
   );
@@ -134,8 +140,11 @@ describe("HomelabViewRuntimeReactor", () => {
         expect(exists).toBe(true);
       }).pipe(
         Effect.scoped,
-        Effect.provide(HomelabViewRuntimeReactorLive),
-        Effect.provide(Layer.mergeAll(runtimeLayer, graphLayer)),
+        Effect.provide(
+          HomelabViewRuntimeReactorLive.pipe(
+            Layer.provide(Layer.mergeAll(runtimeLayer, graphLayer)),
+          ),
+        ),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

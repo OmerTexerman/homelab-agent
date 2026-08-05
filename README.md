@@ -69,10 +69,13 @@ See [NOTICE.md](./NOTICE.md) for attribution details.
 
 - pnpm `^11.10.0`
 - Node `^24.13.1`
+- The global [Vite+](https://viteplus.dev/guide/) `vp` command-line tool:
+  - macOS / Linux: `curl -fsSL https://vite.plus | bash`
+  - Windows: `irm https://vite.plus/ps1 | iex`
 - Docker
 - At least one authenticated provider on the host:
-  - `codex login`
-  - `claude auth login`
+  - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
+  - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
 
 ### Start
 
@@ -97,6 +100,14 @@ Use `pnpm run test` for tests.
 - Runtime containers are built locally from `docker/runtime/Dockerfile`.
 - Threads in a project use that project's Project Runtime by default.
 - Idle Project Runtimes can sleep and wake back up when project work resumes.
+
+## Documentation
+
+Full docs live in [docs/](./docs). Upstream's user-facing guides
+([docs/user/](./docs/user)) and contributor internals
+([docs/internals/](./docs/internals)) are kept in the tree and still apply to
+the shared surfaces; fork-specific docs are indexed from
+[docs/README.md](./docs/README.md).
 
 ## License
 

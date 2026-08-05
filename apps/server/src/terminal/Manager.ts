@@ -593,10 +593,19 @@ function shouldExcludeTerminalEnvKey(key: string): boolean {
 // They describe the AppImage itself, not the user's session, so terminals must
 // not inherit them.
 const APPIMAGE_RUNTIME_ENV_KEYS = ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] as const;
-// PATH-style variables the AppImage runtime prepends with its temporary mount
-// (e.g. /tmp/.mount_T3-XXXX/usr/bin). Only the mount segments are dropped; the
-// user's real entries are preserved.
-const APPIMAGE_PATH_LIKE_ENV_KEYS = ["PATH", "LD_LIBRARY_PATH"] as const;
+// Colon-separated search-path variables the AppImage runtime points at its
+// temporary mount (e.g. /tmp/.mount_T3-XXXX/usr/bin, the bundled glib schemas,
+// and an $APPDIR/usr/share XDG data entry). Only the mount segments are
+// dropped; the user's real entries are preserved. When nothing but mount
+// segments remain the variable is removed entirely so consumers fall back to
+// their platform default (e.g. gsettings finds the host schemas instead of
+// reporting "No schemas installed"). See issues #1699 and #5059.
+const APPIMAGE_PATH_LIKE_ENV_KEYS = [
+  "PATH",
+  "LD_LIBRARY_PATH",
+  "XDG_DATA_DIRS",
+  "GSETTINGS_SCHEMA_DIR",
+] as const;
 
 function isPathSegmentUnderAppDir(segment: string, appDir: string): boolean {
   return segment === appDir || segment.startsWith(`${appDir}/`);
@@ -674,6 +683,7 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapter["Service"];
   threadRuntime?: ThreadRuntimeShape;
   shellResolver?: () => string;
+  env?: NodeJS.ProcessEnv;
   subprocessChecker?: TerminalSubprocessChecker;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
@@ -701,6 +711,11 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
     const logsDir = options.logsDir;
     const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
     const shellResolver = options.shellResolver ?? defaultShellResolver;
+    // Terminals must inherit the user's full environment (minus the blocklist
+    // applied in createTerminalSpawnEnv) — an allowlist here silently strips
+    // things like PSModulePath, DISPLAY, proxies, and toolchain variables.
+    // `options.env` is the test seam.
+    const baseEnv = options.env ?? process.env;
     const subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
     const subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
@@ -1374,7 +1389,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
                 const runtimeShell = normalizeShellCommand(session.runtimeShell ?? undefined);
                 return runtimeShell ?? shellResolver();
               });
-              const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv);
+              const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
               const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
               ptyProcess = spawnResult.process;
               startedShell = spawnResult.shellLabel;

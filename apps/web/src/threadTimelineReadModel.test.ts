@@ -90,6 +90,8 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     projectId: ProjectId.make("project-1"),
     runtimeId: RuntimeSessionId.make("project-runtime:project-1"),
     runtimeSelectionMode: "shared",
+    settledOverride: null,
+    settledAt: null,
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),

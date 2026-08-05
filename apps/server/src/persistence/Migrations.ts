@@ -9,8 +9,8 @@
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -43,6 +43,11 @@ import Migration0027 from "./Migrations/027_ProviderSessionRuntimeInstanceId.ts"
 import Migration0028 from "./Migrations/028_ProjectionThreadSessionInstanceId.ts";
 import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexes.ts";
 import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
+// Fork migrations 31-41 shipped with these ids in homelab databases and must
+// never be renumbered. Upstream's 031 (AuthAuthorizationScopes) and 032
+// (AuthPairingProofKeyThumbprint) were adopted in a previous sync as fork ids
+// 36 and 41; upstream migrations that are genuinely new in this sync are
+// appended after the fork block as ids 42+.
 import Migration0031 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
 import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
 import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
@@ -54,6 +59,10 @@ import Migration0038 from "./Migrations/038_BackfillAuthSessionVisibility.ts";
 import Migration0039 from "./Migrations/039_DeriveThreadRuntimeBindings.ts";
 import Migration0040 from "./Migrations/040_HomelabSkills.ts";
 import Migration0041 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
+import Migration0042 from "./Migrations/033_ProjectionThreadsSettled.ts";
+import Migration0043 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+import Migration0044 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+import Migration0045 from "./Migrations/036_ProjectionThreadsPinned.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -107,7 +116,13 @@ export const migrationEntries = [
   [39, "DeriveThreadRuntimeBindings", Migration0039],
   [40, "HomelabSkills", Migration0040],
   [41, "AuthPairingProofKeyThumbprint", Migration0041],
+  [42, "ProjectionThreadsSettled", Migration0042],
+  [43, "ProjectionThreadsSnoozed", Migration0043],
+  [44, "ProjectionThreadTitleRegeneration", Migration0044],
+  [45, "ProjectionThreadsPinned", Migration0045],
 ] as const;
+
+export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
