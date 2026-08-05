@@ -81,6 +81,8 @@ function makeThread(id: ThreadId): OrchestrationThread {
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     deletedAt: null,
     messages: [],
     proposedPlans: [],
@@ -239,6 +241,7 @@ function makeHarness(input: {
     getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.some(threadId)),
     getThreadCheckpointContext: () => Effect.die("unused"),
     getFullThreadDiffContext: () => Effect.die("unused"),
+    searchThreads: () => Effect.die("unused"),
     getThreadShellById: () => Effect.succeed(Option.none()),
     getThreadDetailById: (id) =>
       Effect.succeed(Option.fromNullishOr(readModel.threads.find((thread) => thread.id === id))),

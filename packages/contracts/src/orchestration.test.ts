@@ -13,6 +13,8 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationThread,
+  OrchestrationThreadShell,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -39,6 +41,8 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 
 function getOptionValue(
   options: ReadonlyArray<{ id: string; value: unknown }> | undefined,
@@ -350,6 +354,12 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
     const parsed = yield* decodeThreadMetaUpdatedPayload({
       threadId: "thread-1",
       projectId: "project-2",
+      regenerateTitle: true,
+      previousTitle: "Previous title",
+      titleRegeneration: {
+        requestId: "cmd-title-regenerate",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
@@ -357,6 +367,8 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.projectId, "project-2");
+    assert.strictEqual(parsed.previousTitle, "Previous title");
+    assert.strictEqual(parsed.titleRegeneration?.requestId, "cmd-title-regenerate");
     assert.strictEqual(parsed.modelSelection?.instanceId, "claudeAgent");
   }),
 );
@@ -376,6 +388,75 @@ it.effect("decodes thread archive and unarchive commands", () =>
 
     assert.strictEqual(archive.type, "thread.archive");
     assert.strictEqual(unarchive.type, "thread.unarchive");
+  }),
+);
+
+it.effect("decodes thread settle and unsettle commands", () =>
+  Effect.gen(function* () {
+    const settle = yield* decodeOrchestrationCommand({
+      type: "thread.settle",
+      commandId: "cmd-settle-1",
+      threadId: "thread-1",
+    });
+    const unsettle = yield* decodeOrchestrationCommand({
+      type: "thread.unsettle",
+      commandId: "cmd-unsettle-1",
+      threadId: "thread-1",
+      reason: "user",
+    });
+
+    assert.strictEqual(settle.type, "thread.settle");
+    assert.strictEqual(unsettle.type, "thread.unsettle");
+
+    // "activity" is server-owned: it exists on the event, never on the
+    // command, so a client cannot forge the neutral reset.
+    const forged = yield* decodeOrchestrationCommand({
+      type: "thread.unsettle",
+      commandId: "cmd-unsettle-2",
+      threadId: "thread-1",
+      reason: "activity",
+    }).pipe(Effect.flip);
+    assert.ok(forged);
+  }),
+);
+
+it.effect("defaults settled fields when decoding historical thread data", () =>
+  Effect.gen(function* () {
+    const common = {
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Historical thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      session: null,
+    };
+    const thread = yield* decodeOrchestrationThread({
+      ...common,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+    });
+    const shell = yield* decodeOrchestrationThreadShell({
+      ...common,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+
+    assert.strictEqual(thread.settledOverride, null);
+    assert.strictEqual(thread.settledAt, null);
+    assert.strictEqual(shell.settledOverride, null);
+    assert.strictEqual(shell.settledAt, null);
   }),
 );
 
@@ -423,6 +504,48 @@ it.effect("decodes thread archived and unarchived events", () =>
   }),
 );
 
+it.effect("decodes thread settled and unsettled events", () =>
+  Effect.gen(function* () {
+    const settled = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-settle-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.settled",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-settle-1",
+      causationEventId: null,
+      correlationId: "cmd-settle-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        settledAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const unsettled = yield* decodeOrchestrationEvent({
+      sequence: 2,
+      eventId: "event-unsettle-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.unsettled",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      commandId: "cmd-unsettle-1",
+      causationEventId: null,
+      correlationId: "cmd-unsettle-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        reason: "user",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      },
+    });
+
+    assert.strictEqual(settled.type, "thread.settled");
+    assert.strictEqual(unsettled.type, "thread.unsettled");
+  }),
+);
+
 it.effect("accepts provider-scoped model options in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -467,6 +590,53 @@ it.effect("accepts a title seed in thread.turn.start", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.titleSeed, "Investigate reconnect failures");
+  }),
+);
+
+it.effect("accepts a title regeneration intent in thread.meta.update", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-title-regenerate",
+      threadId: "thread-1",
+      regenerateTitle: true,
+    });
+    assert.strictEqual(parsed.type, "thread.meta.update");
+    if (parsed.type === "thread.meta.update") {
+      assert.strictEqual(parsed.regenerateTitle, true);
+    }
+  }),
+);
+
+it.effect("accepts an internal title regeneration completion", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.title.regeneration.complete",
+      commandId: "cmd-title-regeneration-complete",
+      threadId: "thread-1",
+      requestId: "cmd-title-regenerate",
+      title: "Updated title",
+    });
+    assert.strictEqual(parsed.type, "thread.title.regeneration.complete");
+    if (parsed.type === "thread.title.regeneration.complete") {
+      assert.strictEqual(parsed.requestId, "cmd-title-regenerate");
+      assert.strictEqual(parsed.title, "Updated title");
+    }
+  }),
+);
+
+it.effect("rejects an explicit title combined with title regeneration", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.meta.update",
+        commandId: "cmd-title-regenerate-with-title",
+        threadId: "thread-1",
+        title: "Explicit title",
+        regenerateTitle: true,
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 

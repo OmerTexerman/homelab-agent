@@ -36,6 +36,8 @@ function renderHeader(
       isStandaloneThread={options.isStandaloneThread}
       runtimeSelectionMode={options.runtimeSelectionMode}
       openInCwd={null}
+      activeProjectCwd={null}
+      onNewThreadInProject={vi.fn()}
       activeProjectScripts={undefined as ProjectScript[] | undefined}
       preferredScriptId={null}
       keybindings={[]}

@@ -308,6 +308,9 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
         sandbox: "read-only",
       };
     case "auto-accept-edits":
+    // Matches upstream's CodexSessionRuntime mapping for "auto"; this surface
+    // carries no approvalsReviewer, so the two modes coincide here.
+    case "auto":
       return {
         approvalPolicy: "on-request",
         sandbox: "workspace-write",

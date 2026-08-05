@@ -5,6 +5,7 @@ import {
   EnvironmentHttpApi,
   ThreadId,
 } from "@t3tools/contracts";
+import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -53,6 +54,14 @@ import { wakeThreadWorkspaceRuntime } from "./runtime/wakeThreadWorkspaceRuntime
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
+export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
+  global: true,
+});
+
+// Homelab fork: the web bundle is served from other origins (tailnet names,
+// LAN IPs, the ai.texerman.com deployment), so browser API requests are
+// credentialed and the allowed origin is reflected instead of upstream's
+// dev-origin allowlist.
 const credentialedBrowserApiCorsMiddleware = HttpMiddleware.cors({
   allowedOrigins: isBrowserApiCorsOriginAllowed,
   allowedMethods: [...browserApiCorsAllowedMethods],
@@ -303,6 +312,10 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     }
 
     const config = yield* ServerConfig.ServerConfig;
+    if (config.devUrl && isDevProxiedPath(url.value.pathname)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
     if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
       return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
         status: 302,

@@ -46,8 +46,11 @@ describe("HomelabSecretRuntimeReactor", () => {
         expect([...calls].sort()).toEqual(["thread-a", "thread-b"]);
       }).pipe(
         Effect.scoped,
-        Effect.provide(HomelabSecretRuntimeReactorLive),
-        Effect.provide(Layer.mergeAll(runtimeLayer, registryLayer)),
+        Effect.provide(
+          HomelabSecretRuntimeReactorLive.pipe(
+            Layer.provide(Layer.mergeAll(runtimeLayer, registryLayer)),
+          ),
+        ),
       );
     }),
   );
@@ -85,8 +88,11 @@ describe("HomelabSecretRuntimeReactor", () => {
         expect(yield* Ref.get(refreshed)).toEqual(2);
       }).pipe(
         Effect.scoped,
-        Effect.provide(HomelabSecretRuntimeReactorLive),
-        Effect.provide(Layer.mergeAll(runtimeLayer, registryLayer)),
+        Effect.provide(
+          HomelabSecretRuntimeReactorLive.pipe(
+            Layer.provide(Layer.mergeAll(runtimeLayer, registryLayer)),
+          ),
+        ),
       );
     }),
   );

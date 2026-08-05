@@ -84,6 +84,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       ...derivedPaths,
       staticDir: undefined,
       devUrl: undefined,
+      devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
@@ -152,7 +153,7 @@ const withLiveProjectCliServer = <A, E>(
         }
         yield* persistServerRuntimeState({
           path: config.serverRuntimeStatePath,
-          state: makePersistedServerRuntimeState({
+          state: yield* makePersistedServerRuntimeState({
             config,
             port: address.port,
           }),
@@ -203,6 +204,18 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       assert.include(output, "ERROR");
       assert.include(output, "missing T3 Connect public configuration");
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
+  );
+
+  it.effect("exposes service lifecycle commands without T3 Connect configuration", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(runCli(["service", "--help"], noConnectCli));
+
+      assert.include(output, "Manage the T3 Code background service.");
+      assert.include(output, "install");
+      assert.include(output, "uninstall");
+      assert.include(output, "update");
+      assert.include(output, "status");
+    }),
   );
 
   it.effect("reports fresh headless connect state without requiring local configuration", () =>
@@ -308,7 +321,10 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "logout", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "Signed out of T3 Connect locally.");
+      assert.equal(
+        output,
+        "Signed out of T3 Connect locally.\nThe background service is managed separately with `t3 service`.",
+      );
       assert.isFalse(NodeFS.existsSync(tokenPath));
     }),
   );

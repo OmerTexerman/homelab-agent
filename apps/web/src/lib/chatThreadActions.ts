@@ -10,13 +10,6 @@ import type { DraftThreadEnvMode } from "../composerDraftStore";
 interface ThreadContextLike {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  branch: string | null;
-  worktreePath: string | null;
-}
-
-interface DraftThreadContextLike extends ThreadContextLike {
-  envMode: DraftThreadEnvMode;
-  startFromOrigin: boolean;
 }
 
 interface NewThreadHandler {
@@ -32,10 +25,8 @@ interface NewThreadHandler {
   ): Promise<void>;
 }
 
-type NewThreadOptions = NonNullable<Parameters<NewThreadHandler>[1]>;
-
 export interface ChatThreadActionContext {
-  readonly activeDraftThread: DraftThreadContextLike | null;
+  readonly activeDraftThread: ThreadContextLike | null;
   readonly activeThread: ThreadContextLike | undefined;
   readonly defaultProjectRef: ScopedProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
@@ -63,35 +54,27 @@ export function resolveThreadActionProjectRef(
   return context.defaultProjectRef;
 }
 
-function buildContextualThreadOptions(context: ChatThreadActionContext): NewThreadOptions {
-  return {
-    branch: context.activeThread?.branch ?? context.activeDraftThread?.branch ?? null,
-    worktreePath:
-      context.activeThread?.worktreePath ?? context.activeDraftThread?.worktreePath ?? null,
-    envMode:
-      context.activeDraftThread?.envMode ??
-      (context.activeThread?.worktreePath ? "worktree" : "local"),
-    ...(context.activeDraftThread
-      ? { startFromOrigin: context.activeDraftThread.startFromOrigin }
-      : {}),
-  };
-}
-
+// New threads inherit only the *project* from the current context. Branch,
+// worktree, and env mode always come from the user's configured defaults —
+// carrying them over from the viewed thread meant "new thread" silently
+// reused checkouts and branches. Explicit affordances (branch toolbar's
+// "new thread in this worktree") pass those options to handleNewThread
+// directly instead.
 export async function startNewThreadInProjectFromContext(
   context: ChatThreadActionContext,
   projectRef: ScopedProjectRef,
 ): Promise<void> {
-  await context.handleNewThread(projectRef, buildContextualThreadOptions(context));
+  await context.handleNewThread(projectRef);
 }
 
+// Homelab fork: an isolated-runtime thread carries only the runtime
+// selection; workspace context comes from the configured defaults, matching
+// startNewThreadInProjectFromContext.
 export async function startNewIsolatedThreadInProjectFromContext(
   context: ChatThreadActionContext,
   projectRef: ScopedProjectRef,
 ): Promise<void> {
-  await context.handleNewThread(projectRef, {
-    ...buildContextualThreadOptions(context),
-    runtimeSelectionMode: "isolated",
-  });
+  await context.handleNewThread(projectRef, { runtimeSelectionMode: "isolated" });
 }
 
 export async function startNewThreadFromContext(
@@ -102,7 +85,7 @@ export async function startNewThreadFromContext(
     return false;
   }
 
-  await startNewThreadInProjectFromContext(context, projectRef);
+  await context.handleNewThread(projectRef);
   return true;
 }
 
@@ -115,17 +98,5 @@ export async function startNewIsolatedThreadFromContext(
   }
 
   await startNewIsolatedThreadInProjectFromContext(context, projectRef);
-  return true;
-}
-
-export async function startNewLocalThreadFromContext(
-  context: ChatThreadActionContext,
-): Promise<boolean> {
-  const projectRef = resolveThreadActionProjectRef(context);
-  if (!projectRef) {
-    return false;
-  }
-
-  await context.handleNewThread(projectRef);
   return true;
 }

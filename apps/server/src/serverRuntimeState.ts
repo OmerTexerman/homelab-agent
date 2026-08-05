@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -14,6 +14,9 @@ export const PersistedServerRuntimeState = Schema.Struct({
   host: Schema.optional(Schema.String),
   port: Schema.Int,
   origin: Schema.String,
+  // Present when the server fronts a dev web server (VITE_DEV_SERVER_URL).
+  // Dev is single-origin: browsers must pair through this URL, not `origin`.
+  devUrl: Schema.optional(Schema.String),
   startedAt: Schema.String,
 });
 export type PersistedServerRuntimeState = typeof PersistedServerRuntimeState.Type;
@@ -45,16 +48,18 @@ const runtimeOriginForConfig = (
 };
 
 export const makePersistedServerRuntimeState = (input: {
-  readonly config: Pick<ServerConfig.ServerConfig["Service"], "host">;
+  readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
   readonly port: number;
-}): PersistedServerRuntimeState => ({
-  version: 1,
-  pid: process.pid,
-  ...(input.config.host ? { host: input.config.host } : {}),
-  port: input.port,
-  origin: runtimeOriginForConfig(input.config, input.port),
-  startedAt: new Date().toISOString(),
-});
+}): Effect.Effect<PersistedServerRuntimeState> =>
+  Effect.map(DateTime.now, (now) => ({
+    version: 1,
+    pid: process.pid,
+    ...(input.config.host ? { host: input.config.host } : {}),
+    port: input.port,
+    origin: runtimeOriginForConfig(input.config, input.port),
+    ...(input.config.devUrl ? { devUrl: input.config.devUrl.toString() } : {}),
+    startedAt: DateTime.formatIso(now),
+  }));
 
 export const persistServerRuntimeState = (input: {
   readonly path: string;

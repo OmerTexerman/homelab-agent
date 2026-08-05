@@ -91,6 +91,7 @@ describe("settings navigation", () => {
   it("exposes Homelab settings surfaces and hides primary source-control navigation", () => {
     expect(SETTINGS_NAV_ITEMS.map((item) => item.label)).toEqual([
       "General",
+      "Appearance",
       "Providers",
       "Secrets",
       "Devices & Sessions",

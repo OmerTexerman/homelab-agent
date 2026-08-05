@@ -138,6 +138,8 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     projectId: PROJECT_ID,
     runtimeId: RUNTIME_ID,
     runtimeSelectionMode: "shared",
+    settledOverride: null,
+    settledAt: null,
     title: "Map My Homelab",
     modelSelection: {
       instanceId: INSTANCE_ID,

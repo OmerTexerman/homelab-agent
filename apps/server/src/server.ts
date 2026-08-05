@@ -1,9 +1,14 @@
 import { EnvironmentHttpApi } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
@@ -12,6 +17,7 @@ import {
   staticAndDevRouteLayer,
   threadWorkspaceFileRouteLayer,
   browserApiCorsLayer,
+  httpCompressionLayer,
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -58,6 +64,7 @@ import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -92,14 +99,25 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import {
+  connectHttpApiLayer,
+  reconcileDesiredCloudLink,
+  releaseManagedTunnelOnShutdown,
+} from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
+import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
+import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
+import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -111,12 +129,17 @@ import { homelabRoutesLayer } from "./homelab/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
+import { forkParked, ServerActivation } from "./serverActivation.ts";
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
 // T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
 // already closes the websocket gracefully. Do not add an artificial drain before
 // those finalizers get a chance to run.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
+const ResourceAttributionLayerLive = ResourceAttribution.layer;
+const ApplicationObservabilityLive = ObservabilityLive.pipe(
+  Layer.provideMerge(ResourceAttributionLayerLive),
+);
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -128,6 +151,35 @@ const PtyAdapterLive = Layer.unwrap(
       return NodePtyAdapter.layer;
     }
   }),
+);
+
+const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
+
+const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
+  Layer.provide(ResourceMonitorBinary.layer),
+);
+const DesktopTelemetryReceiverLayerLive = DesktopTelemetryReceiver.layer.pipe(
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
+const ResourceTelemetryLayerLive = ResourceTelemetry.layer.pipe(
+  Layer.provideMerge(NativeTelemetryLayerLive),
+  Layer.provideMerge(DesktopTelemetryReceiverLayerLive),
+);
+
+const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
+  Layer.provide(DesktopTelemetryReceiverLayerLive),
+);
+
+const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
+  Layer.provide(HostPowerMonitorLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
+const ResourceDiagnosticsLayerLive = Layer.mergeAll(
+  ResourceTelemetryLayerLive,
+  ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
+  ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
 );
 
 const RelayClientLive = Layer.unwrap(
@@ -148,6 +200,20 @@ const HttpServerLive = Layer.unwrap(
         port: config.port,
         hostname: config.host ?? "127.0.0.1",
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        websocket: {
+          // Negotiate permessage-deflate with clients that offer it; clients
+          // that don't still get uncompressed frames on their connection. A
+          // dedicated compressor keeps a per-connection sliding window
+          // (context takeover) so the compression dictionary is shared across
+          // server-to-client frames. Decompression uses the shared
+          // decompressor: uWebSockets' dedicated decompressor path can abort
+          // connections (close 1006) on valid DEFLATE input — see
+          // https://github.com/uNetworking/uWebSockets.js/issues/633.
+          perMessageDeflate: {
+            compress: "dedicated",
+            decompress: "shared",
+          },
+        },
       });
     } else {
       const [NodeHttpServer, NodeHttp] = yield* Effect.all([
@@ -158,6 +224,13 @@ const HttpServerLive = Layer.unwrap(
         host: config.host ?? "127.0.0.1",
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        // Negotiate permessage-deflate with clients that offer it; clients
+        // that don't still get uncompressed frames on their connection.
+        // Context takeover stays enabled (ws default) so the compression
+        // window is shared across frames — that also makes small frames cheap
+        // to compress, so no size threshold is set (ws only honors
+        // `threshold` when context takeover is disabled).
+        websocket: { perMessageDeflate: true },
       });
     }
   }),
@@ -193,7 +266,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
 // by looking up the default `ProviderInstance` per driver in the instance
 // registry. Adapter construction itself moved inside each driver's
-// `create()`; `ProviderEventLoggersLive` owns the shared native/canonical
+// `create()`; `ProviderEventLoggers.layer` owns the shared native/canonical
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
@@ -297,6 +370,7 @@ const WorkspaceLayerLive = Layer.mergeAll(
 
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
 );
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
@@ -343,6 +417,7 @@ const RuntimeCoreBaseLive = Layer.mergeAll(
   HomelabViewRuntimeReactorLive,
 ).pipe(
   // Core Services
+  Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
@@ -364,7 +439,7 @@ const RuntimeCoreBaseLive = Layer.mergeAll(
   // `ProviderService` (canonical stream, written after event normalization).
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggers.ProviderEventLoggersLive),
+  Layer.provideMerge(ProviderEventLoggers.layer),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and
@@ -373,8 +448,10 @@ const RuntimeCoreBaseLive = Layer.mergeAll(
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
 );
 
+// Fork split: the homelab knowledge/runtime layers below depend on the
+// provider/orchestration core above, so they hang off RuntimeCoreBaseLive.
+// ServerSettingsLayerLive is already provided in the core chain.
 const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
-  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
@@ -411,8 +488,8 @@ const RuntimeCoreDependenciesLive = RuntimeCoreBaseLive.pipe(
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
-  Layer.provideMerge(ProcessDiagnostics.layer),
-  Layer.provideMerge(ProcessResourceMonitor.layer),
+  Layer.provideMerge(BackgroundLayerLive),
+  Layer.provideMerge(ResourceDiagnosticsLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
@@ -420,8 +497,12 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provide(NetService.layer),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
-  Layer.provideMerge(RuntimeDependenciesLive),
+const commandReadinessLayer = HttpRouter.middleware(
+  (httpEffect) =>
+    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
+      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
+    ),
+  { global: true },
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -441,11 +522,25 @@ export const makeRoutesLayer = Layer.mergeAll(
   threadWorkspaceFileRouteLayer,
   homelabRoutesLayer,
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+).pipe(
+  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(ServerSelfUpdate.layer),
+  Layer.provide(commandReadinessLayer),
+  Layer.provide(browserApiCorsLayer),
+  Layer.provide(httpCompressionLayer),
+);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const activation = yield* Deferred.make<void>();
+    const awaitActivation = Deferred.await(activation);
+    const activationLayer = Layer.succeed(ServerActivation, awaitActivation);
+    const runtimeStateParked = yield* Deferred.make<void>();
+    const tailscaleParked = yield* Deferred.make<void>();
+    const cloudLinkParked = yield* Deferred.make<void>();
+    const routesReady = yield* Deferred.make<void>();
+    const launcherLayer = ServiceLauncherClient.layer;
 
     yield* fixPath();
 
@@ -459,28 +554,41 @@ export const makeServerLayer = Layer.unwrap(
     const runtimeStateLayer = Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.gen(function* () {
+          yield* Deferred.succeed(runtimeStateParked, undefined).pipe(Effect.orDie);
+          yield* awaitActivation;
           const server = yield* HttpServer.HttpServer;
           const address = server.address;
           if (typeof address === "string" || !("port" in address)) {
             return;
           }
 
-          const state = makePersistedServerRuntimeState({
+          const state = yield* makePersistedServerRuntimeState({
             config,
             port: address.port,
           });
           yield* persistServerRuntimeState({
             path: config.serverRuntimeStatePath,
             state,
-          });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to persist server runtime state", { cause }),
+            ),
+          );
         }),
-        () => clearPersistedServerRuntimeState(config.serverRuntimeStatePath),
+        () =>
+          clearPersistedServerRuntimeState(config.serverRuntimeStatePath).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to clear server runtime state", { cause }),
+            ),
+          ),
       ),
     );
     const tailscaleServeLayer = config.tailscaleServeEnabled
       ? Layer.effectDiscard(
           Effect.acquireRelease(
             Effect.gen(function* () {
+              yield* Deferred.succeed(tailscaleParked, undefined).pipe(Effect.orDie);
+              yield* awaitActivation;
               const server = yield* HttpServer.HttpServer;
               const address = server.address;
               if (typeof address === "string" || !("port" in address)) {
@@ -530,30 +638,80 @@ export const makeServerLayer = Layer.unwrap(
       : Layer.empty;
     const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
       Effect.gen(function* () {
-        if (!hasCloudPublicConfig) return;
-        if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
-        const server = yield* HttpServer.HttpServer;
-        const address = server.address;
-        if (typeof address === "string" || !("port" in address)) return;
-        yield* Effect.forkScoped(
-          Effect.sleep("250 millis").pipe(
-            Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
-            Effect.retry({ times: 4 }),
-            Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
-                cause,
+        if (!hasCloudPublicConfig) {
+          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
+          return;
+        }
+        yield* forkParked(
+          Effect.gen(function* () {
+            // Only an activated runtime owns the tunnel cleanup finalizer.
+            yield* Effect.addFinalizer(() =>
+              releaseManagedTunnelOnShutdown().pipe(
+                Effect.timeout("10 seconds"),
+                Effect.tap((released) =>
+                  released
+                    ? Effect.logInfo("Released the managed tunnel on shutdown")
+                    : Effect.void,
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(
+                    "Failed to release the managed tunnel on shutdown; the next link reuses it",
+                    { cause },
+                  ),
+                ),
+                Effect.asVoid,
+              ),
+            );
+            if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
+            const server = yield* HttpServer.HttpServer;
+            const address = server.address;
+            if (typeof address === "string" || !("port" in address)) return;
+            yield* Effect.sleep("250 millis").pipe(
+              Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
+              Effect.retry({
+                while: (error) =>
+                  error._tag !== "EnvironmentHttpBadRequestError" &&
+                  error._tag !== "EnvironmentHttpUnauthorizedError" &&
+                  error._tag !== "EnvironmentHttpConflictError",
+                schedule: Schedule.exponential("1 second").pipe(
+                  Schedule.modifyDelay(({ duration }) =>
+                    Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+                  ),
+                  Schedule.upTo({ duration: "10 minutes" }),
+                ),
               }),
-            ),
-          ),
+              Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+                  cause,
+                }),
+              ),
+            );
+          }),
         );
+        yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
       }),
     );
 
+    const runtimeServicesLive = ServerRuntimeStartup.layerWithOptions({
+      activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
+      abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
+      awaitAuxiliaryParked: Effect.all(
+        [
+          Deferred.await(runtimeStateParked),
+          Deferred.await(cloudLinkParked),
+          Deferred.await(routesReady),
+          ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.asVoid),
+    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+
+    const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
+      disableLogger: !config.logWebSocketEvents,
+    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
-        disableLogger: !config.logWebSocketEvents,
-      }),
+      routesLayer,
       httpListeningLayer,
       runtimeStateLayer,
       tailscaleServeLayer,
@@ -561,10 +719,11 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(runtimeServicesLive),
+      Layer.provide(activationLayer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
-      Layer.provide(ObservabilityLive),
+      Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(PlatformServicesLive),
@@ -572,10 +731,5 @@ export const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// Important: Only `ServerConfig` should be provided by the CLI layer!!! Don't let other requirements leak into the launch layer.
-// @effect-diagnostics-next-line unsafeEffectTypeAssertion:off
-export const runServer = Layer.launch(makeServerLayer) as Effect.Effect<
-  never,
-  never,
-  ServerConfig.ServerConfig
->;
+// The CLI supplies configuration.
+export const runServer = Layer.launch(makeServerLayer);

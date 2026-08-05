@@ -97,10 +97,13 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       : Effect.succeed(runtimeMock.state.inventory as OpenCodeInventory),
   loadInventoryFromCli: () =>
     runtimeMock.state.inventoryError
-      ? Effect.succeed({
-          providerList: { all: [], default: {}, connected: [] as string[] },
-          agents: [],
-        } as OpenCodeInventory)
+      ? Effect.fail(
+          new OpenCodeRuntimeError({
+            operation: "loadInventoryFromCli",
+            detail: runtimeMock.state.inventoryError.message,
+            cause: runtimeMock.state.inventoryError,
+          }),
+        )
       : Effect.succeed(runtimeMock.state.inventory as OpenCodeInventory),
 };
 
@@ -199,6 +202,19 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
       );
     }),
   );
+
+  it.effect("does not spawn a local server for health check (uses CLI instead)", () =>
+    Effect.gen(function* () {
+      yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
+
+      NodeAssert.equal(runtimeMock.state.closeCalls, 0);
+    }),
+  );
+
+  // Upstream also asserts that a local CLI inventory failure surfaces as an
+  // error, but managed OpenCode never runs a local CLI inventory here: the
+  // fork short-circuits to runtime-ready (see the test above) and inventory
+  // happens against the Project Runtime's published server URL instead.
 });
 
 it.layer(testLayer)("checkOpenCodeProviderStatus with configured server URL", (it) => {

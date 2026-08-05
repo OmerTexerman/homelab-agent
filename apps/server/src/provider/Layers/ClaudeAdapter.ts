@@ -80,6 +80,7 @@ import {
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
+  resolveClaudeContextWindow,
   resolveClaudeEffort,
 } from "./ClaudeProvider.ts";
 import {
@@ -92,8 +93,8 @@ import {
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
-const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
+const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
@@ -374,24 +375,18 @@ function selectedClaudeContextWindow(
   switch (modelSelection?.model) {
     case "claude-opus-4-8":
     case "claude-opus-4-7":
+      // Always 1M at the API; these models expose no contextWindow option.
       return 1_000_000;
   }
 
-  const optionValue = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
-  if (optionValue === "1m") {
-    return 1_000_000;
+  switch (resolveClaudeContextWindow(modelSelection)) {
+    case "1m":
+      return 1_000_000;
+    case "200k":
+      return 200_000;
+    default:
+      return undefined;
   }
-  if (optionValue === "200k") {
-    return 200_000;
-  }
-  const caps = getClaudeModelCapabilities(modelSelection?.model);
-  const hasContextWindowOption = getProviderOptionDescriptors({ caps }).some(
-    (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
-  );
-  if (hasContextWindowOption) {
-    return 200_000;
-  }
-  return undefined;
 }
 
 function finiteNonNegativeInteger(value: unknown): number | undefined {
@@ -1392,6 +1387,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           stream: "native",
         })
       : undefined);
+  const managedNativeEventLogger =
+    options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
   const createQuery =
     options?.createQuery ??
@@ -1426,7 +1423,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Queue.offerAll(runtimeEventQueue, canonicalizer.canonicalize(event)).pipe(Effect.asVoid);
 
-  const logNativeSdkMessage = Effect.fn("logNativeSdkMessage")(function* (
+  const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
   ) {
@@ -2634,6 +2631,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       },
     };
 
+    // Undeclared-but-real subtypes (absent from the SDK's union, so they can't
+    // be switch cases): consumed intentionally without emitting, otherwise
+    // they fall through to the unknown-subtype warning and surface as spurious
+    // error rows in client work logs. `background_tasks_changed` is a roster
+    // snapshot ({tasks: [...]}) — the task_* lifecycle events carry the
+    // authoritative per-agent data and the typed background_tasks control
+    // request is the reconciliation source.
+    if ((message.subtype as string) === "background_tasks_changed") {
+      return;
+    }
+
     switch (message.subtype) {
       case "init":
         yield* offerRuntimeEvent({
@@ -2746,6 +2754,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      // Task state patch (status/backgrounded/end_time). No runtime mapping
+      // yet — the terminal task_notification reports the outcome — but it
+      // must not surface as an unknown-subtype warning row.
+      case "task_updated":
+        return;
       case "task_notification":
         yield* emitThreadTokenUsage(
           context,
@@ -2790,12 +2803,51 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       case "thinking_tokens":
         return;
-      // Benign notice fired when the available slash-command set changes (command
-      // discovery at startup, or an MCP server connecting and registering
-      // commands). Content-less, like other `*_changed` notices — see the
-      // default branch, which now drops any system message with no displayable
-      // content so new SDK notice subtypes don't spam the work log.
+      case "api_retry":
+        // Transport-level retry heartbeat. Surfacing each attempt as a
+        // warning row spammed the work log (10 rows during a 502 storm);
+        // the terminal result/error path reports the actual failure. Keep
+        // the session visibly alive instead.
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "session.state.changed",
+          payload: {
+            state: "running",
+            reason: `api_retry:${message.attempt}/${message.max_retries}`,
+          },
+        });
+        return;
+      case "session_state_changed":
+        // Authoritative turn-over signal from the CLI.
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "session.state.changed",
+          payload: {
+            state:
+              message.state === "running"
+                ? "running"
+                : message.state === "requires_action"
+                  ? "waiting"
+                  : "ready",
+            reason: `session_state:${message.state}`,
+          },
+        });
+        return;
+      case "notification":
+        // User-facing CLI notification (e.g. context-limit warnings). Only
+        // high-priority ones warrant a work-log row.
+        if (message.priority === "high" || message.priority === "immediate") {
+          yield* emitRuntimeWarning(context, message.text, message);
+        }
+        return;
+      // Inner protocol/UX details with no T3 surface today — consumed
+      // deliberately so they don't masquerade as unknown-subtype warnings.
+      case "model_refusal_fallback":
+      case "local_command_output":
+      case "plugin_install":
       case "commands_changed":
+      case "memory_recall":
+      case "elicitation_complete":
         return;
       case "permission_denied":
         yield* offerRuntimeEvent({
@@ -2817,23 +2869,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         );
         return;
       default: {
-        // Only surface an unmodeled system message if it actually carries
-        // human-readable content. The SDK emits a growing family of content-less
-        // notices (commands_changed, background_tasks_changed, mcp_status_changed,
-        // ...) that are pure discriminator keys; rendering them produced empty
-        // "(no displayable text content)" error-styled rows that just spam the
-        // work log. Keep them at debug for diagnosability instead.
+        // Exhaustiveness guard: every subtype in the SDK's typed union is
+        // handled above, so `message` narrows to never here — a new SDK
+        // release adding a subtype fails this typecheck instead of silently
+        // warning at runtime. The runtime fallback still catches undeclared
+        // wire-only subtypes (like background_tasks_changed used to be).
+        message satisfies never;
+        const unknownMessage = message as never as { subtype: string };
+        // Homelab: only surface an unmodeled system message if it actually
+        // carries human-readable content. The SDK emits a growing family of
+        // content-less notices that are pure discriminator keys; rendering
+        // them produced empty "(no displayable text content)" error-styled
+        // rows that spam the work log. Keep them at debug for diagnosability.
         const preview = previewUnknownSdkContent(message);
         if (preview === undefined) {
           yield* Effect.logDebug("claude system message with no displayable content", {
-            subtype: message.subtype,
+            subtype: unknownMessage.subtype,
             threadId: context.session.threadId,
           });
           return;
         }
         yield* emitRuntimeWarning(
           context,
-          `Claude system message '${message.subtype}' — ${preview}`,
+          describeUnknownSdkMessage(`Claude system message '${unknownMessage.subtype}'`, message),
           message,
         );
         return;
@@ -2945,13 +3003,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       case "rate_limit_event":
         yield* handleSdkTelemetryMessage(context, message);
         return;
-      default:
+      // Composer prompt suggestions have no T3 surface; consumed deliberately.
+      case "prompt_suggestion":
+        return;
+      default: {
+        // Exhaustiveness guard (see handleSystemMessage): new SDK top-level
+        // message types fail typecheck here instead of warning at runtime.
+        message satisfies never;
+        const unknownMessage = message as never as { type: string };
         yield* emitRuntimeWarning(
           context,
-          describeUnknownSdkMessage(`Claude SDK message '${message.type}'`, message),
+          describeUnknownSdkMessage(`Claude SDK message '${unknownMessage.type}'`, message),
           message,
         );
         return;
+      }
     }
   });
 
@@ -3532,6 +3598,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const effectiveEffort = getEffectiveClaudeAgentEffort(effort, modelSelection?.model);
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
+        auto: "auto",
         "full-access": "bypassPermissions",
       };
       const permissionMode = runtimeModeToPermission[input.runtimeMode];
@@ -3946,6 +4013,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         Effect.logError("Failed to emit Claude session shutdown event.", { cause }),
       ),
       Effect.tap(() => Queue.shutdown(runtimeEventQueue)),
+      Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
     ),
   );
 

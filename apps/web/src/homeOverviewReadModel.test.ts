@@ -37,6 +37,8 @@ function thread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSum
     projectId: "project-media" as SidebarThreadSummary["projectId"],
     runtimeId: "project-runtime:project-media" as RuntimeSessionId,
     runtimeSelectionMode: "shared",
+    settledOverride: null,
+    settledAt: null,
     title: "Check Plex",
     modelSelection: {
       instanceId: "codex" as SidebarThreadSummary["modelSelection"]["instanceId"],
