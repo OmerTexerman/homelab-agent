@@ -14,7 +14,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { isCuratorProject, isCuratorProjectId } from "@t3tools/shared/curatorProject";
-import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
+import { isStandaloneProject, isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -162,6 +162,10 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./u
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import {
+  STANDALONE_THREAD_CONTEXT_MENU_ITEMS,
+  useStandaloneThreadMoveDialogs,
+} from "./sidebar/StandaloneThreadMoveDialogs";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -1231,6 +1235,13 @@ export default function SidebarV2() {
     unpinThread,
     deleteThread,
   } = useThreadActions();
+  // Fork: scratch threads keep their move/promote flows in the beta sidebar;
+  // the dialogs (with the memory-migration choice) are shared with v1.
+  const {
+    openMoveStandaloneThreadDialog,
+    openPromoteStandaloneThreadDialog,
+    standaloneThreadMoveDialogs,
+  } = useStandaloneThreadMoveDialogs();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -2404,6 +2415,8 @@ export default function SidebarV2() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
+        // Fork: scratch threads offer move/promote (shared dialogs with v1).
+        const isStandaloneThread = isStandaloneProjectId(thread.projectId);
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date());
         const clicked = await settlePromise(() =>
@@ -2449,6 +2462,7 @@ export default function SidebarV2() {
                         },
                   ]
                 : []),
+              ...(isStandaloneThread ? STANDALONE_THREAD_CONTEXT_MENU_ITEMS : []),
               { id: "rename", label: "Rename thread" },
               ...(supportsTitleRegeneration
                 ? [
@@ -2513,6 +2527,12 @@ export default function SidebarV2() {
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "move-to-project":
+            openMoveStandaloneThreadDialog(thread);
+            return;
+          case "promote-to-project":
+            openPromoteStandaloneThreadDialog(thread);
             return;
           case "rename":
             startThreadRename(threadRef, thread.title);
@@ -2600,6 +2620,8 @@ export default function SidebarV2() {
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
+      openMoveStandaloneThreadDialog,
+      openPromoteStandaloneThreadDialog,
       projectCwdByKey,
       serverConfigs,
       startThreadRename,
@@ -3350,6 +3372,7 @@ export default function SidebarV2() {
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+      {standaloneThreadMoveDialogs}
       <SidebarChromeFooter />
     </>
   );

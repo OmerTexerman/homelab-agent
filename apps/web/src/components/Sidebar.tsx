@@ -46,12 +46,9 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
   ProjectId,
-  type ProjectMemoryEntry,
-  type ProjectMemoryId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
-  type StandaloneThreadMoveMemoryMigrationMode,
   type ThreadRuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
@@ -83,7 +80,7 @@ import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { resolveFallbackModelSelection } from "../lib/defaultModelSelection";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { cn, isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { cn, isMacPlatform, newCommandId, newThreadId } from "../lib/utils";
 import {
   readThreadShell,
   useProject,
@@ -123,12 +120,7 @@ import { standaloneThreadEnvironment } from "../state/homelabOrchestration";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import {
-  useEnvironment,
-  useEnvironmentHttpBaseUrl,
-  useEnvironments,
-  usePrimaryEnvironmentId,
-} from "../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
@@ -141,6 +133,7 @@ import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarStageBackdrop, resolveSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import { HomelabAgentMark } from "./sidebar/HomelabBrandMark";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
+import { useStandaloneThreadMoveDialogs } from "./sidebar/StandaloneThreadMoveDialogs";
 import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
@@ -154,7 +147,6 @@ import {
 import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -196,7 +188,6 @@ import {
   buildMultiSelectThreadContextMenuItems,
   buildSidebarDraftThreadSummaries,
   getSidebarThreadIdsToPrewarm,
-  buildStandaloneThreadMoveMemoryMigration,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
@@ -208,9 +199,6 @@ import {
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
-  standaloneThreadMoveMemoryDescription,
-  standaloneThreadMoveRuntimeDescription,
-  type StandaloneThreadMoveMemorySelection,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -1238,11 +1226,6 @@ interface SidebarProjectItemProps {
   dragHandleProps: SortableProjectHandleProps | null;
 }
 
-interface MoveStandaloneThreadDialogTarget {
-  readonly thread: SidebarThreadSummary;
-  readonly threadKey: string;
-}
-
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
   const {
     project,
@@ -1286,12 +1269,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const createStandaloneThread = useAtomCommand(standaloneThreadEnvironment.create, {
     reportFailure: false,
   });
-  const promoteStandaloneThread = useAtomCommand(standaloneThreadEnvironment.promoteToProject, {
-    reportFailure: false,
-  });
-  const moveStandaloneThread = useAtomCommand(standaloneThreadEnvironment.moveToProject, {
-    reportFailure: false,
-  });
+  const {
+    openMoveStandaloneThreadDialog,
+    openPromoteStandaloneThreadDialog,
+    standaloneThreadMoveDialogs,
+  } = useStandaloneThreadMoveDialogs();
   const updateSettings = useUpdateClientSettings();
   const sidebarThreadPreviewCount = useClientSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
@@ -1396,7 +1378,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // thread-list change).
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
-  const allProjects = useProjects();
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -1423,32 +1404,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
     SidebarProjectGroupingMode | "inherit"
   >("inherit");
-  const [moveStandaloneTarget, setMoveStandaloneTarget] =
-    useState<MoveStandaloneThreadDialogTarget | null>(null);
-  const [moveStandaloneProjectId, setMoveStandaloneProjectId] = useState<string>("");
-  const [moveStandaloneMemoryMode, setMoveStandaloneMemoryMode] =
-    useState<StandaloneThreadMoveMemoryMigrationMode>("none");
-  const [moveStandaloneMemorySelection, setMoveStandaloneMemorySelection] =
-    useState<StandaloneThreadMoveMemorySelection>("all-relevant");
-  const [moveStandaloneSelectedMemoryIds, setMoveStandaloneSelectedMemoryIds] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [moveStandaloneMemoryEntries, setMoveStandaloneMemoryEntries] = useState<
-    ReadonlyArray<ProjectMemoryEntry>
-  >([]);
-  const [isMoveStandaloneMemoryLoading, setIsMoveStandaloneMemoryLoading] = useState(false);
-  const [isMoveStandaloneSubmitting, setIsMoveStandaloneSubmitting] = useState(false);
-  // Promote-to-project: turn a scratch thread's world into a new named project.
-  // Simpler than move (no target picker, all-relevant memory migration).
-  const [promoteStandaloneTarget, setPromoteStandaloneTarget] =
-    useState<MoveStandaloneThreadDialogTarget | null>(null);
-  const [promoteStandaloneName, setPromoteStandaloneName] = useState("");
-  const [promoteStandaloneMemoryMode, setPromoteStandaloneMemoryMode] =
-    useState<StandaloneThreadMoveMemoryMigrationMode>("move");
-  const [isPromoteStandaloneSubmitting, setIsPromoteStandaloneSubmitting] = useState(false);
-  const moveStandaloneHttpBaseUrl = useEnvironmentHttpBaseUrl(
-    moveStandaloneTarget?.thread.environmentId ?? null,
-  );
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -1477,28 +1432,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     }
     return counts;
   }, [memberProjectByScopedKey, project.memberProjects, projectThreads]);
-  const moveStandaloneTargetProjects = useMemo(() => {
-    const environmentId = moveStandaloneTarget?.thread.environmentId ?? null;
-    if (!environmentId) {
-      return [];
-    }
-    return allProjects
-      .filter(
-        (candidate) =>
-          candidate.environmentId === environmentId &&
-          !isStandaloneProjectId(candidate.id) &&
-          !isCuratorProjectId(candidate.id),
-      )
-      .toSorted((left, right) => left.title.localeCompare(right.title));
-  }, [allProjects, moveStandaloneTarget?.thread.environmentId]);
-  const moveStandaloneRelevantMemoryEntries = useMemo(() => {
-    const threadId = moveStandaloneTarget?.thread.id ?? null;
-    if (!threadId) {
-      return [];
-    }
-    return moveStandaloneMemoryEntries.filter((entry) => entry.sourceThreadId === threadId);
-  }, [moveStandaloneMemoryEntries, moveStandaloneTarget?.thread.id]);
-
   const { projectStatus, visibleProjectThreads, orderedProjectThreadKeys } = useMemo(() => {
     const lastVisitedAtByThreadKey = new Map(
       projectThreads.map((thread, index) => [
@@ -1687,175 +1620,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [projectGroupingSettings.sidebarProjectGroupingOverrides],
   );
-
-  const closeMoveStandaloneDialog = useCallback(() => {
-    setMoveStandaloneTarget(null);
-    setMoveStandaloneProjectId("");
-    setMoveStandaloneMemoryMode("none");
-    setMoveStandaloneMemorySelection("all-relevant");
-    setMoveStandaloneSelectedMemoryIds(new Set());
-    setMoveStandaloneMemoryEntries([]);
-    setIsMoveStandaloneMemoryLoading(false);
-    setIsMoveStandaloneSubmitting(false);
-  }, []);
-
-  const openMoveStandaloneDialog = useCallback(
-    (thread: SidebarThreadSummary, threadKey: string) => {
-      const firstTargetProject = allProjects
-        .filter(
-          (candidate) =>
-            candidate.environmentId === thread.environmentId &&
-            !isStandaloneProjectId(candidate.id) &&
-            !isCuratorProjectId(candidate.id),
-        )
-        .toSorted((left, right) => left.title.localeCompare(right.title))[0];
-      setMoveStandaloneTarget({ thread, threadKey });
-      setMoveStandaloneProjectId(firstTargetProject ? String(firstTargetProject.id) : "");
-      setMoveStandaloneMemoryMode("none");
-      setMoveStandaloneMemorySelection("all-relevant");
-      setMoveStandaloneSelectedMemoryIds(new Set());
-      setMoveStandaloneMemoryEntries([]);
-    },
-    [allProjects],
-  );
-
-  const closePromoteStandaloneDialog = useCallback(() => {
-    setPromoteStandaloneTarget(null);
-    setPromoteStandaloneName("");
-    setPromoteStandaloneMemoryMode("move");
-    setIsPromoteStandaloneSubmitting(false);
-  }, []);
-
-  const openPromoteStandaloneDialog = useCallback(
-    (thread: SidebarThreadSummary, threadKey: string) => {
-      setPromoteStandaloneTarget({ thread, threadKey });
-      setPromoteStandaloneName(thread.title ?? "");
-      setPromoteStandaloneMemoryMode("move");
-    },
-    [],
-  );
-
-  const submitPromoteStandalone = useCallback(async () => {
-    if (!promoteStandaloneTarget || isPromoteStandaloneSubmitting) {
-      return;
-    }
-    const thread = promoteStandaloneTarget.thread;
-    const title = promoteStandaloneName.trim().replace(/\s+/g, " ");
-    if (!title) {
-      toastManager.add({ type: "warning", title: "Enter a project name" });
-      return;
-    }
-    setIsPromoteStandaloneSubmitting(true);
-    try {
-      const result = await promoteStandaloneThread({
-        environmentId: thread.environmentId,
-        input: {
-          type: "thread.standalone.promote-to-project",
-          commandId: newCommandId(),
-          threadId: thread.id,
-          projectId: newProjectId(),
-          title,
-          memoryMigration: { mode: promoteStandaloneMemoryMode },
-          createdAt: new Date().toISOString(),
-        },
-      });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to promote thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-        return;
-      }
-      toastManager.add({
-        type: "success",
-        title: "Thread promoted to project",
-        description: title,
-      });
-      closePromoteStandaloneDialog();
-    } finally {
-      setIsPromoteStandaloneSubmitting(false);
-    }
-  }, [
-    promoteStandaloneTarget,
-    promoteStandaloneName,
-    promoteStandaloneMemoryMode,
-    isPromoteStandaloneSubmitting,
-    promoteStandaloneThread,
-    closePromoteStandaloneDialog,
-  ]);
-
-  useEffect(() => {
-    if (!moveStandaloneTarget) {
-      return;
-    }
-
-    if (!moveStandaloneHttpBaseUrl) {
-      setMoveStandaloneMemoryEntries([]);
-      setIsMoveStandaloneMemoryLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsMoveStandaloneMemoryLoading(true);
-    const url = new URL(moveStandaloneHttpBaseUrl);
-    url.pathname = "/api/homelab/project-memory";
-    url.search = new URLSearchParams({
-      projectId: moveStandaloneTarget.thread.projectId,
-      limit: "500",
-    }).toString();
-
-    void fetch(url, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Project memory request failed with status ${response.status}.`);
-        }
-        return (await response.json()) as { readonly entries?: ReadonlyArray<ProjectMemoryEntry> };
-      })
-      .then((result) => {
-        if (cancelled) {
-          return;
-        }
-        setMoveStandaloneMemoryEntries(result.entries ?? []);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setMoveStandaloneMemoryEntries([]);
-        toastManager.add(
-          stackedThreadToast({
-            type: "warning",
-            title: "Unable to load Scratch memory",
-            description: error instanceof Error ? error.message : "Memory options may be empty.",
-          }),
-        );
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsMoveStandaloneMemoryLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [moveStandaloneHttpBaseUrl, moveStandaloneTarget]);
-
-  useEffect(() => {
-    if (!moveStandaloneTarget || moveStandaloneProjectId.length > 0) {
-      return;
-    }
-    const firstTargetProject = moveStandaloneTargetProjects[0];
-    if (firstTargetProject) {
-      setMoveStandaloneProjectId(String(firstTargetProject.id));
-    }
-  }, [moveStandaloneProjectId, moveStandaloneTarget, moveStandaloneTargetProjects]);
 
   const removeProject = useCallback(
     async (member: SidebarProjectGroupMember, options: { force?: boolean } = {}) => {
@@ -2708,96 +2472,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     updateSettings,
   ]);
 
-  const submitMoveStandaloneThread = useCallback(async () => {
-    if (!moveStandaloneTarget || isMoveStandaloneSubmitting) {
-      return;
-    }
-
-    const targetProject = moveStandaloneTargetProjects.find(
-      (candidate) => String(candidate.id) === moveStandaloneProjectId,
-    );
-    if (!targetProject) {
-      toastManager.add({
-        type: "warning",
-        title: "Select a target project",
-      });
-      return;
-    }
-
-    const selectedMemoryIds: ProjectMemoryId[] = moveStandaloneRelevantMemoryEntries
-      .filter((entry) => moveStandaloneSelectedMemoryIds.has(String(entry.id)))
-      .map((entry) => entry.id);
-    if (
-      moveStandaloneMemoryMode !== "none" &&
-      moveStandaloneMemorySelection === "selected" &&
-      selectedMemoryIds.length === 0
-    ) {
-      toastManager.add({
-        type: "warning",
-        title: "Select memory entries",
-      });
-      return;
-    }
-
-    setIsMoveStandaloneSubmitting(true);
-    try {
-      const result = await moveStandaloneThread({
-        environmentId: moveStandaloneTarget.thread.environmentId,
-        input: {
-          type: "thread.standalone.move-to-project",
-          commandId: newCommandId(),
-          threadId: moveStandaloneTarget.thread.id,
-          projectId: ProjectId.make(moveStandaloneProjectId),
-          memoryMigration: buildStandaloneThreadMoveMemoryMigration({
-            mode: moveStandaloneMemoryMode,
-            selection: moveStandaloneMemorySelection,
-            selectedMemoryIds,
-          }),
-          createdAt: new Date().toISOString(),
-        },
-      });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to move thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-        return;
-      }
-      toastManager.add({
-        type: "success",
-        title: "Thread moved to project",
-        description: targetProject.title,
-      });
-      closeMoveStandaloneDialog();
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to move thread",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-      setIsMoveStandaloneSubmitting(false);
-    }
-  }, [
-    closeMoveStandaloneDialog,
-    isMoveStandaloneSubmitting,
-    moveStandaloneMemoryMode,
-    moveStandaloneMemorySelection,
-    moveStandaloneProjectId,
-    moveStandaloneRelevantMemoryEntries,
-    moveStandaloneSelectedMemoryIds,
-    moveStandaloneTarget,
-    moveStandaloneTargetProjects,
-    moveStandaloneThread,
-  ]);
-
   const handleThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -2885,25 +2559,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "promote-to-project") {
-        openPromoteStandaloneDialog(thread, threadKey);
+        openPromoteStandaloneThreadDialog(thread);
         return;
       }
 
       if (clicked === "move-to-project") {
-        const targetProjectsForThread = allProjects.filter(
-          (candidate) =>
-            candidate.environmentId === thread.environmentId &&
-            !isStandaloneProjectId(candidate.id),
-        );
-        if (targetProjectsForThread.length === 0) {
-          toastManager.add({
-            type: "warning",
-            title: "No target projects",
-            description: "Create a project before moving standalone threads.",
-          });
-          return;
-        }
-        openMoveStandaloneDialog(thread, threadKey);
+        // The shared open function pre-checks target projects and warns
+        // instead of opening an unusable dialog.
+        openMoveStandaloneThreadDialog(thread);
         return;
       }
 
@@ -2960,7 +2623,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       appSettingsConfirmThreadDelete,
-      allProjects,
       createStandaloneThreadForMember,
       copyPathToClipboard,
       copyThreadIdToClipboard,
@@ -2968,8 +2630,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       handleNewThread,
       markThreadUnread,
       memberProjectByScopedKey,
-      openMoveStandaloneDialog,
-      openPromoteStandaloneDialog,
+      openMoveStandaloneThreadDialog,
+      openPromoteStandaloneThreadDialog,
       project.workspaceRoot,
       showCompatibilityWorkspaceControls,
       startThreadRename,
@@ -3282,291 +2944,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         </DialogPopup>
       </Dialog>
 
-      <Dialog
-        open={moveStandaloneTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            closeMoveStandaloneDialog();
-          }
-        }}
-      >
-        <DialogPopup className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{HOMELAB_PRODUCT_COPY.standalone.moveAction}</DialogTitle>
-            <DialogDescription>
-              {moveStandaloneTarget
-                ? `Move "${moveStandaloneTarget.thread.title}" into an existing project.`
-                : HOMELAB_PRODUCT_COPY.standalone.moveDescription}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-4">
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p>Chat transcript and thread identity move automatically.</p>
-              <p className="mt-1">{standaloneThreadMoveRuntimeDescription()}</p>
-            </div>
-
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Target project</span>
-              <Select
-                value={moveStandaloneProjectId}
-                onValueChange={(value) => {
-                  if (value) {
-                    setMoveStandaloneProjectId(value);
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Target project">
-                  <SelectValue>
-                    {moveStandaloneTargetProjects.find(
-                      (candidate) => String(candidate.id) === moveStandaloneProjectId,
-                    )?.title ?? "Select project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {moveStandaloneTargetProjects.map((candidate) => (
-                    <SelectItem
-                      key={String(candidate.id)}
-                      hideIndicator
-                      value={String(candidate.id)}
-                    >
-                      {candidate.title}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              {moveStandaloneTargetProjects.length === 0 ? (
-                <p className="text-xs text-warning">Create a project before moving this thread.</p>
-              ) : null}
-            </div>
-
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Scratch memory</span>
-              <Select
-                value={moveStandaloneMemoryMode}
-                onValueChange={(value) => {
-                  if (value === "none" || value === "copy" || value === "move") {
-                    setMoveStandaloneMemoryMode(value);
-                    if (value === "none") {
-                      setMoveStandaloneMemorySelection("all-relevant");
-                    }
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Scratch memory handling">
-                  <SelectValue>
-                    {moveStandaloneMemoryMode === "none"
-                      ? "Leave memory in Scratch"
-                      : moveStandaloneMemoryMode === "copy"
-                        ? "Copy memory to target project"
-                        : "Move memory to target project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="none">
-                    Leave memory in Scratch
-                  </SelectItem>
-                  <SelectItem hideIndicator value="copy">
-                    Copy memory to target project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="move">
-                    Move memory to target project
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {standaloneThreadMoveMemoryDescription(
-                  moveStandaloneMemoryMode,
-                  moveStandaloneMemorySelection,
-                )}
-              </p>
-            </div>
-
-            {moveStandaloneMemoryMode !== "none" ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant={
-                      moveStandaloneMemorySelection === "all-relevant" ? "secondary" : "outline"
-                    }
-                    size="sm"
-                    onClick={() => setMoveStandaloneMemorySelection("all-relevant")}
-                  >
-                    All relevant
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={moveStandaloneMemorySelection === "selected" ? "secondary" : "outline"}
-                    size="sm"
-                    onClick={() => setMoveStandaloneMemorySelection("selected")}
-                  >
-                    Selected
-                  </Button>
-                </div>
-
-                {moveStandaloneMemorySelection === "selected" ? (
-                  <div className="max-h-44 overflow-y-auto rounded-md border border-border">
-                    {isMoveStandaloneMemoryLoading ? (
-                      <div className="p-3 text-xs text-muted-foreground">Loading memory...</div>
-                    ) : moveStandaloneRelevantMemoryEntries.length === 0 ? (
-                      <div className="p-3 text-xs text-muted-foreground">
-                        No durable Scratch memory entries reference this thread.
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {moveStandaloneRelevantMemoryEntries.map((entry) => {
-                          const checked = moveStandaloneSelectedMemoryIds.has(String(entry.id));
-                          return (
-                            <label
-                              key={String(entry.id)}
-                              className="flex cursor-pointer items-start gap-2 p-2 text-xs hover:bg-accent/50"
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={() => {
-                                  setMoveStandaloneSelectedMemoryIds((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(String(entry.id))) {
-                                      next.delete(String(entry.id));
-                                    } else {
-                                      next.add(String(entry.id));
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              />
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate font-medium text-foreground">
-                                  {entry.summary}
-                                </span>
-                                {entry.tags.length > 0 ? (
-                                  <span className="block truncate text-muted-foreground">
-                                    {entry.tags.join(", ")}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    {isMoveStandaloneMemoryLoading
-                      ? "Loading memory..."
-                      : `${moveStandaloneRelevantMemoryEntries.length} relevant entries found.`}
-                  </p>
-                )}
-              </div>
-            ) : null}
-          </DialogPanel>
-          <DialogFooter>
-            <Button variant="outline" onClick={closeMoveStandaloneDialog}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void submitMoveStandaloneThread()}
-              disabled={
-                isMoveStandaloneSubmitting ||
-                moveStandaloneTargetProjects.length === 0 ||
-                moveStandaloneProjectId.length === 0
-              }
-            >
-              {isMoveStandaloneSubmitting ? "Moving..." : "Move"}
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
-
-      <Dialog
-        open={promoteStandaloneTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            closePromoteStandaloneDialog();
-          }
-        }}
-      >
-        <DialogPopup className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{HOMELAB_PRODUCT_COPY.standalone.promoteAction}</DialogTitle>
-            <DialogDescription>
-              {promoteStandaloneTarget
-                ? `Turn "${promoteStandaloneTarget.thread.title}" into a new project. Its runtime workspace and skills become the project's shared defaults, so future threads reuse them.`
-                : HOMELAB_PRODUCT_COPY.standalone.promoteDescription}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-4">
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Project name</span>
-              <Input
-                value={promoteStandaloneName}
-                onChange={(event) => setPromoteStandaloneName(event.target.value)}
-                placeholder="Project name"
-                autoFocus
-                spellCheck={false}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void submitPromoteStandalone();
-                  }
-                }}
-              />
-            </div>
-
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Scratch memory</span>
-              <Select
-                value={promoteStandaloneMemoryMode}
-                onValueChange={(value) => {
-                  if (value === "none" || value === "copy" || value === "move") {
-                    setPromoteStandaloneMemoryMode(value);
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Scratch memory handling">
-                  <SelectValue>
-                    {promoteStandaloneMemoryMode === "none"
-                      ? "Leave memory in Scratch"
-                      : promoteStandaloneMemoryMode === "copy"
-                        ? "Copy memory into the project"
-                        : "Move memory into the project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="move">
-                    Move memory into the project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="copy">
-                    Copy memory into the project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="none">
-                    Leave memory in Scratch
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {promoteStandaloneMemoryMode === "none"
-                  ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory stays behind."
-                  : promoteStandaloneMemoryMode === "copy"
-                    ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory is copied in."
-                    : "The chat transcript, runtime workspace, skills, and durable Scratch memory all move into the project."}
-              </p>
-            </div>
-          </DialogPanel>
-          <DialogFooter>
-            <Button variant="outline" onClick={closePromoteStandaloneDialog}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void submitPromoteStandalone()}
-              disabled={isPromoteStandaloneSubmitting || promoteStandaloneName.trim().length === 0}
-            >
-              {isPromoteStandaloneSubmitting ? "Promoting..." : "Promote"}
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
+      {standaloneThreadMoveDialogs}
     </>
   );
 });
