@@ -13,6 +13,10 @@ import type {
   TurnDiffSummary,
 } from "./types";
 import type { WorkLogEntry } from "./threadActivityDerivations";
+// session-logic.ts's TimelineEntry is a superset of this file's (it also allows
+// a "turn-plan" entry kind); deriveCompletionDividerBeforeEntryId only reads the
+// "message" variant, so it's widened to accept either shape.
+import type { TimelineEntry as AnyTimelineEntry } from "./session-logic";
 
 export type TimelineEntry =
   | {
@@ -99,7 +103,7 @@ export function deriveTimelineEntries(
 }
 
 export function deriveCompletionDividerBeforeEntryId(
-  timelineEntries: ReadonlyArray<TimelineEntry>,
+  timelineEntries: ReadonlyArray<AnyTimelineEntry>,
   latestTurn: Pick<
     OrchestrationLatestTurn,
     "assistantMessageId" | "startedAt" | "completedAt"

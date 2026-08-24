@@ -23,6 +23,9 @@ import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "../src/cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
+import { CuratorSessionReaper } from "../src/homelab/Services/CuratorSessionReaper.ts";
+import { HomelabSecretRuntimeReactor } from "../src/homelab/Services/HomelabSecretRuntimeReactor.ts";
+import { HomelabViewRuntimeReactor } from "../src/homelab/Services/HomelabViewRuntimeReactor.ts";
 import * as Keybindings from "../src/keybindings.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
@@ -105,6 +108,9 @@ const startupDependencies = Layer.mergeAll(
     }),
   ),
   AnalyticsService.layerTest,
+  Layer.succeed(CuratorSessionReaper, { start: () => Effect.void }),
+  Layer.succeed(HomelabSecretRuntimeReactor, { start: () => Effect.void }),
+  Layer.succeed(HomelabViewRuntimeReactor, { start: () => Effect.void }),
   Layer.succeed(ProviderService.ProviderService, {
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),
@@ -112,6 +118,7 @@ const startupDependencies = Layer.mergeAll(
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
+    clearThreadState: () => Effect.die("unused"),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),

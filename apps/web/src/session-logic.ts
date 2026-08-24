@@ -23,6 +23,9 @@ import type {
   TurnDiffSummary,
 } from "./types";
 
+export { deriveCompletionDividerBeforeEntryId, hasToolActivityForTurn } from "./threadTimeline";
+export { findSidebarProposedPlan } from "./threadActivityDerivations";
+
 export type ProviderPickerKind = ProviderDriverKind;
 
 export const PROVIDER_OPTIONS: Array<{

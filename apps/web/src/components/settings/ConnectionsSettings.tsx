@@ -1,4 +1,5 @@
 import {
+  ChevronDownIcon,
   ChevronsLeftRightEllipsisIcon,
   PlusIcon,
   QrCodeIcon,
@@ -86,6 +87,16 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Group, GroupSeparator } from "../ui/group";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { AnimatedHeight } from "../AnimatedHeight";
 import { Textarea } from "../ui/textarea";
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
@@ -688,7 +699,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
 
   const primaryLabel = pairingLink.label ?? "Pairing link";
   const defaultEndpointCopyOption =
-    endpointCopyOptions.find((option) => option.key === defaultEndpointKey) ??
+    endpointCopyOptions.find((option) => option.preferenceKey === defaultEndpointKey) ??
     endpointCopyOptions[0] ??
     null;
   const defaultEndpointCopyLabel = defaultEndpointCopyOption?.label ?? "URL";
@@ -709,7 +720,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   ) =>
     options.map((option) => (
       <MenuItem
-        key={option.key}
+        key={option.preferenceKey}
         onClick={() => copyPairingValue(option.url, copyKindForUrl(option.url))}
       >
         <span className="min-w-0 flex-1">

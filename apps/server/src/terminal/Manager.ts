@@ -175,7 +175,7 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   {
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
-    command: Schema.Literals(["powershell", "ps"]),
+    command: Schema.Literals(["powershell", "pgrep", "ps"]),
     terminalPid: Schema.Number,
     exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
     timedOut: Schema.optional(Schema.Boolean),

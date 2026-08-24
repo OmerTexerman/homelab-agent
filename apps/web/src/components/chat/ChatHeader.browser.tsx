@@ -33,6 +33,9 @@ function renderHeader(
       activeThreadId={ThreadId.make("thread-export-dialog")}
       activeThreadTitle="Map My Homelab"
       activeProjectName={options.activeProjectName}
+      activeProjectFaviconPath={null}
+      isServerThread
+      changeRequest={null}
       isStandaloneThread={options.isStandaloneThread}
       runtimeSelectionMode={options.runtimeSelectionMode}
       openInCwd={null}

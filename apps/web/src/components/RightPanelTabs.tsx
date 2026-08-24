@@ -283,7 +283,6 @@ function RightPanelEmptyState(props: {
       description: "Open a local app or URL.",
       icon: Globe2,
       shortcut: "B",
-      shortcut: "B",
       available: props.browserAvailable,
       hidden: props.browserHidden ?? false,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.browser,

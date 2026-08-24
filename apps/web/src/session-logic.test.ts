@@ -1033,7 +1033,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["runtime-real"]);
   });
 

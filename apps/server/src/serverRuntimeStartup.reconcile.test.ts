@@ -51,6 +51,7 @@ const makeProviderService = (liveThreadIds: ReadonlyArray<ThreadId> = []) =>
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
+    clearThreadState: () => Effect.die("unused"),
     listSessions: () => Effect.succeed(liveThreadIds.map((threadId) => ({ threadId }) as never)),
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
@@ -85,6 +86,7 @@ const runReconciliation = (input: {
       dispatch: input.dispatch,
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
+      getReadModel: () => Effect.die("unused"),
     }),
     Effect.provide(NodeServices.layer),
   );
@@ -290,6 +292,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
       dispatch: () => Effect.die("unused"),
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
+      getReadModel: () => Effect.die("unused"),
     }),
     Effect.provide(NodeServices.layer),
     Effect.tap(() => Effect.sync(() => assert.equal(queried, false))),

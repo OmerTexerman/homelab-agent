@@ -284,6 +284,7 @@ import {
   useProject,
   useProjects,
   useThread,
+  useThreadProposedPlans,
   useThreadRefs,
   useThreadShell,
 } from "../state/entities";
@@ -523,6 +524,8 @@ type EnvironmentUnavailableState = {
   readonly label: string;
   readonly connection: EnvironmentConnectionPresentation;
 };
+
+type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
 function eventPathContainsSelector(event: Event, selector: string): boolean {
   const path = event.composedPath();
@@ -2408,6 +2411,29 @@ function ChatViewContent(props: ChatViewProps) {
       };
     });
   }, [serverAttachmentUrlById, serverMessages]);
+  const sourcePlanThreadRef = useMemo(() => {
+    const sourceThreadId = activeLatestTurn?.sourceProposedPlan?.threadId;
+    if (!activeThread || !sourceThreadId || sourceThreadId === activeThread.id) {
+      return null;
+    }
+    return scopeThreadRef(activeThread.environmentId, sourceThreadId);
+  }, [activeLatestTurn?.sourceProposedPlan?.threadId, activeThread]);
+  const sourceThreadProposedPlans = useThreadProposedPlans(sourcePlanThreadRef);
+  const threadPlanCatalog = useMemo<ThreadPlanCatalogEntry[]>(() => {
+    if (!activeThread) {
+      return [];
+    }
+    const entries: ThreadPlanCatalogEntry[] = [
+      { id: activeThread.id, proposedPlans: activeThread.proposedPlans },
+    ];
+    if (sourcePlanThreadRef) {
+      entries.push({
+        id: sourcePlanThreadRef.threadId,
+        proposedPlans: sourceThreadProposedPlans,
+      });
+    }
+    return entries;
+  }, [activeThread, sourcePlanThreadRef, sourceThreadProposedPlans]);
   const threadTimeline = useMemo(
     () =>
       deriveThreadTimelineReadModel({
@@ -2504,7 +2530,7 @@ function ChatViewContent(props: ChatViewProps) {
     );
   }, [activeLatestTurn?.turnId, activePlan]);
   const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
+    composerDecisionState.pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);

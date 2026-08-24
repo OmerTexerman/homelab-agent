@@ -102,6 +102,13 @@ export type ChatExportTimelineEntry =
       readonly createdAt: string;
       readonly phase: ThreadTimelineEntry["phase"];
       readonly proposedPlan: ChatExportProposedPlan;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "turn-plan";
+      readonly createdAt: string;
+      readonly phase: ThreadTimelineEntry["phase"];
+      readonly turnPlan: ChatExportActivePlan;
     };
 
 export interface ChatExportReadModel {
@@ -819,6 +826,18 @@ function toExportTimelineEntry(entry: ThreadTimelineEntry): ChatExportTimelineEn
       work: toExportWorkLogEntry(entry.entry),
     };
   }
+  if (entry.kind === "turn-plan") {
+    return {
+      ...base,
+      kind: "turn-plan",
+      turnPlan: {
+        createdAt: entry.turnPlan.plan.createdAt,
+        turnId: entry.turnPlan.plan.turnId,
+        explanation: entry.turnPlan.plan.explanation ?? null,
+        steps: entry.turnPlan.plan.steps,
+      },
+    };
+  }
   return {
     ...base,
     kind: "proposed-plan",
@@ -994,6 +1013,10 @@ function renderTimelineEntryMarkdown(lines: string[], entry: ChatExportTimelineE
   }
   if (entry.kind === "work") {
     renderWorkMarkdown(lines, entry.work);
+    return;
+  }
+  if (entry.kind === "turn-plan") {
+    renderActivePlanMarkdown(lines, entry.turnPlan);
     return;
   }
   renderProposedPlanMarkdown(lines, entry.proposedPlan);
@@ -1202,6 +1225,10 @@ function renderTimelineEntryPlainText(lines: string[], entry: ChatExportTimeline
     renderWorkPlainText(lines, entry.work);
     return;
   }
+  if (entry.kind === "turn-plan") {
+    renderActivePlanPlainText(lines, entry.turnPlan);
+    return;
+  }
   renderProposedPlanPlainText(lines, entry.proposedPlan);
 }
 
@@ -1390,6 +1417,15 @@ function rawRecordForTimelineEntry(entry: ChatExportTimelineEntry): unknown {
       work: entry.work,
     };
   }
+  if (entry.kind === "turn-plan") {
+    return {
+      type: "turn-plan",
+      timelineEntryId: entry.id,
+      timelineCreatedAt: entry.createdAt,
+      phase: entry.phase,
+      turnPlan: entry.turnPlan,
+    };
+  }
   return {
     type: "proposed-plan",
     timelineEntryId: entry.id,
@@ -1432,6 +1468,9 @@ function renderTimelineEntryHtml(entry: ChatExportTimelineEntry): string {
       ${work.detail ? `<pre>${escapeHtml(work.detail)}</pre>` : ""}
       ${changedFiles}
     </article>`;
+  }
+  if (entry.kind === "turn-plan") {
+    return renderActivePlanHtml(entry.turnPlan);
   }
   const plan = entry.proposedPlan;
   return `<article class="plan">
