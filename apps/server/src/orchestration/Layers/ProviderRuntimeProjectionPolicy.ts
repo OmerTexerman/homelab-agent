@@ -596,29 +596,73 @@ export function runtimeEventToActivities(
     }
 
     case "task.progress": {
+      const title =
+        event.payload.description.trim().length > 0
+          ? { title: truncateDetail(event.payload.description, 120) }
+          : {};
+      // Usage and activity are independent latest-state streams. Keeping them
+      // under separate stable ids prevents a command/reasoning update from
+      // replacing the last known token count (and prevents a usage-only tick
+      // from blanking the last meaningful activity).
+      const hasProgressState =
+        event.payload.typedUsage === undefined ||
+        event.payload.summary !== undefined ||
+        event.payload.lastToolName !== undefined ||
+        event.payload.status !== undefined ||
+        event.payload.error !== undefined;
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "task.progress",
-          summary:
-            event.payload.description.trim().length > 0
-              ? truncateDetail(event.payload.description, 120)
-              : "Reasoning update",
-          payload: {
-            taskId: event.payload.taskId,
-            ...(event.payload.description.trim().length > 0
-              ? { title: truncateDetail(event.payload.description, 120) }
-              : {}),
-            detail: truncateDetail(event.payload.summary ?? event.payload.description),
-            ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
-            ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
-            ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
-          turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        ...(hasProgressState
+          ? [
+              {
+                // Stable per-task id: activity is "latest state", not
+                // history, so each meaningful tick replaces the last. This
+                // bounds a large fleet to one activity row per task.
+                id: EventId.make(`task-progress:${event.threadId}:${event.payload.taskId}`),
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "task.progress" as const,
+                summary:
+                  event.payload.description.trim().length > 0
+                    ? truncateDetail(event.payload.description, 120)
+                    : "Reasoning update",
+                payload: {
+                  taskId: event.payload.taskId,
+                  ...title,
+                  detail: truncateDetail(event.payload.summary ?? event.payload.description),
+                  ...(event.payload.summary
+                    ? { summary: truncateDetail(event.payload.summary) }
+                    : {}),
+                  ...(event.payload.lastToolName
+                    ? { lastToolName: event.payload.lastToolName }
+                    : {}),
+                  ...(event.payload.status ? { status: event.payload.status } : {}),
+                  ...(event.payload.error ? { error: event.payload.error } : {}),
+                  ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+                },
+                turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
+        ...(event.payload.typedUsage !== undefined
+          ? [
+              {
+                id: EventId.make(`task-usage:${event.threadId}:${event.payload.taskId}`),
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "task.progress" as const,
+                summary: "Task usage updated",
+                payload: {
+                  taskId: event.payload.taskId,
+                  ...title,
+                  usageSnapshot: true,
+                  typedUsage: event.payload.typedUsage,
+                },
+                turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
       ];
     }
 
@@ -701,8 +745,15 @@ export function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      // A streaming update's `data` carries the full tool output accumulated
+      // so far (adapters merge state forward), and a new activity is emitted
+      // per chunk, so persisting `data` verbatim writes O(N^2) bytes per tool
+      // call into both the event store and the projection table. No reader
+      // needs it: ws.ts and http.ts apply `projectActivityPayload` before any
+      // payload reaches a client. Persist the projected form for non-terminal
+      // updates; `item.completed` below still persists the full payload.
       return [
-        {
+        projectActivityPayload({
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
@@ -710,13 +761,14 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool updated",
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
           ...maybeSequence,
-        },
+        }),
       ];
     }
 
@@ -733,6 +785,7 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
@@ -755,7 +808,10 @@ export function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
+            ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toRuntimeProjectionTurnId(event.turnId) ?? null,
           ...maybeSequence,

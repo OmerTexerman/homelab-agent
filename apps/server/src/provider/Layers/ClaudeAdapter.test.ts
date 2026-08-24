@@ -542,7 +542,10 @@ describe("ClaudeAdapterLive", () => {
         NodePath.join(launchContext.hostBinDir, "claude"),
       );
       assert.equal(createInput?.options.cwd, launchContext.hostWorkspacePath);
-      assert.deepEqual(createInput?.options.additionalDirectories, ["/workspace"]);
+      assert.deepEqual(createInput?.options.additionalDirectories, [
+        "/workspace",
+        "/tmp/userdata/attachments",
+      ]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),

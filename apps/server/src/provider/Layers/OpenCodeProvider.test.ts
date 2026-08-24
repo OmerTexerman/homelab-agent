@@ -252,7 +252,10 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         ],
       };
 
-      const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
+      const snapshot = yield* checkOpenCodeProviderStatus(
+        makeOpenCodeSettings({ serverUrl: "http://127.0.0.1:9999" }),
+        process.cwd(),
+      );
 
       NodeAssert.deepEqual(
         snapshot.skills.map((skill) => ({
@@ -284,13 +287,13 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
       yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
 
       NodeAssert.equal(runtimeMock.state.closeCalls, 0);
-      NodeAssert.equal(runtimeMock.state.inventoryCwd, process.cwd());
     }),
   );
 
   // Upstream also asserts that a local CLI inventory failure surfaces as an
-  // error, but managed OpenCode never runs a local CLI inventory here: the
-  // fork short-circuits to runtime-ready (see the test above) and inventory
+  // error, and that a local run threads its cwd into the inventory call, but
+  // managed OpenCode never runs a local CLI inventory here: the fork
+  // short-circuits to runtime-ready (see the test above) and inventory
   // happens against the Project Runtime's published server URL instead.
 });
 
