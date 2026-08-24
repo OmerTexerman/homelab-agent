@@ -1,6 +1,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
+import { isProviderInterruptionMessage } from "@t3tools/shared/providerInterruptions";
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
@@ -852,11 +853,24 @@ export function deriveWorkLogEntries(
     if (activity.kind === "tool.progress") continue;
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
+    if (isInterruptedRuntimeErrorActivity(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     entries.push(toDerivedWorkLogEntry(activity));
   }
   return collapseDerivedWorkLogEntries(entries);
+}
+
+function isInterruptedRuntimeErrorActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.error") {
+    return false;
+  }
+
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  return typeof payload?.message === "string" && isProviderInterruptionMessage(payload.message);
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {

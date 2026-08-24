@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   CheckpointRef,
+  EventId,
   isToolLifecycleItemType,
   MessageId,
   type OrchestrationCheckpointSummary,
@@ -13,6 +14,8 @@ import {
   type ThreadTokenUsageSnapshot,
   TurnId,
 } from "@t3tools/contracts";
+
+import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 
 export function toRuntimeProjectionTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
