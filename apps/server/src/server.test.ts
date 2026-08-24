@@ -63,7 +63,6 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   FetchHttpClient,

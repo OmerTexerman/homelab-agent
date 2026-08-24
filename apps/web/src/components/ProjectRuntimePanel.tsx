@@ -33,6 +33,7 @@ import { cn } from "~/lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   isThreadWaitingOnProjectRuntime,
   projectRuntimeIsOperationBusy,
@@ -402,9 +403,18 @@ export function ProjectRuntimePanel({
               key={snapshot.id}
               className="flex min-w-0 items-center gap-1.5 rounded border border-border/70 bg-background/60 px-1.5 py-1"
             >
-              <span className="max-w-40 truncate text-xs text-foreground" title={snapshot.name}>
-                {snapshot.name}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="max-w-40 truncate text-xs text-foreground">
+                      {snapshot.name}
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
+                  {snapshot.name}
+                </TooltipPopup>
+              </Tooltip>
               <span className="text-xs text-muted-foreground">
                 {snapshotCreatedAtLabel(snapshot)}
               </span>
