@@ -175,10 +175,24 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   {
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    command: Schema.Literals(["powershell", "ps"]),
     terminalPid: Schema.Number,
-    command: Schema.Literals(["powershell", "pgrep", "ps"]),
+    exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
+    timedOut: Schema.optional(Schema.Boolean),
+    stdoutTruncated: Schema.optional(Schema.Boolean),
   },
-) {}
+) {
+  override get message(): string {
+    const details = [
+      this.exitCode !== undefined && this.exitCode !== null ? `exit code ${this.exitCode}` : null,
+      this.timedOut ? "timed out" : null,
+      this.stdoutTruncated ? "output truncated" : null,
+    ]
+      .filter((detail) => detail !== null)
+      .join(", ");
+    return `Failed to inspect terminal subprocesses with ${this.command}${details.length > 0 ? ` (${details})` : ""}`;
+  }
+}
 
 class TerminalProcessSignalError extends Schema.TaggedErrorClass<TerminalProcessSignalError>()(
   "TerminalProcessSignalError",

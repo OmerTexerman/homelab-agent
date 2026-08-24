@@ -40,15 +40,15 @@ Before making broad changes, read:
 Before opening a PR, run:
 
 ```bash
-bun fmt
-bun lint
-bun typecheck
+pnpm fmt
+pnpm lint
+pnpm typecheck
 ```
 
 If tests are relevant, use:
 
 ```bash
-bun run test
+pnpm run test
 ```
 
 ## Attribution

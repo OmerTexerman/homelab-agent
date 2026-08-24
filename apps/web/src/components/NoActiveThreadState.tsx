@@ -35,9 +35,9 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { Button } from "./ui/button";
 import { SidebarInset } from "./ui/sidebar";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 
 const HOME_RUNTIME_PROJECT_LIMIT = 8;
 
@@ -102,17 +102,9 @@ export function NoActiveThreadState() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <header
-          className={cn(
-            "border-b border-border px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
-            isElectron ? "workspace-topbar drag-region" : "workspace-topbar",
-            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-          )}
-        >
+        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           {isElectron ? (
-            <span className="text-xs text-muted-foreground/50 wco:pr-[var(--workspace-native-controls-inset)]">
-              {model.title}
-            </span>
+            <span className="text-xs text-muted-foreground/50">{model.title}</span>
           ) : (
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
@@ -120,7 +112,7 @@ export function NoActiveThreadState() {
               </span>
             </div>
           )}
-        </header>
+        </WorkspacePageHeader>
 
         <HomeOverviewSurface
           model={model}

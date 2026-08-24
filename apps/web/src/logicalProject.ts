@@ -9,6 +9,7 @@ import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import type { Project } from "./types";
 
 export {
+  buildProjectGroups,
   derivePhysicalProjectKey,
   derivePhysicalProjectKeyFromPath,
   deriveProjectGroupLabel,
@@ -18,6 +19,8 @@ export {
   selectProjectGroupingSettings,
   type ProjectGroupingMode,
   type ProjectGroupingSettings,
+  type ProjectGroup,
+  type ProjectGroupMember,
 } from "@t3tools/client-runtime/state/project-grouping";
 
 type LogicalProjectInput = Pick<

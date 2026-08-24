@@ -1,6 +1,5 @@
 import { APP_BASE_NAME } from "../branding";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
-import { isWindowsPlatform } from "../lib/utils";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
@@ -25,7 +24,12 @@ export function getDesktopUpdateReleaseUrl(version: string | null): string | nul
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
 ): DesktopUpdateButtonAction {
-  if (state.downloadedVersion) {
+  if (
+    state.downloadedVersion &&
+    (state.status === "downloaded" ||
+      (state.status === "error" &&
+        (state.errorContext === null || state.errorContext === "install")))
+  ) {
     return "install";
   }
   if (state.status === "available") {
@@ -91,6 +95,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
     if (state.errorContext === "install" && state.downloadedVersion) {
       return `Install failed for ${state.downloadedVersion}. Click to retry.`;
     }
+    if (state.downloadedVersion) {
+      return `Update ${state.downloadedVersion} downloaded. Click to restart and install.`;
+    }
     return state.message ?? "Update failed";
   }
   return "Up to date";
@@ -98,13 +105,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
 
 export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
-  platform = "",
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  const windowsInstallWarning = isWindowsPlatform(platform)
-    ? `\n\nOn Windows, ${APP_BASE_NAME} may remain closed for several minutes while the update installs, and no installer window may appear. ${APP_BASE_NAME} will reopen automatically when installation finishes.`
-    : "";
-  return `Install update${version ? ` ${version}` : ""} and restart ${APP_BASE_NAME}?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.${windowsInstallWarning}`;
+  return `Install update${version ? ` ${version}` : ""} and restart ${APP_BASE_NAME}?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {
@@ -126,9 +129,6 @@ export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | nu
 export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
   if (!state || !state.enabled) return false;
   return (
-    state.status !== "checking" &&
-    state.status !== "downloading" &&
-    state.status !== "downloaded" &&
-    state.status !== "disabled"
+    state.status !== "checking" && state.status !== "downloading" && state.status !== "disabled"
   );
 }

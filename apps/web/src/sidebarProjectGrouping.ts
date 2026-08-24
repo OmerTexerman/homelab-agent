@@ -1,12 +1,6 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import { STANDALONE_PROJECT_TITLE, isStandaloneProject } from "@t3tools/shared/standaloneProject";
-import {
-  deriveLogicalProjectKeyFromSettings,
-  derivePhysicalProjectKey,
-  deriveProjectGroupLabel,
-  type ProjectGroupingSettings,
-} from "./logicalProject";
+import { buildProjectGroups, type ProjectGroupingSettings } from "./logicalProject";
 import type { Project } from "./types";
 
 export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
@@ -40,77 +34,21 @@ export interface SidebarProjectPickerEntry {
   isPreferred: boolean;
 }
 
-interface SidebarProjectGroupCandidate {
-  readonly logicalKey: string;
-  readonly project: Project;
-}
-
-function getProjectFreshnessTime(project: Project): number {
-  const updatedAtTime = Date.parse(project.updatedAt);
-  if (Number.isFinite(updatedAtTime)) {
-    return updatedAtTime;
-  }
-  const createdAtTime = Date.parse(project.createdAt);
-  return Number.isFinite(createdAtTime) ? createdAtTime : 0;
-}
-
-function shouldReplaceDuplicateMember(input: {
-  existingMember: Project;
-  candidateMember: Project;
-  primaryEnvironmentId: EnvironmentId | null;
-}): boolean {
-  if (
-    input.primaryEnvironmentId !== null &&
-    input.existingMember.environmentId !== input.primaryEnvironmentId &&
-    input.candidateMember.environmentId === input.primaryEnvironmentId
-  ) {
-    return true;
-  }
-
-  const existingFreshness = getProjectFreshnessTime(input.existingMember);
-  const candidateFreshness = getProjectFreshnessTime(input.candidateMember);
-  if (candidateFreshness !== existingFreshness) {
-    return candidateFreshness > existingFreshness;
-  }
-
-  return input.candidateMember.id > input.existingMember.id;
-}
-
-function collectProjectWinnersByPhysicalKey(input: {
-  projects: ReadonlyArray<Project>;
-  settings: ProjectGroupingSettings;
-  primaryEnvironmentId: EnvironmentId | null;
-}): Map<string, SidebarProjectGroupCandidate> {
-  const winnersByPhysicalKey = new Map<string, SidebarProjectGroupCandidate>();
-  for (const project of input.projects) {
-    const logicalKey = deriveLogicalProjectKeyFromSettings(project, input.settings);
-    const physicalProjectKey = derivePhysicalProjectKey(project);
-    const existing = winnersByPhysicalKey.get(physicalProjectKey);
-    if (!existing) {
-      winnersByPhysicalKey.set(physicalProjectKey, { logicalKey, project });
-      continue;
-    }
-    if (
-      shouldReplaceDuplicateMember({
-        existingMember: existing.project,
-        candidateMember: project,
-        primaryEnvironmentId: input.primaryEnvironmentId,
-      })
-    ) {
-      winnersByPhysicalKey.set(physicalProjectKey, { logicalKey, project });
-    }
-  }
-  return winnersByPhysicalKey;
-}
-
 export function buildPhysicalToLogicalProjectKeyMap(input: {
   projects: ReadonlyArray<Project>;
   settings: ProjectGroupingSettings;
   primaryEnvironmentId: EnvironmentId | null;
 }): Map<string, string> {
   const mapping = new Map<string, string>();
-  for (const [physicalProjectKey, winner] of collectProjectWinnersByPhysicalKey(input)) {
-    mapping.set(physicalProjectKey, winner.logicalKey);
+  const groups = buildProjectGroups({
+    projects: input.projects,
+    settings: input.settings,
+    preferredEnvironmentId: input.primaryEnvironmentId,
+  });
+  for (const group of groups) {
+    for (const member of group.members) {
+      mapping.set(member.physicalProjectKey, group.key);
+    }
   }
   return mapping;
 }
@@ -126,63 +64,28 @@ export function buildSidebarProjectSnapshots(input: {
   // legacy behavior.
   isDesktopLocalEnvironment?: (environmentId: EnvironmentId) => boolean;
 }): SidebarProjectSnapshot[] {
-  const winnersByPhysicalKey = collectProjectWinnersByPhysicalKey(input);
-  const groupedMembers = new Map<string, SidebarProjectGroupMember[]>();
-  for (const { logicalKey, project } of winnersByPhysicalKey.values()) {
-    const member: SidebarProjectGroupMember = {
-      ...project,
-      physicalProjectKey: derivePhysicalProjectKey(project),
-      environmentLabel: input.resolveEnvironmentLabel(project.environmentId),
-      isStandalone: isStandaloneProject({
-        id: project.id,
-        workspaceRoot: project.workspaceRoot,
+  return buildProjectGroups({
+    projects: input.projects,
+    settings: input.settings,
+    preferredEnvironmentId: input.primaryEnvironmentId,
+  }).map((group): SidebarProjectSnapshot => {
+    const members = group.members.map(
+      ({ physicalProjectKey, project }): SidebarProjectGroupMember => ({
+        ...project,
+        physicalProjectKey,
+        environmentLabel: input.resolveEnvironmentLabel(project.environmentId),
+        isStandalone: isStandaloneProject({
+          id: project.id,
+          workspaceRoot: project.workspaceRoot,
+        }),
       }),
-    };
-    const existingMembers = groupedMembers.get(logicalKey);
-    if (existingMembers) {
-      existingMembers.push(member);
-    } else {
-      groupedMembers.set(logicalKey, [member]);
-    }
-  }
-
-  const projectRefsByLogicalKey = new Map<string, ScopedProjectRef[]>();
-  const seenProjectRefs = new Set<string>();
-  for (const project of input.projects) {
-    const physicalProjectKey = derivePhysicalProjectKey(project);
-    const logicalKey =
-      winnersByPhysicalKey.get(physicalProjectKey)?.logicalKey ??
-      deriveLogicalProjectKeyFromSettings(project, input.settings);
-    const projectRefKey = `${project.environmentId}:${project.id}`;
-    if (seenProjectRefs.has(projectRefKey)) continue;
-    seenProjectRefs.add(projectRefKey);
-
-    const projectRef = scopeProjectRef(project.environmentId, project.id);
-    const existingRefs = projectRefsByLogicalKey.get(logicalKey);
-    if (existingRefs) {
-      existingRefs.push(projectRef);
-    } else {
-      projectRefsByLogicalKey.set(logicalKey, [projectRef]);
-    }
-  }
-
-  const result: SidebarProjectSnapshot[] = [];
-  const seen = new Set<string>();
-  for (const project of input.projects) {
-    const logicalKey = deriveLogicalProjectKeyFromSettings(project, input.settings);
-    if (seen.has(logicalKey)) {
-      continue;
-    }
-    seen.add(logicalKey);
-
-    const members = groupedMembers.get(logicalKey) ?? [];
+    );
     const representative =
-      (input.primaryEnvironmentId
-        ? members.find((member) => member.environmentId === input.primaryEnvironmentId)
-        : null) ?? members[0];
-    if (!representative) {
-      continue;
-    }
+      members.find(
+        (member) =>
+          member.environmentId === group.representative.environmentId &&
+          member.id === group.representative.id,
+      ) ?? members[0]!;
 
     const hasLocal =
       input.primaryEnvironmentId !== null &&
@@ -203,29 +106,24 @@ export function buildSidebarProjectSnapshots(input: {
       remoteMembers.length > 0 &&
       remoteMembers.every((member) => isDesktopLocal(member.environmentId));
 
-    result.push({
+    const isStandalone = members.some((member) => member.isStandalone);
+
+    return {
       ...representative,
-      projectKey: logicalKey,
-      displayName: representative.isStandalone
-        ? STANDALONE_PROJECT_TITLE
-        : members.length > 1
-          ? deriveProjectGroupLabel({
-              representative,
-              members,
-            })
-          : representative.title,
-      isStandalone: members.some((member) => member.isStandalone),
+      projectKey: group.key,
+      // Scratch/standalone groups always show the fixed title, never the
+      // upstream-derived group label (which would leak a real thread title).
+      displayName: isStandalone ? STANDALONE_PROJECT_TITLE : group.label,
+      isStandalone,
       groupedProjectCount: members.length,
       environmentPresence:
         hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",
       allRemoteMembersAreDesktopLocal,
       memberProjects: members,
-      memberProjectRefs: projectRefsByLogicalKey.get(logicalKey) ?? [],
+      memberProjectRefs: group.memberProjectRefs,
       remoteEnvironmentLabels,
-    });
-  }
-
-  return result;
+    };
+  });
 }
 
 export function buildSidebarProjectPickerEntries(input: {

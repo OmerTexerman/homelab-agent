@@ -47,7 +47,7 @@ import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.
 // never be renumbered. Upstream's 031 (AuthAuthorizationScopes) and 032
 // (AuthPairingProofKeyThumbprint) were adopted in a previous sync as fork ids
 // 36 and 41; upstream migrations that are genuinely new in this sync are
-// appended after the fork block as ids 42+.
+// appended after the fork block as ids 46+.
 import Migration0031 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
 import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
 import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
@@ -63,6 +63,12 @@ import Migration0042 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0043 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 import Migration0044 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0045 from "./Migrations/036_ProjectionThreadsPinned.ts";
+// Upstream migrations new in the 2026-08-23 sync, appended as fork ids 46+.
+import Migration0046 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+import Migration0047 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
+import Migration0048 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
+import Migration0049 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
+import Migration0050 from "./Migrations/041_AuthSessionClientConnection.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -120,6 +126,11 @@ export const migrationEntries = [
   [43, "ProjectionThreadsSnoozed", Migration0043],
   [44, "ProjectionThreadTitleRegeneration", Migration0044],
   [45, "ProjectionThreadsPinned", Migration0045],
+  [46, "ProjectionTurnsKeysetIndex", Migration0046],
+  [47, "ProjectionThreadsPinOrderKey", Migration0047],
+  [48, "ProjectionProjectsDefaultThreadEnvMode", Migration0048],
+  [49, "ProjectionProjectFaviconPath", Migration0049],
+  [50, "AuthSessionClientConnection", Migration0050],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -6,9 +6,11 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
+  ModelSelection,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -21,6 +23,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  isProviderSendTurnSupportedImageMimeType,
 } from "./orchestration.ts";
 import { ProjectMemoryId } from "./projectMemory.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -50,6 +53,19 @@ function getOptionValue(
 ): unknown {
   return options?.find((option) => option.id === id)?.value;
 }
+const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
+
+it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "Failed to create worktree.",
+      bootstrapThreadDisposition: "deleted",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "deleted");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -777,3 +793,124 @@ it.effect("preserves proposed plan implementation metadata when present", () =>
     assert.strictEqual(parsed.implementationThreadId, "thread-2");
   }),
 );
+
+// ── ModelSelection: instance-keyed wire shape + legacy decoder ────────
+//
+// `ModelSelection` is routing-keyed on `instanceId` — never a driver kind.
+// Persisted and in-flight payloads from pre-instance builds carry a
+// `provider` field whose value was a driver kind; those payloads are migrated
+// at the wire boundary by
+// promoting `provider` to the default instance id for that driver
+// (built-in drivers use the driver kind slug as their default instance id, so
+// the migration is a 1:1 rename).
+//
+// These tests pin the rollback/fork tolerance invariant: legacy payloads
+// decode cleanly for fork-provided drivers, and the decoded form uses
+// `instanceId` uniformly regardless of origin.
+
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+const encodeModelSelection = Schema.encodeUnknownEffect(ModelSelection);
+
+it.effect("ModelSelection migrates legacy `provider` field to `instanceId`", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      model: "gpt-5-codex",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex"));
+    assert.strictEqual(parsed.model, "gpt-5-codex");
+    assert.deepStrictEqual(parsed.options, [{ id: "reasoningEffort", value: "high" }]);
+  }),
+);
+
+it.effect("ModelSelection accepts an explicit instanceId routing key", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      instanceId: "codex_personal",
+      model: "gpt-5-codex",
+    });
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex_personal"));
+  }),
+);
+
+it.effect("ModelSelection prefers explicit instanceId over legacy provider", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      instanceId: "codex_personal",
+      model: "gpt-5-codex",
+    });
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex_personal"));
+  }),
+);
+
+it.effect(
+  "ModelSelection decodes unknown driver kinds via legacy provider (rollback / fork invariant)",
+  () =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeModelSelection({
+        provider: "ollama",
+        model: "llama3:70b",
+        options: [{ id: "temperature", value: "0.4" }],
+      });
+      assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("ollama"));
+      assert.strictEqual(parsed.model, "llama3:70b");
+    }),
+);
+
+it.effect("ModelSelection encodes to the canonical instanceId wire form", () =>
+  Effect.gen(function* () {
+    const decoded = yield* decodeModelSelection({
+      provider: "ollama",
+      model: "llama3:70b",
+      options: [{ id: "temperature", value: "0.4" }],
+    });
+    const encoded = yield* encodeModelSelection(decoded);
+    assert.deepStrictEqual(encoded, {
+      instanceId: "ollama",
+      model: "llama3:70b",
+      options: [{ id: "temperature", value: "0.4" }],
+    });
+  }),
+);
+
+it.effect("ModelSelection rejects malformed instance ids", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeModelSelection({
+        instanceId: "1invalid", // must start with a letter
+        model: "x",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("project favicon overrides accept only supported image files", () =>
+  Effect.gen(function* () {
+    const valid = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-favicon",
+      projectId: "project-1",
+      faviconPath: "brand/icon.svg",
+    });
+    assert.strictEqual(valid.type, "project.meta.update");
+
+    const invalid = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "project.meta.update",
+        commandId: "cmd-project-secret",
+        projectId: "project-1",
+        faviconPath: ".env",
+      }),
+    );
+    assert.strictEqual(invalid._tag, "Failure");
+  }),
+);
+
+it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects svg", () => {
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});
