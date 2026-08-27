@@ -109,9 +109,14 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
-import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import {
+  environmentServerConfigsAtom,
+  primaryServerKeybindingsAtom,
+  primaryServerProvidersAtom,
+} from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
+import { standaloneThreadEnvironment } from "../state/homelabOrchestration";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
@@ -121,7 +126,9 @@ import {
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import { cn } from "~/lib/utils";
+import { resolveFallbackModelSelection } from "../lib/defaultModelSelection";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
+import { cn, newCommandId, newThreadId } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   animatePinnedLayoutChanges,
@@ -1828,6 +1835,68 @@ export default function Sidebar() {
   );
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // Fork: scratch threads have no project, so they're the only way to start a
+  // thread when the sidebar's "New thread" button would otherwise have no
+  // project to create one in.
+  const createStandaloneThreadCommand = useAtomCommand(standaloneThreadEnvironment.create, {
+    reportFailure: false,
+  });
+  const serverProvidersForFallbackModel = useAtomValue(primaryServerProvidersAtom);
+  const standaloneFallbackModelSelection = useMemo(
+    () => resolveFallbackModelSelection(serverProvidersForFallbackModel),
+    [serverProvidersForFallbackModel],
+  );
+  const createStandaloneThread = useCallback(async () => {
+    if (primaryEnvironmentId === null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: HOMELAB_PRODUCT_COPY.serverConnection.unavailableTitle,
+          description: HOMELAB_PRODUCT_COPY.serverConnection.noRuntimeServerDescription,
+        }),
+      );
+      return;
+    }
+    const threadId = newThreadId();
+    const result = await createStandaloneThreadCommand({
+      environmentId: primaryEnvironmentId,
+      input: {
+        type: "thread.standalone.create",
+        commandId: newCommandId(),
+        threadId,
+        title: HOMELAB_PRODUCT_COPY.standalone.newThreadAction,
+        modelSelection: standaloneFallbackModelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to create scratch thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return;
+    }
+    if (isMobile) setOpenMobile(false);
+    await router.navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
+    });
+  }, [
+    createStandaloneThreadCommand,
+    isMobile,
+    primaryEnvironmentId,
+    router,
+    setOpenMobile,
+    standaloneFallbackModelSelection,
+  ]);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -3384,6 +3453,13 @@ export default function Sidebar() {
   // for multi-project setups.
   const handleNewThreadClick = useCallback(
     (event?: ReactMouseEvent) => {
+      // No real projects yet: there's nothing to pick or create a thread in,
+      // so fall back to a scratch thread instead of leaving the button dead.
+      if (projectGroups.length === 0) {
+        if (isMobile) setOpenMobile(false);
+        void createStandaloneThread();
+        return;
+      }
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
@@ -3400,7 +3476,7 @@ export default function Sidebar() {
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [createStandaloneThread, isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -3480,7 +3556,6 @@ export default function Sidebar() {
                         type="button"
                         className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
                         aria-label="New thread"
                       />
                     }
@@ -3492,7 +3567,9 @@ export default function Sidebar() {
                     />
                   </TooltipTrigger>
                   <TooltipPopup side="right">
-                    {projectGroups.length > 1 ? (
+                    {projectGroups.length === 0 ? (
+                      "New scratch thread (no project needed)"
+                    ) : projectGroups.length > 1 ? (
                       <span className="flex flex-col gap-0.5">
                         <span>
                           {newThreadShortcutLabel
@@ -3961,14 +4038,24 @@ export default function Sidebar() {
               {projects.length === 0 ? (
                 <>
                   <span>No projects yet</span>
-                  <button
-                    type="button"
-                    onClick={openAddProjectCommandPalette}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                  >
-                    <PlusIcon className="-mx-0.5 size-3" />
-                    Add project
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={openAddProjectCommandPalette}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                    >
+                      <PlusIcon className="-mx-0.5 size-3" />
+                      Add project
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void createStandaloneThread()}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                    >
+                      <SquarePenIcon className="-mx-0.5 size-3" />
+                      New scratch thread
+                    </button>
+                  </div>
                 </>
               ) : scopedProjectGroup ? (
                 `No threads in ${scopedProjectGroup.displayName} yet`
