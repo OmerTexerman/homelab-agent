@@ -1,11 +1,16 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type {
   EnvironmentId,
+  ModelSelection,
   ProjectId,
   ScopedProjectRef,
-  ThreadRuntimeMode,
 } from "@t3tools/contracts";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
+
+type ComposerModelSelectionState = Pick<
+  ComposerThreadDraftState,
+  "activeProvider" | "modelSelectionByProvider" | "modelSelectionExplicit"
+>;
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
@@ -19,7 +24,6 @@ interface NewThreadHandler {
       branch?: string | null;
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
-      runtimeSelectionMode?: ThreadRuntimeMode;
       startFromOrigin?: boolean;
     },
     // The opened draft's identity, which most callers have no use for.
@@ -38,6 +42,30 @@ export function resolveNewDraftStartFromOrigin(input: {
   newWorktreesStartFromOrigin: boolean;
 }): boolean {
   return input.envMode === "worktree" && input.newWorktreesStartFromOrigin;
+}
+
+export function resolveNewThreadModelSelectionOverride(input: {
+  readonly projectDefaultSelection: ModelSelection | null;
+  readonly carrySelection: ModelSelection | null;
+  readonly carrySourceDraftId: string | null;
+  readonly destinationDraftId: string;
+}): ModelSelection | null {
+  return (
+    input.projectDefaultSelection ??
+    (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection)
+  );
+}
+
+export function hasExplicitComposerModelSelection(
+  draft: ComposerModelSelectionState | null | undefined,
+): boolean {
+  const activeProvider = draft?.activeProvider;
+  return (
+    draft?.modelSelectionExplicit === true &&
+    activeProvider !== null &&
+    activeProvider !== undefined &&
+    draft.modelSelectionByProvider[activeProvider] !== undefined
+  );
 }
 
 export function resolveThreadActionProjectRef(
@@ -61,23 +89,6 @@ export function resolveThreadActionProjectRef(
 // reused checkouts and branches. Explicit affordances (branch toolbar's
 // "new thread in this worktree") pass those options to handleNewThread
 // directly instead.
-export async function startNewThreadInProjectFromContext(
-  context: ChatThreadActionContext,
-  projectRef: ScopedProjectRef,
-): Promise<void> {
-  await context.handleNewThread(projectRef);
-}
-
-// Homelab fork: an isolated-runtime thread carries only the runtime
-// selection; workspace context comes from the configured defaults, matching
-// startNewThreadInProjectFromContext.
-export async function startNewIsolatedThreadInProjectFromContext(
-  context: ChatThreadActionContext,
-  projectRef: ScopedProjectRef,
-): Promise<void> {
-  await context.handleNewThread(projectRef, { runtimeSelectionMode: "isolated" });
-}
-
 export async function startNewThreadFromContext(
   context: ChatThreadActionContext,
 ): Promise<boolean> {
@@ -87,17 +98,5 @@ export async function startNewThreadFromContext(
   }
 
   await context.handleNewThread(projectRef);
-  return true;
-}
-
-export async function startNewIsolatedThreadFromContext(
-  context: ChatThreadActionContext,
-): Promise<boolean> {
-  const projectRef = resolveThreadActionProjectRef(context);
-  if (!projectRef) {
-    return false;
-  }
-
-  await startNewIsolatedThreadInProjectFromContext(context, projectRef);
   return true;
 }

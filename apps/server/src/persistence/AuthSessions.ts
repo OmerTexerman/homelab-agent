@@ -21,15 +21,6 @@ import {
   PersistenceSqlError,
 } from "./Errors.ts";
 
-/**
- * `user` sessions belong to devices people paired and show up in
- * Devices & Sessions; `internal` sessions are machinery (for example
- * thread-runtime bearer tokens) and stay out of user-facing lists and
- * bulk revocation.
- */
-export const AuthSessionVisibility = Schema.Literals(["user", "internal"]);
-export type AuthSessionVisibility = typeof AuthSessionVisibility.Type;
-
 export const AuthSessionClientMetadataRecord = Schema.Struct({
   label: Schema.NullOr(Schema.String),
   ipAddress: Schema.NullOr(Schema.String),
@@ -45,7 +36,6 @@ export const AuthSessionRecord = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
-  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -59,12 +49,18 @@ export const CreateAuthSessionInput = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
-  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
+
+export const CreateReplacingActiveAuthSessionInput = Schema.Struct({
+  session: CreateAuthSessionInput,
+  revokedAt: Schema.DateTimeUtcFromString,
+});
+export type CreateReplacingActiveAuthSessionInput =
+  typeof CreateReplacingActiveAuthSessionInput.Type;
 
 export const GetAuthSessionByIdInput = Schema.Struct({
   sessionId: AuthSessionId,
@@ -73,6 +69,7 @@ export type GetAuthSessionByIdInput = typeof GetAuthSessionByIdInput.Type;
 
 export const ListActiveAuthSessionsInput = Schema.Struct({
   now: Schema.DateTimeUtcFromString,
+  connectedSessionIds: Schema.optionalKey(Schema.Array(AuthSessionId)),
 });
 export type ListActiveAuthSessionsInput = typeof ListActiveAuthSessionsInput.Type;
 
@@ -107,6 +104,12 @@ export class AuthSessionRepository extends Context.Service<
     readonly create: (
       input: CreateAuthSessionInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    readonly createReplacingActive: (
+      input: CreateReplacingActiveAuthSessionInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    readonly createIfAbsent: (
+      input: CreateAuthSessionInput,
+    ) => Effect.Effect<void, AuthSessionRepositoryError>;
     readonly getById: (
       input: GetAuthSessionByIdInput,
     ) => Effect.Effect<Option.Option<AuthSessionRecord>, AuthSessionRepositoryError>;
@@ -133,7 +136,6 @@ const AuthSessionDbRow = Schema.Struct({
   subject: Schema.String,
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   method: ServerAuthSessionMethod,
-  visibility: AuthSessionVisibility,
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
   clientUserAgent: Schema.NullOr(Schema.String),
@@ -151,7 +153,6 @@ const AuthSessionRawDbRow = Schema.Struct({
   subject: Schema.Unknown,
   scopes: Schema.Unknown,
   method: Schema.Unknown,
-  visibility: Schema.Unknown,
   clientLabel: Schema.Unknown,
   clientIpAddress: Schema.Unknown,
   clientUserAgent: Schema.Unknown,
@@ -172,7 +173,6 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     subject: row.subject,
     scopes: row.scopes,
     method: row.method,
-    visibility: row.visibility,
     client: {
       label: row.clientLabel,
       ipAddress: row.clientIpAddress,
@@ -203,19 +203,20 @@ function toPersistenceSqlOrDecodeError(
         });
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const createSessionRow = SqlSchema.void({
-    Request: CreateAuthSessionInput,
-    execute: (input) =>
-      sql`
+  const insertSessionRow = (ignoreExisting: boolean) =>
+    SqlSchema.void({
+      Request: CreateAuthSessionInput,
+      execute: (input) =>
+        sql`
         INSERT INTO auth_sessions (
           session_id,
           subject,
           scopes,
           method,
-          visibility,
           client_label,
           client_ip_address,
           client_user_agent,
@@ -231,7 +232,6 @@ export const make = Effect.gen(function* () {
           ${input.subject},
           ${JSON.stringify(input.scopes)},
           ${input.method},
-          ${input.visibility},
           ${input.client.label},
           ${input.client.ipAddress},
           ${input.client.userAgent},
@@ -242,8 +242,11 @@ export const make = Effect.gen(function* () {
           ${input.expiresAt},
           NULL
         )
+        ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,
-  });
+    });
+  const createSessionRow = insertSessionRow(false);
+  const createSessionRowIfAbsent = insertSessionRow(true);
 
   const getSessionRowById = SqlSchema.findOneOption({
     Request: GetAuthSessionByIdInput,
@@ -255,7 +258,6 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
-          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -271,17 +273,31 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const revokeActiveSessionsForReplacement = SqlSchema.findAll({
+    Request: CreateReplacingActiveAuthSessionInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ session, revokedAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET revoked_at = ${revokedAt}
+        WHERE subject = ${session.subject}
+          AND method = ${session.method}
+          AND revoked_at IS NULL
+          AND expires_at > ${revokedAt}
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
   const listActiveSessionRows = SqlSchema.findAll({
     Request: ListActiveAuthSessionsInput,
     Result: AuthSessionRawDbRow,
-    execute: ({ now }) =>
+    execute: ({ now, connectedSessionIds = [] }) =>
       sql`
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
-          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -294,8 +310,7 @@ export const make = Effect.gen(function* () {
           revoked_at AS "revokedAt"
         FROM auth_sessions
         WHERE revoked_at IS NULL
-          AND expires_at > ${now}
-          AND visibility = 'user'
+          AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
         ORDER BY issued_at DESC, session_id DESC
       `,
   });
@@ -347,7 +362,6 @@ export const make = Effect.gen(function* () {
         SET revoked_at = ${revokedAt}
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
-          AND visibility = 'user'
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -358,6 +372,40 @@ export const make = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.create:query",
           "AuthSessionRepository.create:encodeRequest",
+          { sessionId: input.sessionId },
+        ),
+      ),
+    );
+
+  const createReplacingActive: AuthSessionRepository["Service"]["createReplacingActive"] = (
+    input,
+  ) =>
+    sql
+      .withTransaction(
+        revokeActiveSessionsForReplacement(input).pipe(
+          Effect.flatMap((revokedRows) =>
+            createSessionRow(input.session).pipe(
+              Effect.as(revokedRows.map((row) => row.sessionId)),
+            ),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "AuthSessionRepository.createReplacingActive:query",
+            "AuthSessionRepository.createReplacingActive:encodeRequest",
+            { sessionId: input.session.sessionId },
+          ),
+        ),
+      );
+
+  const createIfAbsent: AuthSessionRepository["Service"]["createIfAbsent"] = (input) =>
+    createSessionRowIfAbsent(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.createIfAbsent:query",
+          "AuthSessionRepository.createIfAbsent:encodeRequest",
           { sessionId: input.sessionId },
         ),
       ),
@@ -374,7 +422,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.flatMap((rowOption) =>
         Option.match(rowOption, {
-          onNone: () => Effect.succeed(Option.none()),
+          onNone: () => Effect.succeedNone,
           onSome: (row) =>
             decodeAuthSessionDbRow(row).pipe(
               Effect.mapError((cause) =>
@@ -462,6 +510,8 @@ export const make = Effect.gen(function* () {
 
   return {
     create,
+    createReplacingActive,
+    createIfAbsent,
     getById,
     listActive,
     revoke,

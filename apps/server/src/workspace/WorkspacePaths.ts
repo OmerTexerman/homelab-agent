@@ -6,7 +6,6 @@
  *
  * @module WorkspacePaths
  */
-import * as NodeOS from "node:os";
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -15,12 +14,9 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import {
-  createLogicalProjectWorkspaceRoot,
-  parseLogicalProjectWorkspaceRoot,
-} from "@t3tools/shared/workspace";
+import { expandHomePathWith } from "../pathExpansion.ts";
 
-export class WorkspaceRootNotExistsError extends Schema.TaggedErrorClass<WorkspaceRootNotExistsError>()(
+export class WorkspaceRootNotExistsError extends Schema.TaggedError<WorkspaceRootNotExistsError>()(
   "WorkspaceRootNotExistsError",
   {
     workspaceRoot: Schema.String,
@@ -32,7 +28,7 @@ export class WorkspaceRootNotExistsError extends Schema.TaggedErrorClass<Workspa
   }
 }
 
-export class WorkspaceRootCreateFailedError extends Schema.TaggedErrorClass<WorkspaceRootCreateFailedError>()(
+export class WorkspaceRootCreateFailedError extends Schema.TaggedError<WorkspaceRootCreateFailedError>()(
   "WorkspaceRootCreateFailedError",
   {
     workspaceRoot: Schema.String,
@@ -45,7 +41,7 @@ export class WorkspaceRootCreateFailedError extends Schema.TaggedErrorClass<Work
   }
 }
 
-export class WorkspaceRootStatFailedError extends Schema.TaggedErrorClass<WorkspaceRootStatFailedError>()(
+export class WorkspaceRootStatFailedError extends Schema.TaggedError<WorkspaceRootStatFailedError>()(
   "WorkspaceRootStatFailedError",
   {
     workspaceRoot: Schema.String,
@@ -59,7 +55,7 @@ export class WorkspaceRootStatFailedError extends Schema.TaggedErrorClass<Worksp
   }
 }
 
-export class WorkspaceRootNotDirectoryError extends Schema.TaggedErrorClass<WorkspaceRootNotDirectoryError>()(
+export class WorkspaceRootNotDirectoryError extends Schema.TaggedError<WorkspaceRootNotDirectoryError>()(
   "WorkspaceRootNotDirectoryError",
   {
     workspaceRoot: Schema.String,
@@ -71,21 +67,7 @@ export class WorkspaceRootNotDirectoryError extends Schema.TaggedErrorClass<Work
   }
 }
 
-export class LogicalWorkspaceRootError extends Schema.TaggedErrorClass<LogicalWorkspaceRootError>()(
-  "LogicalWorkspaceRootError",
-  {
-    workspaceRoot: Schema.String,
-  },
-) {
-  override get message(): string {
-    return (
-      `Logical project roots are not filesystem paths: ${this.workspaceRoot}. ` +
-      "Use the thread workspace for per-thread files instead."
-    );
-  }
-}
-
-export class WorkspacePathOutsideRootError extends Schema.TaggedErrorClass<WorkspacePathOutsideRootError>()(
+export class WorkspacePathOutsideRootError extends Schema.TaggedError<WorkspacePathOutsideRootError>()(
   "WorkspacePathOutsideRootError",
   {
     workspaceRoot: Schema.String,
@@ -102,7 +84,6 @@ export const WorkspacePathsError = Schema.Union([
   WorkspaceRootCreateFailedError,
   WorkspaceRootStatFailedError,
   WorkspaceRootNotDirectoryError,
-  LogicalWorkspaceRootError,
   WorkspacePathOutsideRootError,
 ]);
 export type WorkspacePathsError = typeof WorkspacePathsError.Type;
@@ -123,22 +104,6 @@ export class WorkspacePaths extends Context.Service<
       | WorkspaceRootNotDirectoryError
     >;
     /**
-     * Resolve a workspace root to a concrete filesystem directory.
-     *
-     * Logical project roots are intentionally rejected here because they are
-     * identifiers, not real paths on disk.
-     */
-    readonly resolveFilesystemWorkspaceRoot: (
-      workspaceRoot: string,
-    ) => Effect.Effect<
-      string,
-      | WorkspaceRootNotExistsError
-      | WorkspaceRootCreateFailedError
-      | WorkspaceRootStatFailedError
-      | WorkspaceRootNotDirectoryError
-      | LogicalWorkspaceRootError
-    >;
-    /**
      * Resolve a relative path within a validated workspace root.
      *
      * Rejects absolute paths and traversal attempts outside the workspace root.
@@ -155,16 +120,6 @@ export class WorkspacePaths extends Context.Service<
 
 function toPosixRelativePath(input: string): string {
   return input.replaceAll("\\", "/");
-}
-
-function expandHomePath(input: string, path: Path.Path): string {
-  if (input === "~") {
-    return NodeOS.homedir();
-  }
-  if (input.startsWith("~/") || input.startsWith("~\\")) {
-    return path.join(NodeOS.homedir(), input.slice(2));
-  }
-  return input;
 }
 
 export const make = Effect.gen(function* () {
@@ -197,12 +152,7 @@ export const make = Effect.gen(function* () {
   const normalizeWorkspaceRoot: WorkspacePaths["Service"]["normalizeWorkspaceRoot"] = Effect.fn(
     "WorkspacePaths.normalizeWorkspaceRoot",
   )(function* (workspaceRoot, options) {
-    const logicalProjectId = parseLogicalProjectWorkspaceRoot(workspaceRoot);
-    if (logicalProjectId) {
-      return createLogicalProjectWorkspaceRoot(logicalProjectId);
-    }
-
-    const normalizedWorkspaceRoot = path.resolve(expandHomePath(workspaceRoot.trim(), path));
+    const normalizedWorkspaceRoot = path.resolve(expandHomePathWith(workspaceRoot.trim(), path));
     let workspaceStat = yield* statWorkspaceRoot(
       workspaceRoot,
       normalizedWorkspaceRoot,
@@ -240,17 +190,6 @@ export const make = Effect.gen(function* () {
     return normalizedWorkspaceRoot;
   });
 
-  const resolveFilesystemWorkspaceRoot: WorkspacePaths["Service"]["resolveFilesystemWorkspaceRoot"] =
-    Effect.fn("WorkspacePaths.resolveFilesystemWorkspaceRoot")(function* (workspaceRoot) {
-      const normalizedWorkspaceRoot = yield* normalizeWorkspaceRoot(workspaceRoot);
-      if (parseLogicalProjectWorkspaceRoot(normalizedWorkspaceRoot)) {
-        return yield* new LogicalWorkspaceRootError({
-          workspaceRoot: normalizedWorkspaceRoot,
-        });
-      }
-      return normalizedWorkspaceRoot;
-    });
-
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =
     Effect.fn("WorkspacePaths.resolveRelativePathWithinRoot")(function* (input) {
       const normalizedInputPath = input.relativePath.trim();
@@ -282,11 +221,7 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  return WorkspacePaths.of({
-    normalizeWorkspaceRoot,
-    resolveFilesystemWorkspaceRoot,
-    resolveRelativePathWithinRoot,
-  });
+  return WorkspacePaths.of({ normalizeWorkspaceRoot, resolveRelativePathWithinRoot });
 });
 
 export const layer = Layer.effect(WorkspacePaths, make);

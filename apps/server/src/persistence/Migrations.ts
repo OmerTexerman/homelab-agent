@@ -1,16 +1,15 @@
 /**
- * MigrationsLive - Migration runner with inline loader
+ * Migration runner with an inline loader.
  *
  * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
- * Migrations run automatically when the MigrationLayer is provided,
- * ensuring the database schema is always up-to-date before the application starts.
+ * `runMigrations` is called by the SQLite persistence layer at startup, so the
+ * schema is always up to date before the application starts.
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -43,32 +42,30 @@ import Migration0027 from "./Migrations/027_ProviderSessionRuntimeInstanceId.ts"
 import Migration0028 from "./Migrations/028_ProjectionThreadSessionInstanceId.ts";
 import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexes.ts";
 import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
-// Fork migrations 31-41 shipped with these ids in homelab databases and must
-// never be renumbered. Upstream's 031 (AuthAuthorizationScopes) and 032
-// (AuthPairingProofKeyThumbprint) were adopted in a previous sync as fork ids
-// 36 and 41; upstream migrations that are genuinely new in this sync are
-// appended after the fork block as ids 46+.
-import Migration0031 from "./Migrations/023_ProjectionPendingTurnIntent.ts";
-import Migration0032 from "./Migrations/024_RepairInterruptedClaudeTurns.ts";
-import Migration0033 from "./Migrations/025_AuthSessionVisibility.ts";
-import Migration0034 from "./Migrations/034_ProjectRuntimeAssignments.ts";
-import Migration0035 from "./Migrations/035_ProjectMemory.ts";
-import Migration0036 from "./Migrations/031_AuthAuthorizationScopes.ts";
-import Migration0037 from "./Migrations/037_RepairProjectionThreadShellSummarySchema.ts";
-import Migration0038 from "./Migrations/038_BackfillAuthSessionVisibility.ts";
-import Migration0039 from "./Migrations/039_DeriveThreadRuntimeBindings.ts";
-import Migration0040 from "./Migrations/040_HomelabSkills.ts";
-import Migration0041 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
-import Migration0042 from "./Migrations/033_ProjectionThreadsSettled.ts";
-import Migration0043 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
-import Migration0044 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
-import Migration0045 from "./Migrations/036_ProjectionThreadsPinned.ts";
-// Upstream migrations new in the 2026-08-23 sync, appended as fork ids 46+.
-import Migration0046 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
-import Migration0047 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
-import Migration0048 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
-import Migration0049 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
-import Migration0050 from "./Migrations/041_AuthSessionClientConnection.ts";
+import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
+import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
+import Migration0033 from "./Migrations/033_ProjectionThreadsSettled.ts";
+import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
+import Migration0037 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+import Migration0038 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
+import Migration0039 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
+import Migration0040 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
+import Migration0041 from "./Migrations/041_AuthSessionClientConnection.ts";
+import Migration0042 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
+import Migration0043 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
+import Migration0044 from "./Migrations/044_ClearAutomaticProjectModelDefaults.ts";
+import Migration0045 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
+import Migration0046 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
+import Migration0047 from "./Migrations/047_ProjectionProjectIcon.ts";
+import Migration0048 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
+import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
+import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
+import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
+import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -80,7 +77,7 @@ import Migration0050 from "./Migrations/041_AuthSessionClientConnection.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -111,31 +108,35 @@ export const migrationEntries = [
   [28, "ProjectionThreadSessionInstanceId", Migration0028],
   [29, "ProjectionThreadDetailOrderingIndexes", Migration0029],
   [30, "ProjectionThreadShellArchiveIndexes", Migration0030],
-  [31, "ProjectionPendingTurnIntent", Migration0031],
-  [32, "RepairInterruptedClaudeTurns", Migration0032],
-  [33, "AuthSessionVisibility", Migration0033],
-  [34, "ProjectRuntimeAssignments", Migration0034],
-  [35, "ProjectMemory", Migration0035],
-  [36, "AuthAuthorizationScopes", Migration0036],
-  [37, "RepairProjectionThreadShellSummarySchema", Migration0037],
-  [38, "BackfillAuthSessionVisibility", Migration0038],
-  [39, "DeriveThreadRuntimeBindings", Migration0039],
-  [40, "HomelabSkills", Migration0040],
-  [41, "AuthPairingProofKeyThumbprint", Migration0041],
-  [42, "ProjectionThreadsSettled", Migration0042],
-  [43, "ProjectionThreadsSnoozed", Migration0043],
-  [44, "ProjectionThreadTitleRegeneration", Migration0044],
-  [45, "ProjectionThreadsPinned", Migration0045],
-  [46, "ProjectionTurnsKeysetIndex", Migration0046],
-  [47, "ProjectionThreadsPinOrderKey", Migration0047],
-  [48, "ProjectionProjectsDefaultThreadEnvMode", Migration0048],
-  [49, "ProjectionProjectFaviconPath", Migration0049],
-  [50, "AuthSessionClientConnection", Migration0050],
+  [31, "AuthAuthorizationScopes", Migration0031],
+  [32, "AuthPairingProofKeyThumbprint", Migration0032],
+  [33, "ProjectionThreadsSettled", Migration0033],
+  [34, "ProjectionThreadsSnoozed", Migration0034],
+  [35, "ProjectionThreadTitleRegeneration", Migration0035],
+  [36, "ProjectionThreadsPinned", Migration0036],
+  [37, "ProjectionTurnsKeysetIndex", Migration0037],
+  [38, "ProjectionThreadsPinOrderKey", Migration0038],
+  [39, "ProjectionProjectsDefaultThreadEnvMode", Migration0039],
+  [40, "ProjectionProjectFaviconPath", Migration0040],
+  [41, "AuthSessionClientConnection", Migration0041],
+  [42, "ProjectionThreadLinkedPullRequest", Migration0042],
+  [43, "ProjectionThreadsUnsettledAt", Migration0043],
+  [44, "ClearAutomaticProjectModelDefaults", Migration0044],
+  [45, "ProjectionProjectsAutoPull", Migration0045],
+  [46, "RepairAutomaticSettlementTimestamps", Migration0046],
+  [47, "ProjectionProjectIcon", Migration0047],
+  [48, "ProjectionThreadBranchPullRequest", Migration0048],
+  [49, "ProjectionThreadsActiveOrderKey", Migration0049],
+  [50, "ProjectionThreadPullRequests", Migration0050],
+  [51, "ProjectionThreadMessageContext", Migration0051],
+  [52, "ProjectionThreadTitleState", Migration0052],
+  [53, "PullRequestFilesViewed", Migration0053],
+  [54, "ProjectionThreadsAutoSettleDisabledAt", Migration0054],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries
@@ -174,22 +175,3 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
-
-/**
- * Layer that runs migrations when the layer is built.
- *
- * Use this to ensure migrations run before your application starts.
- * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
- */
-export const MigrationsLive = Layer.effectDiscard(runMigrations());

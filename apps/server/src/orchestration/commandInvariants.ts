@@ -18,26 +18,18 @@ function invariantError(commandType: string, detail: string): OrchestrationComma
   });
 }
 
-export function findThreadById(
+function findThreadById(
   readModel: OrchestrationReadModel,
   threadId: ThreadId,
 ): OrchestrationThread | undefined {
   return readModel.threads.find((thread) => thread.id === threadId);
 }
 
-export function findProjectById(
+function findProjectById(
   readModel: OrchestrationReadModel,
   projectId: ProjectId,
 ): OrchestrationProject | undefined {
   return readModel.projects.find((project) => project.id === projectId);
-}
-
-function findActiveProjectById(
-  readModel: OrchestrationReadModel,
-  projectId: ProjectId,
-): OrchestrationProject | undefined {
-  const project = findProjectById(readModel, projectId);
-  return project?.deletedAt === null ? project : undefined;
 }
 
 export function listThreadsByProjectId(
@@ -47,20 +39,12 @@ export function listThreadsByProjectId(
   return readModel.threads.filter((thread) => thread.projectId === projectId);
 }
 
-function findActiveThreadById(
-  readModel: OrchestrationReadModel,
-  threadId: ThreadId,
-): OrchestrationThread | undefined {
-  const thread = findThreadById(readModel, threadId);
-  return thread?.deletedAt === null ? thread : undefined;
-}
-
 export function requireProject(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
   readonly projectId: ProjectId;
 }): Effect.Effect<OrchestrationProject, OrchestrationCommandInvariantError> {
-  const project = findActiveProjectById(input.readModel, input.projectId);
+  const project = findProjectById(input.readModel, input.projectId);
   if (project) {
     return Effect.succeed(project);
   }
@@ -77,7 +61,7 @@ export function requireProjectAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly projectId: ProjectId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findActiveProjectById(input.readModel, input.projectId)) {
+  if (!findProjectById(input.readModel, input.projectId)) {
     return Effect.void;
   }
   return Effect.fail(
@@ -117,7 +101,7 @@ export function requireThread(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
-  const thread = findActiveThreadById(input.readModel, input.threadId);
+  const thread = findThreadById(input.readModel, input.threadId);
   if (thread) {
     return Effect.succeed(thread);
   }
@@ -135,15 +119,13 @@ export function requireThreadArchived(input: {
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
   return requireThread(input).pipe(
-    Effect.flatMap((thread) =>
-      thread.archivedAt !== null
-        ? Effect.succeed(thread)
-        : Effect.fail(
-            invariantError(
-              input.command.type,
-              `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
-            ),
-          ),
+    Effect.filterOrFail(
+      (thread) => thread.archivedAt !== null,
+      () =>
+        invariantError(
+          input.command.type,
+          `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
+        ),
     ),
   );
 }
@@ -154,15 +136,13 @@ export function requireThreadNotArchived(input: {
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
   return requireThread(input).pipe(
-    Effect.flatMap((thread) =>
-      thread.archivedAt === null
-        ? Effect.succeed(thread)
-        : Effect.fail(
-            invariantError(
-              input.command.type,
-              `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
-            ),
-          ),
+    Effect.filterOrFail(
+      (thread) => thread.archivedAt === null,
+      () =>
+        invariantError(
+          input.command.type,
+          `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
+        ),
     ),
   );
 }
@@ -172,29 +152,17 @@ export function requireThreadAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findActiveThreadById(input.readModel, input.threadId)) {
+  // Thread deletion is a soft delete and a draft keeps its client-minted id
+  // across retries, so only a live row blocks creation. Projectors reset the
+  // thread's rows when the id is created again.
+  const existing = findThreadById(input.readModel, input.threadId);
+  if (existing === undefined || existing.deletedAt !== null) {
     return Effect.void;
   }
   return Effect.fail(
     invariantError(
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
-    ),
-  );
-}
-
-export function requireNonNegativeInteger(input: {
-  readonly commandType: OrchestrationCommand["type"];
-  readonly field: string;
-  readonly value: number;
-}): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (Number.isInteger(input.value) && input.value >= 0) {
-    return Effect.void;
-  }
-  return Effect.fail(
-    invariantError(
-      input.commandType,
-      `${input.field} must be an integer greater than or equal to 0.`,
     ),
   );
 }

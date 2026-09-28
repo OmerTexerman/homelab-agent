@@ -21,10 +21,17 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import * as ModelManifest from "./ModelManifest.ts";
+import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
-import { RuntimeProviderVersionManifest } from "./RuntimeProviderVersionManifest.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
-import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
+import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  makeTargetedProviderUpdateAction,
+  resolveLatestProviderVersion,
+  type ProviderMaintenanceCommandAction,
+  ProviderVersionCache,
+} from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
@@ -48,6 +55,7 @@ export interface ProviderMaintenanceRunnerShape {
       | {
           readonly provider: ProviderDriverKind;
           readonly instanceId?: ProviderInstanceId | undefined;
+          readonly targetVersion?: string | undefined;
         },
   ) => Effect.Effect<ServerProviderUpdatedPayload, ServerProviderUpdateError>;
 }
@@ -74,6 +82,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
     readonly command: string;
     readonly args: ReadonlyArray<string>;
+    readonly env?: NodeJS.ProcessEnv;
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
@@ -84,7 +93,12 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
         // shell. On Linux/macOS (incl. the WSL backend) this is a no-op.
         const resolved = yield* resolveSpawnCommand(input.command, input.args);
         const child = yield* input.spawner
-          .spawn(ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }))
+          .spawn(
+            ChildProcess.make(resolved.command, resolved.args, {
+              shell: resolved.shell,
+              ...(input.env ? { env: input.env, extendEnv: true } : {}),
+            }),
+          )
           .pipe(
             Effect.mapError(
               (cause) =>
@@ -168,19 +182,11 @@ function commandOutput(result: ProviderMaintenanceCommandResult): string | null 
   return truncateText(output, UPDATE_OUTPUT_MAX_BYTES);
 }
 
-function isPermissionFailure(result: ProviderMaintenanceCommandResult): boolean {
-  const output = `${result.stderr}\n${result.stdout}`;
-  return output.includes("EACCES") || output.toLowerCase().includes("permission denied");
-}
-
 function failureMessage(result: ProviderMaintenanceCommandResult): string {
   if (result.timedOut) {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
-    if (isPermissionFailure(result)) {
-      return `Update command exited with code ${result.exitCode} because the server user cannot write to the install location. Install the provider CLI under a user-writable npm prefix for the server user (for example \`npm config set prefix ~/.npm-global\`, reinstall the CLI, and put that bin directory on the service PATH).`;
-    }
     return `Update command exited with code ${result.exitCode}.`;
   }
   return "Update command failed.";
@@ -188,6 +194,10 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
 
 function isOutdatedProvider(provider: ServerProvider | undefined): boolean {
   return provider?.versionAdvisory?.status === "behind_latest";
+}
+
+function isStillInstalled(provider: ServerProvider): boolean {
+  return provider.installed;
 }
 
 function makeUpdateState(input: {
@@ -206,16 +216,19 @@ function makeUpdateState(input: {
   };
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
+  const manifestService = yield* ModelManifest.ModelManifest;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
-  const runtimeProviderVersionManifest = yield* RuntimeProviderVersionManifest;
-  const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
+  const versionCache = yield* ProviderVersionCache;
+  const runMaintenanceCommand = (update: ProviderMaintenanceCommandAction) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
-      command,
-      args,
+      command: update.executable,
+      args: update.args,
+      ...(update.env ? { env: update.env } : {}),
     });
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
     makeAlreadyRunningError: () =>
@@ -268,17 +281,18 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             enrichProviderSnapshotWithVersionAdvisory(
               refreshedProvider,
               maintenanceCapabilities,
-            ).pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
+            ).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+              Effect.provideService(ProviderVersionCache, versionCache),
+            ),
           {
             concurrency: "unbounded",
           },
         ).pipe(
-          Effect.map(
-            (verifiedProviders): VerifiedProviderRefresh => ({
-              providers,
-              verifiedProviders,
-            }),
-          ),
+          Effect.map((verifiedProviders): VerifiedProviderRefresh => ({
+            providers,
+            verifiedProviders,
+          })),
           Effect.catchCause((cause) =>
             Effect.logWarning("Provider post-update version verification failed", {
               provider,
@@ -302,6 +316,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       typeof target === "string"
         ? defaultInstanceIdForDriver(provider)
         : (target.instanceId ?? defaultInstanceIdForDriver(provider));
+    const targetVersion = typeof target === "string" ? undefined : target.targetVersion;
     const targetKey = `instance:${instanceId}`;
     const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
       instanceId,
@@ -330,20 +345,11 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       }),
     ).pipe(Effect.asVoid);
 
-    // The update runs inside the caller's (RPC) fiber, so a dropped websocket
-    // interrupts it after "queued"/"running" was published. Track whether a
-    // terminal state was recorded so the interruption finalizer below can
-    // close out the update state instead of leaving the UI spinning forever.
-    const startedAtRef = yield* Ref.make<string | null>(null);
-    const terminalStateRecordedRef = yield* Ref.make(false);
-
     const runProviderUpdate = Effect.fn("ProviderMaintenanceRunner.runProviderUpdate")(
       function* () {
         const finish = (state: ServerProviderUpdateState) =>
-          setUpdateState(state).pipe(
-            Effect.tap(() => Ref.set(terminalStateRecordedRef, true)),
-            Effect.map((providers) => ({ providers })),
-          );
+          setUpdateState(state).pipe(Effect.map((providers) => ({ providers })));
+        const startedAtRef = yield* Ref.make<string | null>(null);
 
         const runCommandAndVerify = Effect.fn("ProviderMaintenanceRunner.runCommandAndVerify")(
           function* () {
@@ -358,7 +364,63 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               }),
             );
 
-            const result = yield* runMaintenanceCommand(update.executable, update.args);
+            // The cached capabilities chose the lock; re-derive ownership
+            // now so the command that runs matches the executable as it is
+            // at click time, not as it was at the last health refresh.
+            const fresh = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
+              instanceId,
+              provider,
+              { fresh: true },
+            );
+            if (!fresh.update || fresh.update.lockKey !== update.lockKey) {
+              return yield* finish(
+                makeUpdateState({
+                  status: "failed",
+                  startedAt,
+                  finishedAt: yield* nowIso,
+                  message: "Provider installation changed. Refresh and try again.",
+                }),
+              );
+            }
+
+            const manifest = yield* manifestService.current;
+            const candidateVersion =
+              targetVersion ??
+              (yield* resolveLatestProviderVersion(fresh).pipe(
+                Effect.provideService(HttpClient.HttpClient, httpClient),
+                Effect.provideService(ProviderVersionCache, versionCache),
+              ));
+            const advisory =
+              resolveProviderCompatibility(manifest.compatibility, provider, candidateVersion) ??
+              resolveProviderCompatibility(
+                ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+                provider,
+                candidateVersion,
+              );
+            const command =
+              targetVersion !== undefined
+                ? makeTargetedProviderUpdateAction(fresh, targetVersion)
+                : fresh.update;
+            const rejected =
+              targetVersion !== undefined
+                ? !command ||
+                  advisory?.recommendedVersion !== targetVersion ||
+                  advisory.status !== "supported"
+                : advisory?.status === "broken" || advisory?.status === "unsupported";
+            if (rejected || !command) {
+              return yield* finish(
+                makeUpdateState({
+                  status: "failed",
+                  startedAt,
+                  finishedAt: yield* nowIso,
+                  message:
+                    targetVersion !== undefined
+                      ? "This version is no longer recommended or this installer cannot install a specific version. Refresh provider settings."
+                      : "The latest provider version is incompatible with this T3 Code release. Review provider settings.",
+                }),
+              );
+            }
+            const result = yield* runMaintenanceCommand(command);
             const finishedAt = yield* nowIso;
             if (result.timedOut || result.exitCode !== 0) {
               return yield* finish(
@@ -372,42 +434,41 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               );
             }
 
+            // Homebrew's "latest" moves once the upgrade lands; read it again.
+            const verified = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
+              instanceId,
+              provider,
+              { fresh: true },
+            );
             const { verifiedProviders } = yield* verifyRefreshedProvider(
               provider,
-              capabilities,
+              verified,
               instanceId,
             );
-            const couldNotVerify = verifiedProviders.length === 0;
+            // "Succeeded" needs the provider to still be installed: an
+            // installer that exits 0 and leaves the binary missing is not a
+            // success. A missing version alone is not held against it, since
+            // Cursor's `about` probe can fail transiently on a healthy binary.
+            const couldNotVerify =
+              verifiedProviders.length === 0 ||
+              verifiedProviders.some(
+                (verifiedProvider) =>
+                  !isStillInstalled(verifiedProvider) ||
+                  (targetVersion !== undefined &&
+                    verifiedProvider.version?.replace(/^v/, "") !== targetVersion),
+              );
             const stillOutdated =
-              couldNotVerify ||
+              targetVersion === undefined &&
               verifiedProviders.some((verifiedProvider) => isOutdatedProvider(verifiedProvider));
-
-            // The host CLI is now genuinely on the latest version. Pin that same
-            // resolved version into the shared runtime manifest so the Docker
-            // image rebuilds onto it and sessions stay in sync (best-effort —
-            // this never fails the update). Skip providers that aren't baked
-            // into the runtime image (no npm package) or that we couldn't verify.
-            if (!stillOutdated && capabilities.packageName) {
-              const resolvedVersion =
-                verifiedProviders.find((verifiedProvider) => verifiedProvider.version)?.version ??
-                null;
-              if (resolvedVersion) {
-                yield* runtimeProviderVersionManifest.recordInstalledVersion({
-                  packageName: capabilities.packageName,
-                  version: resolvedVersion,
-                });
-              }
-            }
-
             return yield* finish(
               makeUpdateState({
-                status: stillOutdated ? "unchanged" : "succeeded",
+                status: couldNotVerify || stillOutdated ? "unchanged" : "succeeded",
                 startedAt,
                 finishedAt,
                 message: couldNotVerify
-                  ? "Update command completed, but Homelab Agent could not verify the provider version."
+                  ? "Update command completed, but T3 Code could not verify the provider version."
                   : stillOutdated
-                    ? "Update command completed, but Homelab Agent still detects an outdated provider version."
+                    ? "Update command completed, but T3 Code still detects an outdated provider version."
                     : "Provider updated.",
                 output: commandOutput(result),
               }),
@@ -435,23 +496,6 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       },
     );
 
-    const recordInterruptedUpdate = Effect.gen(function* () {
-      const recorded = yield* Ref.get(terminalStateRecordedRef);
-      if (recorded) {
-        return;
-      }
-      const startedAt = yield* Ref.get(startedAtRef);
-      yield* setUpdateState(
-        makeUpdateState({
-          status: "failed",
-          startedAt,
-          finishedAt: yield* nowIso,
-          message:
-            "Update was interrupted before it finished (for example by a dropped connection). Run the update again.",
-        }),
-      );
-    }).pipe(Effect.ignore);
-
     return yield* commandCoordinator
       .withCommandLock({
         targetKey,
@@ -460,7 +504,6 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         run: runProviderUpdate(),
       })
       .pipe(
-        Effect.onInterrupt(() => recordInterruptedUpdate),
         Effect.mapError((error) =>
           isServerProviderUpdateError(error)
             ? new ServerProviderUpdateError({

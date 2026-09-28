@@ -10,26 +10,20 @@ import {
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
-import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function PairingPendingSurface() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
-      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          {HOMELAB_PRODUCT_COPY.authPairing.pendingTitle}
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          {HOMELAB_PRODUCT_COPY.authPairing.pendingDescription}
-        </p>
-      </section>
-    </div>
+    <StandalonePage tone="pairing">
+      <StandalonePageHeader
+        eyebrow={APP_DISPLAY_NAME}
+        title="Pairing with this environment"
+        description="Validating the pairing link and preparing your session."
+      />
+    </StandalonePage>
   );
 }
 
@@ -92,63 +86,57 @@ export function PairingRouteSurface({
   }, [submitCredential]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
-      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          {HOMELAB_PRODUCT_COPY.authPairing.title}
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          {describeAuthGate(auth.bootstrapMethods)}
-        </p>
+    <StandalonePage tone="pairing">
+      <StandalonePageHeader
+        eyebrow={APP_DISPLAY_NAME}
+        title="Pair with this environment"
+        description={describeAuthGate(auth.bootstrapMethods)}
+      />
 
-        <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="pairing-token">
-              Pairing token
-            </label>
-            <Input
-              id="pairing-token"
-              autoCapitalize="none"
-              autoComplete="off"
-              autoCorrect="off"
-              disabled={isSubmitting}
-              nativeInput
-              onChange={(event) => setCredential(event.currentTarget.value)}
-              placeholder={HOMELAB_PRODUCT_COPY.authPairing.tokenPlaceholder}
-              spellCheck={false}
-              value={credential}
-            />
-          </div>
-
-          {errorMessage ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-              {errorMessage}
-            </div>
-          ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={isSubmitting} size="sm" type="submit">
-              {isSubmitting ? "Pairing..." : "Continue"}
-            </Button>
-            <Button
-              disabled={isSubmitting}
-              onClick={() => window.location.reload()}
-              size="sm"
-              variant="outline"
-            >
-              Reload app
-            </Button>
-          </div>
-        </form>
-
-        <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          {describeSupportedMethods(auth.bootstrapMethods)}
+      <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="pairing-token">
+            Pairing token
+          </label>
+          <Input
+            id="pairing-token"
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect="off"
+            disabled={isSubmitting}
+            nativeInput
+            onChange={(event) => setCredential(event.currentTarget.value)}
+            placeholder="Paste a one-time token or pairing secret"
+            spellCheck={false}
+            value={credential}
+          />
         </div>
-      </section>
-    </div>
+
+        {errorMessage ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={isSubmitting} size="sm" type="submit">
+            {isSubmitting ? "Pairing..." : "Continue"}
+          </Button>
+          <Button
+            disabled={isSubmitting}
+            onClick={() => window.location.reload()}
+            size="sm"
+            variant="outline"
+          >
+            Reload app
+          </Button>
+        </div>
+      </form>
+
+      <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+        {describeSupportedMethods(auth.bootstrapMethods)}
+      </div>
+    </StandalonePage>
   );
 }
 
@@ -160,10 +148,10 @@ export function HostedPairingRouteSurface() {
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(() =>
     hostedPairingRequestRef.current ? "pairing" : "error",
   );
-  const [message, setMessage] = useState<string>(() =>
+  const [message, setMessage] = useState(() =>
     hostedPairingRequestRef.current
-      ? HOMELAB_PRODUCT_COPY.authPairing.hostedConnecting
-      : HOMELAB_PRODUCT_COPY.authPairing.hostedMissing,
+      ? "Connecting to this backend."
+      : "This pairing link is missing its backend host or token.",
   );
   const [canRetry, setCanRetry] = useState(false);
   const submitAttemptedRef = useRef(false);
@@ -174,7 +162,7 @@ export function HostedPairingRouteSurface() {
 
     if (!request) {
       setStatus("error");
-      setMessage(HOMELAB_PRODUCT_COPY.authPairing.hostedMissing);
+      setMessage("This pairing link is missing its backend host or token.");
       setCanRetry(false);
       return;
     }
@@ -187,7 +175,7 @@ export function HostedPairingRouteSurface() {
     }
 
     setStatus("pairing");
-    setMessage(HOMELAB_PRODUCT_COPY.authPairing.hostedConnecting);
+    setMessage("Connecting to this backend.");
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
@@ -205,7 +193,7 @@ export function HostedPairingRouteSurface() {
     setStatus("error");
     setCanRetry(true);
     setMessage(
-      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} ${HOMELAB_PRODUCT_COPY.authPairing.hostedAcceptedTokenRetry}`,
+      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} If the backend accepted this one-time token, request a new pairing link before retrying.`,
     );
   }, [connectPairingEnvironment]);
 
@@ -222,50 +210,49 @@ export function HostedPairingRouteSurface() {
   const request = hostedPairingRequestRef.current;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground sm:px-6">
-      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 shadow-sm sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          {status === "paired"
-            ? HOMELAB_PRODUCT_COPY.authPairing.hostedPairedTitle
+    <StandalonePage tone="pairing">
+      <StandalonePageHeader
+        eyebrow={APP_DISPLAY_NAME}
+        title={
+          status === "paired"
+            ? "Backend paired"
             : status === "error"
-              ? HOMELAB_PRODUCT_COPY.authPairing.hostedErrorTitle
-              : HOMELAB_PRODUCT_COPY.authPairing.hostedPairingTitle}
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
+              ? "Pairing failed"
+              : "Pairing backend"
+        }
+        description={message}
+      />
 
-        {request ? (
-          <div className="mt-5 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-            Host: <span className="font-mono text-foreground/80">{request.host}</span>
-          </div>
-        ) : null}
-
-        {status === "error" ? (
-          <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-            {HOMELAB_PRODUCT_COPY.authPairing.hostedReachabilityError}
-          </div>
-        ) : null}
-
-        <div className="mt-6 flex flex-wrap gap-2">
-          {status === "pairing" ? (
-            <Button disabled size="sm">
-              Pairing...
-            </Button>
-          ) : canRetry ? (
-            <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
-              Try again
-            </Button>
-          ) : null}
-          {status === "paired" ? (
-            <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
-              Open app
-            </Button>
-          ) : null}
+      {request ? (
+        <div className="mt-5 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+          Host: <span className="font-mono text-foreground/80">{request.host}</span>
         </div>
-      </section>
-    </div>
+      ) : null}
+
+      {status === "error" ? (
+        <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
+          Verify the backend is reachable from this browser, supports CORS for hosted clients, and
+          is served over HTTPS when opening this page from HTTPS.
+        </div>
+      ) : null}
+
+      <div className="mt-6 flex flex-wrap gap-2">
+        {status === "pairing" ? (
+          <Button disabled size="sm">
+            Pairing...
+          </Button>
+        ) : canRetry ? (
+          <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
+            Try again
+          </Button>
+        ) : null}
+        {status === "paired" ? (
+          <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
+            Open app
+          </Button>
+        ) : null}
+      </div>
+    </StandalonePage>
   );
 }
 
@@ -283,10 +270,10 @@ function errorMessageFromUnknown(error: unknown): string {
 
 function describeAuthGate(bootstrapMethods: ReadonlyArray<string>): string {
   if (bootstrapMethods.includes("desktop-bootstrap")) {
-    return HOMELAB_PRODUCT_COPY.authPairing.desktopGateDescription;
+    return "This environment expects a trusted pairing credential before the app can connect.";
   }
 
-  return HOMELAB_PRODUCT_COPY.authPairing.tokenGateDescription;
+  return "Enter a pairing token to start a session with this environment.";
 }
 
 function describeSupportedMethods(bootstrapMethods: ReadonlyArray<string>): string {
@@ -294,12 +281,12 @@ function describeSupportedMethods(bootstrapMethods: ReadonlyArray<string>): stri
     bootstrapMethods.includes("desktop-bootstrap") &&
     bootstrapMethods.includes("one-time-token")
   ) {
-    return HOMELAB_PRODUCT_COPY.authPairing.desktopAndTokenMethods;
+    return "Desktop-managed pairing and one-time pairing tokens are both accepted for this environment.";
   }
 
   if (bootstrapMethods.includes("desktop-bootstrap")) {
-    return HOMELAB_PRODUCT_COPY.authPairing.desktopMethod;
+    return "This environment is desktop-managed. Open it from the desktop app or paste a bootstrap credential if one was issued explicitly.";
   }
 
-  return HOMELAB_PRODUCT_COPY.authPairing.tokenMethod;
+  return "This environment accepts one-time pairing tokens. Pairing links can open this page directly, or you can paste the token here.";
 }
