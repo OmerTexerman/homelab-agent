@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # Homelab fork: allow running CI on any branch without opening a PR.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
@@ -94,8 +96,9 @@ jobs:
   # isolation that flag buys is preserved exactly.
   test_server:
     name: Test Server ${{ matrix.shard }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
+    # Homelab fork: GitHub-hosted runners (Blacksmith never picks up fork jobs).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -161,7 +164,7 @@ jobs:
   # for checks that take under 3s, on the critical path of every PR.
   rust:
     name: Rust
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -189,7 +192,9 @@ jobs:
   # the diff cannot be resolved, the lint runs.
   mobile_native_changes:
     name: Mobile Native Changes
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Homelab fork: mobile is not shipped, so mobile native CI is disabled.
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -266,8 +271,9 @@ jobs:
     needs: mobile_native_changes
     # Skip only on an explicit "no": a gate job that failed or errored leaves the
     # output empty, and that must run the lint rather than silently skip it.
-    if: ${{ !cancelled() && needs.mobile_native_changes.outputs.changed != 'false' }}
-    runs-on: blacksmith-6vcpu-macos-26
+    # Homelab fork: `false &&` disables mobile native CI (see mobile_native_changes).
+    if: ${{ false && !cancelled() && needs.mobile_native_changes.outputs.changed != 'false' }}
+    runs-on: macos-26
     timeout-minutes: 10
     steps:
       - name: Checkout
