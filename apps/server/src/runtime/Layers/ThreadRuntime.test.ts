@@ -13,7 +13,7 @@ import {
 } from "../ProjectRuntimePolicy.ts";
 import { Effect, FileSystem, Layer, Stream } from "effect";
 
-import { type ProcessRunResult } from "../../processRunner.ts";
+import { type ProcessRunResult } from "../hostProcessRunner.ts";
 import { ServerConfig } from "../../config.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";

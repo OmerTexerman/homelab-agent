@@ -37,12 +37,8 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { loadJsonStateFile } from "../../jsonStateFile.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  layer as ProcessRunnerLayerLive,
-  runProcess,
-  type ProcessRunOptions,
-  type ProcessRunResult,
-} from "../../processRunner.ts";
+import { layer as ProcessRunnerLayerLive } from "../../processRunner.ts";
+import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../hostProcessRunner.ts";
 import { layer as ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";

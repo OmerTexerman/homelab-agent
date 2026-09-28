@@ -1,19 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
-
-import {
   animatePinnedLayoutChanges,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
-  buildSidebarDraftThreadSummaries,
-  buildStandaloneThreadMoveMemoryMigration,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -27,7 +19,6 @@ import {
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
-  sidebarThreadCreationRuntimeCopy,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
@@ -44,15 +35,12 @@ import {
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
-  standaloneThreadMoveMemoryDescription,
-  standaloneThreadMoveRuntimeDescription,
   shouldCreateNewThreadInCurrentProject,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
   EnvironmentId,
   OrchestrationLatestTurn,
-  ProjectMemoryId,
   ProjectId,
   ProviderInstanceId,
   RuntimeSessionId,
@@ -65,164 +53,8 @@ import {
   type Project,
   type Thread,
 } from "../types";
-import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
-
-describe("standalone thread move helpers", () => {
-  it("builds explicit no-memory migration options", () => {
-    expect(
-      buildStandaloneThreadMoveMemoryMigration({
-        mode: "none",
-        selection: "selected",
-        selectedMemoryIds: [ProjectMemoryId.make("memory-router")],
-      }),
-    ).toEqual({ mode: "none" });
-  });
-
-  it("builds all-relevant copy options without selected ids", () => {
-    expect(
-      buildStandaloneThreadMoveMemoryMigration({
-        mode: "copy",
-        selection: "all-relevant",
-        selectedMemoryIds: [ProjectMemoryId.make("memory-router")],
-      }),
-    ).toEqual({ mode: "copy" });
-  });
-
-  it("builds selected move options with selected ids", () => {
-    expect(
-      buildStandaloneThreadMoveMemoryMigration({
-        mode: "move",
-        selection: "selected",
-        selectedMemoryIds: [
-          ProjectMemoryId.make("memory-router"),
-          ProjectMemoryId.make("memory-dashboard"),
-        ],
-      }),
-    ).toEqual({
-      mode: "move",
-      memoryIds: ["memory-router", "memory-dashboard"],
-    });
-  });
-
-  it("keeps move dialog copy explicit about transcript, memory, and runtime filesystem state", () => {
-    expect(standaloneThreadMoveMemoryDescription("none", "all-relevant")).toContain(
-      "Chat transcript moves automatically",
-    );
-    expect(standaloneThreadMoveMemoryDescription("copy", "selected")).toContain(
-      "selected Scratch memory entries are copied",
-    );
-    expect(standaloneThreadMoveRuntimeDescription()).toContain(
-      "joins the project as a shared thread",
-    );
-    expect(standaloneThreadMoveRuntimeDescription()).toContain("becomes the project's default");
-  });
-});
-
-function makeDraftThread(overrides: Partial<DraftThreadState> = {}): DraftThreadState {
-  return {
-    threadId: ThreadId.make("thread-draft"),
-    environmentId: localEnvironmentId,
-    projectId: ProjectId.make("project-main"),
-    logicalProjectKey: "environment-local:project-main",
-    createdAt: "2026-06-04T00:00:00.000Z",
-    runtimeMode: "full-access",
-    runtimeSelectionMode: "shared",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    envMode: "local",
-    startFromOrigin: false,
-    promotedTo: null,
-    ...overrides,
-  };
-}
-
-function makeComposerDraft(
-  overrides: Partial<ComposerThreadDraftState> = {},
-): ComposerThreadDraftState {
-  return {
-    prompt: "",
-    images: [],
-    terminalContexts: [],
-    elementContexts: [],
-    previewAnnotations: [],
-    reviewComments: [],
-    nonPersistedImageIds: [],
-    persistedAttachments: [],
-    modelSelectionByProvider: {},
-    activeProvider: null,
-    runtimeMode: null,
-    interactionMode: null,
-    ...overrides,
-  };
-}
-
-describe("buildSidebarDraftThreadSummaries", () => {
-  it("projects an empty project draft into a sidebar row before the first message", () => {
-    const summaries = buildSidebarDraftThreadSummaries({
-      draftThreadsByThreadKey: {
-        "draft-project-thread": makeDraftThread(),
-      },
-      draftsByThreadKey: {
-        "draft-project-thread": makeComposerDraft(),
-      },
-      memberProjectRefs: [scopeProjectRef(localEnvironmentId, ProjectId.make("project-main"))],
-    });
-
-    expect(summaries).toEqual([
-      expect.objectContaining({
-        id: ThreadId.make("thread-draft"),
-        draftId: "draft-project-thread",
-        isDraft: true,
-        projectId: ProjectId.make("project-main"),
-        title: "New thread",
-        runtimeSelectionMode: "shared",
-      }),
-    ]);
-  });
-
-  it("labels isolated draft rows as parallel runtime work and preserves typed prompt titles", () => {
-    const summaries = buildSidebarDraftThreadSummaries({
-      draftThreadsByThreadKey: {
-        "draft-isolated-thread": makeDraftThread({
-          threadId: ThreadId.make("thread-isolated-draft"),
-          runtimeSelectionMode: "isolated",
-        }),
-      },
-      draftsByThreadKey: {
-        "draft-isolated-thread": makeComposerDraft({
-          prompt: "check the backup topology\nthen compare snapshots",
-        }),
-      },
-    });
-
-    expect(summaries).toEqual([
-      expect.objectContaining({
-        id: ThreadId.make("thread-isolated-draft"),
-        draftId: "draft-isolated-thread",
-        isDraft: true,
-        title: "check the backup topology",
-        runtimeSelectionMode: "isolated",
-      }),
-    ]);
-  });
-
-  it("omits draft rows once the matching server thread exists", () => {
-    const summaries = buildSidebarDraftThreadSummaries({
-      draftThreadsByThreadKey: {
-        "draft-materialized": makeDraftThread(),
-      },
-      draftsByThreadKey: {},
-      existingThreadKeys: new Set([
-        scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("thread-draft"))),
-      ]),
-    });
-
-    expect(summaries).toEqual([]);
-  });
-});
 
 describe("animatePinnedLayoutChanges", () => {
   const baseArgs: Parameters<AnimateLayoutChanges>[0] = {
@@ -606,22 +438,6 @@ describe("isTrailingDoubleClick", () => {
 
   it("ignores further clicks of a triple-click", () => {
     expect(isTrailingDoubleClick(3)).toBe(true);
-  });
-});
-
-describe("sidebarThreadCreationRuntimeCopy", () => {
-  it("labels the default project runtime thread action as queued on the Project Runtime", () => {
-    expect(sidebarThreadCreationRuntimeCopy("shared")).toMatchObject({
-      label: "New thread",
-      description: expect.stringContaining("Project Runtime"),
-    });
-  });
-
-  it("labels isolated runtime thread creation as a runtime clone", () => {
-    expect(sidebarThreadCreationRuntimeCopy("isolated")).toMatchObject({
-      label: "New parallel thread",
-      description: expect.stringContaining("Clones this Project Runtime"),
-    });
   });
 });
 

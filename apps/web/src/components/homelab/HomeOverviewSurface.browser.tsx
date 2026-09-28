@@ -1,4 +1,4 @@
-import "../index.css";
+import "../../index.css";
 
 import type {
   HomelabSetupStatus,
@@ -10,9 +10,9 @@ import { page } from "vite-plus/test/browser";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
-import { deriveHomeOverviewReadModel } from "../homeOverviewReadModel";
-import type { Project, SidebarThreadSummary } from "../types";
-import { HomeOverviewSurface } from "./NoActiveThreadState";
+import { deriveHomeOverviewReadModel } from "../../homeOverviewReadModel";
+import type { Project, SidebarThreadSummary } from "../../types";
+import { HomeOverviewSurface } from "./HomeOverviewSurface";
 
 const NOW = "2026-05-17T12:00:00.000Z";
 const ENVIRONMENT_ID = "local" as Project["environmentId"];

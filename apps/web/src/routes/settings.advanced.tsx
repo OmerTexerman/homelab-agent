@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { AdvancedSettingsPanel } from "../components/settings/SettingsPanels";
+import { AdvancedSettingsPanel } from "../components/settings/HomelabSettingsPanels";
 
 function SettingsAdvancedRoute() {
   return <AdvancedSettingsPanel />;

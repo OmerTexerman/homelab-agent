@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { ProjectRuntimeSettingsPanel } from "../components/settings/SettingsPanels";
+import { ProjectRuntimeSettingsPanel } from "../components/settings/HomelabSettingsPanels";
 
 function SettingsProjectRuntimeRoute() {
   return <ProjectRuntimeSettingsPanel />;

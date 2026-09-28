@@ -31,8 +31,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
-import { isCuratorProject, isCuratorProjectId } from "@t3tools/shared/curatorProject";
-import { isStandaloneProject, isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -108,7 +107,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
 import {
   environmentServerConfigsAtom,
   primaryServerKeybindingsAtom,
@@ -1718,30 +1717,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const allProjects = useProjects();
-  // Hidden system projects (system:standalone scratch container, system:curator)
-  // must never surface as project entries — same normalProjects rule as the
-  // CommandPalette. Scratch THREADS stay visible below: this sidebar renders
-  // flat thread lists, so they appear as plain rows without a project label
-  // rather than via a dedicated scratch section.
-  const projects = useMemo(
-    () =>
-      allProjects.filter(
-        (project) =>
-          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
-          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
-      ),
-    [allProjects],
-  );
+  const projects = useUserVisibleProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const allThreads = useThreadShells();
-  // Curator sessions live in Settings -> Memory & Knowledge, not the sidebar.
-  // Standalone scratch threads are NOT filtered: they remain reachable as
-  // ordinary thread rows.
-  const threads = useMemo(
-    () => allThreads.filter((thread) => !isCuratorProjectId(thread.projectId)),
-    [allThreads],
-  );
+  const threads = useUserVisibleThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

@@ -1,19 +1,6 @@
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import {
-  scopedProjectKey,
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
-import type {
-  ContextMenuItem,
-  ProjectMemoryId,
-  ScopedProjectRef,
-  StandaloneThreadMoveMemoryMigration,
-  StandaloneThreadMoveMemoryMigrationMode,
-  ThreadRuntimeMode,
-} from "@t3tools/contracts";
+import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -22,11 +9,9 @@ import {
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
-import type { ComposerThreadDraftState, DraftThreadState } from "../composerDraftStore";
 import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { deriveSidebarThreadDecisionQueue } from "../decisionQueueReadModel";
-import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
@@ -69,154 +54,6 @@ type LogicalSidebarProject = SidebarProject & {
     projectId: string;
   }[];
 };
-
-export type SidebarThreadCreationRuntimeMode = ThreadRuntimeMode;
-export type StandaloneThreadMoveMemorySelection = "all-relevant" | "selected";
-
-/**
- * Homelab fork: sidebar rows render both server-backed thread shells and
- * local draft sessions. Draft rows carry `draftId`/`isDraft` markers and may
- * not have a model selection yet.
- */
-export type SidebarDraftAwareThreadSummary = Omit<SidebarThreadSummary, "modelSelection"> & {
-  readonly modelSelection: SidebarThreadSummary["modelSelection"] | null;
-  readonly draftId?: string;
-  readonly isDraft?: boolean;
-};
-
-export function sidebarThreadCreationRuntimeCopy(
-  runtimeSelectionMode: SidebarThreadCreationRuntimeMode,
-): { label: string; description: string } {
-  if (runtimeSelectionMode === "isolated") {
-    return {
-      label: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction,
-      description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
-    };
-  }
-
-  return {
-    label: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction,
-    description: HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadDescription,
-  };
-}
-
-export function standaloneThreadMoveRuntimeDescription(): string {
-  // A moved scratch thread always joins the project as a shared thread. If the
-  // project has no runtime yet, this thread's Scratch runtime becomes the project
-  // default (its files are kept in place); otherwise the thread switches to the
-  // project's existing runtime and Scratch files are not merged.
-  return "This thread joins the project as a shared thread. If the project has no runtime yet, its Scratch runtime becomes the project's default and its files are kept in place; otherwise it switches to the project's existing runtime (Scratch files are not merged).";
-}
-
-export function standaloneThreadMoveMemoryDescription(
-  mode: StandaloneThreadMoveMemoryMigrationMode,
-  selection: StandaloneThreadMoveMemorySelection,
-): string {
-  if (mode === "none") {
-    return "Chat transcript moves automatically. Durable Scratch memory stays in Standalone Threads.";
-  }
-
-  const selectedCopy = selection === "selected" ? "selected" : "all relevant";
-  if (mode === "copy") {
-    return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are copied to the target project.`;
-  }
-
-  return `Chat transcript moves automatically. ${selectedCopy} Scratch memory entries are moved to the target project.`;
-}
-
-function firstDraftPromptLine(prompt: string | undefined): string | null {
-  const line = prompt
-    ?.split(/\r?\n/)
-    .map((candidate) => candidate.trim())
-    .find((candidate) => candidate.length > 0);
-  if (!line) {
-    return null;
-  }
-  return line.length > 64 ? `${line.slice(0, 61)}...` : line;
-}
-
-export function buildSidebarDraftThreadSummaries(input: {
-  readonly draftThreadsByThreadKey: Record<string, DraftThreadState>;
-  readonly draftsByThreadKey: Record<string, ComposerThreadDraftState | undefined>;
-  readonly existingThreadKeys?: ReadonlySet<string>;
-  readonly memberProjectRefs?: readonly ScopedProjectRef[];
-}): SidebarDraftAwareThreadSummary[] {
-  const memberProjectKeys =
-    input.memberProjectRefs === undefined
-      ? null
-      : new Set(input.memberProjectRefs.map((projectRef) => scopedProjectKey(projectRef)));
-  const result: SidebarDraftAwareThreadSummary[] = [];
-
-  for (const [draftId, draftThread] of Object.entries(input.draftThreadsByThreadKey)) {
-    const threadRef = scopeThreadRef(draftThread.environmentId, draftThread.threadId);
-    const threadKey = scopedThreadKey(threadRef);
-    if (input.existingThreadKeys?.has(threadKey)) {
-      continue;
-    }
-    const projectKey = scopedProjectKey(
-      scopeProjectRef(draftThread.environmentId, draftThread.projectId),
-    );
-    if (memberProjectKeys !== null && !memberProjectKeys.has(projectKey)) {
-      continue;
-    }
-
-    const title =
-      firstDraftPromptLine(input.draftsByThreadKey[draftId]?.prompt) ??
-      (draftThread.runtimeSelectionMode === "isolated"
-        ? HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadAction
-        : HOMELAB_PRODUCT_COPY.projectRuntime.newSharedThreadAction);
-
-    result.push({
-      id: draftThread.threadId,
-      environmentId: draftThread.environmentId,
-      projectId: draftThread.projectId,
-      draftId,
-      isDraft: true,
-      runtimeId: null,
-      runtimeSelectionMode: draftThread.runtimeSelectionMode ?? "shared",
-      settledOverride: null,
-      settledAt: null,
-      title,
-      modelSelection: null,
-      runtimeMode: draftThread.runtimeMode,
-      interactionMode: draftThread.interactionMode,
-      session: null,
-      createdAt: draftThread.createdAt,
-      updatedAt: draftThread.createdAt,
-      archivedAt: null,
-      branch: draftThread.branch,
-      worktreePath: draftThread.worktreePath,
-      latestTurn: null,
-      latestUserMessageAt: null,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
-    });
-  }
-
-  return result;
-}
-
-export function buildStandaloneThreadMoveMemoryMigration(input: {
-  readonly mode: StandaloneThreadMoveMemoryMigrationMode;
-  readonly selection: StandaloneThreadMoveMemorySelection;
-  readonly selectedMemoryIds: ReadonlyArray<ProjectMemoryId>;
-}): StandaloneThreadMoveMemoryMigration {
-  if (input.mode === "none") {
-    return { mode: "none" };
-  }
-
-  if (input.selection === "selected") {
-    return {
-      mode: input.mode,
-      memoryIds: [...input.selectedMemoryIds],
-    };
-  }
-
-  return {
-    mode: input.mode,
-  };
-}
 
 export type ThreadTraversalDirection = "previous" | "next";
 

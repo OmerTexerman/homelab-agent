@@ -66,7 +66,8 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useThreadShells } from "../../state/entities";
+import { useUserVisibleProjects } from "../../homelab/visibleProjects";
 import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -121,7 +122,7 @@ export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, st
 
 /** Logical project groups for the settings page, sorted by display name. */
 export function useSettingsProjectGroups(): SidebarProjectSnapshot[] {
-  const projects = useProjects();
+  const projects = useUserVisibleProjects();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();

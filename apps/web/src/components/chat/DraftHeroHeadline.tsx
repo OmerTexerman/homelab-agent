@@ -1,6 +1,5 @@
 import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
@@ -13,7 +12,8 @@ import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
 } from "~/sidebarProjectGrouping";
-import { useProjects, useThreadShells } from "~/state/entities";
+import { useThreadShells } from "~/state/entities";
+import { useUserVisibleProjects } from "~/homelab/visibleProjects";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
@@ -36,7 +36,7 @@ export function DraftHeroHeadline({
   activeProjectRef,
   activeProjectTitle,
 }: DraftHeroHeadlineProps) {
-  const projects = useProjects();
+  const projects = useUserVisibleProjects();
   const threads = useThreadShells();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -52,18 +52,11 @@ export function DraftHeroHeadline({
       ),
     [environments],
   );
-  // The Knowledge Curator is a hidden system namespace reached only from
-  // Settings -> Memory & Knowledge, never a normal project you switch into
-  // (the sidebar filters it the same way).
-  const visibleProjects = useMemo(
-    () => projects.filter((project) => !isCuratorProjectId(project.id)),
-    [projects],
-  );
   const projectGroups = useMemo(
     () =>
       sortLogicalProjectsForSidebar(
         buildSidebarProjectSnapshots({
-          projects: visibleProjects,
+          projects,
           settings: projectGroupingSettings,
           primaryEnvironmentId,
           resolveEnvironmentLabel: (environmentId) =>
@@ -77,8 +70,8 @@ export function DraftHeroHeadline({
       primaryEnvironmentId,
       projectGroupingSettings,
       projectSortOrder,
+      projects,
       threads,
-      visibleProjects,
     ],
   );
   const projectPickerEntries = useMemo(
