@@ -14,61 +14,8 @@ import type {
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
-import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
-
-const EMPTY_HOME_LAB_SETUP_STATUS: HomelabSetupStatus = {
-  snapshot: {
-    entities: [],
-    relations: [],
-    observations: [],
-    updatedAt: new Date(0).toISOString(),
-  },
-  secrets: {
-    secrets: [],
-  },
-  runtimeBootstrap: {
-    backend: "docker",
-    imageRef: "homelab-agent-runtime:local",
-    bootstrapVersion: "bootstrap-uninitialized",
-    mutations: [],
-    updatedAt: new Date(0).toISOString(),
-  },
-  runtimeBootstrapCatalog: {
-    activeBlueprint: {
-      backend: "docker",
-      imageRef: "homelab-agent-runtime:local",
-      bootstrapVersion: "bootstrap-uninitialized",
-      mutations: [],
-      updatedAt: new Date(0).toISOString(),
-    },
-    activeBootstrapVersion: "bootstrap-uninitialized",
-    availableMaterializations: [],
-  },
-};
-
-async function readEnvironmentJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "include" });
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}.`);
-  }
-  return (await response.json()) as T;
-}
-
-async function writeEnvironmentJson<T>(url: string, payload: unknown): Promise<T> {
-  const response = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}.`);
-  }
-  return (await response.json()) as T;
-}
+import { homelabFetch } from "~/homelab/homelabFetch";
+import { keepPreviousDataWithinScope } from "~/homelab/queryDisplayState";
 
 export const homelabQueryKeys = {
   all: ["homelab"] as const,
@@ -110,20 +57,18 @@ export function homelabSetupStatusQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: homelabQueryKeys.setupStatus(input.environmentId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab setup status is unavailable.");
       }
-      return readEnvironmentJson<HomelabSetupStatus>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/setup-status",
-        }),
-      );
+      return homelabFetch<HomelabSetupStatus>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/setup-status",
+        signal,
+      });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: input.staleTime ?? 10_000,
-    placeholderData: (previous) => previous ?? EMPTY_HOME_LAB_SETUP_STATUS,
     refetchOnWindowFocus: false,
   });
 }
@@ -136,24 +81,22 @@ export function homelabProjectMemoryQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: homelabQueryKeys.projectMemory(input.environmentId, input.projectId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input.environmentId || !input.projectId) {
         throw new Error("Project memory is unavailable.");
       }
-      return readEnvironmentJson<ProjectMemoryListResult>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/project-memory",
-          searchParams: {
-            projectId: input.projectId,
-            limit: String(input.limit ?? 100),
-          },
-        }),
-      );
+      return homelabFetch<ProjectMemoryListResult>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/project-memory",
+        searchParams: {
+          projectId: input.projectId,
+          limit: String(input.limit ?? 100),
+        },
+        signal,
+      });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.projectId !== null,
     staleTime: 5_000,
-    placeholderData: (previous) => previous ?? { entries: [] },
     refetchOnWindowFocus: false,
   });
 }
@@ -166,29 +109,29 @@ export function homelabProjectMemorySearchQueryOptions(input: {
   readonly includeTranscripts?: boolean;
   readonly limit?: number;
 }) {
+  const queryKey = homelabQueryKeys.projectMemorySearch(
+    input.environmentId,
+    input.projectId,
+    input.query.trim(),
+    input.includeTranscripts ?? true,
+  );
   return queryOptions({
-    queryKey: homelabQueryKeys.projectMemorySearch(
-      input.environmentId,
-      input.projectId,
-      input.query.trim(),
-      input.includeTranscripts ?? true,
-    ),
-    queryFn: async () => {
+    queryKey,
+    queryFn: async ({ signal }) => {
       if (!input.environmentId || !input.projectId) {
         throw new Error("Project memory search is unavailable.");
       }
-      return writeEnvironmentJson<ProjectMemorySearchResultList>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/project-memory/search",
-        }),
-        {
+      return homelabFetch<ProjectMemorySearchResultList>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/project-memory/search",
+        body: {
           projectId: input.projectId,
           query: input.query.trim(),
           includeTranscripts: input.includeTranscripts ?? true,
           limit: input.limit ?? 20,
         },
-      );
+        signal,
+      });
     },
     enabled:
       (input.enabled ?? true) &&
@@ -196,7 +139,8 @@ export function homelabProjectMemorySearchQueryOptions(input: {
       input.projectId !== null &&
       input.query.trim().length > 0,
     staleTime: 2_000,
-    placeholderData: (previous) => previous ?? { results: [] },
+    // Keep results while the query text changes within the same project.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 4),
     refetchOnWindowFocus: false,
   });
 }
@@ -208,28 +152,33 @@ export function homelabGraphSearchQueryOptions(input: {
   readonly kinds?: readonly HomelabEntityKind[] | undefined;
   readonly limit?: number;
 }) {
+  const queryKey = homelabQueryKeys.graphSearch(
+    input.environmentId,
+    input.query.trim(),
+    input.kinds,
+  );
   return queryOptions({
-    queryKey: homelabQueryKeys.graphSearch(input.environmentId, input.query.trim(), input.kinds),
-    queryFn: async () => {
+    queryKey,
+    queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab graph search is unavailable.");
       }
-      return writeEnvironmentJson<ReadonlyArray<HomelabGraphSearchResult>>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/search",
-        }),
-        {
+      return homelabFetch<ReadonlyArray<HomelabGraphSearchResult>>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/search",
+        body: {
           query: input.query.trim(),
           ...(input.kinds && input.kinds.length > 0 ? { kinds: input.kinds } : {}),
           limit: input.limit ?? 20,
         },
-      );
+        signal,
+      });
     },
     enabled:
       (input.enabled ?? true) && input.environmentId !== null && input.query.trim().length > 0,
     staleTime: 2_000,
-    placeholderData: (previous) => previous ?? [],
+    // Keep results while the query text changes within the same environment.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 3),
     refetchOnWindowFocus: false,
   });
 }
@@ -241,21 +190,19 @@ export function homelabAllMemoryQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: homelabQueryKeys.allMemory(input.environmentId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab memory is unavailable.");
       }
-      return readEnvironmentJson<CuratorMemoryListResult>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/curate/memory",
-          searchParams: { limit: "10000" },
-        }),
-      );
+      return homelabFetch<CuratorMemoryListResult>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/curate/memory",
+        searchParams: { limit: "10000" },
+        signal,
+      });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: 10_000,
-    placeholderData: (previous) => previous ?? { entries: [] },
     refetchOnWindowFocus: false,
   });
 }
@@ -267,20 +214,18 @@ export function homelabAllSkillsQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: homelabQueryKeys.allSkills(input.environmentId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab skills are unavailable.");
       }
-      return readEnvironmentJson<CuratorSkillListResult>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/curate/skills",
-        }),
-      );
+      return homelabFetch<CuratorSkillListResult>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/curate/skills",
+        signal,
+      });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: 10_000,
-    placeholderData: (previous) => previous ?? { skills: [] },
     refetchOnWindowFocus: false,
   });
 }
@@ -292,16 +237,15 @@ export function homelabCuratorOverviewQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: homelabQueryKeys.curatorOverview(input.environmentId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab curator overview is unavailable.");
       }
-      return readEnvironmentJson<CuratorOverview>(
-        resolveEnvironmentHttpUrl({
-          environmentId: input.environmentId,
-          pathname: "/api/homelab/curate/overview",
-        }),
-      );
+      return homelabFetch<CuratorOverview>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/curate/overview",
+        signal,
+      });
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: 30_000,
@@ -315,15 +259,13 @@ export async function promoteProjectMemoryEntry(input: {
   readonly memoryId: ProjectMemoryEntry["id"];
   readonly promotion: ProjectMemoryPromoteInput["promotion"];
 }): Promise<{ readonly entry: ProjectMemoryEntry; readonly recorded: unknown }> {
-  return writeEnvironmentJson<{ readonly entry: ProjectMemoryEntry; readonly recorded: unknown }>(
-    resolveEnvironmentHttpUrl({
-      environmentId: input.environmentId,
-      pathname: "/api/homelab/project-memory/promote",
-    }),
-    {
+  return homelabFetch<{ readonly entry: ProjectMemoryEntry; readonly recorded: unknown }>({
+    environmentId: input.environmentId,
+    pathname: "/api/homelab/project-memory/promote",
+    body: {
       projectId: input.projectId,
       memoryId: input.memoryId,
       promotion: input.promotion,
     },
-  );
+  });
 }

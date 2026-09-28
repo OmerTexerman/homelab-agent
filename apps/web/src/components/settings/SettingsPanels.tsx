@@ -199,6 +199,8 @@ import {
   homelabCuratorOverviewQueryOptions,
   homelabSetupStatusQueryOptions,
 } from "../../lib/homelabReactQuery";
+import { describeHomelabError } from "../../homelab/homelabFetch";
+import { queryDisplayState } from "../../homelab/queryDisplayState";
 import { KnowledgeEstateBrowser } from "./KnowledgeEstateBrowser";
 import {
   HOMELAB_PRODUCT_COPY,
@@ -2827,6 +2829,10 @@ export function MemoryKnowledgeSettingsPanel() {
     homelabSetupStatusQuery.isLoading ||
     homelabAllMemoryQuery.isLoading ||
     homelabAllSkillsQuery.isLoading;
+  const estateSnapshotState = queryDisplayState(homelabSetupStatusQuery, () => false);
+  const estateError = [homelabSetupStatusQuery, homelabAllMemoryQuery, homelabAllSkillsQuery].find(
+    (query) => query.isError,
+  )?.error;
   const projectNameById = useMemo(
     () => new Map(allProjects.map((project) => [String(project.id), project.title])),
     [allProjects],
@@ -2958,9 +2964,11 @@ export function MemoryKnowledgeSettingsPanel() {
               </span>
             ) : (
               <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-                {estateLoading
+                {estateLoading || estateSnapshotState === "loading"
                   ? "Loading"
-                  : `Updated ${formatRelativeTimeLabel(estateSnapshot?.updatedAt ?? new Date(0).toISOString())}`}
+                  : estateSnapshot
+                    ? `Updated ${formatRelativeTimeLabel(estateSnapshot.updatedAt)}`
+                    : "Unavailable"}
               </span>
             )
           }
@@ -2988,19 +2996,16 @@ export function MemoryKnowledgeSettingsPanel() {
           description="Project Runtime bootstrap mutations available through homelab tools."
           control={
             <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-              {homelabSetupStatusQuery.isLoading ? "Loading" : `${bootstrapMutationCount} entries`}
+              {estateSnapshotState === "loading"
+                ? "Loading"
+                : estateSnapshotState === "error"
+                  ? "Unavailable"
+                  : `${bootstrapMutationCount} entries`}
             </span>
           }
         />
-        {homelabSetupStatusQuery.isError ? (
-          <SettingsRow
-            title="Status"
-            description={
-              homelabSetupStatusQuery.error instanceof Error
-                ? homelabSetupStatusQuery.error.message
-                : "Unable to load memory and knowledge status."
-            }
-          />
+        {estateError ? (
+          <SettingsRow title="Status" description={describeHomelabError(estateError)} />
         ) : null}
       </SettingsSection>
     </SettingsPageContainer>

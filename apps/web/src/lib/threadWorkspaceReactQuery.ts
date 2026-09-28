@@ -1,30 +1,11 @@
-import type {
-  EnvironmentId,
-  ThreadId,
-  ThreadWorkspaceEntriesResult,
-  ThreadWorkspaceReadFileResult,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
+import { keepPreviousDataWithinScope } from "~/homelab/queryDisplayState";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { threadWorkspaceEnvironment } from "~/state/homelabRuntime";
-
-const EMPTY_THREAD_WORKSPACE_ENTRIES_RESULT: ThreadWorkspaceEntriesResult = {
-  basePath: "/workspace",
-  entries: [],
-  truncated: false,
-};
-
-const EMPTY_THREAD_WORKSPACE_READ_FILE_RESULT: ThreadWorkspaceReadFileResult = {
-  path: "",
-  contents: null,
-  sizeBytes: 0,
-  isBinary: false,
-  truncated: false,
-  unsupportedReason: null,
-};
 
 export const threadWorkspaceQueryKeys = {
   all: ["threadWorkspace"] as const,
@@ -57,14 +38,15 @@ export function threadWorkspaceEntriesQueryOptions(input: {
   staleTime?: number;
 }) {
   const limit = input.limit ?? 500;
+  const queryKey = threadWorkspaceQueryKeys.listEntries(
+    input.environmentId,
+    input.threadId,
+    input.basePath ?? null,
+    input.query,
+    limit,
+  );
   return queryOptions({
-    queryKey: threadWorkspaceQueryKeys.listEntries(
-      input.environmentId,
-      input.threadId,
-      input.basePath ?? null,
-      input.query,
-      limit,
-    ),
+    queryKey,
     queryFn: async () => {
       if (!input.environmentId || !input.threadId) {
         throw new Error("Thread workspace is unavailable.");
@@ -90,7 +72,9 @@ export function threadWorkspaceEntriesQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.threadId !== null,
     staleTime: input.staleTime ?? 10_000,
-    placeholderData: (previous) => previous ?? EMPTY_THREAD_WORKSPACE_ENTRIES_RESULT,
+    // Keep the listing while the filter changes within one directory; a new
+    // thread or directory shows a real loading state instead.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 5),
     refetchOnWindowFocus: false,
   });
 }
@@ -131,7 +115,6 @@ export function threadWorkspaceReadFileQueryOptions(input: {
       input.threadId !== null &&
       input.path !== null,
     staleTime: input.staleTime ?? 10_000,
-    placeholderData: (previous) => previous ?? EMPTY_THREAD_WORKSPACE_READ_FILE_RESULT,
     refetchOnWindowFocus: false,
   });
 }

@@ -1,5 +1,5 @@
 import { AuthHomelabSecretsAdminScope } from "@t3tools/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { KeyRoundIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -10,12 +10,14 @@ import {
   homelabSecretsQueryOptions,
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
+import { describeHomelabError } from "~/homelab/homelabFetch";
+import { queryDisplayState } from "~/homelab/queryDisplayState";
+import { useHomelabMutation } from "~/homelab/useHomelabMutation";
 import { ensureLocalApi } from "~/localApi";
 import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 
 function normalizeOptionalValue(value: string): string | undefined {
@@ -25,7 +27,6 @@ function normalizeOptionalValue(value: string): string | undefined {
 
 export function HomelabSecretsSection() {
   useRelativeTimeTick();
-  const queryClient = useQueryClient();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const sessionState = usePrimarySessionState();
   // Writing secrets needs homelab:secrets-admin (server-enforced on the HTTP
@@ -45,65 +46,50 @@ export function HomelabSecretsSection() {
     homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
   );
   const secrets = secretsQuery.data?.secrets ?? [];
+  const secretsDisplayState = queryDisplayState(secretsQuery, (data) => data.secrets.length === 0);
 
-  const upsertSecretMutation = useMutation({
+  const resetForm = useCallback(() => {
+    setEditingKey(null);
+    setKey("");
+    setLabel("");
+    setSummary("");
+    setValue("");
+  }, []);
+
+  const upsertSecretMutation = useHomelabMutation({
     mutationFn: async (input: { key: string; label?: string; summary?: string; value: string }) => {
       if (!primaryEnvironmentId) {
         throw new Error("No environment is available to store secrets.");
       }
       return upsertHomelabSecretRequest({ environmentId: primaryEnvironmentId, secret: input });
     },
-    onSuccess: async (secret) => {
-      await queryClient.invalidateQueries({ queryKey: homelabSecretsQueryKeys.all });
-      setEditingKey(null);
-      setKey("");
-      setLabel("");
-      setSummary("");
-      setValue("");
-      toastManager.add({
-        type: "success",
-        title: `Saved ${secret.placeholder}`,
-        description: "This secret is now available to new and existing Project Runtimes.",
-      });
-    },
-    onError: (error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not save secret",
-        description: error instanceof Error ? error.message : "Secret save failed.",
-      });
-    },
+    invalidate: [homelabSecretsQueryKeys.all],
+    onSuccess: resetForm,
+    successToast: (secret) => ({
+      title: `Saved ${secret.placeholder}`,
+      description: "Runtimes pick it up on their next command.",
+    }),
+    errorToast: "Could not save secret",
   });
 
-  const deleteSecretMutation = useMutation({
+  const deleteSecretMutation = useHomelabMutation({
     mutationFn: async (secretKey: string) => {
       if (!primaryEnvironmentId) {
         throw new Error("No environment is available to remove secrets.");
       }
       return deleteHomelabSecretRequest({ environmentId: primaryEnvironmentId, key: secretKey });
     },
-    onSuccess: async (_, secretKey) => {
-      await queryClient.invalidateQueries({ queryKey: homelabSecretsQueryKeys.all });
+    invalidate: [homelabSecretsQueryKeys.all],
+    onSuccess: (_, secretKey) => {
       if (editingKey === secretKey) {
-        setEditingKey(null);
-        setKey("");
-        setLabel("");
-        setSummary("");
-        setValue("");
+        resetForm();
       }
-      toastManager.add({
-        type: "success",
-        title: `Removed $${secretKey}`,
-        description: "Future Project Runtime launches will no longer receive this secret.",
-      });
     },
-    onError: (error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not remove secret",
-        description: error instanceof Error ? error.message : "Secret removal failed.",
-      });
-    },
+    successToast: (_, secretKey) => ({
+      title: `Removed $${secretKey}`,
+      description: "Future Project Runtime launches will no longer receive this secret.",
+    }),
+    errorToast: "Could not remove secret",
   });
 
   const isSaving = upsertSecretMutation.isPending;
@@ -138,7 +124,7 @@ export function HomelabSecretsSection() {
       nextSecret.summary = normalizedSummary;
     }
 
-    upsertSecretMutation.mutate(nextSecret);
+    upsertSecretMutation.submit(nextSecret);
   }, [key, label, summary, upsertSecretMutation, value]);
 
   const handleEdit = useCallback((secret: (typeof secrets)[number]) => {
@@ -157,7 +143,7 @@ export function HomelabSecretsSection() {
       if (!confirmed) {
         return;
       }
-      deleteSecretMutation.mutate(secretKey);
+      deleteSecretMutation.submit(secretKey);
     },
     [deleteSecretMutation],
   );
@@ -232,17 +218,7 @@ export function HomelabSecretsSection() {
               {isSaving ? "Saving..." : editingKey ? `Save $${editingKey}` : "Save secret"}
             </Button>
             {editingKey ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setEditingKey(null);
-                  setKey("");
-                  setLabel("");
-                  setSummary("");
-                  setValue("");
-                }}
-              >
+              <Button size="sm" variant="ghost" onClick={resetForm}>
                 Cancel
               </Button>
             ) : null}
@@ -250,11 +226,15 @@ export function HomelabSecretsSection() {
         </div>
       </SettingsRow>
 
-      {secretsQuery.isLoading ? (
+      {secretsDisplayState === "loading" ? (
         <div className="border-t border-border/60 px-4 py-4 text-xs text-muted-foreground sm:px-5">
           Loading secrets...
         </div>
-      ) : secrets.length === 0 ? (
+      ) : secretsDisplayState === "error" ? (
+        <div className="border-t border-border/60 px-4 py-4 text-xs text-destructive sm:px-5">
+          Could not load secrets. {describeHomelabError(secretsQuery.error)}
+        </div>
+      ) : secretsDisplayState === "empty" ? (
         <div className="border-t border-border/60 px-4 py-4 text-xs text-muted-foreground sm:px-5">
           No secrets saved yet.
         </div>
@@ -303,7 +283,7 @@ export function HomelabSecretsSection() {
                       size="sm"
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
-                      disabled={deleteSecretMutation.isPending && deletingKey === secret.key}
+                      disabled={deleteSecretMutation.isPending}
                       onClick={() => void handleDelete(secret.key)}
                     >
                       <Trash2Icon className="size-3.5" />

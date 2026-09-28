@@ -13,6 +13,7 @@ import {
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 
+import { describeHomelabError, fetchHomelabJson } from "../../homelab/homelabFetch";
 import { newCommandId, newProjectId } from "../../lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { useProjects } from "../../state/entities";
@@ -243,13 +244,7 @@ export function useStandaloneThreadMoveDialogs(): {
       limit: "500",
     }).toString();
 
-    void fetch(url, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Project memory request failed with status ${response.status}.`);
-        }
-        return (await response.json()) as { readonly entries?: ReadonlyArray<ProjectMemoryEntry> };
-      })
+    void fetchHomelabJson<{ readonly entries?: ReadonlyArray<ProjectMemoryEntry> }>(url)
       .then((result) => {
         if (cancelled) {
           return;
@@ -265,7 +260,7 @@ export function useStandaloneThreadMoveDialogs(): {
           stackedThreadToast({
             type: "warning",
             title: "Unable to load Scratch memory",
-            description: error instanceof Error ? error.message : "Memory options may be empty.",
+            description: describeHomelabError(error),
           }),
         );
       })
