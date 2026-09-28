@@ -1,144 +1,74 @@
 # Upstream Sync Playbook
 
-## Goal
-
-Keep Homelab Agent easy to update from upstream `t3code` while preserving the
-homelab product model.
-
-The main strategy is to isolate homelab-specific behavior behind local modules
-and keep upstream-heavy provider/runtime files as thin integration points.
+Homelab Agent tracks `pingdotgg/t3code`, which lands several hundred commits a
+week. Syncs are **merges** (never rebases), done **weekly** so each one stays
+small. The rule that keeps them cheap: upstream-owned files carry only one-line
+hooks; homelab behavior lives in fork-owned modules.
 
 ## Remotes
-
-Expected remotes:
 
 ```text
 origin    https://github.com/OmerTexerman/homelab-agent.git
 upstream  https://github.com/pingdotgg/t3code.git
 ```
 
-Check with:
+## Weekly flow
 
 ```bash
-git remote -v
+node scripts/upstream-sync.ts           # drift, conflict forecast, new migrations
+node scripts/upstream-sync.ts --merge   # sync/upstream-<date> + checkpoint branch, merge started
+# resolve conflicts (rules below), regenerate generated files
+node scripts/upstream-sync.ts --verify  # fork invariants + typecheck
 ```
 
-## Branch Strategy
+The merge branch goes through CI like any change. `main` only reaches prod after
+CI passes (see `deploy/proxmox/README.md`).
 
-Do not rebase a dirty working tree.
+## Resolution rules
 
-Recommended flow:
+1. **Upstream wins.** For a conflicted upstream-owned file, take upstream's
+   version, then re-add the fork's behavior as a small hook: a one-line call,
+   spread, or option into a fork-owned module. Never move upstream logic into a
+   fork module; fork modules hold only fork deltas.
+2. **Know what must survive.** Before merging, list the fork's changes to the
+   files that conflict (`git diff $(git merge-base HEAD upstream/main) HEAD -- <file>`)
+   and check each one off. Silent drops come from renamed/moved upstream files and
+   from taking upstream wholesale without re-adding hooks.
+3. **Generated files are regenerated**, never hand-merged:
+   `apps/web/src/routeTree.gen.ts` (router plugin) and `pnpm-lock.yaml` (`vp i`).
+4. **Migrations get new ids.** Register each new upstream migration above the
+   fork's current maximum id (the script prints the mapping). The Effect migrator
+   skips ids at or below the latest applied one, so reusing upstream's number
+   means it never runs in prod. Never renumber an existing migration.
+5. **Fork tests live in sibling files** (`*.homelab.test.ts`), so upstream test
+   files can be taken as-is.
+6. **CI runners:** `--merge` rewrites upstream's Blacksmith runners to
+   GitHub-hosted ones. Upstream-only workflows stay disabled with
+   `gh workflow disable`, not deleted.
+7. Keep the fork's `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and
+   `docs/README.md`.
 
-```bash
-git status --short --branch
-git switch -c sync/upstream-YYYY-MM-DD
-git fetch upstream
-git rebase upstream/main
-```
+## Hook seams
 
-If the branch already contains local uncommitted work, checkpoint it first with a
-clear WIP commit or an explicit stash created for the sync. Prefer a commit when
-the work should be preserved for later review.
+Where fork behavior plugs into upstream code:
 
-After conflicts are resolved and checks pass, merge or open a PR back into the
-main homelab branch.
+| Upstream area                            | Fork seam                                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| WS RPC methods and scopes                | `apps/server/src/wsHomelabRpc.ts`, `apps/server/src/auth/homelabRpcScopes.ts`        |
+| HTTP routes                              | `apps/server/src/homelab/http.ts`                                                    |
+| Runtime execution (providers, terminals) | `apps/server/src/runtime/**` via `RuntimeExecutionContext`, `RuntimeTerminalContext` |
+| Settings UI                              | `apps/web/src/components/settings/HomelabSettingsPanels.tsx`                         |
+| Home screen                              | `apps/web/src/components/homelab/HomeOverviewSurface.tsx`                            |
+| Project pickers and counts               | `apps/web/src/homelab/visibleProjects.ts`                                            |
+| Upstream UI that is wrong for homelab    | server capabilities (`pullRequests: false`), `apps/web/src/productCapabilities.ts`   |
+| Contract additions                       | fork-owned files re-exported through `packages/contracts/src/homelabIndex.ts`        |
 
-## Conflict Zones
-
-These files are expected to conflict more often because they sit near upstream
-integration code:
-
-- `apps/server/src/provider/Layers/ClaudeAdapter.ts`
-- `apps/server/src/provider/Layers/CodexAdapter.ts`
-- `apps/server/src/provider/Layers/ProviderService.ts`
-- `apps/server/src/runtime/Layers/ThreadRuntime.ts`
-- `apps/server/src/terminal/Layers/Manager.ts`
-- `apps/web/src/components/ChatView.tsx`
-- `apps/web/src/components/Sidebar.tsx`
-- `packages/contracts/src/orchestration.ts`
-- `packages/contracts/src/providerRuntime.ts`
-
-When possible, move homelab policy out of those files and into fork-owned
-modules. Then keep the upstream-heavy file change small: parse upstream/provider
-state, call the homelab module, and adapt the result back.
-
-## Fork-Owned Boundaries
-
-Prefer these modules or equivalent successors for homelab product behavior. See
-[architecture-boundaries.md](./architecture-boundaries.md) for ownership and
-non-ownership details.
-
-- `RuntimeWorkspace`
-- `ProjectRuntimeQueue`
-- `ProjectMemory`
-- `HomelabContextView`
-- `RuntimeSecretInjection`
-- `RuntimeTerminalContext`
-- `apps/web/src/threadTimelineReadModel.ts`
-- `apps/web/src/decisionQueueReadModel.ts`
-- `apps/server/src/provider/Layers/ProviderEventCanonicalizer.ts`
-- `apps/server/src/orchestration/Layers/ProviderRuntimeProjectionPolicy.ts`
-- `apps/server/src/orchestration/Layers/ProviderCommandPolicy.ts`
-- `apps/server/src/orchestration/Layers/CheckpointProjectionPolicy.ts`
-- `apps/server/src/terminal/Layers/TerminalSession.ts`
-- `apps/server/src/provider/ProviderSelectionPolicy.ts`
-- `apps/server/src/runtime/Layers/RuntimeExecutionContext.ts`
-- `apps/server/src/runtime/Services/RuntimeBootstrapResolver.ts`
-- `apps/server/src/runtime/Layers/RuntimeBootstrapResolver.ts`
-
-Fork-owned modules should have focused tests. This gives upstream syncs a stable
-regression surface even when upstream files churn.
-
-## Sync Procedure
-
-1. Read the upstream diff summary before rebasing:
-
-   ```bash
-   git fetch upstream
-   git log --oneline --decorate HEAD..upstream/main
-   git diff --stat HEAD..upstream/main
-   ```
-
-2. Checkpoint local work.
-3. Rebase onto `upstream/main`.
-4. Resolve conflicts by preserving homelab product behavior and accepting
-   upstream provider/runtime fixes where compatible.
-5. Move any newly duplicated homelab policy back behind fork-owned modules.
-6. Run validation.
-7. Review runtime instruction files for drift.
-8. Update this playbook if the conflict pattern changes.
+When upstream restructures an area, add or move the seam rather than spreading
+fork logic back into upstream files.
 
 ## Validation
 
-Minimum validation after an upstream sync:
-
-```bash
-pnpm fmt
-pnpm lint
-pnpm typecheck
-```
-
-Run focused tests with `pnpm run test` (or `vp test run <files>` for targeted runs).
-
-Recommended focused areas after provider/runtime conflicts:
-
-```bash
-pnpm run test apps/server/src/provider
-pnpm run test apps/server/src/runtime
-pnpm run test apps/server/src/orchestration
-pnpm run test apps/server/src/terminal
-pnpm run test apps/web/src
-```
-
-## Automation Target
-
-Future automation can do the non-destructive parts:
-
-- fetch upstream
-- create a sync branch
-- attempt the rebase
-- run validation
-- report conflicts and changed conflict zones
-
-Automation should not silently resolve conflicts in provider/runtime files. Those
-files carry product semantics and need human or agent review.
+`--verify` runs the fork-invariant tests (`scripts/fork-invariants.test.ts`,
+migration ordering, scope-table agreement, every `*.homelab.test.ts`) and
+typechecks contracts, server and web. Run focused tests for any file you
+resolved by hand. CI runs the full suite.
