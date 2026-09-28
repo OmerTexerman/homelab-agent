@@ -146,7 +146,8 @@ export const make = Effect.gen(function* () {
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
-      pullRequests: true,
+      // Homelab threads run in Project Runtime containers, not Git checkouts.
+      pullRequests: false,
       threadSettlement: true,
       threadSnooze: true,
       threadPinning: true,

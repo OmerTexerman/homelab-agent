@@ -2139,10 +2139,7 @@ function ChatViewContent(props: ChatViewProps) {
     ? (activeEnvironment?.serverConfig ?? null)
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
-  // Homelab threads run in Docker Project Runtimes, not Git checkouts:
-  // pull requests are hidden along with the rest of the source-control UI.
-  const supportsPullRequests =
-    showSourceControlUi && serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread

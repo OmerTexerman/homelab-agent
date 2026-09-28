@@ -11,7 +11,6 @@ import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-ro
 import { APP_BASE_NAME } from "../../branding";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { shouldShowPrimarySourceControlUi } from "../../productCapabilities";
 import { useEnvironments } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -145,15 +144,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             : null,
   });
   const { environments } = useEnvironments();
-  // Homelab threads run in Docker Project Runtimes, not Git checkouts: pull
-  // requests are hidden along with the rest of the source-control UI.
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.
-  const pullRequestsSupported =
-    shouldShowPrimarySourceControlUi() &&
-    environments.some(
-      (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
-    );
+  const pullRequestsSupported = environments.some(
+    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+  );
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
