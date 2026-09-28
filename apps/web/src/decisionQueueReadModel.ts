@@ -263,19 +263,6 @@ export function deriveComposerDecisionState(queue: DecisionQueueReadModel): Comp
   };
 }
 
-export function deriveNextSecretRequestDecision(
-  secrets: ReadonlyArray<HomelabSecretDescriptor> | undefined,
-  dismissedSecretKeys: ReadonlySet<string>,
-): SecretRequestDecisionEntry | null {
-  const queue = deriveDecisionQueueReadModel({
-    secretRequests: {
-      secrets,
-      dismissedSecretKeys,
-    },
-  });
-  return queue.pendingEntries.find(isSecretRequestDecision) ?? null;
-}
-
 export function deriveSidebarThreadDecisionQueue(input: {
   readonly thread: Pick<
     SidebarThreadSummary,
@@ -572,8 +559,4 @@ function compareDecisionEntries(left: DecisionQueueEntry, right: DecisionQueueEn
   }
 
   return left.id.localeCompare(right.id);
-}
-
-function isSecretRequestDecision(entry: DecisionQueueEntry): entry is SecretRequestDecisionEntry {
-  return entry.kind === "secret-request";
 }

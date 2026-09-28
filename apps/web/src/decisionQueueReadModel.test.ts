@@ -12,7 +12,6 @@ import type { ProposedPlan } from "./types";
 import {
   deriveComposerDecisionState,
   deriveDecisionQueueReadModel,
-  deriveNextSecretRequestDecision,
 } from "./decisionQueueReadModel";
 
 const approval = (id: string, createdAt: string): PendingApproval => ({
@@ -178,7 +177,9 @@ describe("deriveDecisionQueueReadModel", () => {
 
   it("deduplicates the same prompt when multiple consumers contribute it", () => {
     const pendingSecret = secret("PROXMOX_TOKEN", false);
-    const duplicateSecretDecision = deriveNextSecretRequestDecision([pendingSecret], new Set());
+    const duplicateSecretDecision = deriveDecisionQueueReadModel({
+      secretRequests: { secrets: [pendingSecret], dismissedSecretKeys: new Set() },
+    }).pendingEntries.find((entry) => entry.kind === "secret-request");
     if (!duplicateSecretDecision) {
       throw new Error("expected a secret request decision");
     }

@@ -6,7 +6,6 @@ import type {
   ProjectRuntimeLifecycleState,
   RuntimeSessionId,
   ServerProvider,
-  ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import { isCuratorProject, isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import {
@@ -771,8 +770,4 @@ export function deriveHomeOverviewReadModel(input: HomeOverviewInput): HomeOverv
     },
     knowledge,
   };
-}
-
-export function runtimeModeLabel(mode: ThreadRuntimeMode): string {
-  return mode === "isolated" ? "Isolated runtime clone" : "Project Runtime queue";
 }
