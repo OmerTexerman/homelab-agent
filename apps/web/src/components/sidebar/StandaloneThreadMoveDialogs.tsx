@@ -25,7 +25,7 @@ import {
   standaloneThreadMoveRuntimeDescription,
   type SidebarDraftAwareThreadSummary,
   type StandaloneThreadMoveMemorySelection,
-} from "../Sidebar.logic";
+} from "./standaloneThreadMove.logic";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
