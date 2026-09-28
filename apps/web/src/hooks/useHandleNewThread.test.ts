@@ -1,6 +1,6 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { DraftId } from "../composerDraftStore";
 
 import {

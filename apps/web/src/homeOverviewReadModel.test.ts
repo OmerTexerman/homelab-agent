@@ -5,7 +5,7 @@ import type {
   RuntimeSessionId,
   ServerProvider,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { deriveHomeOverviewReadModel } from "./homeOverviewReadModel";
 import type { Project, SidebarThreadSummary, ThreadSession } from "./types";

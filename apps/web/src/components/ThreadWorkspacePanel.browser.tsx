@@ -2,8 +2,8 @@ import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vite-plus/test/browser";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
 const { environmentApiById, ensureEnvironmentApiMock } = vi.hoisted(() => ({

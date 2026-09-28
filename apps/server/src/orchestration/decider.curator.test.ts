@@ -11,7 +11,7 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createCuratorProjectWorkspaceRoot } from "@t3tools/shared/curatorProject";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";

@@ -5,7 +5,7 @@ import {
   type OrchestrationProposedPlanId,
   TurnId,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type { PendingApproval, PendingUserInput } from "./session-logic";
 import type { ProposedPlan } from "./types";

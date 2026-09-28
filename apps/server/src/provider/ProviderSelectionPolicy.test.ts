@@ -6,7 +6,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   interpretProviderReadiness,
