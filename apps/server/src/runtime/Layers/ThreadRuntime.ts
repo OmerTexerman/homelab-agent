@@ -240,7 +240,39 @@ const RUNTIME_SERVER_HOST_ALIAS = "host.docker.internal";
 const RUNTIME_SERVER_URL_ENV = "HOMELAB_AGENT_RUNTIME_SERVER_URL";
 const RUNTIME_AGENTS_FILENAME = "AGENTS.md";
 const RUNTIME_CLAUDE_FILENAME = "CLAUDE.md";
-const KEEPALIVE_COMMAND = "trap : TERM INT; while sleep 3600; do :; done";
+// `wait` lets the TERM trap fire immediately, so `docker stop` returns promptly
+// instead of hitting its kill timeout.
+const KEEPALIVE_COMMAND = "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done";
+// Host sockets that grant root-equivalent (docker) or credential (ssh-agent)
+// access are only forwarded into runtimes when the operator opts in.
+const RUNTIME_DOCKER_SOCKET_ENV = "HOMELAB_AGENT_RUNTIME_DOCKER_SOCKET";
+const RUNTIME_SSH_AGENT_ENV = "HOMELAB_AGENT_RUNTIME_SSH_AGENT";
+const RUNTIME_CONTAINER_PROFILE_LABEL = "homelab.runtime.profile";
+const RUNTIME_CONTAINER_HARDENING_ARGS = [
+  "--init",
+  "--security-opt",
+  "no-new-privileges",
+  "--pids-limit",
+  "4096",
+] as const;
+
+function isRuntimeOptInEnabled(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+/**
+ * Identifies the container launch profile (hardening flags plus opted-in host
+ * sockets). Stored as a container label so a profile change recreates the
+ * container instead of leaving previously-granted mounts in place.
+ */
+function runtimeContainerProfile(hostBindings: RuntimeHostBindings): string {
+  return [
+    "v1",
+    `docker=${hostBindings.dockerSocketPath ? 1 : 0}`,
+    `ssh=${hostBindings.sshAuthSockPath ? 1 : 0}`,
+  ].join(";");
+}
 
 interface CurrentContainerNetwork {
   readonly networkName: string;
@@ -2295,9 +2327,13 @@ function isContainerCompatible(
   inspect: DockerContainerInspectResult,
   runtime: ThreadRuntimeDescriptor,
   mounts: ReadonlyArray<DockerMountSpec>,
+  expectedProfile: string,
   expectedImageFingerprint?: string,
 ): boolean {
   if (inspect.Config?.Image !== runtime.imageRef) {
+    return false;
+  }
+  if (inspect.Config?.Labels?.[RUNTIME_CONTAINER_PROFILE_LABEL] !== expectedProfile) {
     return false;
   }
   if (inspect.Config?.WorkingDir !== runtime.cwd) {
@@ -2634,8 +2670,11 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           NodePath.join(NodeOS.homedir(), ".local", "share"),
         "opencode",
       );
-      const sshAuthSockPath = trimToUndefined(process.env.SSH_AUTH_SOCK);
+      const sshAuthSockPath = isRuntimeOptInEnabled(RUNTIME_SSH_AGENT_ENV)
+        ? trimToUndefined(process.env.SSH_AUTH_SOCK)
+        : undefined;
       const dockerSocketPath = "/var/run/docker.sock";
+      const forwardDockerSocket = isRuntimeOptInEnabled(RUNTIME_DOCKER_SOCKET_ENV);
       const codexExists = yield* fileSystem
         .exists(configuredCodexAuthPath)
         .pipe(Effect.orElseSucceed(() => false));
@@ -2651,9 +2690,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       const sshAuthSockExists = sshAuthSockPath
         ? yield* fileSystem.exists(sshAuthSockPath).pipe(Effect.orElseSucceed(() => false))
         : false;
-      const dockerSocketExists = yield* fileSystem
-        .exists(dockerSocketPath)
-        .pipe(Effect.orElseSucceed(() => false));
+      const dockerSocketExists = forwardDockerSocket
+        ? yield* fileSystem.exists(dockerSocketPath).pipe(Effect.orElseSucceed(() => false))
+        : false;
 
       return {
         ...(codexExists ? { codexHostAuthPath: configuredCodexAuthPath } : {}),
@@ -3434,6 +3473,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const runDetachedContainer = Effect.fn("threadRuntime.runDetachedContainer")(function* (input: {
     readonly runtime: ThreadRuntimeDescriptor;
     readonly mounts: ReadonlyArray<DockerMountSpec>;
+    readonly profile: string;
   }) {
     const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const args = [
@@ -3441,6 +3481,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       "-d",
       "--name",
       input.runtime.containerName,
+      "--label",
+      `${RUNTIME_CONTAINER_PROFILE_LABEL}=${input.profile}`,
+      ...RUNTIME_CONTAINER_HARDENING_ARGS,
       ...(runtimeNetworkPlan.addHostGatewayAlias
         ? ["--add-host", `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`]
         : []),
@@ -3569,11 +3612,15 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     currentFingerprint: string | undefined,
   ) {
     const mounts = buildMountSpecs(runtime, hostBindings);
+    const profile = runtimeContainerProfile(hostBindings);
     const expectedImageFingerprint =
       runtime.imageRef === localRuntimeImageBuildSpec.imageRef ? currentFingerprint : undefined;
 
     let inspect = yield* inspectContainerByName(runtime.containerName);
-    if (inspect && !isContainerCompatible(inspect, runtime, mounts, expectedImageFingerprint)) {
+    if (
+      inspect &&
+      !isContainerCompatible(inspect, runtime, mounts, profile, expectedImageFingerprint)
+    ) {
       yield* removeContainerIfPresent(runtime.containerName);
       inspect = undefined;
     }
@@ -3582,6 +3629,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       yield* runDetachedContainer({
         runtime,
         mounts,
+        profile,
       });
       inspect = yield* inspectContainerByName(runtime.containerName);
       if (!inspect) {

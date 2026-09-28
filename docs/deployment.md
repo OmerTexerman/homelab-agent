@@ -200,6 +200,15 @@ Runtime image settings:
 | `HOMELAB_AGENT_RUNTIME_SHELL`         | `/bin/bash`                    | Shell path inside runtime containers.                |
 | `HOMELAB_AGENT_DOCKER_BINARY`         | `docker`                       | Docker CLI binary path.                              |
 | `HOMELAB_AGENT_OPENCODE_MANAGED_HOST` | unset                          | Optional host name for managed OpenCode server URLs. |
+| `HOMELAB_AGENT_RUNTIME_DOCKER_SOCKET` | unset                          | Set `1` to mount the host Docker socket.             |
+| `HOMELAB_AGENT_RUNTIME_SSH_AGENT`     | unset                          | Set `1` to forward the host `SSH_AUTH_SOCK`.         |
+
+Runtime containers run with `--init`, `no-new-privileges`, and a pids limit, and
+do not receive host sockets unless opted in above. The Docker socket is
+root-equivalent on the host, so only enable it when agents must manage Docker
+there. Containers carry a `homelab.runtime.profile` label; changing these
+settings (or upgrading from a build without the label) recreates each runtime
+container on its next start. `/workspace` and `/runtime/home` are preserved.
 
 Runtime containers receive a generated `.homelab-runtime.env` containing:
 

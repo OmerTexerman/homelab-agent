@@ -137,6 +137,7 @@ class FakeDockerRunner {
         let name = "";
         let workdir = "";
         let networkName = "bridge";
+        const runLabels: Record<string, string> = {};
         const mounts: FakeDockerMount[] = [];
         const ports: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
         const portBindings: Record<string, Array<{ HostIp: string; HostPort: string }>> = {};
@@ -162,7 +163,17 @@ class FakeDockerRunner {
             index += 2;
             continue;
           }
-          if (value === "--add-host") {
+          if (value === "--add-host" || value === "--security-opt" || value === "--pids-limit") {
+            index += 2;
+            continue;
+          }
+          if (value === "--init") {
+            index += 1;
+            continue;
+          }
+          if (value === "--label") {
+            const [key = "", ...rest] = (input[index + 1] ?? "").split("=");
+            runLabels[key] = rest.join("=");
             index += 2;
             continue;
           }
@@ -229,7 +240,7 @@ class FakeDockerRunner {
               IPAddress: `172.30.0.${this.nextId}`,
             },
           },
-          labels: Object.assign({}, this.imageLabels.get(image)),
+          labels: Object.assign({}, this.imageLabels.get(image), runLabels),
           running: true,
         });
         return okResult({ stdout: `${id}\n` });
@@ -1246,6 +1257,58 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
         NodeAssert.equal(
           docker.calls.some((call) => call[0] === "start"),
           false,
+        );
+      }),
+  );
+
+  it.effect(
+    "launches hardened containers without host sockets and recreates older launch profiles",
+    () =>
+      Effect.gen(function* () {
+        docker.calls.length = 0;
+        docker.containers.clear();
+        docker.images.clear();
+        docker.imageLabels.clear();
+        delete process.env.HOMELAB_AGENT_RUNTIME_DOCKER_SOCKET;
+        delete process.env.HOMELAB_AGENT_RUNTIME_SSH_AGENT;
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const runtime = yield* ThreadRuntime;
+        const settings = yield* ServerSettingsService;
+        const codexAuthPath = (yield* settings.getSettings).providers.codex.homePath;
+        yield* fileSystem.makeDirectory(codexAuthPath, { recursive: true });
+
+        const descriptor = yield* runtime.ensureRuntime({
+          threadId: ThreadId.make("thread-runtime-launch-profile"),
+          provider: "codex",
+          runtimeMode: "full-access",
+        });
+        const firstStart = yield* runtime.startRuntime(descriptor.threadId);
+
+        const runCall = findRunCall(docker.calls);
+        NodeAssert.ok(runCall);
+        NodeAssert.ok(runCall.includes("--init"));
+        NodeAssert.ok(runCall.includes("no-new-privileges"));
+        NodeAssert.ok(runCall.includes("--pids-limit"));
+        NodeAssert.equal(
+          runCall.some((arg) => arg.includes("docker.sock")),
+          false,
+        );
+        const container = docker.containers.get(firstStart.containerName);
+        NodeAssert.ok(container);
+        NodeAssert.equal(container.labels["homelab.runtime.profile"], "v1;docker=0;ssh=0");
+
+        // Containers created before launch profiles existed carry no label and may
+        // still hold the docker socket, so they must be recreated rather than reused.
+        yield* runtime.stopRuntime(descriptor.threadId);
+        delete container.labels["homelab.runtime.profile"];
+        docker.calls.length = 0;
+        const restarted = yield* runtime.startRuntime(descriptor.threadId);
+
+        NodeAssert.notEqual(restarted.containerId, firstStart.containerId);
+        NodeAssert.equal(
+          docker.calls.some((call) => call[0] === "rm"),
+          true,
         );
       }),
   );
