@@ -12,6 +12,8 @@ import pkg from "./package.json" with { type: "json" };
 
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
+import { resolveHomelabDevHmrHost } from "./src/homelab/devHmrHost";
+
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 
 const repoEnv = loadRepoEnv();
@@ -29,9 +31,11 @@ const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 const port = Number(process.env.PORT ?? 5733);
 const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
-// Homelab fork: headless dev driving advertises the dev server through
-// VITE_DEV_SERVER_URL; the HMR host is derived from it (see resolveDevHmrHost).
-const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
+const hmrHost = resolveHomelabDevHmrHost({
+  explicitHost,
+  bindHost: host,
+  devServerUrl: process.env.VITE_DEV_SERVER_URL,
+});
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
 const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
@@ -154,30 +158,6 @@ const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-export function resolveDevHmrHost(input: {
-  readonly bindHost: string;
-  readonly devServerUrl: string | undefined;
-}): string {
-  const configuredDevServerUrl = input.devServerUrl?.trim();
-  if (configuredDevServerUrl) {
-    try {
-      const url = new URL(configuredDevServerUrl);
-      if (url.hostname) {
-        return url.hostname;
-      }
-    } catch {
-      // Fall back to the bind host when the optional display URL is malformed.
-    }
-  }
-
-  const bindHost = input.bindHost.trim();
-  return bindHost === "0.0.0.0" || bindHost === "::" || bindHost === "[::]"
-    ? "localhost"
-    : bindHost || "localhost";
-}
-
-const hmrHost = resolveDevHmrHost({ bindHost: host, devServerUrl: configuredDevServerUrl });
-
 export default defineConfig(() => {
   return {
     assetsInclude: ["**/*.wasm"],
@@ -274,9 +254,7 @@ export default defineConfig(() => {
       // page origin, which is what makes HMR work over Tailscale/LAN instead of
       // failing an attempt against the wrong machine's localhost first.
       // (Vite 8 logs connection state via console.debug — enable "Verbose".)
-      // Homelab fork: a configured VITE_DEV_SERVER_URL (headless dev driving)
-      // also pins the HMR host, derived from that display URL.
-      ...(explicitHost || configuredDevServerUrl
+      ...(hmrHost
         ? {
             hmr: {
               protocol: "ws",
