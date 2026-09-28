@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { KeyRoundIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -8,6 +8,7 @@ import {
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
 import { deriveDecisionQueueReadModel } from "~/decisionQueueReadModel";
+import { useHomelabMutation } from "~/homelab/useHomelabMutation";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { Button } from "./ui/button";
 import {
@@ -20,15 +21,12 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { toastManager } from "./ui/toast";
 
 export function HomelabSecretRequestCoordinator() {
-  const queryClient = useQueryClient();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledKeysRef = useRef(new Set<string>());
   const [activeSecretKey, setActiveSecretKey] = useState<string | null>(null);
   const [value, setValue] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
   const secretsQuery = useQuery({
     ...homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
     refetchInterval: 3_000,
@@ -66,8 +64,29 @@ export function HomelabSecretRequestCoordinator() {
     }
     setActiveSecretKey(null);
     setValue("");
-    setIsSaving(false);
   };
+
+  const saveSecretMutation = useHomelabMutation({
+    mutationFn: async (secret: {
+      key: string;
+      value: string;
+      label?: string;
+      summary?: string;
+    }) => {
+      if (!primaryEnvironmentId) {
+        throw new Error("No environment is available to store secrets.");
+      }
+      return upsertHomelabSecretRequest({ environmentId: primaryEnvironmentId, secret });
+    },
+    invalidate: [homelabSecretsQueryKeys.all],
+    onSuccess: (_, secret) => closeModal(secret.key),
+    successToast: (saved) => ({
+      title: "Secret saved",
+      description: `${saved.placeholder} is saved. Runtimes pick it up on their next command.`,
+    }),
+    errorToast: "Could not save secret",
+  });
+  const isSaving = saveSecretMutation.isPending;
 
   if (!activeSecret) {
     return null;
@@ -144,46 +163,12 @@ export function HomelabSecretRequestCoordinator() {
           <Button
             disabled={value.trim().length === 0 || isSaving}
             onClick={() => {
-              if (!primaryEnvironmentId) {
-                toastManager.add({
-                  type: "error",
-                  title: "Could not save secret",
-                  description: "No environment is available to store secrets.",
-                });
-                return;
-              }
-              setIsSaving(true);
-              void upsertHomelabSecretRequest({
-                environmentId: primaryEnvironmentId,
-                secret: {
-                  key: activeSecret.key,
-                  value,
-                  ...(activeSecret.label ? { label: activeSecret.label } : {}),
-                  ...(activeSecret.summary ? { summary: activeSecret.summary } : {}),
-                },
-              })
-                .then(() =>
-                  queryClient.invalidateQueries({
-                    queryKey: homelabSecretsQueryKeys.all,
-                  }),
-                )
-                .then(() => {
-                  toastManager.add({
-                    type: "success",
-                    title: "Secret saved",
-                    description: `${activeSecret.placeholder} is now available to runtimes.`,
-                  });
-                  closeModal(activeSecret.key);
-                })
-                .catch((error: unknown) => {
-                  setIsSaving(false);
-                  toastManager.add({
-                    type: "error",
-                    title: "Could not save secret",
-                    description:
-                      error instanceof Error ? error.message : "Unknown secret save failure.",
-                  });
-                });
+              saveSecretMutation.submit({
+                key: activeSecret.key,
+                value,
+                ...(activeSecret.label ? { label: activeSecret.label } : {}),
+                ...(activeSecret.summary ? { summary: activeSecret.summary } : {}),
+              });
             }}
           >
             Save secret
