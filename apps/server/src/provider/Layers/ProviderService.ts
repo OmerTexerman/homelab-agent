@@ -1414,9 +1414,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ),
   );
 
-  const clearThreadState: ProviderService.ProviderServiceShape["clearThreadState"] = (threadId) =>
-    stopSession({ threadId }).pipe(Effect.catch(() => Effect.void));
-
   return {
     startSession,
     sendTurn,
@@ -1424,7 +1421,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
-    clearThreadState,
     listSessions,
     getCapabilities,
     getInstanceInfo,

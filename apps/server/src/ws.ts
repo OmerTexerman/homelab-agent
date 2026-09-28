@@ -114,6 +114,7 @@ import {
   type AdoptedBootstrapThread,
   makeThreadBootstrapRecovery,
 } from "./wsThreadBootstrapRecovery.ts";
+import { OrchestrationCommandReadModel } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -421,6 +422,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const commandReadModel = yield* OrchestrationCommandReadModel;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
       // client's origin, including server-generated bootstrap sub-commands:
@@ -873,6 +875,7 @@ const makeWsRpcLayer = (
 
           const bootstrapRecovery = makeThreadBootstrapRecovery({
             orchestrationEngine,
+            commandReadModel,
             gitWorkflow,
             serverCommandId,
             threadId: command.threadId,
@@ -1759,7 +1762,7 @@ const makeWsRpcLayer = (
           ),
         ...makeHomelabRpcHandlers({
           observeRpcEffect,
-          orchestrationEngine,
+          commandReadModel,
           threadRuntime,
           threadWorkspace,
           projectRuntimeLifecycle,

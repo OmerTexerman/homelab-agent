@@ -10,6 +10,7 @@ import {
 import * as Effect from "effect/Effect";
 
 import type { GitWorkflowService } from "./git/GitWorkflowService.ts";
+import type { OrchestrationCommandReadModelShape } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
 
 /**
@@ -44,7 +45,8 @@ const hasBootstrapPriorTurnState = (
 ) => thread.latestTurn !== null || thread.messages.length > 0 || thread.checkpoints.length > 0;
 
 export const makeThreadBootstrapRecovery = (deps: {
-  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch" | "getReadModel">;
+  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">;
+  readonly commandReadModel: OrchestrationCommandReadModelShape;
   readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree">;
   readonly serverCommandId: (
     tag: string,
@@ -52,10 +54,10 @@ export const makeThreadBootstrapRecovery = (deps: {
   readonly threadId: ThreadId;
   readonly requestedCreateThread: ThreadTurnStartBootstrap["createThread"] | undefined;
 }) => {
-  const { orchestrationEngine, gitWorkflow, serverCommandId, threadId } = deps;
+  const { orchestrationEngine, commandReadModel, gitWorkflow, serverCommandId, threadId } = deps;
 
   const loadExistingThread = (): Effect.Effect<OrchestrationThread | null, never, never> =>
-    orchestrationEngine
+    commandReadModel
       .getReadModel()
       .pipe(
         Effect.map(

@@ -15,7 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
-import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
+import type { OrchestrationCommandReadModelShape } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import { wakeThreadWorkspaceRuntime as wakeThreadWorkspaceRuntimeShared } from "./runtime/wakeThreadWorkspaceRuntime.ts";
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
@@ -56,7 +56,7 @@ export interface HomelabRpcHandlerDeps {
     effect: Effect.Effect<A, E, R>,
     traceAttributes?: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
-  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "getReadModel">;
+  readonly commandReadModel: OrchestrationCommandReadModelShape;
   readonly threadRuntime: ThreadRuntimeShape;
   readonly threadWorkspace: ThreadWorkspaceShape;
   readonly projectRuntimeLifecycle: ProjectRuntimeLifecycleShape;
@@ -67,7 +67,7 @@ export interface HomelabRpcHandlerDeps {
 export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
   const {
     observeRpcEffect,
-    orchestrationEngine,
+    commandReadModel,
     threadRuntime,
     threadWorkspace,
     projectRuntimeLifecycle,
@@ -87,7 +87,7 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
   };
 
   const activeSessionThreadIds = Effect.gen(function* () {
-    const readModel = yield* orchestrationEngine.getReadModel();
+    const readModel = yield* commandReadModel.getReadModel();
     return readModel.threads
       .filter(
         (thread) =>
@@ -119,7 +119,7 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
     wakeThreadWorkspaceRuntimeShared({
       threadId,
       threadRuntime,
-      getReadModel: orchestrationEngine.getReadModel,
+      getReadModel: commandReadModel.getReadModel,
     });
 
   return {
