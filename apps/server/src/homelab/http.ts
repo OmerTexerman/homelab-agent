@@ -44,12 +44,13 @@ import {
   HomelabSkillCreateInput,
   HomelabSkillListInput,
   HomelabSkillPromoteInput,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Data, Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
+  type AuthenticatedSession,
   EnvironmentAuth,
   isServerAuthCredentialError,
   isServerAuthInternalError,
@@ -214,13 +215,100 @@ const requireProjectScopeForPromotion = (projectId: ProjectId) =>
         )
       : Effect.void;
 
-const resolveProjectIdForMemoryRequest = (input: {
-  readonly projectId?: ProjectId | undefined;
-  readonly threadId?: ProjectMemoryListInput["threadId"] | undefined;
-}) =>
+const lookupActiveThreadProjectId = (threadId: ThreadId) =>
   Effect.gen(function* () {
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: "Failed to resolve thread for homelab request.",
+            status: 500,
+            cause,
+          }),
+      ),
+    );
+    return Option.map(thread, (entry) => entry.projectId);
+  });
+
+// Subject of the in-container runtime bearer token, minted by ThreadRuntime.
+const RUNTIME_TOKEN_SUBJECT_PREFIX = "thread-runtime:";
+
+/**
+ * Who is calling a project/thread-scoped homelab route. Human sessions are
+ * `unrestricted`; runtime tokens are pinned to the project of the thread they were
+ * minted for, and scratch/curator runtimes (always isolated) additionally to that thread.
+ */
+export type HomelabCallerScope =
+  | { readonly kind: "unrestricted" }
+  | {
+      readonly kind: "runtime";
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly threadScoped: boolean;
+    };
+
+const UNRESTRICTED_CALLER: HomelabCallerScope = { kind: "unrestricted" };
+
+export const resolveHomelabCallerScope = (session: Pick<AuthenticatedSession, "subject">) =>
+  Effect.gen(function* () {
+    if (!session.subject.startsWith(RUNTIME_TOKEN_SUBJECT_PREFIX)) {
+      return UNRESTRICTED_CALLER;
+    }
+    const threadId = ThreadId.make(session.subject.slice(RUNTIME_TOKEN_SUBJECT_PREFIX.length));
+    const projectId = yield* lookupActiveThreadProjectId(threadId);
+    if (Option.isNone(projectId)) {
+      return yield* new HomelabHttpError({
+        message: "Runtime token thread no longer exists.",
+        status: 403,
+      });
+    }
+    const caller: HomelabCallerScope = {
+      kind: "runtime",
+      threadId,
+      projectId: projectId.value,
+      threadScoped: isStandaloneProjectId(projectId.value) || isCuratorProjectId(projectId.value),
+    };
+    return caller;
+  });
+
+const forbiddenScope = (message: string) => new HomelabHttpError({ message, status: 403 });
+
+/**
+ * Resolves the project (and effective thread) a memory/skill request operates on.
+ * For runtime callers, request params may only narrow the token's scope, never widen it,
+ * and thread-scoped (scratch/curator) runtimes always get their own thread applied.
+ */
+const resolveMemoryRequestScope = (
+  caller: HomelabCallerScope,
+  input: {
+    readonly projectId?: ProjectId | undefined;
+    readonly threadId?: ThreadId | undefined;
+  },
+) =>
+  Effect.gen(function* () {
+    if (caller.kind === "runtime") {
+      if (input.projectId !== undefined && input.projectId !== caller.projectId) {
+        return yield* forbiddenScope("Runtime tokens may only access their own project.");
+      }
+      if (caller.threadScoped) {
+        if (input.threadId !== undefined && input.threadId !== caller.threadId) {
+          return yield* forbiddenScope("Runtime tokens may only access their own thread.");
+        }
+        return { projectId: caller.projectId, threadId: caller.threadId };
+      }
+      // Shared project runtimes serve several threads with one token; any of them is fine.
+      if (input.threadId !== undefined && input.threadId !== caller.threadId) {
+        const threadProjectId = yield* lookupActiveThreadProjectId(input.threadId);
+        if (Option.isNone(threadProjectId) || threadProjectId.value !== caller.projectId) {
+          return yield* forbiddenScope("Runtime tokens may only access their own project.");
+        }
+      }
+      return { projectId: caller.projectId, threadId: input.threadId };
+    }
+
     if (input.projectId) {
-      return input.projectId;
+      return { projectId: input.projectId, threadId: input.threadId };
     }
     if (!input.threadId) {
       return yield* new HomelabHttpError({
@@ -228,29 +316,18 @@ const resolveProjectIdForMemoryRequest = (input: {
         status: 400,
       });
     }
-
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const snapshot = yield* projectionSnapshotQuery.getSnapshot().pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Failed to resolve project for project memory request.",
-            status: 500,
-            cause,
-          }),
-      ),
-    );
-    const thread = snapshot.threads.find(
-      (entry) => entry.id === input.threadId && entry.deletedAt === null,
-    );
-    if (!thread) {
+    const projectId = yield* lookupActiveThreadProjectId(input.threadId);
+    if (Option.isNone(projectId)) {
       return yield* new HomelabHttpError({
         message: "Project memory thread not found.",
         status: 404,
       });
     }
-    return thread.projectId;
+    return { projectId: projectId.value, threadId: input.threadId };
   });
+
+const optionalThreadId = (threadId: ThreadId | undefined) =>
+  threadId !== undefined ? { threadId } : {};
 
 const parseKindsFromUrl = (url: URL) =>
   Effect.try({
@@ -583,7 +660,7 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/project-memory",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
     const url = yield* getRequestUrl;
     const rawInput = {
       ...(url.searchParams.get("projectId")
@@ -605,12 +682,13 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const projectId = yield* resolveProjectIdForMemoryRequest({
-      projectId: input.projectId,
-      threadId: input.threadId,
-    });
+    const scope = yield* resolveMemoryRequestScope(caller, input);
     const projectMemory = yield* ProjectMemory;
-    const entries = yield* projectMemory.list({ ...input, projectId });
+    const entries = yield* projectMemory.list({
+      ...input,
+      projectId: scope.projectId,
+      ...optionalThreadId(scope.threadId),
+    });
     return HttpServerResponse.jsonUnsafe(
       {
         entries,
@@ -627,7 +705,7 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory/search",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemorySearchInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -638,12 +716,13 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const projectId = yield* resolveProjectIdForMemoryRequest({
-      projectId: input.projectId,
-      threadId: input.threadId,
-    });
+    const scope = yield* resolveMemoryRequestScope(caller, input);
     const projectMemory = yield* ProjectMemory;
-    const results = yield* projectMemory.search({ ...input, projectId });
+    const results = yield* projectMemory.search({
+      ...input,
+      projectId: scope.projectId,
+      ...optionalThreadId(scope.threadId),
+    });
     return HttpServerResponse.jsonUnsafe(
       {
         results,
@@ -660,7 +739,9 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemoryCreateInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -671,17 +752,18 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const projectId = yield* resolveProjectIdForMemoryRequest({
+    const scope = yield* resolveMemoryRequestScope(caller, {
       projectId: input.projectId,
       threadId: input.sourceThreadId,
     });
     if (input.promotionStatus === "proposed") {
-      yield* requireProjectScopeForPromotion(projectId);
+      yield* requireProjectScopeForPromotion(scope.projectId);
     }
     const projectMemory = yield* ProjectMemory;
     const entry = yield* projectMemory.create({
       ...input,
-      projectId,
+      projectId: scope.projectId,
+      ...(scope.threadId !== undefined ? { sourceThreadId: scope.threadId } : {}),
     });
     return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(
@@ -694,7 +776,9 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/project-memory/promote",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
     const input = yield* HttpServerRequest.schemaBodyJson(ProjectMemoryPromoteInput).pipe(
       Effect.mapError((cause) => {
         const detail =
@@ -710,7 +794,7 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
         });
       }),
     );
-    const projectId = yield* resolveProjectIdForMemoryRequest(input);
+    const { projectId } = yield* resolveMemoryRequestScope(caller, input);
     yield* requireProjectScopeForPromotion(projectId);
     const projectMemory = yield* ProjectMemory;
     const recorded = yield* recordPromotedDiscoveries(input.promotion);
@@ -729,20 +813,23 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
   ),
 );
 
-const resolveSkillContext = (input: {
-  readonly projectId?: ProjectId | undefined;
-  readonly threadId?: ThreadId | undefined;
-}) =>
+const resolveSkillContext = (
+  caller: HomelabCallerScope,
+  input: {
+    readonly projectId?: ProjectId | undefined;
+    readonly threadId?: ThreadId | undefined;
+  },
+) =>
   Effect.gen(function* () {
-    const projectId = yield* resolveProjectIdForMemoryRequest(input);
+    const { projectId, threadId } = yield* resolveMemoryRequestScope(caller, input);
     if (isStandaloneProjectId(projectId)) {
-      if (!input.threadId) {
+      if (!threadId) {
         return yield* new HomelabHttpError({
           message: "Scratch skill requests must include threadId.",
           status: 400,
         });
       }
-      return { kind: "scratch", threadId: input.threadId } as const;
+      return { kind: "scratch", threadId } as const;
     }
     return { kind: "project", projectId } as const;
   });
@@ -760,7 +847,7 @@ export const homelabSkillsListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/skills",
   Effect.gen(function* () {
-    yield* authenticateHomelabRead;
+    const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
     const url = yield* getRequestUrl;
     const input = yield* decodeHomelabSkillListInput({
       ...(url.searchParams.get("projectId")
@@ -777,7 +864,7 @@ export const homelabSkillsListRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(input);
+    const context = yield* resolveSkillContext(caller, input);
     const skills = yield* HomelabSkills;
     const entries = yield* skills.listForContext(context);
     return HttpServerResponse.jsonUnsafe({ skills: entries }, { status: 200 });
@@ -791,7 +878,9 @@ export const homelabSkillsCreateRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/skills",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabSkillCreateInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -802,7 +891,7 @@ export const homelabSkillsCreateRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(input);
+    const context = yield* resolveSkillContext(caller, input);
     const skills = yield* HomelabSkills;
     const entry = yield* skills.upsert({
       context,
@@ -821,7 +910,9 @@ export const homelabSkillsPromoteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/skills/promote",
   Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabSkillPromoteInput).pipe(
       Effect.mapError(
         (cause) =>
@@ -832,7 +923,7 @@ export const homelabSkillsPromoteRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(input);
+    const context = yield* resolveSkillContext(caller, input);
     const skills = yield* HomelabSkills;
     const entry = yield* skills.promote({ context, name: input.name, to: input.to });
     return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
@@ -889,21 +980,8 @@ const requireCuratorThread = (threadId: ThreadId | undefined) =>
     if (threadId === undefined) {
       return;
     }
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const snapshot = yield* projectionSnapshotQuery.getSnapshot().pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Failed to resolve curator session thread.",
-            status: 500,
-            cause,
-          }),
-      ),
-    );
-    const thread = snapshot.threads.find(
-      (entry) => entry.id === threadId && entry.deletedAt === null,
-    );
-    if (!thread || !isCuratorProjectId(thread.projectId)) {
+    const projectId = yield* lookupActiveThreadProjectId(threadId);
+    if (Option.isNone(projectId) || !isCuratorProjectId(projectId.value)) {
       return yield* new HomelabHttpError({
         message: "Curator mutations require a curator session thread.",
         status: 403,
