@@ -1,5 +1,6 @@
 import {
   type AuthEnvironmentScope,
+  AuthHomelabSecretsAdminScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   type EnvironmentAuthorizationError,
@@ -31,8 +32,8 @@ import type { ProviderCliStoreShape } from "./runtime/ProviderCliStore.ts";
  */
 export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEnvironmentScope]> = [
   [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
-  [WS_METHODS.serverUpsertHomelabSecret, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverDeleteHomelabSecret, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUpsertHomelabSecret, AuthHomelabSecretsAdminScope],
+  [WS_METHODS.serverDeleteHomelabSecret, AuthHomelabSecretsAdminScope],
   [WS_METHODS.serverGetProviderCliStatus, AuthOrchestrationReadScope],
   [WS_METHODS.serverApplyProviderCliUpdate, AuthOrchestrationOperateScope],
   [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],

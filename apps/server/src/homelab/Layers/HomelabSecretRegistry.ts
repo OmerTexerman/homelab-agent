@@ -225,7 +225,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
           [...secrets].toSorted((left, right) => left.key.localeCompare(right.key)),
           (secret) =>
             secretStore.get(secretStoreKey(secret.key)).pipe(
-              Effect.map((value) => toDescriptor(secret, value !== null)),
+              Effect.map((value) => toDescriptor(secret, Option.isSome(value))),
               Effect.mapError((cause) =>
                 toRegistryError(`Failed to read stored value for secret '${secret.key}'.`, cause),
               ),
@@ -329,7 +329,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
             ),
           );
 
-        return toDescriptor(nextSecret, existingValue !== null);
+        return toDescriptor(nextSecret, Option.isSome(existingValue));
       }),
     );
 

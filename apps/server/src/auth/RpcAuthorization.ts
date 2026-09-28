@@ -1,5 +1,6 @@
 import {
   AuthAccessReadScope,
+  AuthHomelabSecretsAdminScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -128,8 +129,8 @@ export const RPC_REQUIRED_SCOPES = {
   // Homelab fork methods. `HOMELAB_RPC_REQUIRED_SCOPES` in wsHomelabRpc.ts is
   // consulted first at the ws.ts authorize sites and must stay in sync.
   [WS_METHODS.serverListHomelabSecrets]: AuthOrchestrationReadScope,
-  [WS_METHODS.serverUpsertHomelabSecret]: AuthOrchestrationOperateScope,
-  [WS_METHODS.serverDeleteHomelabSecret]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverUpsertHomelabSecret]: AuthHomelabSecretsAdminScope,
+  [WS_METHODS.serverDeleteHomelabSecret]: AuthHomelabSecretsAdminScope,
   [WS_METHODS.serverGetProviderCliStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverApplyProviderCliUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.threadWorkspaceListEntries]: AuthOrchestrationReadScope,
