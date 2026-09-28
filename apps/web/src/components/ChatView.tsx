@@ -298,7 +298,7 @@ import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { NoActiveThreadState } from "./NoActiveThreadState";
+import { HomeOverviewPage as NoActiveThreadState } from "./homelab/HomeOverviewSurface";
 import { ThreadProjectMemoryPanel, ThreadWorkspacePanel } from "./ThreadWorkspacePanel";
 import { ProjectRuntimePanel } from "./ProjectRuntimePanel";
 import { WorkspacePageHeader } from "./WorkspacePageHeader";
