@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { MemoryKnowledgeSettingsPanel } from "../components/settings/SettingsPanels";
+import { MemoryKnowledgeSettingsPanel } from "../components/settings/HomelabSettingsPanels";
 
 function SettingsMemoryRoute() {
   return <MemoryKnowledgeSettingsPanel />;

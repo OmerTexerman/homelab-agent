@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { SecretsSettingsPanel } from "../components/settings/SettingsPanels";
+import { SecretsSettingsPanel } from "../components/settings/HomelabSettingsPanels";
 
 function SettingsSecretsRoute() {
   return <SecretsSettingsPanel />;
