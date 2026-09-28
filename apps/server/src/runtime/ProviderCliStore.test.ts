@@ -151,6 +151,27 @@ describe("ProviderCliStore", () => {
     }).pipe(Effect.provide(testLayer())),
   );
 
+  it.effect("materializes the state-dir override ahead of the repo default", () =>
+    Effect.gen(function* () {
+      const store = yield* ProviderCliStore;
+      // The store root is `<stateDir>/provider-clis`.
+      const serverStateDir = NodePath.dirname(store.storeRootPath);
+      const overrideVersions = { ...VERSIONS, "@openai/codex": "0.141.0" };
+      NodeFS.mkdirSync(serverStateDir, { recursive: true });
+      NodeFS.writeFileSync(
+        NodePath.join(serverStateDir, "provider-versions.json"),
+        `${JSON.stringify(overrideVersions, null, 2)}\n`,
+      );
+      const status = yield* store.ensureCurrent;
+
+      expect(status.desiredVersions).toEqual(overrideVersions);
+      expect(status.currentSetId).toBe(computeProviderCliSetId(overrideVersions));
+      expect(npmCalls[0]?.args).toContain("@openai/codex@0.141.0");
+      // The repo default is only ever read.
+      expect(JSON.parse(NodeFS.readFileSync(manifestPath, "utf8"))).toEqual(VERSIONS);
+    }).pipe(Effect.provide(testLayer())),
+  );
+
   it.effect("fails with a ProviderCliStoreError when npm fails", () =>
     Effect.gen(function* () {
       npmExitCode = 1;

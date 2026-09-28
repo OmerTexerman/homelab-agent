@@ -1,18 +1,20 @@
 /**
- * RuntimeProviderVersionReconciler — keeps the runtime image's pinned CLI
+ * RuntimeProviderVersionReconciler — keeps the runtime containers' pinned CLI
  * versions in lockstep with the host.
  *
- * The shared manifest (`docker/runtime/provider-versions.json`) is the single
- * source of truth for the CLI versions baked into the runtime image: threads
- * execute against the container CLIs, while provider probes (and therefore the
- * model catalog shown in pickers) observe the host CLIs. The invariant is that
- * both sides run the same version.
+ * The effective provider-version pin (repo default in
+ * `docker/runtime/provider-versions.json`, overlaid by the runtime override in
+ * `<stateDir>/provider-versions.json`) decides which CLIs the provider CLI
+ * store mounts into containers: threads execute against the container CLIs,
+ * while provider probes (and therefore the model catalog shown in pickers)
+ * observe the host CLIs. The invariant is that both sides run the same version.
  *
  * Historically only a successful in-app provider update rewrote the pin, so
  * any out-of-band host change (manual npm/bun installs, restored backups,
  * partially-failed updates) silently broke the invariant. This daemon closes
  * that gap: on every provider snapshot emission it records each provider's
- * actually-installed host version into the manifest. `recordInstalledVersion`
+ * actually-installed host version into the state-dir override (the repo
+ * default is never written at runtime). `recordInstalledVersion`
  * is idempotent (no-op when unchanged) and ignores packages that aren't baked
  * into the runtime image, so steady state costs one manifest read per refresh.
  */

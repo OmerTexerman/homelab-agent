@@ -83,10 +83,10 @@ function findRuntimeContextPath(startDir: string): string {
 }
 
 /**
- * Basename of the shared provider-version manifest that lives inside the
- * runtime build context. It is the single source of truth for the CLI versions
- * baked into the runtime image (the Dockerfile installs from it) and the host
- * update flow rewrites it so host + image stay in sync.
+ * Basename of the provider-version manifest. The copy inside the runtime build
+ * context is the git-tracked default pin (the Dockerfile bakes its fallback
+ * CLIs from it) and is never written at runtime; runtime updates land in a
+ * same-named override under the server state dir (see providerVersionPins.ts).
  */
 export const RUNTIME_PROVIDER_VERSIONS_BASENAME = "provider-versions.json";
 
@@ -97,9 +97,9 @@ export function resolveRuntimeBuildContextPath(repoRoot: string): string {
 }
 
 /**
- * Absolute path of the provider-version manifest within the same build context
- * that {@link resolveLocalRuntimeImageBuildSpec} fingerprints and builds, so a
- * write here reliably changes the image fingerprint.
+ * Absolute path of the default provider-version manifest within the build
+ * context that {@link resolveLocalRuntimeImageBuildSpec} builds. It is excluded
+ * from the image fingerprint.
  */
 export function resolveRuntimeProviderVersionsManifestPath(repoRoot: string): string {
   return NodePath.join(

@@ -407,8 +407,8 @@ const CuratorReaperLayerLive = CuratorSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-// Daemon that mirrors probed host CLI versions into the runtime image's
-// provider-versions manifest, keeping host and container CLIs in lockstep
+// Daemon that mirrors probed host CLI versions into the provider-versions
+// override under the state dir, keeping host and container CLIs in lockstep
 // even when the host changes out-of-band (manual installs, failed updates).
 const RuntimeProviderVersionReconcilerLive = runtimeProviderVersionReconcilerLayer.pipe(
   Layer.provide(runtimeProviderVersionManifestLayer),

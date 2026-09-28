@@ -40,11 +40,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # FALLBACK provider CLIs only. The live CLIs come from the host's provider
 # CLI store, bind-mounted at /runtime/provider-clis and resolved first on
-# PATH; these baked copies (whatever docker/runtime/provider-versions.json
-# said at build time) only serve containers whose store mount is missing.
-# The manifest is deliberately excluded from the build-context fingerprint,
-# so rewriting it does NOT rebuild this image — updates flow through the
-# store's atomic `current` symlink flip instead.
+# PATH; these baked copies (the repo-default pins in
+# docker/runtime/provider-versions.json at build time) only serve containers
+# whose store mount is missing. Runtime provider updates never touch this
+# file: they write an override under the server state dir, and the store
+# materializes default+override through its atomic `current` symlink flip.
+# The manifest is also excluded from the build-context fingerprint, so a
+# deploy that bumps the default does not rebuild this image.
 COPY provider-versions.json /opt/homelab/provider-versions.json
 
 RUN set -eux; \

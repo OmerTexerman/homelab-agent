@@ -9,13 +9,18 @@ import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
-import { resolveRuntimeProviderVersionsManifestPath } from "../runtime/image.ts";
+import {
+  readEffectiveProviderVersionPins,
+  resolveProviderVersionPinPaths,
+} from "../runtime/providerVersionPins.ts";
 
 /**
- * The shared runtime provider-version manifest pins, by npm package name, the
- * CLI versions baked into the runtime Docker image. It is the single source of
- * truth: the Dockerfile installs from it, and a successful host provider update
- * rewrites it so the image rebuilds onto the same version the host now runs.
+ * The runtime provider-version manifest pins, by npm package name, the CLI
+ * versions runtime containers run (via the provider CLI store). Host provider
+ * updates and the reconciler record the host's installed version here so host
+ * and container stay in lockstep. Writes go to the state-dir override only; the
+ * repo default in the runtime build context stays read-only at runtime (see
+ * providerVersionPins.ts for how the two combine).
  */
 const ProviderVersionManifest = Schema.Record(Schema.String, Schema.String);
 const ProviderVersionManifestJson = fromJsonStringPretty(ProviderVersionManifest);
@@ -67,10 +72,10 @@ export interface RecordInstalledVersionInput {
 
 export interface RuntimeProviderVersionManifestShape {
   /**
-   * Best-effort: rewrite the shared runtime provider-version manifest so the
-   * runtime image rebuilds onto `version` for `packageName`. Never fails the
-   * caller — it no-ops (with a log) when the manifest is absent, the package is
-   * not baked into the runtime image, or the version is already current.
+   * Best-effort: pin `packageName` to `version` in the state-dir override so the
+   * provider CLI store materializes it. Never fails the caller — it no-ops (with
+   * a log) when no pin exists at all, the package is not part of the runtime
+   * pin set, or the effective version is already current.
    */
   readonly recordInstalledVersion: (input: RecordInstalledVersionInput) => Effect.Effect<void>;
 }
@@ -86,24 +91,26 @@ export const layer = Layer.effect(
     const serverConfig = yield* ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const manifestPath = resolveRuntimeProviderVersionsManifestPath(serverConfig.cwd);
+    const pinPaths = resolveProviderVersionPinPaths({
+      repoRoot: serverConfig.cwd,
+      stateDir: serverConfig.stateDir,
+    });
 
     const recordInstalledVersion: RuntimeProviderVersionManifestShape["recordInstalledVersion"] = (
       input,
     ) =>
       Effect.gen(function* () {
-        const exists = yield* fs.exists(manifestPath).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) {
+        const effectivePins = yield* Effect.sync(() => readEffectiveProviderVersionPins(pinPaths));
+        if (effectivePins === null) {
           yield* Effect.logDebug(
-            "Runtime provider-version manifest not present; skipping image sync",
-            { manifestPath, packageName: input.packageName },
+            "Runtime provider-version manifest not present; skipping runtime sync",
+            { ...pinPaths, packageName: input.packageName },
           );
           return;
         }
 
-        const raw = yield* fs.readFileString(manifestPath);
         const outcome = yield* computeProviderVersionManifestUpdate({
-          rawManifest: raw,
+          rawManifest: yield* encodeManifest(effectivePins),
           packageName: input.packageName,
           version: input.version,
         });
@@ -112,14 +119,14 @@ export const layer = Layer.effect(
         }
 
         yield* writeFileStringAtomically({
-          filePath: manifestPath,
+          filePath: pinPaths.overridePath,
           contents: outcome.contents,
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
         );
-        yield* Effect.logInfo("Synced runtime image to host provider version", {
-          manifestPath,
+        yield* Effect.logInfo("Synced runtime provider pin to host provider version", {
+          overridePath: pinPaths.overridePath,
           packageName: input.packageName,
           version: input.version,
         });
