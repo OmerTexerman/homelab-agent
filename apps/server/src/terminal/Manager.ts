@@ -47,7 +47,7 @@ import {
   terminalRestartsTotal,
   terminalSessionsTotal,
 } from "../observability/Metrics.ts";
-import { runProcess } from "../processRunner.ts";
+import { runProcess } from "../runtime/hostProcessRunner.ts";
 import { ThreadRuntime, type ThreadRuntimeShape } from "../runtime/Services/ThreadRuntime.ts";
 import { resolveRuntimeTerminalStartContext } from "./RuntimeTerminalContext.ts";
 import {
