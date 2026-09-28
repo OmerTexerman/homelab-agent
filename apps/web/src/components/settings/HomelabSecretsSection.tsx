@@ -10,6 +10,8 @@ import {
   homelabSecretsQueryOptions,
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
+import { describeHomelabError } from "~/homelab/homelabFetch";
+import { queryDisplayState } from "~/homelab/queryDisplayState";
 import { ensureLocalApi } from "~/localApi";
 import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -45,6 +47,7 @@ export function HomelabSecretsSection() {
     homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
   );
   const secrets = secretsQuery.data?.secrets ?? [];
+  const secretsDisplayState = queryDisplayState(secretsQuery, (data) => data.secrets.length === 0);
 
   const upsertSecretMutation = useMutation({
     mutationFn: async (input: { key: string; label?: string; summary?: string; value: string }) => {
@@ -250,11 +253,15 @@ export function HomelabSecretsSection() {
         </div>
       </SettingsRow>
 
-      {secretsQuery.isLoading ? (
+      {secretsDisplayState === "loading" ? (
         <div className="border-t border-border/60 px-4 py-4 text-xs text-muted-foreground sm:px-5">
           Loading secrets...
         </div>
-      ) : secrets.length === 0 ? (
+      ) : secretsDisplayState === "error" ? (
+        <div className="border-t border-border/60 px-4 py-4 text-xs text-destructive sm:px-5">
+          Could not load secrets. {describeHomelabError(secretsQuery.error)}
+        </div>
+      ) : secretsDisplayState === "empty" ? (
         <div className="border-t border-border/60 px-4 py-4 text-xs text-muted-foreground sm:px-5">
           No secrets saved yet.
         </div>

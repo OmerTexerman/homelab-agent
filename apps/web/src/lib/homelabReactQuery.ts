@@ -15,36 +15,7 @@ import type {
 import { queryOptions } from "@tanstack/react-query";
 
 import { homelabFetch } from "~/homelab/homelabFetch";
-
-const EMPTY_HOME_LAB_SETUP_STATUS: HomelabSetupStatus = {
-  snapshot: {
-    entities: [],
-    relations: [],
-    observations: [],
-    updatedAt: new Date(0).toISOString(),
-  },
-  secrets: {
-    secrets: [],
-  },
-  runtimeBootstrap: {
-    backend: "docker",
-    imageRef: "homelab-agent-runtime:local",
-    bootstrapVersion: "bootstrap-uninitialized",
-    mutations: [],
-    updatedAt: new Date(0).toISOString(),
-  },
-  runtimeBootstrapCatalog: {
-    activeBlueprint: {
-      backend: "docker",
-      imageRef: "homelab-agent-runtime:local",
-      bootstrapVersion: "bootstrap-uninitialized",
-      mutations: [],
-      updatedAt: new Date(0).toISOString(),
-    },
-    activeBootstrapVersion: "bootstrap-uninitialized",
-    availableMaterializations: [],
-  },
-};
+import { keepPreviousDataWithinScope } from "~/homelab/queryDisplayState";
 
 export const homelabQueryKeys = {
   all: ["homelab"] as const,
@@ -98,7 +69,6 @@ export function homelabSetupStatusQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: input.staleTime ?? 10_000,
-    placeholderData: (previous) => previous ?? EMPTY_HOME_LAB_SETUP_STATUS,
     refetchOnWindowFocus: false,
   });
 }
@@ -127,7 +97,6 @@ export function homelabProjectMemoryQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.projectId !== null,
     staleTime: 5_000,
-    placeholderData: (previous) => previous ?? { entries: [] },
     refetchOnWindowFocus: false,
   });
 }
@@ -140,13 +109,14 @@ export function homelabProjectMemorySearchQueryOptions(input: {
   readonly includeTranscripts?: boolean;
   readonly limit?: number;
 }) {
+  const queryKey = homelabQueryKeys.projectMemorySearch(
+    input.environmentId,
+    input.projectId,
+    input.query.trim(),
+    input.includeTranscripts ?? true,
+  );
   return queryOptions({
-    queryKey: homelabQueryKeys.projectMemorySearch(
-      input.environmentId,
-      input.projectId,
-      input.query.trim(),
-      input.includeTranscripts ?? true,
-    ),
+    queryKey,
     queryFn: async ({ signal }) => {
       if (!input.environmentId || !input.projectId) {
         throw new Error("Project memory search is unavailable.");
@@ -169,7 +139,8 @@ export function homelabProjectMemorySearchQueryOptions(input: {
       input.projectId !== null &&
       input.query.trim().length > 0,
     staleTime: 2_000,
-    placeholderData: (previous) => previous ?? { results: [] },
+    // Keep results while the query text changes within the same project.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 4),
     refetchOnWindowFocus: false,
   });
 }
@@ -181,8 +152,13 @@ export function homelabGraphSearchQueryOptions(input: {
   readonly kinds?: readonly HomelabEntityKind[] | undefined;
   readonly limit?: number;
 }) {
+  const queryKey = homelabQueryKeys.graphSearch(
+    input.environmentId,
+    input.query.trim(),
+    input.kinds,
+  );
   return queryOptions({
-    queryKey: homelabQueryKeys.graphSearch(input.environmentId, input.query.trim(), input.kinds),
+    queryKey,
     queryFn: async ({ signal }) => {
       if (!input.environmentId) {
         throw new Error("Homelab graph search is unavailable.");
@@ -201,7 +177,8 @@ export function homelabGraphSearchQueryOptions(input: {
     enabled:
       (input.enabled ?? true) && input.environmentId !== null && input.query.trim().length > 0,
     staleTime: 2_000,
-    placeholderData: (previous) => previous ?? [],
+    // Keep results while the query text changes within the same environment.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 3),
     refetchOnWindowFocus: false,
   });
 }
@@ -226,7 +203,6 @@ export function homelabAllMemoryQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: 10_000,
-    placeholderData: (previous) => previous ?? { entries: [] },
     refetchOnWindowFocus: false,
   });
 }
@@ -250,7 +226,6 @@ export function homelabAllSkillsQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null,
     staleTime: 10_000,
-    placeholderData: (previous) => previous ?? { skills: [] },
     refetchOnWindowFocus: false,
   });
 }
