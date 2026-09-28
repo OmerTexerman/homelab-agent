@@ -10,10 +10,9 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
-import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 
 import { describeHomelabError, fetchHomelabJson } from "../../homelab/homelabFetch";
+import { isUserVisibleProject } from "../../homelab/visibleProjects";
 import { newCommandId, newProjectId } from "../../lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { useProjects } from "../../state/entities";
@@ -102,10 +101,7 @@ export function useStandaloneThreadMoveDialogs(): {
     }
     return allProjects
       .filter(
-        (candidate) =>
-          candidate.environmentId === environmentId &&
-          !isStandaloneProjectId(candidate.id) &&
-          !isCuratorProjectId(candidate.id),
+        (candidate) => candidate.environmentId === environmentId && isUserVisibleProject(candidate),
       )
       .toSorted((left, right) => left.title.localeCompare(right.title));
   }, [allProjects, moveTarget?.environmentId]);
@@ -132,9 +128,7 @@ export function useStandaloneThreadMoveDialogs(): {
     (thread: StandaloneThreadSummary) => {
       const targetProjects = allProjects.filter(
         (candidate) =>
-          candidate.environmentId === thread.environmentId &&
-          !isStandaloneProjectId(candidate.id) &&
-          !isCuratorProjectId(candidate.id),
+          candidate.environmentId === thread.environmentId && isUserVisibleProject(candidate),
       );
       if (targetProjects.length === 0) {
         toastManager.add({

@@ -1,6 +1,4 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { isCuratorProject } from "@t3tools/shared/curatorProject";
-import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -12,11 +10,8 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import {
-  useAllEnvironmentShellsBootstrapped,
-  useProjects,
-  useThreadShells,
-} from "../state/entities";
+import { useUserVisibleProjects } from "../homelab/visibleProjects";
+import { useAllEnvironmentShellsBootstrapped, useThreadShells } from "../state/entities";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
@@ -38,31 +33,20 @@ function ChatIndexRouteView() {
  * end. Falls back to an add-project hero when no project exists yet.
  */
 function IndexDraftLanding() {
-  const projects = useProjects();
+  // Scratch and Curator never take the landing draft (thread.create rejects them).
+  const projects = useUserVisibleProjects();
   const threads = useThreadShells();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
-  // System-namespace projects (Scratch, Curator) never take the landing draft:
-  // regular thread.create is rejected for them server-side, so a standalone
-  // thread being the most recent activity must not capture the home screen.
-  const draftableProjects = useMemo(
-    () =>
-      projects.filter(
-        (project) =>
-          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
-          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
-      ),
-    [projects],
-  );
   const mostRecentProject = useMemo(
     () =>
       bootstrapped
-        ? (sortScopedProjectsForSidebar(draftableProjects, threads, "updated_at")[0] ?? null)
+        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
         : null,
-    [bootstrapped, draftableProjects, threads],
+    [bootstrapped, projects, threads],
   );
 
   useEffect(() => {

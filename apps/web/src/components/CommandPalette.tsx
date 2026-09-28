@@ -178,7 +178,7 @@ import {
   shouldShowEditorOpenInControls,
   shouldShowRemoteProjectCloneUi,
 } from "../productCapabilities";
-import { isCuratorProject } from "@t3tools/shared/curatorProject";
+import { filterUserVisibleProjects } from "../homelab/visibleProjects";
 import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
@@ -620,17 +620,7 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
-  // Homelab: hidden system projects (standalone scratch + curator) never
-  // surface in command palette project pickers.
-  const normalProjects = useMemo(
-    () =>
-      projects.filter(
-        (project) =>
-          !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
-          !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
-      ),
-    [projects],
-  );
+  const normalProjects = useMemo(() => filterUserVisibleProjects(projects), [projects]);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

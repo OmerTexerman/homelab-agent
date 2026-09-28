@@ -10,8 +10,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, type ReactNode } from "react";
-import { isCuratorProject } from "@t3tools/shared/curatorProject";
-import { isStandaloneProject } from "@t3tools/shared/standaloneProject";
+import { filterUserVisibleProjects } from "../homelab/visibleProjects";
 
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
@@ -50,14 +49,7 @@ export function NoActiveThreadState() {
   const { defaultProjectRef, handleNewThread } = useHandleNewThread();
 
   const runtimeProjects = useMemo(
-    () =>
-      projects
-        .filter(
-          (project) =>
-            !isStandaloneProject({ id: project.id, workspaceRoot: project.workspaceRoot }) &&
-            !isCuratorProject({ id: project.id, workspaceRoot: project.workspaceRoot }),
-        )
-        .slice(0, HOME_RUNTIME_PROJECT_LIMIT),
+    () => filterUserVisibleProjects(projects).slice(0, HOME_RUNTIME_PROJECT_LIMIT),
     [projects],
   );
   const memoryProject = useMemo(() => runtimeProjects[0] ?? null, [runtimeProjects]);
