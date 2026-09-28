@@ -99,8 +99,6 @@ const THREAD_SHELL = {
   settledOverride: null,
   settledAt: null,
   session: null,
-  runtimeId: null,
-  runtimeSelectionMode: "shared",
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,

@@ -144,8 +144,6 @@ describe("OrchestrationEngine", () => {
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access" as const,
-          runtimeId: null,
-          runtimeSelectionMode: "shared" as const,
           branch: null,
           worktreePath: null,
           latestTurn: null,

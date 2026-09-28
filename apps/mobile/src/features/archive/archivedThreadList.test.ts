@@ -28,8 +28,6 @@ function makeThread(
   return {
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: "full-access",
-    runtimeId: null,
-    runtimeSelectionMode: "shared",
     interactionMode: "default",
     branch: null,
     worktreePath: null,

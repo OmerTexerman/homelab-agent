@@ -5,6 +5,7 @@ import {
   type ProjectId,
   type ThreadId,
   type ThreadTurnStartBootstrap,
+  threadRuntimeSelectionMode,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
@@ -93,8 +94,8 @@ export const makeThreadBootstrapRecovery = (deps: {
 
       const sameBootstrapTarget =
         thread.projectId === requested.projectId &&
-        thread.runtimeSelectionMode ===
-          (requested.runtimeSelectionMode ?? thread.runtimeSelectionMode) &&
+        threadRuntimeSelectionMode(thread) ===
+          (requested.runtimeSelectionMode ?? threadRuntimeSelectionMode(thread)) &&
         thread.runtimeMode === requested.runtimeMode &&
         thread.interactionMode === requested.interactionMode &&
         thread.branch === requested.branch &&

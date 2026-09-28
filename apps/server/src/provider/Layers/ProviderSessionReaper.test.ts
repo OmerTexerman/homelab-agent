@@ -92,8 +92,6 @@ function makeReadModel(
     threads: threads.map((thread) => ({
       id: thread.id,
       projectId,
-      runtimeId: null,
-      runtimeSelectionMode: "shared" as const,
       title: `Thread ${thread.id}`,
       modelSelection: defaultModelSelection,
       interactionMode: "default" as const,

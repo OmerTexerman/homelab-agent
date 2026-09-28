@@ -492,8 +492,6 @@ const makeDefaultOrchestrationThreadShell = (
   return {
     id: defaultThreadId,
     projectId: defaultProjectId,
-    runtimeId: null,
-    runtimeSelectionMode: "shared",
     title: "Default Thread",
     modelSelection: defaultModelSelection,
     runtimeMode: "full-access",

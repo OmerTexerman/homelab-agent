@@ -20,8 +20,6 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: DEFAULT_RUNTIME_MODE,
-    runtimeId: null,
-    runtimeSelectionMode: "shared",
     interactionMode: "default",
     session: null,
     messages: [],
