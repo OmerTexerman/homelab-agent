@@ -1,8 +1,4 @@
 import {
-  type AuthEnvironmentScope,
-  AuthHomelabSecretsAdminScope,
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
   type EnvironmentAuthorizationError,
   HomelabSecretError,
   ProviderCliStoreError,
@@ -30,25 +26,7 @@ import type { ProviderCliStoreShape } from "./runtime/ProviderCliStore.ts";
  * spreads these into its scope map and handler record at two one-line call
  * sites.
  */
-export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEnvironmentScope]> = [
-  [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
-  [WS_METHODS.serverUpsertHomelabSecret, AuthHomelabSecretsAdminScope],
-  [WS_METHODS.serverDeleteHomelabSecret, AuthHomelabSecretsAdminScope],
-  [WS_METHODS.serverGetProviderCliStatus, AuthOrchestrationReadScope],
-  [WS_METHODS.serverApplyProviderCliUpdate, AuthOrchestrationOperateScope],
-  [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceReadFile, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeGet, AuthOrchestrationReadScope],
-  [WS_METHODS.projectRuntimeWake, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeSleep, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeArchive, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeReset, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeSnapshot, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeRestore, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeMergeIsolated, AuthOrchestrationOperateScope],
-];
+export { HOMELAB_RPC_REQUIRED_SCOPES } from "./auth/homelabRpcScopes.ts";
 
 export interface HomelabRpcHandlerDeps {
   readonly observeRpcEffect: <A, E, R>(
