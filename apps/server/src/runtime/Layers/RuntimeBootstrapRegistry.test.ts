@@ -137,3 +137,41 @@ it.effect("keeps historical materializations after the active bootstrap changes"
     assert.equal(active.env.TOOL_HOME, "/opt/current");
   }).pipe(Effect.provide(registryTestLayer), Effect.scoped),
 );
+
+it.effect("refuses writes instead of replacing bootstrap state it could not load", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const serverConfig = yield* ServerConfig;
+    const statePath = NodePath.join(serverConfig.stateDir, "runtime-bootstrap.json");
+    const corruptBytes = "{ not json";
+    yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
+    yield* fileSystem.writeFileString(statePath, corruptBytes);
+
+    const registry = yield* makeRuntimeBootstrapRegistry;
+    // Reads fall back to the default blueprint so runtimes can still launch.
+    assert.equal((yield* registry.getActiveBlueprint()).mutations.length, 0);
+
+    const failure = yield* registry
+      .recordMutation({
+        id: "tool-home",
+        sourceThreadId: threadId,
+        kind: "env",
+        summary: "Set tool home",
+        payload: { key: "TOOL_HOME", value: "/opt/tool" },
+        createdAt: "2026-05-16T00:00:00.000Z",
+      })
+      .pipe(Effect.flip);
+    assert.include(failure.message, "is degraded");
+
+    // Startup did not persist defaults over the file either.
+    assert.equal(yield* fileSystem.exists(statePath), false);
+    const corruptFiles = (yield* fileSystem.readDirectory(serverConfig.stateDir)).filter((name) =>
+      name.startsWith("runtime-bootstrap.json.corrupt-"),
+    );
+    assert.equal(corruptFiles.length, 1);
+    assert.equal(
+      yield* fileSystem.readFileString(NodePath.join(serverConfig.stateDir, corruptFiles[0]!)),
+      corruptBytes,
+    );
+  }).pipe(Effect.provide(registryTestLayer), Effect.scoped),
+);

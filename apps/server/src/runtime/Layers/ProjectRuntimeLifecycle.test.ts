@@ -710,6 +710,38 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
     ),
   );
 
+  it.effect("refuses writes instead of wiping lifecycle metadata it could not load", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "project-runtime-degraded-",
+        });
+        const stateDir = NodePath.join(tempDir, "userdata");
+        const statePath = NodePath.join(stateDir, "project-runtime-lifecycle.json");
+        const corruptBytes = '{"version":1,"runtimes":[{"runtimeId":';
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        NodeFS.writeFileSync(statePath, corruptBytes);
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
+        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+
+        const failure = yield* lifecycle.archive({ projectId, threadId }).pipe(Effect.flip);
+        assert.include(failure.message, "is degraded");
+
+        assert.isFalse(NodeFS.existsSync(statePath));
+        const corruptFiles = NodeFS.readdirSync(stateDir).filter((name) =>
+          name.startsWith("project-runtime-lifecycle.json.corrupt-"),
+        );
+        assert.lengthOf(corruptFiles, 1);
+        assert.equal(
+          NodeFS.readFileSync(NodePath.join(stateDir, corruptFiles[0]!), "utf8"),
+          corruptBytes,
+        );
+      }),
+    ),
+  );
+
   it.effect("reports a project runtime with no bound thread as idle instead of failing", () =>
     Effect.scoped(
       Effect.gen(function* () {

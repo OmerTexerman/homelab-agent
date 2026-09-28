@@ -21,14 +21,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
+import { loadJsonStateFile } from "../../jsonStateFile.ts";
 import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { KnowledgeGraph } from "../../homelab/Services/KnowledgeGraph.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -360,7 +359,6 @@ function removeScratchPath(workspacePath: string, relativePath: string): void {
 export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const threadRuntime = yield* ThreadRuntime;
   const terminalManager = yield* TerminalManager;
@@ -394,70 +392,28 @@ export const makeProjectRuntimeLifecycle = Effect.gen(function* () {
       effect,
     );
 
-  const loadMetadataFromDisk = Effect.gen(function* () {
-    const exists = yield* fileSystem.exists(metadataPath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return new Map<string, ProjectRuntimeMetadataRecord>();
-    }
+  // A degraded store (unloadable file) serves no metadata but refuses writes,
+  // so it can never persist empty metadata over the real file.
+  const stateFile = yield* loadJsonStateFile({
+    storeName: "Project runtime lifecycle store",
+    filePath: metadataPath,
+    decode: decodePersistedProjectRuntimeMetadataState,
+  });
 
-    const raw = yield* fileSystem.readFileString(metadataPath).pipe(
-      Effect.mapError((cause) =>
-        toProjectRuntimeError({
-          message: "Failed to read project runtime lifecycle state.",
-          cause,
-        }),
-      ),
-    );
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return new Map<string, ProjectRuntimeMetadataRecord>();
-    }
-
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(trimmed) as unknown,
-      catch: (cause) =>
-        toProjectRuntimeError({
-          message: "Failed to parse project runtime lifecycle state.",
-          cause,
-        }),
-    });
-    const decoded = yield* decodePersistedProjectRuntimeMetadataState(parsed).pipe(
-      Effect.mapError((cause) =>
-        toProjectRuntimeError({
-          message: "Failed to decode project runtime lifecycle state.",
-          cause,
-        }),
-      ),
-    );
-    return new Map(decoded.runtimes.map((record) => [String(record.runtimeId), record]));
-  }).pipe(
-    Effect.catchTag("ProjectRuntimeError", (error) =>
-      Effect.logWarning("failed to load project runtime lifecycle state", {
-        message: error.message,
-        path: metadataPath,
-      }).pipe(Effect.as(new Map<string, ProjectRuntimeMetadataRecord>())),
+  const metadataRef = yield* Ref.make(
+    new Map<string, ProjectRuntimeMetadataRecord>(
+      (stateFile.value?.runtimes ?? []).map((record) => [String(record.runtimeId), record]),
     ),
   );
 
-  const metadataRef = yield* Ref.make(yield* loadMetadataFromDisk);
-
   const persistMetadata = (records: ReadonlyMap<string, ProjectRuntimeMetadataRecord>) =>
-    writeFileStringAtomically({
-      filePath: metadataPath,
-      contents: `${JSON.stringify(
-        {
-          version: 1,
-          runtimes: [...records.values()],
-        },
-        null,
-        2,
-      )}\n`,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, pathService),
+    stateFile.writeJson({ version: 1, runtimes: [...records.values()] }).pipe(
       Effect.mapError((cause) =>
         toProjectRuntimeError({
-          message: "Failed to persist project runtime lifecycle state.",
+          message:
+            cause._tag === "JsonStateFileDegradedError"
+              ? cause.message
+              : "Failed to persist project runtime lifecycle state.",
           cause,
         }),
       ),

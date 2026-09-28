@@ -4,11 +4,11 @@ import {
   TrimmedNonEmptyString,
   type ThreadId as ThreadIdModel,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { Effect, Layer, Path, Ref, Schema } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
+import { loadJsonStateFile } from "../../jsonStateFile.ts";
 import { defaultRuntimeImageRef } from "../image.ts";
 import {
   RuntimeBootstrapRegistry,
@@ -284,82 +284,39 @@ function defaultPersistedState(now: string): PersistedRuntimeBootstrapStateV2 {
 
 export const makeRuntimeBootstrapRegistry = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const writeSemaphore = yield* Semaphore.make(1);
   const statePath = path.join(stateDir, "runtime-bootstrap.json");
 
-  const writeStateAtomically = (persistedState: PersistedRuntimeBootstrapStateV2) => {
-    return writeFileStringAtomically({
-      filePath: statePath,
-      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
+  // A degraded registry (unloadable file) serves the default blueprint but
+  // refuses writes, so it can never persist defaults over the real file.
+  const stateFile = yield* loadJsonStateFile({
+    storeName: "Runtime bootstrap registry",
+    filePath: statePath,
+    decode: decodePersistedRuntimeBootstrapState,
+  });
+
+  const writeStateAtomically = (persistedState: PersistedRuntimeBootstrapStateV2) =>
+    stateFile.writeJson(persistedState).pipe(
       Effect.mapError(
         (cause) =>
           new RuntimeBootstrapRegistryError({
-            message: "Failed to persist runtime bootstrap state.",
-            cause,
-          }),
-      ),
-    );
-  };
-
-  const loadStateFromDisk = Effect.gen(function* () {
-    const exists = yield* fileSystem.exists(statePath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return [defaultPersistedState(new Date().toISOString()), true] as const;
-    }
-
-    const raw = yield* fileSystem.readFileString(statePath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new RuntimeBootstrapRegistryError({
-            message: "Failed to read runtime bootstrap state.",
-            cause,
-          }),
-      ),
-    );
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) {
-      return [defaultPersistedState(new Date().toISOString()), true] as const;
-    }
-
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(trimmed) as unknown,
-      catch: (cause) =>
-        new RuntimeBootstrapRegistryError({
-          message: "Failed to parse runtime bootstrap JSON.",
-          cause,
-        }),
-    });
-
-    const persisted = yield* decodePersistedRuntimeBootstrapState(parsed).pipe(
-      Effect.mapError(
-        (cause) =>
-          new RuntimeBootstrapRegistryError({
-            message: "Failed to decode runtime bootstrap state.",
+            message:
+              cause._tag === "JsonStateFileDegradedError"
+                ? cause.message
+                : "Failed to persist runtime bootstrap state.",
             cause,
           }),
       ),
     );
 
-    return normalizePersistedState({
-      persisted,
-      now: new Date().toISOString(),
-    });
-  }).pipe(
-    Effect.catchTag("RuntimeBootstrapRegistryError", (error) =>
-      Effect.logWarning("failed to load runtime bootstrap state, using defaults", {
-        message: error.message,
-        cause: error.cause,
-        path: statePath,
-      }).pipe(Effect.as([defaultPersistedState(new Date().toISOString()), false] as const)),
-    ),
-  );
-
-  const [loadedState, shouldPersistLoadedState] = yield* loadStateFromDisk;
+  const [loadedState, shouldPersistLoadedState] =
+    stateFile.value !== undefined
+      ? normalizePersistedState({ persisted: stateFile.value, now: new Date().toISOString() })
+      : ([
+          defaultPersistedState(new Date().toISOString()),
+          stateFile.degraded === undefined,
+        ] as const);
   if (shouldPersistLoadedState) {
     yield* writeStateAtomically(loadedState);
   }

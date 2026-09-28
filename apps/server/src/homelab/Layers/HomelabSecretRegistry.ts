@@ -9,12 +9,16 @@ import {
   IsoDateTime,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Option, Path, PubSub, Ref, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  type JsonStateFileDegradedError,
+  type JsonStateFileWriteError,
+  loadJsonStateFile,
+} from "../../jsonStateFile.ts";
 import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import {
   HomelabSecretRegistry,
@@ -117,7 +121,6 @@ function knowledgeGraphEntityId(key: string) {
 
 const makeHomelabSecretRegistry = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const secretStore = yield* ServerSecretStore;
   const writeSemaphore = yield* Semaphore.make(1);
@@ -126,58 +129,28 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
   const statePath = path.join(stateDir, "homelab-secrets.json");
 
+  // A degraded registry (unloadable file) lists no secrets but refuses writes,
+  // so it can never persist empty metadata over the real file.
+  const stateFile = yield* loadJsonStateFile({
+    storeName: "Homelab secret registry",
+    filePath: statePath,
+    decode: decodePersistedHomelabSecretState,
+  });
+  const toWriteError = (
+    cause: JsonStateFileDegradedError | JsonStateFileWriteError,
+  ): HomelabSecretRegistryError =>
+    toRegistryError(
+      cause._tag === "JsonStateFileDegradedError"
+        ? cause.message
+        : "Failed to persist homelab secret metadata.",
+      cause,
+    );
+  const ensureWritable = stateFile.ensureWritable.pipe(Effect.mapError(toWriteError));
+
   const persistState = (secrets: ReadonlyArray<PersistedHomelabSecretMetadata>) => {
     const persistedState: PersistedHomelabSecretState = { version: 1, secrets: [...secrets] };
-
-    return writeFileStringAtomically({
-      filePath: statePath,
-      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-      Effect.mapError((cause) =>
-        toRegistryError("Failed to persist homelab secret metadata.", cause),
-      ),
-    );
+    return stateFile.writeJson(persistedState).pipe(Effect.mapError(toWriteError));
   };
-
-  const loadSecretsFromDisk = Effect.gen(function* () {
-    const exists = yield* fileSystem.exists(statePath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return [] as ReadonlyArray<PersistedHomelabSecretMetadata>;
-    }
-
-    const raw = yield* fileSystem
-      .readFileString(statePath)
-      .pipe(
-        Effect.mapError((cause) =>
-          toRegistryError("Failed to read homelab secret metadata.", cause),
-        ),
-      );
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) {
-      return [] as ReadonlyArray<PersistedHomelabSecretMetadata>;
-    }
-
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(trimmed) as unknown,
-      catch: (cause) => toRegistryError("Failed to parse homelab secret metadata JSON.", cause),
-    });
-    const persisted = yield* decodePersistedHomelabSecretState(parsed).pipe(
-      Effect.mapError((cause) =>
-        toRegistryError("Failed to decode homelab secret metadata state.", cause),
-      ),
-    );
-    return persisted.secrets;
-  }).pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      Effect.logWarning("failed to load homelab secret metadata, using empty state", {
-        message: error.message,
-        cause: error.cause,
-        path: statePath,
-      }).pipe(Effect.as([] as ReadonlyArray<PersistedHomelabSecretMetadata>)),
-    ),
-  );
 
   const maybeSyncKnowledgeGraph = Effect.fn("homelabSecretRegistry.maybeSyncKnowledgeGraph")(
     function* (
@@ -216,7 +189,9 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     },
   );
 
-  const secretsRef = yield* Ref.make(yield* loadSecretsFromDisk);
+  const secretsRef = yield* Ref.make<ReadonlyArray<PersistedHomelabSecretMetadata>>(
+    stateFile.value?.secrets ?? [],
+  );
 
   const listSecrets: HomelabSecretRegistryShape["listSecrets"] = () =>
     Ref.get(secretsRef).pipe(
@@ -280,6 +255,8 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
           updatedAt: now,
         };
 
+        // Refuse before storing the value so a degraded registry stores nothing.
+        yield* ensureWritable;
         yield* secretStore
           .set(secretStoreKey(input.key), Buffer.from(input.value, "utf8"))
           .pipe(

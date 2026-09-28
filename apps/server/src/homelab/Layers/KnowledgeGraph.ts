@@ -11,11 +11,11 @@ import {
   type HomelabRelationId,
   type HomelabSnapshot as HomelabSnapshotModel,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
+import { Effect, Layer, Path, PubSub, Ref, Schema, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { ServerConfig } from "../../config.ts";
+import { loadJsonStateFile } from "../../jsonStateFile.ts";
 import {
   KnowledgeGraph,
   KnowledgeGraphError,
@@ -301,7 +301,6 @@ function makePromotionRecorded(promotion: HomelabPromotionEnvelope): HomelabProm
 
 const makeKnowledgeGraph = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const writeSemaphore = yield* Semaphore.make(1);
   const statePath = path.join(stateDir, "homelab-graph.json");
@@ -310,76 +309,32 @@ const makeKnowledgeGraph = Effect.gen(function* () {
   const publishChange = (event: KnowledgeGraphChangeEvent) =>
     PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
 
+  // A degraded graph (unloadable file) serves the empty snapshot but refuses
+  // writes, so it can never persist that empty state over the real graph.
+  const stateFile = yield* loadJsonStateFile({
+    storeName: "Homelab knowledge graph",
+    filePath: statePath,
+    decode: decodePersistedKnowledgeGraphState,
+  });
+
   const writeSnapshotAtomically = (snapshot: HomelabSnapshotModel) => {
     const persistedState: PersistedKnowledgeGraphState = { version: 1, snapshot };
 
-    return writeFileStringAtomically({
-      filePath: statePath,
-      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
+    return stateFile.writeJson(persistedState).pipe(
       Effect.mapError(
         (cause) =>
           new KnowledgeGraphError({
-            message: "Failed to persist homelab knowledge graph.",
+            message:
+              cause._tag === "JsonStateFileDegradedError"
+                ? cause.message
+                : "Failed to persist homelab knowledge graph.",
             cause,
           }),
       ),
     );
   };
 
-  const loadSnapshotFromDisk = Effect.gen(function* () {
-    const exists = yield* fileSystem.exists(statePath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return emptySnapshot();
-    }
-
-    const raw = yield* fileSystem.readFileString(statePath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new KnowledgeGraphError({
-            message: "Failed to read homelab knowledge graph.",
-            cause,
-          }),
-      ),
-    );
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) {
-      return emptySnapshot();
-    }
-
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(trimmed) as unknown,
-      catch: (cause) =>
-        new KnowledgeGraphError({
-          message: "Failed to parse homelab knowledge graph JSON.",
-          cause,
-        }),
-    });
-
-    const persisted = yield* decodePersistedKnowledgeGraphState(parsed).pipe(
-      Effect.mapError(
-        (cause) =>
-          new KnowledgeGraphError({
-            message: "Failed to decode homelab knowledge graph state.",
-            cause,
-          }),
-      ),
-    );
-
-    return persisted.snapshot;
-  }).pipe(
-    Effect.catchTag("KnowledgeGraphError", (error) =>
-      Effect.logWarning("failed to load homelab knowledge graph, using empty state", {
-        message: error.message,
-        cause: error.cause,
-        path: statePath,
-      }).pipe(Effect.as(emptySnapshot())),
-    ),
-  );
-
-  const snapshotRef = yield* Ref.make(yield* loadSnapshotFromDisk);
+  const snapshotRef = yield* Ref.make(stateFile.value?.snapshot ?? emptySnapshot());
 
   const mutateSnapshot = <A>(
     mutate: (snapshot: HomelabSnapshotModel) => {

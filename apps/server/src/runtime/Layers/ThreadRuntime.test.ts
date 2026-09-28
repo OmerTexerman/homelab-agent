@@ -1580,3 +1580,58 @@ runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
       }),
   );
 });
+
+it.effect("refuses writes instead of wiping thread runtime records it could not load", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* ServerConfig;
+    const statePath = NodePath.join(stateDir, "thread-runtimes.json");
+    // Parses as JSON but fails schema decoding.
+    const corruptBytes = '{"version":1,"runtimes":[{"threadId":42}]}\n';
+    yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+    yield* fileSystem.writeFileString(statePath, corruptBytes);
+
+    const runtime = yield* ThreadRuntime.pipe(
+      Effect.provide(
+        makeThreadRuntimeLive({
+          dockerBinaryPath: "docker",
+          dockerNetwork: "homelab-agent-test",
+          containerShellPath: "/bin/zsh",
+          dockerRunner: docker.run,
+        }),
+      ),
+    );
+    NodeAssert.deepEqual(yield* runtime.listRuntimes(), []);
+
+    const failure = yield* runtime
+      .ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-degraded"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      })
+      .pipe(Effect.flip);
+    NodeAssert.match(failure.message, /is degraded/);
+
+    NodeAssert.equal(yield* fileSystem.exists(statePath), false);
+    const corruptFiles = (yield* fileSystem.readDirectory(stateDir)).filter((name) =>
+      name.startsWith("thread-runtimes.json.corrupt-"),
+    );
+    NodeAssert.equal(corruptFiles.length, 1);
+    NodeAssert.equal(
+      yield* fileSystem.readFileString(NodePath.join(stateDir, corruptFiles[0]!)),
+      corruptBytes,
+    );
+  }).pipe(
+    Effect.provide(
+      ServerSettingsService.layerTest({
+        providers: { codex: { homePath: makeCodexAuthDirPath() } },
+      }).pipe(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-degraded-test-" }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+    Effect.scoped,
+  ),
+);

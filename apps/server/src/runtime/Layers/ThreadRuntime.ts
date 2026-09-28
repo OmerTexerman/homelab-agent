@@ -35,6 +35,7 @@ import { writeHomelabSkillsView } from "../HomelabSkillsView.ts";
 import { HomelabSkills, type HomelabSkillContext } from "../../homelab/Services/HomelabSkills.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
+import { loadJsonStateFile } from "../../jsonStateFile.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   layer as ProcessRunnerLayerLive,
@@ -2453,22 +2454,28 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       }));
   const runtimeDockerNetworkPlanRef = yield* Ref.make<RuntimeDockerNetworkPlan | null>(null);
 
+  // A degraded store (unloadable file) serves no runtimes but refuses writes,
+  // so it can never persist an empty runtime list over the real file.
+  const stateFile = yield* loadJsonStateFile({
+    storeName: "Thread runtime store",
+    filePath: statePath,
+    decode: decodePersistedThreadRuntimeState,
+  });
+
   const writeStateAtomically = (runtimes: ReadonlyArray<ThreadRuntimeDescriptor>) => {
     const persistedState: PersistedThreadRuntimeState = {
       version: 1,
       runtimes: [...runtimes],
     };
 
-    return writeFileStringAtomically({
-      filePath: statePath,
-      contents: `${JSON.stringify(persistedState, null, 2)}\n`,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
+    return stateFile.writeJson(persistedState).pipe(
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
-            message: "Failed to persist thread runtime state.",
+            message:
+              cause._tag === "JsonStateFileDegradedError"
+                ? cause.message
+                : "Failed to persist thread runtime state.",
             cause,
           }),
       ),
@@ -2539,57 +2546,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
-  const loadRuntimesFromDisk = Effect.gen(function* () {
-    const exists = yield* fileSystem.exists(statePath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
-      return [] as ReadonlyArray<ThreadRuntimeDescriptor>;
-    }
-
-    const raw = yield* fileSystem.readFileString(statePath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadRuntimeError({
-            message: "Failed to read thread runtime state.",
-            cause,
-          }),
-      ),
-    );
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) {
-      return [] as ReadonlyArray<ThreadRuntimeDescriptor>;
-    }
-
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(trimmed) as unknown,
-      catch: (cause) =>
-        new ThreadRuntimeError({
-          message: "Failed to parse thread runtime JSON.",
-          cause,
-        }),
-    });
-
-    const persisted = yield* decodePersistedThreadRuntimeState(parsed).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ThreadRuntimeError({
-            message: "Failed to decode thread runtime state.",
-            cause,
-          }),
-      ),
-    );
-
-    return persisted.runtimes;
-  }).pipe(
-    Effect.catchTag("ThreadRuntimeError", (error) =>
-      Effect.logWarning("failed to load thread runtime state, using empty state", {
-        message: error.message,
-        cause: error.cause,
-        path: statePath,
-      }).pipe(Effect.as([] as ReadonlyArray<ThreadRuntimeDescriptor>)),
-    ),
+  const runtimesRef = yield* Ref.make<ReadonlyArray<ThreadRuntimeDescriptor>>(
+    stateFile.value?.runtimes ?? [],
   );
-
-  const runtimesRef = yield* Ref.make(yield* loadRuntimesFromDisk);
   yield* fileSystem.makeDirectory(threadRuntimesDir, { recursive: true }).pipe(Effect.orDie);
 
   const publishEvent = (event: ThreadRuntimeEvent) =>
