@@ -1,8 +1,4 @@
 import {
-  type AuthEnvironmentScope,
-  AuthHomelabSecretsAdminScope,
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
   type EnvironmentAuthorizationError,
   HomelabSecretError,
   ProviderCliStoreError,
@@ -15,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type { HomelabSecretRegistryShape } from "./homelab/Services/HomelabSecretRegistry.ts";
-import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine.ts";
+import type { OrchestrationCommandReadModelShape } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import { wakeThreadWorkspaceRuntime as wakeThreadWorkspaceRuntimeShared } from "./runtime/wakeThreadWorkspaceRuntime.ts";
 import type { ProjectRuntimeLifecycleShape } from "./runtime/Services/ProjectRuntimeLifecycle.ts";
 import type { ThreadRuntimeShape } from "./runtime/Services/ThreadRuntime.ts";
@@ -30,25 +26,7 @@ import type { ProviderCliStoreShape } from "./runtime/ProviderCliStore.ts";
  * spreads these into its scope map and handler record at two one-line call
  * sites.
  */
-export const HOMELAB_RPC_REQUIRED_SCOPES: ReadonlyArray<readonly [string, AuthEnvironmentScope]> = [
-  [WS_METHODS.serverListHomelabSecrets, AuthOrchestrationReadScope],
-  [WS_METHODS.serverUpsertHomelabSecret, AuthHomelabSecretsAdminScope],
-  [WS_METHODS.serverDeleteHomelabSecret, AuthHomelabSecretsAdminScope],
-  [WS_METHODS.serverGetProviderCliStatus, AuthOrchestrationReadScope],
-  [WS_METHODS.serverApplyProviderCliUpdate, AuthOrchestrationOperateScope],
-  [WS_METHODS.threadWorkspaceListEntries, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceReadFile, AuthOrchestrationReadScope],
-  [WS_METHODS.threadWorkspaceWriteFile, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeGet, AuthOrchestrationReadScope],
-  [WS_METHODS.projectRuntimeWake, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeSleep, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeArchive, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeReset, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeCleanupScratch, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeSnapshot, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeRestore, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectRuntimeMergeIsolated, AuthOrchestrationOperateScope],
-];
+export { HOMELAB_RPC_REQUIRED_SCOPES } from "./auth/homelabRpcScopes.ts";
 
 export interface HomelabRpcHandlerDeps {
   readonly observeRpcEffect: <A, E, R>(
@@ -56,7 +34,7 @@ export interface HomelabRpcHandlerDeps {
     effect: Effect.Effect<A, E, R>,
     traceAttributes?: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
-  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "getReadModel">;
+  readonly commandReadModel: OrchestrationCommandReadModelShape;
   readonly threadRuntime: ThreadRuntimeShape;
   readonly threadWorkspace: ThreadWorkspaceShape;
   readonly projectRuntimeLifecycle: ProjectRuntimeLifecycleShape;
@@ -67,7 +45,7 @@ export interface HomelabRpcHandlerDeps {
 export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
   const {
     observeRpcEffect,
-    orchestrationEngine,
+    commandReadModel,
     threadRuntime,
     threadWorkspace,
     projectRuntimeLifecycle,
@@ -87,7 +65,7 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
   };
 
   const activeSessionThreadIds = Effect.gen(function* () {
-    const readModel = yield* orchestrationEngine.getReadModel();
+    const readModel = yield* commandReadModel.getReadModel();
     return readModel.threads
       .filter(
         (thread) =>
@@ -119,7 +97,7 @@ export const makeHomelabRpcHandlers = (deps: HomelabRpcHandlerDeps) => {
     wakeThreadWorkspaceRuntimeShared({
       threadId,
       threadRuntime,
-      getReadModel: orchestrationEngine.getReadModel,
+      getReadModel: commandReadModel.getReadModel,
     });
 
   return {

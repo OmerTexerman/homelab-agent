@@ -11,7 +11,7 @@ import {
   DEFAULT_THREAD_RUNTIME_MODE,
   ThreadRuntimeMode,
   type ThreadRuntimeMode as ThreadRuntimeModeType,
-} from "./orchestration.ts";
+} from "./threadRuntimeMode.ts";
 
 export const ProjectRuntimeId = RuntimeSessionId;
 export type ProjectRuntimeId = RuntimeSessionId;

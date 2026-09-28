@@ -25,6 +25,7 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProjectMemoryId } from "./projectMemory.ts";
+import { ThreadRuntimeMode } from "./threadRuntimeMode.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
@@ -128,9 +129,6 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const ThreadRuntimeMode = Schema.Literals(["shared", "isolated"]);
-export type ThreadRuntimeMode = typeof ThreadRuntimeMode.Type;
-export const DEFAULT_THREAD_RUNTIME_MODE: ThreadRuntimeMode = "shared";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -388,10 +386,9 @@ export const OrchestrationThread = Schema.Struct({
   projectId: ProjectId,
   // Derived: runtime binding is a pure function of (runtimeSelectionMode, threadId,
   // project.defaultRuntimeId) in ProjectRuntimePolicy. Projections cache it for display.
-  runtimeId: Schema.NullOr(RuntimeSessionId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  runtimeSelectionMode: ThreadRuntimeMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_RUNTIME_MODE)),
-  ),
+  // Type-optional; read via threadRuntimeId()/threadRuntimeSelectionMode().
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -465,10 +462,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   projectId: ProjectId,
   // Derived: runtime binding is a pure function of (runtimeSelectionMode, threadId,
   // project.defaultRuntimeId) in ProjectRuntimePolicy. Projections cache it for display.
-  runtimeId: Schema.NullOr(RuntimeSessionId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  runtimeSelectionMode: ThreadRuntimeMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_RUNTIME_MODE)),
-  ),
+  // Type-optional; read via threadRuntimeId()/threadRuntimeSelectionMode().
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

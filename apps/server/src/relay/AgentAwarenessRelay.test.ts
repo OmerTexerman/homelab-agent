@@ -298,8 +298,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
       title: "Run remote agent",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",
-      runtimeId: null,
-      runtimeSelectionMode: "shared",
       interactionMode: "default",
       branch: null,
       worktreePath: null,
@@ -441,8 +439,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          runtimeId: null,
-          runtimeSelectionMode: "shared",
           interactionMode: "default",
           branch: null,
           worktreePath: null,
@@ -475,7 +471,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
         } satisfies OrchestrationThreadShell;
 
         const orchestrationEngine = {
-          getReadModel: () => Effect.die("getReadModel unused in relay tests"),
           readEvents: () => Stream.empty,
           dispatch: () => Effect.succeed({ sequence: 1 }),
           streamDomainEvents: Stream.fromQueue(events),
@@ -602,8 +597,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          runtimeId: null,
-          runtimeSelectionMode: "shared",
           interactionMode: "default",
           branch: null,
           worktreePath: null,
@@ -670,7 +663,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             getDescriptor: Effect.succeed(descriptor),
           }),
           Layer.succeed(OrchestrationEngineService, {
-            getReadModel: () => Effect.die("getReadModel unused in relay tests"),
             readEvents: () => Stream.empty,
             dispatch: () => Effect.succeed({ sequence: 1 }),
             streamDomainEvents: Stream.fromQueue(events),

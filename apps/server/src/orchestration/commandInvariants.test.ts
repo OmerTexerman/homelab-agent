@@ -72,8 +72,6 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-1"),
       projectId: ProjectId.make("project-a"),
-      runtimeId: null,
-      runtimeSelectionMode: "shared" as const,
       title: "Thread A",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -99,8 +97,6 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-2"),
       projectId: ProjectId.make("project-b"),
-      runtimeId: null,
-      runtimeSelectionMode: "shared" as const,
       title: "Thread B",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -126,8 +122,6 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-deleted"),
       projectId: ProjectId.make("project-a"),
-      runtimeId: null,
-      runtimeSelectionMode: "shared" as const,
       title: "Thread Deleted",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),

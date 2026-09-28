@@ -92,8 +92,6 @@ function makeReadModel(
     threads: threads.map((thread) => ({
       id: thread.id,
       projectId,
-      runtimeId: null,
-      runtimeSelectionMode: "shared" as const,
       title: `Thread ${thread.id}`,
       modelSelection: defaultModelSelection,
       interactionMode: "default" as const,
@@ -170,7 +168,6 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
-      clearThreadState: () => Effect.void,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       getInstanceInfo: (instanceId) => {

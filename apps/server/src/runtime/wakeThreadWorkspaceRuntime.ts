@@ -1,7 +1,7 @@
 import type { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
+import type { OrchestrationCommandReadModelShape } from "../orchestration/Services/OrchestrationCommandReadModel.ts";
 import {
   defaultRuntimeIdForProject,
   resolveProjectRuntimeAssignment,
@@ -29,7 +29,7 @@ export const wakeThreadWorkspaceRuntime = (input: {
     ThreadRuntimeShape,
     "getRuntime" | "ensureRuntime" | "startRuntime" | "touchRuntime"
   >;
-  readonly getReadModel: OrchestrationEngineShape["getReadModel"];
+  readonly getReadModel: OrchestrationCommandReadModelShape["getReadModel"];
 }) =>
   Effect.gen(function* () {
     const { threadId, threadRuntime, getReadModel } = input;

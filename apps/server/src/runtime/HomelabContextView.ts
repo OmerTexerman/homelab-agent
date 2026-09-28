@@ -8,6 +8,7 @@ import type {
   ProjectMemoryEntry,
   ThreadId,
 } from "@t3tools/contracts";
+import { threadRuntimeId, threadRuntimeSelectionMode } from "@t3tools/contracts";
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import * as Effect from "effect/Effect";
@@ -123,8 +124,8 @@ function renderThreadSummary(input: { readonly thread: OrchestrationThread }): s
     "",
     `- Thread: ${thread.id}`,
     `- Project: ${thread.projectId}`,
-    `- Runtime: ${thread.runtimeId ?? "unassigned"}`,
-    `- Runtime mode: ${thread.runtimeSelectionMode}`,
+    `- Runtime: ${threadRuntimeId(thread) ?? "unassigned"}`,
+    `- Runtime mode: ${threadRuntimeSelectionMode(thread)}`,
     `- Status: ${thread.session?.status ?? "idle"}`,
     `- Messages: ${thread.messages.length}`,
     `- Updated: ${thread.updatedAt}`,
@@ -392,8 +393,8 @@ export function renderHomelabContextViewFiles(
         jsonLine({
           threadId: thread.id,
           title: thread.title,
-          runtimeId: thread.runtimeId,
-          runtimeSelectionMode: thread.runtimeSelectionMode,
+          runtimeId: threadRuntimeId(thread),
+          runtimeSelectionMode: threadRuntimeSelectionMode(thread),
           summary: summarizeThread(thread),
           summaryPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/summary.md`,
           transcriptPath: `.homelab/threads/thread_${safeHomelabViewSegment(String(thread.id))}/transcript.md`,
@@ -462,7 +463,7 @@ export function renderHomelabContextViewFiles(
         jsonLine({
           threadId: thread.id,
           title: thread.title,
-          runtimeId: thread.runtimeId,
+          runtimeId: threadRuntimeId(thread),
           updatedAt: thread.updatedAt,
         }),
       )

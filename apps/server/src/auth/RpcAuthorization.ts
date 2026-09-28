@@ -1,6 +1,5 @@
 import {
   AuthAccessReadScope,
-  AuthHomelabSecretsAdminScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -13,6 +12,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { HOMELAB_RPC_REQUIRED_SCOPES_RECORD } from "./homelabRpcScopes.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
@@ -126,25 +126,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
-  // Homelab fork methods. `HOMELAB_RPC_REQUIRED_SCOPES` in wsHomelabRpc.ts is
-  // consulted first at the ws.ts authorize sites and must stay in sync.
-  [WS_METHODS.serverListHomelabSecrets]: AuthOrchestrationReadScope,
-  [WS_METHODS.serverUpsertHomelabSecret]: AuthHomelabSecretsAdminScope,
-  [WS_METHODS.serverDeleteHomelabSecret]: AuthHomelabSecretsAdminScope,
-  [WS_METHODS.serverGetProviderCliStatus]: AuthOrchestrationReadScope,
-  [WS_METHODS.serverApplyProviderCliUpdate]: AuthOrchestrationOperateScope,
-  [WS_METHODS.threadWorkspaceListEntries]: AuthOrchestrationReadScope,
-  [WS_METHODS.threadWorkspaceReadFile]: AuthOrchestrationReadScope,
-  [WS_METHODS.threadWorkspaceWriteFile]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeGet]: AuthOrchestrationReadScope,
-  [WS_METHODS.projectRuntimeWake]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeSleep]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeArchive]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeReset]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeCleanupScratch]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeSnapshot]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeRestore]: AuthOrchestrationOperateScope,
-  [WS_METHODS.projectRuntimeMergeIsolated]: AuthOrchestrationOperateScope,
+  ...HOMELAB_RPC_REQUIRED_SCOPES_RECORD,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

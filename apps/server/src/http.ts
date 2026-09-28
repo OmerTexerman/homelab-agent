@@ -46,7 +46,7 @@ import {
   browserApiCorsAllowedMethods,
   isBrowserApiCorsOriginAllowed,
 } from "./httpCors.ts";
-import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationCommandReadModel } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import { ThreadRuntime } from "./runtime/Services/ThreadRuntime.ts";
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { wakeThreadWorkspaceRuntime } from "./runtime/wakeThreadWorkspaceRuntime.ts";
@@ -271,14 +271,14 @@ export const threadWorkspaceFileRouteLayer = HttpRouter.add(
 
     const threadId = ThreadId.make(threadIdParam);
     const threadRuntime = yield* ThreadRuntime;
-    const orchestrationEngine = yield* OrchestrationEngineService;
+    const commandReadModel = yield* OrchestrationCommandReadModel;
     // Same create-if-missing wake as the WS workspace ops, so downloading a file
     // from a thread whose runtime was reaped (or never started) succeeds instead
     // of 400-ing on a missing container.
     yield* wakeThreadWorkspaceRuntime({
       threadId,
       threadRuntime,
-      getReadModel: orchestrationEngine.getReadModel,
+      getReadModel: commandReadModel.getReadModel,
     });
 
     const threadWorkspace = yield* ThreadWorkspace;

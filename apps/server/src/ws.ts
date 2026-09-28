@@ -109,11 +109,12 @@ import { ProjectRuntimeLifecycle } from "./runtime/Services/ProjectRuntimeLifecy
 import { ThreadWorkspace } from "./runtime/Services/ThreadWorkspace.ts";
 import { HomelabSecretRegistry } from "./homelab/Services/HomelabSecretRegistry.ts";
 import { ProviderCliStore } from "./runtime/ProviderCliStore.ts";
-import { HOMELAB_RPC_REQUIRED_SCOPES, makeHomelabRpcHandlers } from "./wsHomelabRpc.ts";
+import { makeHomelabRpcHandlers } from "./wsHomelabRpc.ts";
 import {
   type AdoptedBootstrapThread,
   makeThreadBootstrapRecovery,
 } from "./wsThreadBootstrapRecovery.ts";
+import { OrchestrationCommandReadModel } from "./orchestration/Services/OrchestrationCommandReadModel.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -335,13 +336,6 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 // databases. Past this gap the client is reset with a fresh thread snapshot.
 const THREAD_RESUME_MAX_GAP = 1_000;
 
-// Homelab RPC scopes live with the fork-owned handlers in wsHomelabRpc.ts;
-// everything else resolves through the upstream typed scope table. Lookups
-// stay fail-closed: requiredScopeForRpcMethod throws for undeclared methods.
-const HOMELAB_RPC_SCOPE_LOOKUP = new Map(HOMELAB_RPC_REQUIRED_SCOPES);
-const requiredScopeForWsRpcMethod = (method: string): AuthEnvironmentScope =>
-  HOMELAB_RPC_SCOPE_LOOKUP.get(method) ?? requiredScopeForRpcMethod(method);
-
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
@@ -421,6 +415,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const commandReadModel = yield* OrchestrationCommandReadModel;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
       // client's origin, including server-generated bootstrap sub-commands:
@@ -542,7 +537,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForWsRpcMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const observeRpcStream = <A, E, R>(
@@ -552,7 +547,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStream(
           method,
-          authorizeStream(requiredScopeForWsRpcMethod(method), stream),
+          authorizeStream(requiredScopeForRpcMethod(method), stream),
           traceAttributes,
         );
       const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
@@ -566,7 +561,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStreamEffect(
           method,
-          authorizeEffect(requiredScopeForWsRpcMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
@@ -873,6 +868,7 @@ const makeWsRpcLayer = (
 
           const bootstrapRecovery = makeThreadBootstrapRecovery({
             orchestrationEngine,
+            commandReadModel,
             gitWorkflow,
             serverCommandId,
             threadId: command.threadId,
@@ -1759,7 +1755,7 @@ const makeWsRpcLayer = (
           ),
         ...makeHomelabRpcHandlers({
           observeRpcEffect,
-          orchestrationEngine,
+          commandReadModel,
           threadRuntime,
           threadWorkspace,
           projectRuntimeLifecycle,

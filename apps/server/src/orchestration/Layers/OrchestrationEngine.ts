@@ -8,6 +8,7 @@ import type {
 import { OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -51,6 +52,10 @@ import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import { HomelabSkills } from "../../homelab/Services/HomelabSkills.ts";
 import { refreshActiveProjectContextViews } from "../../homelab/ProjectMemoryContextViews.ts";
 import { standaloneProjectId } from "../../runtime/ProjectRuntimePolicy.ts";
+import {
+  OrchestrationCommandReadModel,
+  type OrchestrationCommandReadModelShape,
+} from "../Services/OrchestrationCommandReadModel.ts";
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
@@ -469,7 +474,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return yield* Deferred.await(result);
     });
 
-  const getReadModel: OrchestrationEngineShape["getReadModel"] = () =>
+  const getReadModel: OrchestrationCommandReadModelShape["getReadModel"] = () =>
     Effect.succeed(commandReadModel);
 
   return {
@@ -487,10 +492,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // consistent, committed value — reassignment of `commandReadModel` is
     // atomic on the single-threaded event loop.
     latestSequence: Effect.sync(() => commandReadModel.snapshotSequence),
-  } satisfies OrchestrationEngineShape;
+  } satisfies OrchestrationEngineShape & OrchestrationCommandReadModelShape;
 });
 
-export const OrchestrationEngineLive = Layer.effect(
-  OrchestrationEngineService,
-  makeOrchestrationEngine,
+export const OrchestrationEngineLive = Layer.effectContext(
+  Effect.map(makeOrchestrationEngine, (engine) =>
+    Context.make(OrchestrationEngineService, engine).pipe(
+      Context.add(OrchestrationCommandReadModel, { getReadModel: engine.getReadModel }),
+    ),
+  ),
 );

@@ -20,8 +20,6 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-1"),
       projectId: ProjectId.make("project-1"),
-      runtimeId: null,
-      runtimeSelectionMode: "shared",
       title: "Manual title",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",

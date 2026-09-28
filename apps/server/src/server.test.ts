@@ -116,6 +116,10 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import {
+  OrchestrationCommandReadModel,
+  type OrchestrationCommandReadModelShape,
+} from "./orchestration/Services/OrchestrationCommandReadModel.ts";
+import {
   OrchestrationCommandInvariantError,
   OrchestrationListenerCallbackError,
 } from "./orchestration/Errors.ts";
@@ -492,8 +496,6 @@ const makeDefaultOrchestrationThreadShell = (
   return {
     id: defaultThreadId,
     projectId: defaultProjectId,
-    runtimeId: null,
-    runtimeSelectionMode: "shared",
     title: "Default Thread",
     modelSelection: defaultModelSelection,
     runtimeMode: "full-access",
@@ -649,7 +651,9 @@ const buildAppUnderTest = (options?: {
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
-    orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
+    orchestrationEngine?: Partial<
+      OrchestrationEngine.OrchestrationEngineService["Service"] & OrchestrationCommandReadModelShape
+    >;
     analyticsService?: Partial<AnalyticsService.AnalyticsService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
@@ -1186,8 +1190,14 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
+        Layer.succeed(OrchestrationCommandReadModel, {
+          getReadModel:
+            options?.layers?.orchestrationEngine?.getReadModel ??
+            (() => Effect.succeed(makeDefaultOrchestrationReadModel())),
+        }),
+      ),
+      Layer.provide(
         Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
           readEvents: () => Stream.empty,
           dispatch: () => Effect.succeed({ sequence: 0 }),
           streamDomainEvents: Stream.empty,

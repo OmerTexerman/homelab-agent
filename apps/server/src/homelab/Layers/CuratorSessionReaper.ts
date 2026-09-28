@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 
+import { OrchestrationCommandReadModel } from "../../orchestration/Services/OrchestrationCommandReadModel.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { isCuratorProjectId } from "../../runtime/ProjectRuntimePolicy.ts";
 import {
@@ -78,6 +79,7 @@ function parseDurationMs(value: string | undefined, fallback: number): number {
 const makeCuratorSessionReaper = (options?: CuratorSessionReaperLiveOptions) =>
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const commandReadModel = yield* OrchestrationCommandReadModel;
 
     const retentionMs = Math.max(
       1,
@@ -97,7 +99,7 @@ const makeCuratorSessionReaper = (options?: CuratorSessionReaperLiveOptions) =>
     );
 
     const sweep = Effect.gen(function* () {
-      const readModel = yield* orchestrationEngine.getReadModel();
+      const readModel = yield* commandReadModel.getReadModel();
       const nowMs = yield* Clock.currentTimeMillis;
       const threadIds = selectCuratorSessionsToReap({
         threads: readModel.threads,

@@ -118,7 +118,6 @@ const startupDependencies = Layer.mergeAll(
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
-    clearThreadState: () => Effect.die("unused"),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
