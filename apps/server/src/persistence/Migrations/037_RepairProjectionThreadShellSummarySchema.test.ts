@@ -187,6 +187,11 @@ layer("037_RepairProjectionThreadShellSummarySchema", (it) => {
         [43, "ProjectionThreadsSnoozed"],
         [44, "ProjectionThreadTitleRegeneration"],
         [45, "ProjectionThreadsPinned"],
+        [46, "ProjectionTurnsKeysetIndex"],
+        [47, "ProjectionThreadsPinOrderKey"],
+        [48, "ProjectionProjectsDefaultThreadEnvMode"],
+        [49, "ProjectionProjectFaviconPath"],
+        [50, "AuthSessionClientConnection"],
       ]);
 
       const afterColumns = yield* sql<{ readonly name: string }>`

@@ -25,7 +25,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { expect } from "vitest";
+import { expect } from "vite-plus/test";
 
 import type { TerminalManagerShape } from "./Manager.ts";
 import { ThreadRuntime } from "../runtime/Services/ThreadRuntime.ts";

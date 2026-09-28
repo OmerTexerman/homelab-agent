@@ -29,6 +29,8 @@ import {
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
   ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   RuntimeSessionId,
   ResolvedKeybindingRule,
   ThreadId,
