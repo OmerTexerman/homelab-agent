@@ -25,6 +25,7 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProjectMemoryId } from "./projectMemory.ts";
+import { DEFAULT_THREAD_RUNTIME_MODE, ThreadRuntimeMode } from "./threadRuntimeMode.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
@@ -128,9 +129,6 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const ThreadRuntimeMode = Schema.Literals(["shared", "isolated"]);
-export type ThreadRuntimeMode = typeof ThreadRuntimeMode.Type;
-export const DEFAULT_THREAD_RUNTIME_MODE: ThreadRuntimeMode = "shared";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
