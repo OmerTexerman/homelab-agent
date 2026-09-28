@@ -22,6 +22,9 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 
+const SECRET_REQUEST_POLL_INTERVAL_MS = 10_000;
+const PENDING_SECRET_POLL_INTERVAL_MS = 3_000;
+
 export function HomelabSecretRequestCoordinator() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledKeysRef = useRef(new Set<string>());
@@ -29,8 +32,14 @@ export function HomelabSecretRequestCoordinator() {
   const [value, setValue] = useState("");
   const secretsQuery = useQuery({
     ...homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
-    refetchInterval: 3_000,
-    refetchIntervalInBackground: true,
+    // Agents request secrets mid-turn, so poll for new requests, faster while one
+    // is waiting. Hidden tabs don't poll; they refetch when focused again.
+    refetchInterval: (query) =>
+      query.state.data?.secrets.some((secret) => secret.pending)
+        ? PENDING_SECRET_POLL_INTERVAL_MS
+        : SECRET_REQUEST_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   });
 
   const activeSecret = useMemo(
