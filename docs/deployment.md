@@ -73,6 +73,12 @@ Before putting a persistent instance behind a reverse proxy:
 
 ## Host Auto-Deploy From Main
 
+The production instance (Proxmox LXC) deploys the CI-gated `prod` branch using
+separate release directories, a real-data smoke, drain, health check, and
+rollback. See [deploy/proxmox/README.md](../deploy/proxmox/README.md). Prefer
+that flow for any long-lived host; the simpler `deploy-main.sh` path below
+builds in place and has no rollback.
+
 For a homelab host, the simplest low-maintenance deploy path is a local
 systemd timer that polls `origin/main`, fast-forwards the deployment checkout,
 builds, runs the disposable production smoke, backs up `T3CODE_HOME`, and

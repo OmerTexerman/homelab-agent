@@ -1,0 +1,29 @@
+# Homelab Agent service inside the ai-agent LXC (/etc/systemd/system/t3code.service).
+# Runs whichever release `current` points at; see deploy/proxmox/README.md.
+[Unit]
+Description=Homelab Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=t3code
+Group=t3code
+WorkingDirectory=/home/t3code/homelab-agent-releases/current
+Environment=HOME=/home/t3code
+Environment=PATH=/home/t3code/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=T3CODE_HOME=/home/t3code/.t3
+Environment=T3CODE_HOST=0.0.0.0
+Environment=T3CODE_PORT=3000
+Environment=T3CODE_NO_BROWSER=true
+Environment=HOMELAB_AGENT_RUNTIME_IMAGE=homelab-agent-runtime:local
+Environment=HOMELAB_AGENT_RUNTIME_CONTEXT=/home/t3code/homelab-agent-releases/current/docker/runtime
+Environment=HOMELAB_AGENT_RUNTIME_DOCKERFILE=/home/t3code/homelab-agent-releases/current/docker/runtime/Dockerfile
+# Opt in only if agents must manage Docker on this host (root-equivalent):
+# Environment=HOMELAB_AGENT_RUNTIME_DOCKER_SOCKET=1
+ExecStart=/usr/bin/node /home/t3code/homelab-agent-releases/current/apps/server/dist/bin.mjs serve --base-dir /home/t3code/.t3 --host 0.0.0.0 --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

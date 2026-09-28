@@ -1,0 +1,46 @@
+# Fast-forwards `prod` to a main commit once CI passes on it. Deployment hosts
+# track `prod`, so a red commit never ships. Use the manual trigger (with a sha
+# already on main) only to ship an urgent fix while CI itself is broken.
+name: Promote to prod
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to promote
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-prod
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      github.repository == 'OmerTexerman/homelab-agent' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fast-forward prod
+        env:
+          SHA: ${{ inputs.sha || github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "$SHA is not on main" >&2; exit 1; }
+          if git fetch --quiet origin prod 2>/dev/null; then
+            git merge-base --is-ancestor origin/prod "$SHA" || { echo "prod is not an ancestor of $SHA" >&2; exit 1; }
+          fi
+          git push origin "$SHA:refs/heads/prod"
