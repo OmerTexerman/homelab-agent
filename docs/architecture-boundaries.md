@@ -29,16 +29,16 @@ runtime, terminal, or chat components.
 | `apps/server/src/runtime/HomelabSkillsView.ts`                                                                                  | Materializing visible skills into a runtime: the generated `.homelab/skills` view (indexed and reconciled) and `~/.claude/skills` for Claude Code auto-discovery.                                                                          | Skill storage/scoping rules, deciding which skills are visible (HomelabSkills owns that), or when materialization runs (ThreadRuntime owns the call sites).                  |
 | `apps/web/src/threadActivityDerivations.ts`                                                                                     | Deriving pending approvals, pending user-input requests, active and proposed plan state, and the collapsed work log from thread activities.                                                                                                | Timeline entry derivation (`threadTimeline.ts`), read-model seam composition, data fetching, or rendering.                                                                   |
 
-`apps/web/src/session-logic.ts` is intentionally a thin re-export shim over
-`threadTimeline.ts` and `threadActivityDerivations.ts`: upstream-owned
-components keep their `./session-logic` import lines, while the fork-owned
-implementations live in the modules above. During rebases, port upstream
-changes to `session-logic.ts` into those modules instead of re-expanding the
-shim.
+Fork modules hold only fork deltas. Never move upstream logic into a fork
+module to "own" it: every sync then has to re-port upstream's changes by hand,
+and the last time that was tried (`session-logic.ts` as a re-export shim over
+fork copies of upstream derivations) the merge silently dropped fork behavior.
+Take upstream's implementation and add fork behavior as a small hook or
+post-filter instead.
 
-## Rebase Guidance
+## Sync Guidance
 
-During upstream rebases, expect churn near provider adapters, runtime launch,
+During upstream syncs (merges; see [upstream-sync.md](./upstream-sync.md)), expect churn near provider adapters, runtime launch,
 terminal manager, websocket orchestration, chat view, sidebar, and shared
 contracts. Prefer this workflow:
 
