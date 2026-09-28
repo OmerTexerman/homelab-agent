@@ -7,8 +7,13 @@
  * then persist that empty state over the real file. Instead the file is moved
  * aside to `<name>.corrupt-<UTC timestamp>` and the store is DEGRADED: reads
  * see the store's default state so the server still boots, but every write
- * fails with {@link JsonStateFileDegradedError}. Degraded stores are listed in
- * {@link DegradedStateFiles} for health reporting.
+ * fails with {@link JsonStateFileDegradedError}.
+ *
+ * Degradation is sticky across restarts: while the main file is missing and a
+ * `<name>.corrupt-*` sibling exists, the store stays degraded. An operator
+ * resolves it by restoring a repaired copy to the main path, or by deleting
+ * the `.corrupt-*` files to accept starting empty. Degraded stores are listed
+ * in {@link DegradedStateFiles} for health reporting.
  */
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -22,8 +27,8 @@ import { writeFileStringAtomically } from "./atomicWrite.ts";
 export interface DegradedStateFile {
   readonly storeName: string;
   readonly path: string;
-  /** Where the unreadable original was moved, or null when it could not be moved. */
-  readonly corruptPath: string | null;
+  /** Quarantined `<name>.corrupt-*` copies next to `path`; empty when the move failed. */
+  readonly corruptPaths: ReadonlyArray<string>;
   readonly reason: string;
   readonly detectedAt: string;
 }
@@ -43,14 +48,24 @@ export const listDegradedStateFiles = Effect.gen(function* () {
 export class JsonStateFileDegradedError extends Data.TaggedError("JsonStateFileDegradedError")<{
   readonly storeName: string;
   readonly path: string;
-  readonly corruptPath: string | null;
+  readonly corruptPaths: ReadonlyArray<string>;
   readonly reason: string;
 }> {
   override get message(): string {
-    const prefix = `${this.storeName} is degraded: ${this.path} could not be loaded (${this.reason})`;
-    return this.corruptPath === null
-      ? `${prefix}; the file was left in place. Fix or remove it and restart the server.`
-      : `${prefix}; the original was moved to ${this.corruptPath}. Writes are refused until restart: restore a repaired copy to ${this.path}, or restart as-is to start ${this.storeName} from empty state.`;
+    const prefix = `${this.storeName} is degraded: ${this.path} could not be loaded (${this.reason}); writes are refused.`;
+    if (this.corruptPaths.length === 0) {
+      return `${prefix} The file could not be moved aside: fix or remove ${this.path} and restart the server.`;
+    }
+    return `${prefix} Quarantined copies: ${this.corruptPaths.join(", ")}. Either restore a repaired copy to ${this.path}, or delete the .corrupt-* file(s) to accept starting ${this.storeName} empty, then restart the server.`;
+  }
+}
+
+export class JsonStateFileWriteError extends Data.TaggedError("JsonStateFileWriteError")<{
+  readonly path: string;
+  readonly cause: unknown;
+}> {
+  override get message(): string {
+    return `Failed to write ${this.path}.`;
   }
 }
 
@@ -67,17 +82,9 @@ export interface JsonStateFile<A> {
   ) => Effect.Effect<void, JsonStateFileDegradedError | JsonStateFileWriteError>;
 }
 
-export class JsonStateFileWriteError extends Data.TaggedError("JsonStateFileWriteError")<{
-  readonly path: string;
-  readonly cause: unknown;
-}> {
-  override get message(): string {
-    return `Failed to write ${this.path}.`;
-  }
-}
-
 class LoadFailure extends Data.TaggedError("LoadFailure")<{
   readonly reason: string;
+  readonly quarantine: boolean;
   readonly cause?: unknown;
 }> {}
 
@@ -86,8 +93,10 @@ function corruptTimestamp(date: Date): string {
 }
 
 /**
- * Loads a JSON state file. A missing file yields `value: undefined`; an empty,
- * unreadable, unparsable, or undecodable file degrades the store. Empty files
+ * Loads a JSON state file. A missing file with no quarantined siblings yields
+ * `value: undefined` (fresh start). An empty, unreadable, unparsable, or
+ * undecodable file is quarantined and degrades the store; so does a missing
+ * file whose earlier quarantined copies are still unresolved. Empty files
  * count as corrupt because atomic writes never produce one: an empty file
  * means truncation or outside interference, not a fresh install.
  */
@@ -100,67 +109,118 @@ export const loadJsonStateFile = <A>(options: {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const { storeName, filePath } = options;
+    const directory = path.dirname(filePath);
+    const corruptPrefix = `${path.basename(filePath)}.corrupt-`;
+
+    const listCorruptSiblings = Effect.gen(function* () {
+      if (!(yield* fileSystem.exists(directory))) {
+        return [] as ReadonlyArray<string>;
+      }
+      const entries = yield* fileSystem.readDirectory(directory);
+      return entries
+        .filter((name) => name.startsWith(corruptPrefix))
+        .toSorted()
+        .map((name) => path.join(directory, name));
+    });
 
     const loadResult = yield* Effect.gen(function* () {
-      const exists = yield* fileSystem
-        .exists(filePath)
-        .pipe(
+      const exists = yield* fileSystem.exists(filePath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new LoadFailure({
+              reason: "could not check whether it exists",
+              quarantine: false,
+              cause,
+            }),
+        ),
+      );
+      if (!exists) {
+        const siblings = yield* listCorruptSiblings.pipe(
           Effect.mapError(
-            (cause) => new LoadFailure({ reason: "could not check whether it exists", cause }),
+            (cause) =>
+              new LoadFailure({
+                reason: "could not check for quarantined copies",
+                quarantine: false,
+                cause,
+              }),
           ),
         );
-      if (!exists) {
+        if (siblings.length > 0) {
+          return yield* new LoadFailure({
+            reason: "an earlier unloadable copy is quarantined and unresolved",
+            quarantine: false,
+          });
+        }
         return { _tag: "missing" } as const;
       }
       const raw = yield* fileSystem
         .readFileString(filePath)
-        .pipe(Effect.mapError((cause) => new LoadFailure({ reason: "unreadable", cause })));
+        .pipe(
+          Effect.mapError(
+            (cause) => new LoadFailure({ reason: "unreadable", quarantine: true, cause }),
+          ),
+        );
       const trimmed = raw.trim();
       if (trimmed.length === 0) {
-        return yield* new LoadFailure({ reason: "empty file" });
+        return yield* new LoadFailure({ reason: "empty file", quarantine: true });
       }
       const parsed = yield* Effect.try({
         try: () => JSON.parse(trimmed) as unknown,
-        catch: (cause) => new LoadFailure({ reason: "invalid JSON", cause }),
+        catch: (cause) => new LoadFailure({ reason: "invalid JSON", quarantine: true, cause }),
       });
       const value = yield* options
         .decode(parsed)
-        .pipe(Effect.mapError((cause) => new LoadFailure({ reason: "schema mismatch", cause })));
+        .pipe(
+          Effect.mapError(
+            (cause) => new LoadFailure({ reason: "schema mismatch", quarantine: true, cause }),
+          ),
+        );
       return { _tag: "loaded", value } as const;
     }).pipe(Effect.catchTag("LoadFailure", (failure) => Effect.succeed(failure)));
 
     let value: A | undefined;
     let degraded: DegradedStateFile | undefined;
+    const registry = yield* DegradedStateFiles;
 
-    if (loadResult._tag === "loaded") {
-      value = loadResult.value;
-    } else if (loadResult._tag === "LoadFailure") {
+    if (loadResult._tag !== "LoadFailure") {
+      if (loadResult._tag === "loaded") {
+        value = loadResult.value;
+      }
+      yield* Ref.update(registry, (current) => {
+        if (!current.has(filePath)) return current;
+        const next = new Map(current);
+        next.delete(filePath);
+        return next;
+      });
+    } else {
       const now = new Date();
-      const candidateCorruptPath = `${filePath}.corrupt-${corruptTimestamp(now)}`;
-      const corruptPath = yield* fileSystem.rename(filePath, candidateCorruptPath).pipe(
-        Effect.as(candidateCorruptPath as string | null),
-        Effect.catch((cause) =>
-          Effect.logError("failed to move unloadable state file aside", {
-            storeName,
-            path: filePath,
-            cause,
-          }).pipe(Effect.as(null)),
-        ),
+      if (loadResult.quarantine) {
+        yield* fileSystem.rename(filePath, `${filePath}.corrupt-${corruptTimestamp(now)}`).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("failed to move unloadable state file aside", {
+              storeName,
+              path: filePath,
+              cause,
+            }),
+          ),
+        );
+      }
+      const corruptPaths = yield* listCorruptSiblings.pipe(
+        Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
       );
       degraded = {
         storeName,
         path: filePath,
-        corruptPath,
+        corruptPaths,
         reason: loadResult.reason,
         detectedAt: now.toISOString(),
       };
       yield* Effect.logError(`${storeName} could not load its state file; store is degraded`, {
         path: filePath,
-        corruptPath,
+        corruptPaths,
         reason: loadResult.reason,
         cause: loadResult.cause,
       });
-      const registry = yield* DegradedStateFiles;
       const entry = degraded;
       yield* Ref.update(registry, (current) => new Map(current).set(filePath, entry));
     }
@@ -172,7 +232,7 @@ export const loadJsonStateFile = <A>(options: {
             new JsonStateFileDegradedError({
               storeName,
               path: filePath,
-              corruptPath: degraded.corruptPath,
+              corruptPaths: degraded.corruptPaths,
               reason: degraded.reason,
             }),
           );

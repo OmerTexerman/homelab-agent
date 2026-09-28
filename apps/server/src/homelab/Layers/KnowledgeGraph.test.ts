@@ -63,3 +63,35 @@ it.effect("starts a fresh knowledge graph when the file is missing", () =>
     assert.equal(persisted.snapshot.entities[0].id, entity.id);
   }).pipe(Effect.provide(configLayer), Effect.scoped),
 );
+
+it.effect("stays degraded across restarts until the quarantined copy is resolved", () =>
+  Effect.gen(function* () {
+    const { stateDir } = yield* ServerConfig;
+    const statePath = NodePath.join(stateDir, "homelab-graph.json");
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    NodeFS.writeFileSync(statePath, "{ truncated");
+
+    // First boot quarantines the file.
+    const firstBoot = yield* KnowledgeGraph.pipe(Effect.provide(KnowledgeGraphLive));
+    yield* firstBoot.upsertEntity(entity).pipe(Effect.flip);
+    const corruptFiles = NodeFS.readdirSync(stateDir).filter((name) =>
+      name.startsWith("homelab-graph.json.corrupt-"),
+    );
+    assert.lengthOf(corruptFiles, 1);
+
+    // Restart: the main file is gone but the quarantined copy is unresolved.
+    const restarted = yield* KnowledgeGraph.pipe(Effect.provide(KnowledgeGraphLive));
+    assert.deepStrictEqual((yield* restarted.getSnapshot()).entities, []);
+    const failure = yield* restarted.upsertEntity(entity).pipe(Effect.flip);
+    assert.include(failure.message, "is degraded");
+    assert.include(failure.message, `restore a repaired copy to ${statePath}`);
+    assert.include(failure.message, "delete the .corrupt-* file(s)");
+    assert.isFalse(NodeFS.existsSync(statePath));
+
+    // Deleting the quarantined copy accepts starting empty.
+    NodeFS.rmSync(NodePath.join(stateDir, corruptFiles[0]!));
+    const fresh = yield* KnowledgeGraph.pipe(Effect.provide(KnowledgeGraphLive));
+    yield* fresh.upsertEntity(entity);
+    assert.isTrue(NodeFS.existsSync(statePath));
+  }).pipe(Effect.provide(configLayer), Effect.scoped),
+);

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -46,7 +46,7 @@ it.effect("degrades on an empty file, moves it aside, and reports it", () =>
       const stateFile = yield* loadJsonStateFile({ storeName: "Test store", filePath, decode });
       assert.isUndefined(stateFile.value);
       assert.equal(stateFile.degraded?.reason, "empty file");
-      const corruptPath = stateFile.degraded?.corruptPath;
+      const corruptPath = stateFile.degraded?.corruptPaths[0];
       assert.isString(corruptPath);
       assert.equal(NodeFS.readFileSync(corruptPath!, "utf8"), "  \n");
       assert.isFalse(NodeFS.existsSync(filePath));
@@ -59,6 +59,26 @@ it.effect("degrades on an empty file, moves it aside, and reports it", () =>
 
       const degraded = yield* listDegradedStateFiles;
       assert.isTrue(degraded.some((entry) => entry.path === filePath));
+    }),
+  ),
+);
+
+it.effect("loads a restored copy even while quarantined siblings remain", () =>
+  withTempDir((dir) =>
+    Effect.gen(function* () {
+      const filePath = NodePath.join(dir, "state.json");
+      NodeFS.writeFileSync(`${filePath}.corrupt-2026-01-01T00-00-00-000Z`, "{ bad");
+
+      const stillDegraded = yield* loadJsonStateFile({ storeName: "Test store", filePath, decode });
+      assert.isDefined(stillDegraded.degraded);
+      assert.lengthOf(stillDegraded.degraded!.corruptPaths, 1);
+
+      NodeFS.writeFileSync(filePath, JSON.stringify({ version: 1, items: ["restored"] }));
+      const restored = yield* loadJsonStateFile({ storeName: "Test store", filePath, decode });
+      assert.isUndefined(restored.degraded);
+      assert.deepStrictEqual(restored.value, { version: 1, items: ["restored"] });
+      const degraded = yield* listDegradedStateFiles;
+      assert.isFalse(degraded.some((entry) => entry.path === filePath));
     }),
   ),
 );
