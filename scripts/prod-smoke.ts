@@ -11,6 +11,7 @@ import {
   AuthTokenExchangeGrantType,
 } from "@t3tools/contracts";
 import * as NodeNet from "node:net";
+import * as NodeSqlite from "node:sqlite";
 interface ManagedProcess {
   readonly child: NodeChildProcess.ChildProcess;
   exited: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | null;
@@ -98,7 +99,89 @@ async function fetchWithTimeout(
   });
 }
 
-function startServer(input: { readonly baseDir: string; readonly port: number }): ManagedProcess {
+// Top-level userdata files a seeded smoke copies from a real home. Secrets,
+// provider CLIs, runtime workspaces, logs, and the environment id are left out
+// so the smoke server can never act as (or on behalf of) the real instance.
+const SEEDED_USERDATA_FILES = [
+  "homelab-graph.json",
+  "homelab-secrets.json",
+  "keybindings.json",
+  "project-runtime-lifecycle.json",
+  "runtime-bootstrap.json",
+  "settings.json",
+  "thread-runtimes.json",
+] as const;
+
+/**
+ * Copies a consistent snapshot of real state into the disposable home so the
+ * smoke exercises migrations and startup against production-shaped data.
+ * `VACUUM INTO` is safe while the live server has the database open.
+ */
+function seedBaseDir(input: { readonly sourceHome: string; readonly baseDir: string }): void {
+  const sourceUserdata = NodePath.join(input.sourceHome, "userdata");
+  const sourceDb = NodePath.join(sourceUserdata, "state.sqlite");
+  if (!NodeFS.existsSync(sourceDb)) {
+    throw new Error(`Cannot seed smoke state: ${sourceDb} does not exist.`);
+  }
+  const targetUserdata = NodePath.join(input.baseDir, "userdata");
+  NodeFS.mkdirSync(targetUserdata, { recursive: true });
+  const source = new NodeSqlite.DatabaseSync(sourceDb, { readOnly: true });
+  try {
+    source.exec(
+      `VACUUM INTO '${NodePath.join(targetUserdata, "state.sqlite").replaceAll("'", "''")}'`,
+    );
+  } finally {
+    source.close();
+  }
+  for (const name of SEEDED_USERDATA_FILES) {
+    const sourceFile = NodePath.join(sourceUserdata, name);
+    if (NodeFS.existsSync(sourceFile)) {
+      NodeFS.copyFileSync(sourceFile, NodePath.join(targetUserdata, name));
+    }
+  }
+}
+
+/** A docker stand-in that refuses every call, so seeded runtime records can't touch real containers. */
+function writeDockerStub(baseDir: string): string {
+  const stubPath = NodePath.join(baseDir, "docker-disabled.sh");
+  NodeFS.writeFileSync(
+    stubPath,
+    '#!/bin/sh\necho "docker is disabled during prod smoke" >&2\nexit 1\n',
+    {
+      mode: 0o755,
+    },
+  );
+  return stubPath;
+}
+
+function countSeededGraphEntities(sourceHome: string): number | null {
+  const graphPath = NodePath.join(sourceHome, "userdata", "homelab-graph.json");
+  if (!NodeFS.existsSync(graphPath)) {
+    return null;
+  }
+  const parsed = JSON.parse(NodeFS.readFileSync(graphPath, "utf8")) as {
+    readonly snapshot?: { readonly entities?: ReadonlyArray<unknown> };
+  };
+  return parsed.snapshot?.entities?.length ?? 0;
+}
+
+function readSeedFromArg(argv: ReadonlyArray<string>): string | undefined {
+  const index = argv.indexOf("--seed-from");
+  if (index === -1) {
+    return undefined;
+  }
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error("--seed-from requires a T3CODE_HOME path.");
+  }
+  return NodePath.resolve(value);
+}
+
+function startServer(input: {
+  readonly baseDir: string;
+  readonly port: number;
+  readonly dockerBinary: string;
+}): ManagedProcess {
   const child = NodeChildProcess.spawn(
     process.execPath,
     [
@@ -121,6 +204,7 @@ function startServer(input: { readonly baseDir: string; readonly port: number })
         T3CODE_MODE: "web",
         T3CODE_NO_BROWSER: "true",
         HOMELAB_AGENT_RUNTIME_AUTO_BUILD: "0",
+        HOMELAB_AGENT_DOCKER_BINARY: input.dockerBinary,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -241,17 +325,24 @@ async function main(): Promise<void> {
     throw new Error("Missing bundled web client. Run pnpm run build:prod first.");
   }
 
+  const seedFrom = readSeedFromArg(process.argv.slice(2));
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "homelab-prod-smoke-"));
+  if (seedFrom) {
+    log(`Seeding disposable T3CODE_HOME from ${seedFrom}`);
+    seedBaseDir({ sourceHome: seedFrom, baseDir });
+  }
+  const dockerBinary = writeDockerStub(baseDir);
   const port = await findOpenPort();
   const serverBaseUrl = `http://127.0.0.1:${port}`;
-  const serverProcess = startServer({ baseDir, port });
+  const serverProcess = startServer({ baseDir, port, dockerBinary });
 
   try {
     log(`Using disposable T3CODE_HOME ${baseDir}`);
     await waitForHttp({
       url: `${serverBaseUrl}/api/auth/session`,
       process: serverProcess,
-      timeoutMs: 30_000,
+      // Seeded runs apply pending migrations to real data before listening.
+      timeoutMs: seedFrom ? 180_000 : 30_000,
     });
 
     const indexResponse = await fetchWithTimeout(serverBaseUrl, undefined, 10_000);
@@ -283,6 +374,27 @@ async function main(): Promise<void> {
       throw new Error("Bearer session is missing access:write scope.");
     }
 
+    // A store that silently loaded empty (or degraded) state must fail the smoke
+    // rather than ship: the graph served from the seeded copy must match the source.
+    const expectedEntities = seedFrom ? countSeededGraphEntities(seedFrom) : null;
+    if (expectedEntities !== null) {
+      const snapshotResponse = await fetchWithTimeout(
+        new URL("/api/homelab/snapshot", serverBaseUrl),
+        { headers: { Accept: "application/json", Authorization: `Bearer ${bearerToken}` } },
+        30_000,
+      );
+      const snapshot = (await snapshotResponse.json()) as {
+        readonly entities?: ReadonlyArray<unknown>;
+      };
+      const servedEntities = snapshot.entities?.length ?? 0;
+      if (!snapshotResponse.ok || servedEntities !== expectedEntities) {
+        throw new Error(
+          `Seeded knowledge graph did not load intact: HTTP ${snapshotResponse.status}, ${servedEntities}/${expectedEntities} entities.`,
+        );
+      }
+      log(`Seeded knowledge graph loaded intact (${servedEntities} entities).`);
+    }
+
     log(
       JSON.stringify(
         {
@@ -291,6 +403,7 @@ async function main(): Promise<void> {
           baseDir,
           staticClient: true,
           authenticated: true,
+          seededFrom: seedFrom ?? null,
         },
         null,
         2,
