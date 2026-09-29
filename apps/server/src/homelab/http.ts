@@ -20,7 +20,6 @@ import {
   HomelabEntityUpsertInput,
   HomelabEntityVerifyInput,
   HomelabGraphSearchInput,
-  HomelabObservationId,
   HomelabPromotionEnvelope,
   HomelabSecretDeleteInput,
   HomelabSecretRequestInput,
@@ -32,6 +31,7 @@ import {
   type HomelabEntity,
   type HomelabEntityKind as HomelabEntityKindModel,
   type HomelabGraphSearchResult,
+  type HomelabKnowledgeShowResult,
   type HomelabPromotionRecorded,
   type HomelabRelation,
   type HomelabRelationId,
@@ -56,10 +56,14 @@ import {
   isServerAuthInternalError,
 } from "../auth/EnvironmentAuth.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
-import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
+import {
+  KnowledgeGraph,
+  KnowledgeGraphError,
+  type KnowledgeAuditContext,
+} from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
-import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
+import { promoteDiscoveries, recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
 import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
@@ -656,6 +660,49 @@ export const homelabSearchRouteLayer = HttpRouter.add(
   ),
 );
 
+/**
+ * `homelab show <id>`: any knowledge document (graph entity, observation, memory
+ * note) with its links and recent audit rows. Global documents are visible to
+ * every caller; project and thread memory follow the same caller scoping as the
+ * memory routes, and an out-of-scope id reads as not found.
+ */
+export const homelabKnowledgeShowRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/show",
+  Effect.gen(function* () {
+    const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
+    const url = yield* getRequestUrl;
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) {
+      return yield* new HomelabHttpError({ message: "Missing id.", status: 400 });
+    }
+    const knowledgeGraph = yield* KnowledgeGraph;
+    const result = yield* knowledgeGraph.getDocument(id);
+    const notFound = new HomelabHttpError({
+      message: "Knowledge document not found.",
+      status: 404,
+    });
+    if (!result) {
+      return yield* notFound;
+    }
+    const { doc } = result;
+    if (caller.kind === "runtime" && doc.scope !== "global") {
+      const inScope =
+        doc.projectId === String(caller.projectId) &&
+        (!caller.threadScoped || doc.threadId === String(caller.threadId));
+      if (!inScope) {
+        return yield* notFound;
+      }
+    }
+    return HttpServerResponse.jsonUnsafe(result satisfies HomelabKnowledgeShowResult, {
+      status: 200,
+    });
+  }).pipe(
+    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
+    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  ),
+);
+
 export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/project-memory",
@@ -796,9 +843,16 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
     );
     const { projectId } = yield* resolveMemoryRequestScope(caller, input);
     yield* requireProjectScopeForPromotion(projectId);
-    const projectMemory = yield* ProjectMemory;
-    const recorded = yield* recordPromotedDiscoveries(input.promotion);
-    const entry = yield* projectMemory.markPromoted({ ...input, projectId });
+    // Graph entries, memory status, secret placeholders and bootstrap mutations
+    // commit together or not at all.
+    const { recorded, entry } = yield* promoteDiscoveries({
+      promotion: input.promotion,
+      memory: {
+        memoryId: input.memoryId,
+        projectId,
+        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+      },
+    });
     return HttpServerResponse.jsonUnsafe(
       {
         entry,
@@ -989,38 +1043,15 @@ const requireCuratorThread = (threadId: ThreadId | undefined) =>
     }
   });
 
-function makeCuratorObservationId(): string {
-  const randomSuffix = Math.random().toString(36).slice(2, 10);
-  return `observation-curator-${Date.now()}-${randomSuffix}`;
-}
-
-const recordCuratorObservation = (input: {
-  readonly summary: string;
+/** Audit context for a curator mutation; the audit row commits with the mutation. */
+const curatorAudit = (input: {
   readonly reason?: string | undefined;
   readonly threadId?: ThreadId | undefined;
-  readonly entityIds?: ReadonlyArray<HomelabEntityId> | undefined;
-  readonly relationIds?: ReadonlyArray<HomelabRelationId> | undefined;
-  readonly payload?: unknown;
-}) =>
-  Effect.gen(function* () {
-    const knowledgeGraph = yield* KnowledgeGraph;
-    const createdAt = new Date().toISOString();
-    yield* knowledgeGraph.recordObservation({
-      id: HomelabObservationId.make(makeCuratorObservationId()),
-      sourceKind: "manual",
-      summary: input.summary,
-      ...(input.reason ? { detail: input.reason } : {}),
-      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-      ...(input.entityIds !== undefined && input.entityIds.length > 0
-        ? { entityIds: input.entityIds }
-        : {}),
-      ...(input.relationIds !== undefined && input.relationIds.length > 0
-        ? { relationIds: input.relationIds }
-        : {}),
-      payload: { curator: true, ...(input.payload === undefined ? {} : { detail: input.payload }) },
-      createdAt,
-    });
-  });
+}): KnowledgeAuditContext => ({
+  curator: true,
+  ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  ...(input.threadId !== undefined ? { actorThreadId: String(input.threadId) } : {}),
+});
 
 function isoTimestampOrUndefined(value: string | undefined): number | undefined {
   if (!value) {
@@ -1146,16 +1177,10 @@ export const homelabCuratorMemoryUpdateRouteLayer = HttpRouter.add(
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       ...(input.body !== undefined ? { body: input.body } : {}),
       ...(input.tags !== undefined ? { tags: input.tags } : {}),
-    });
-    yield* recordCuratorObservation({
-      summary: `Curator updated memory entry '${String(input.memoryId)}'.`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { memoryId: input.memoryId, projectId: entry.projectId },
+      audit: curatorAudit(input),
     });
     return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
   }).pipe(
-    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -1178,22 +1203,15 @@ export const homelabCuratorMemoryDeleteRouteLayer = HttpRouter.add(
     );
     yield* requireCuratorThread(input.threadId);
     const projectMemory = yield* ProjectMemory;
-    const result = yield* projectMemory.remove(input.memoryId);
+    const result = yield* projectMemory.remove(input.memoryId, curatorAudit(input));
     if (!result.removed) {
       return yield* new HomelabHttpError({
         message: "Project memory entry not found.",
         status: 404,
       });
     }
-    yield* recordCuratorObservation({
-      summary: `Curator deleted memory entry '${String(input.memoryId)}'.`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { memoryId: input.memoryId, projectId: result.entry?.projectId },
-    });
     return HttpServerResponse.jsonUnsafe({ removed: true, entry: result.entry }, { status: 200 });
   }).pipe(
-    Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
@@ -1216,19 +1234,13 @@ export const homelabCuratorEntityDeleteRouteLayer = HttpRouter.add(
     );
     yield* requireCuratorThread(input.threadId);
     const knowledgeGraph = yield* KnowledgeGraph;
-    const result = yield* knowledgeGraph.deleteEntity(input.entityId);
+    const result = yield* knowledgeGraph.deleteEntity(input.entityId, curatorAudit(input));
     if (!result.removed) {
       return yield* new HomelabHttpError({
         message: "Homelab entity not found.",
         status: 404,
       });
     }
-    yield* recordCuratorObservation({
-      summary: `Curator deleted entity '${String(input.entityId)}' and ${result.removedRelationIds.length} connected relation(s).`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { entityId: input.entityId, removedRelationIds: result.removedRelationIds },
-    });
     return HttpServerResponse.jsonUnsafe(
       { removed: true, removedRelationIds: result.removedRelationIds },
       { status: 200 },
@@ -1256,19 +1268,13 @@ export const homelabCuratorRelationDeleteRouteLayer = HttpRouter.add(
     );
     yield* requireCuratorThread(input.threadId);
     const knowledgeGraph = yield* KnowledgeGraph;
-    const result = yield* knowledgeGraph.deleteRelation(input.relationId);
+    const result = yield* knowledgeGraph.deleteRelation(input.relationId, curatorAudit(input));
     if (!result.removed) {
       return yield* new HomelabHttpError({
         message: "Homelab relation not found.",
         status: 404,
       });
     }
-    yield* recordCuratorObservation({
-      summary: `Curator deleted relation '${String(input.relationId)}'.`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { relationId: input.relationId },
-    });
     return HttpServerResponse.jsonUnsafe({ removed: true }, { status: 200 });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
@@ -1314,11 +1320,12 @@ export const homelabCuratorSkillUpdateRouteLayer = HttpRouter.add(
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.body !== undefined ? { body: input.body } : {}),
     });
-    yield* recordCuratorObservation({
-      summary: `Curator updated skill '${skill.name}' (${skill.scope}).`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { skillId: input.skillId, name: skill.name, scope: skill.scope },
+    const knowledgeGraph = yield* KnowledgeGraph;
+    yield* knowledgeGraph.recordAudit({
+      action: "skill.update",
+      docId: String(input.skillId),
+      after: { skillId: input.skillId, name: skill.name, scope: skill.scope },
+      audit: curatorAudit(input),
     });
     return HttpServerResponse.jsonUnsafe(skill, { status: 200 });
   }).pipe(
@@ -1352,11 +1359,12 @@ export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
         status: 404,
       });
     }
-    yield* recordCuratorObservation({
-      summary: `Curator deleted skill '${result.skill?.name ?? String(input.skillId)}'${result.skill ? ` (${result.skill.scope})` : ""}.`,
-      reason: input.reason,
-      threadId: input.threadId,
-      payload: { skillId: input.skillId, name: result.skill?.name, scope: result.skill?.scope },
+    const knowledgeGraph = yield* KnowledgeGraph;
+    yield* knowledgeGraph.recordAudit({
+      action: "skill.delete",
+      docId: String(input.skillId),
+      before: { skillId: input.skillId, name: result.skill?.name, scope: result.skill?.scope },
+      audit: curatorAudit(input),
     });
     return HttpServerResponse.jsonUnsafe({ removed: true, skill: result.skill }, { status: 200 });
   }).pipe(
@@ -1385,14 +1393,9 @@ export const homelabEntityUpsertRouteLayer = HttpRouter.add(
     const slug = normalizedEntityName(input.name).replace(/\s+/g, "-");
     const id = decodeHomelabEntityId(`${input.kind}:${slug}`);
     // Preserve createdAt across re-captures (id or natural-key match).
-    const snapshot = yield* knowledgeGraph.getSnapshot();
     const existing =
-      snapshot.entities.find((entity) => entity.id === id) ??
-      snapshot.entities.find(
-        (entity) =>
-          entity.kind === input.kind &&
-          normalizedEntityName(entity.name) === normalizedEntityName(input.name),
-      );
+      (yield* knowledgeGraph.getEntity(id)) ??
+      (yield* knowledgeGraph.findEntity({ kind: input.kind, name: input.name }));
     const entity: HomelabEntity = {
       id,
       kind: input.kind,
@@ -1428,13 +1431,7 @@ export const homelabEntityVerifyRouteLayer = HttpRouter.add(
         (cause) => new HomelabHttpError({ message: "Invalid verify payload.", status: 400, cause }),
       ),
     );
-    const snapshot = yield* knowledgeGraph.getSnapshot();
-    const target = normalizedEntityName(input.name);
-    const match = snapshot.entities.find(
-      (entity) =>
-        normalizedEntityName(entity.name) === target &&
-        (input.kind === undefined || entity.kind === input.kind),
-    );
+    const match = yield* knowledgeGraph.findEntity({ kind: input.kind, name: input.name });
     if (!match) {
       return yield* respondToHomelabHttpError(
         new HomelabHttpError({
@@ -1485,6 +1482,7 @@ export const homelabRoutesLayer = Layer.mergeAll(
   homelabEntityRouteLayer,
   homelabEntityUpsertRouteLayer,
   homelabEntityVerifyRouteLayer,
+  homelabKnowledgeShowRouteLayer,
   homelabProjectMemoryCreateRouteLayer,
   homelabProjectMemoryListRouteLayer,
   homelabProjectMemoryPromoteRouteLayer,

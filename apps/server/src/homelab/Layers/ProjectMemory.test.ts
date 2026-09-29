@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
@@ -22,7 +23,7 @@ const layer = it.layer(
     ProjectMemoryLive,
     ProjectionThreadRepositoryLive,
     ProjectionThreadMessageRepositoryLive,
-  ).pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+  ).pipe(Layer.provideMerge(Layer.mergeAll(SqlitePersistenceMemory, HomelabSqlMemory))),
 );
 
 layer("ProjectMemory", (it) => {

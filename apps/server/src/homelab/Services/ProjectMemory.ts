@@ -16,6 +16,8 @@ import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
+import type { KnowledgeAuditContext } from "./KnowledgeGraph.ts";
+
 export class ProjectMemoryError extends Data.TaggedError("ProjectMemoryError")<{
   readonly message: string;
   readonly cause?: unknown;
@@ -73,6 +75,7 @@ export interface ProjectMemoryUpdateInput {
   readonly summary?: string | undefined;
   readonly body?: string | undefined;
   readonly tags?: ReadonlyArray<string> | undefined;
+  readonly audit?: KnowledgeAuditContext | undefined;
 }
 
 export interface ProjectMemoryShape {
@@ -99,6 +102,7 @@ export interface ProjectMemoryShape {
   /** Curator-only: delete an entry (any project). Returns whether it existed. */
   readonly remove: (
     memoryId: ProjectMemoryId,
+    audit?: KnowledgeAuditContext,
   ) => Effect.Effect<
     { readonly removed: boolean; readonly entry: ProjectMemoryEntry | undefined },
     ProjectMemoryError
