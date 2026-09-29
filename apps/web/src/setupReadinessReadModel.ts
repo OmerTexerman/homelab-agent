@@ -5,9 +5,11 @@ import {
   type HomelabSetupStatus,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
-  type ProviderKind,
   type ServerProvider,
 } from "@t3tools/contracts";
+
+/** Providers the Project Runtime image can run through its wrapper. */
+export type RuntimeProviderKind = "codex" | "claudeAgent" | "opencode";
 
 export type SetupReadinessSeverity = "good" | "partial" | "attention" | "neutral";
 
@@ -29,7 +31,7 @@ export interface SetupReadinessStatus {
 export interface ProviderRuntimeReadiness extends SetupReadinessStatus {
   readonly usable: boolean;
   readonly supportKind: ProviderRuntimeSupportKind;
-  readonly runtimeProvider: ProviderKind | null;
+  readonly runtimeProvider: RuntimeProviderKind | null;
   readonly blockedReason: string | null;
   readonly nextAction: string | null;
 }
@@ -183,7 +185,7 @@ function isConfiguredOpenCodeServer(input: {
   return (input.liveProvider?.message ?? "").toLowerCase().includes("configured opencode server");
 }
 
-function runtimeProviderForDriver(driver: string): ProviderKind | null {
+function runtimeProviderForDriver(driver: string): RuntimeProviderKind | null {
   switch (driver) {
     case "codex":
       return "codex";
@@ -202,7 +204,7 @@ function resolveRuntimeSupport(input: {
 }): {
   readonly supportKind: ProviderRuntimeSupportKind;
   readonly supported: boolean;
-  readonly runtimeProvider: ProviderKind | null;
+  readonly runtimeProvider: RuntimeProviderKind | null;
   readonly reason: string | null;
 } {
   const provider = input.liveProvider;

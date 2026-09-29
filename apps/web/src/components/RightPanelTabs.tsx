@@ -78,6 +78,15 @@ import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { APP_BASE_NAME } from "~/branding";
+import {
+  applyHomelabSurfaceActions,
+  type HomelabRightPanelSurfaceProps,
+  MEMORY_SURFACE_DISABLED_REASON,
+  MEMORY_SURFACE_LABEL,
+  MEMORY_SURFACE_UNAVAILABLE_HINT,
+  MemorySurfaceIcon,
+} from "./homelabRightPanelSurfaces";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -134,6 +143,7 @@ interface RightPanelTabsProps {
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  homelabSurfaces?: HomelabRightPanelSurfaceProps | undefined;
   children: ReactNode;
 }
 
@@ -154,7 +164,7 @@ export function shouldOpenDefaultBrowserProfileFromMenuClick(
 }
 
 const SURFACE_DISABLED_REASONS = {
-  browser: "Browser previews are only available in the T3 Code desktop app.",
+  browser: `Browser previews are only available in the ${APP_BASE_NAME} desktop app.`,
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
@@ -335,11 +345,12 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   deviceAvailable: boolean;
   liveAgentCount: number;
+  homelabSurfaces?: HomelabRightPanelSurfaceProps | undefined;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
 
-  const actions = [
+  const upstreamActions = [
     {
       label: "Browser",
       icon: Globe2,
@@ -414,6 +425,11 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
   ] as const;
+  const actions = applyHomelabSurfaceActions(upstreamActions, props.homelabSurfaces, (memory) => ({
+    ...memory,
+    disabledReason: MEMORY_SURFACE_UNAVAILABLE_HINT,
+    badgeCount: 0,
+  }));
 
   type SurfaceAction = (typeof actions)[number];
 
@@ -615,6 +631,8 @@ function surfaceTitle(
       return "Diff";
     case "files":
       return "Files";
+    case "memory":
+      return MEMORY_SURFACE_LABEL;
     case "file":
       return surface.relativePath.slice(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
@@ -692,6 +710,8 @@ function SurfaceIcon({
       return <FileDiff className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
+    case "memory":
+      return <MemorySurfaceIcon className="size-3 shrink-0" />;
     case "file":
       return (
         <PierreEntryIcon
@@ -868,7 +888,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     });
   }, []);
 
-  const addSurfaceActions = [
+  const upstreamAddSurfaceActions = [
     {
       label: "Browser",
       icon: Globe2,
@@ -934,6 +954,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddDevice,
     },
   ] as const;
+  const addSurfaceActions = applyHomelabSurfaceActions(
+    upstreamAddSurfaceActions,
+    props.homelabSurfaces,
+    ({ description: _description, ...memory }) => ({
+      ...memory,
+      disabledReason: MEMORY_SURFACE_DISABLED_REASON,
+    }),
+  );
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const action = surfaceShortcutActionForKey(addSurfaceActions, event.nativeEvent);
@@ -1425,6 +1453,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             agentsAvailable={props.agentsAvailable}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
+            homelabSurfaces={props.homelabSurfaces}
           />
         ) : (
           props.children

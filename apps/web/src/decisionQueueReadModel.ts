@@ -6,12 +6,9 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import type {
-  LatestProposedPlanState,
-  PendingApproval,
-  PendingUserInput,
-} from "./threadActivityDerivations";
-import { isLatestTurnSettled } from "./threadTimeline";
+import type { PendingApproval, PendingUserInput } from "@t3tools/client-runtime/pending-requests";
+
+import { isLatestTurnSettled, type LatestProposedPlanState } from "./session-logic";
 import type { ProposedPlan, SidebarThreadSummary } from "./types";
 
 export type DecisionQueueEntryKind =

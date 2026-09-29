@@ -238,10 +238,10 @@ export function DraftHeroHeadline({
   // in the h1; without an explicit label its widget state bleeds into the
   // announced phrase.
   const headingLabel = hasResolvedProject
-    ? `What should we build in ${activeProjectDisplayName}?`
+    ? `${HOMELAB_PRODUCT_COPY.draftHero.withProject} ${activeProjectDisplayName}?`
     : canChooseProject
-      ? `${activeProjectDisplayName ?? "Choose a project"} to start`
-      : "Add a project to start";
+      ? `${activeProjectDisplayName ?? "Choose a project"} ${HOMELAB_PRODUCT_COPY.draftHero.chooseProjectSuffix}`
+      : HOMELAB_PRODUCT_COPY.draftHero.noProject;
 
   return (
     <h1

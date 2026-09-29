@@ -22,6 +22,7 @@ import { memo, useLayoutEffect, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -127,12 +128,12 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                   ? "Searching workspace skills..."
                   : props.triggerKind === "pull-request"
                     ? "Finding pull request..."
-                    : "Searching workspace files..."
+                    : HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceSearching
                 : (props.emptyStateText ??
                   (props.triggerKind === "skill"
                     ? "No skills found. Try / to browse provider commands."
                     : props.triggerKind === "path"
-                      ? "No matching files or folders."
+                      ? HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceEmptyState
                       : "No matching command."))}
             </p>
           </div>

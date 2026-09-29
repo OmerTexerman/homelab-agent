@@ -4,6 +4,7 @@ import { InfoIcon, XIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** Unsupported and broken versions fail mid-turn, so they warn even when ready. */
@@ -71,8 +72,8 @@ export function getProviderStatusMessage(status: ServerProvider): string {
   return status.status === "ready"
     ? "No models are available for this provider."
     : status.status === "error"
-      ? `${providerName} provider is unavailable.`
-      : `${providerName} provider has limited availability.`;
+      ? `${providerName} ${HOMELAB_PRODUCT_COPY.providers.unavailableRuntimeMessage}`
+      : `${providerName} ${HOMELAB_PRODUCT_COPY.providers.limitedRuntimeMessage}`;
 }
 
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
@@ -95,7 +96,7 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
     ? `${providerName} is unauthenticated`
     : incompatible
       ? `${providerName} ${status.version ?? ""} is ${incompatible.status === "broken" ? "known to be broken" : "unsupported"}`
-      : `${providerName} provider status`;
+      : `${providerName} ${HOMELAB_PRODUCT_COPY.providers.statusTitleSuffix}`;
   const message = incompatible?.message ?? getProviderStatusMessage(status);
   const isWarning = status.status === "warning" || incompatible !== null;
 

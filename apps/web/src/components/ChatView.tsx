@@ -375,6 +375,9 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { useHomelabChatView } from "./chat/homelabChatView";
+import { withoutProviderInterruptionActivities } from "../homelabWorkLogFilters";
+import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1953,7 +1956,8 @@ export default function ChatView(props: ChatViewProps) {
   // Explicit composer choices and existing server threads retain their permissions.
   const runtimeMode = composerRuntimeMode ?? activeServerThread?.runtimeMode ?? defaultRuntimeMode;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
-  const canCheckoutPullRequestIntoThread = isLocalDraftThread;
+  const sourceControlVisible = shouldShowPrimarySourceControlUi();
+  const canCheckoutPullRequestIntoThread = sourceControlVisible && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadEnvironmentId = activeThread?.environmentId ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -2897,7 +2901,10 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveLatestContextWindowSnapshot(threadActivities),
     [threadActivities],
   );
-  const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
+  const workLogEntries = useMemo(
+    () => deriveWorkLogEntries(withoutProviderInterruptionActivities(threadActivities)),
+    [threadActivities],
+  );
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
@@ -3628,7 +3635,7 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
+  const gitStatusCwd = sourceControlVisible ? (activeThread?.worktreePath ?? gitCwd) : null;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
@@ -3734,7 +3741,9 @@ export default function ChatView(props: ChatViewProps) {
       rememberCheckoutIsRepo(environmentId, gitStatusCwd, liveIsGitRepo);
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
-  const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  const isGitRepo =
+    sourceControlVisible &&
+    (liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true);
   // Keep a hidden, off-flow strip mounted for existing threads so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
   // content-driven: Git/environment context or controls that actually fit.
@@ -4565,6 +4574,14 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
+  const homelab = useHomelabChatView({
+    activeThread,
+    activeProject,
+    activeThreadRef,
+    isServerThread,
+    renderedRightPanelSurface,
+    resolvedTheme,
+  });
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -9100,6 +9117,8 @@ export default function ChatView(props: ChatViewProps) {
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
         runtimeMode: defaultRuntimeMode,
+        // An isolated thread's follow-up gets its own isolated runtime too.
+        runtimeSelectionMode: activeThread.runtimeSelectionMode ?? "shared",
         interactionMode: "default",
         branch: activeThreadBranch,
         worktreePath: activeThread.worktreePath,
@@ -9414,13 +9433,13 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
-      if (!isServerThread || !activeThreadRef) return;
+      if (!isServerThread || !sourceControlVisible || !activeThreadRef) return;
       explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
       useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath);
       useRightPanelStore.getState().open(activeThreadRef, "diff");
       onDiffPanelOpen?.();
     },
-    [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
+    [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen, sourceControlVisible],
   );
   // The revert handler is read from a ref at call-time so the callback
   // reference is fully stable and never busts TimelineRowCtx identity.
@@ -9528,7 +9547,7 @@ export default function ChatView(props: ChatViewProps) {
       <div className="pointer-events-auto flex h-full items-center">{panelToggleControls}</div>
     </div>
   );
-  const rightPanelContent = activeThreadRef ? (
+  const upstreamRightPanelContent = activeThreadRef ? (
     renderedRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
@@ -9691,6 +9710,7 @@ export default function ChatView(props: ChatViewProps) {
       </Suspense>
     ) : null
   ) : null;
+  const rightPanelContent = homelab.rightPanelContent ?? upstreamRightPanelContent;
 
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
     setDragActive: setIsWorkspaceFileDragActive,
@@ -9763,7 +9783,8 @@ export default function ChatView(props: ChatViewProps) {
             keybindings={keybindings}
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
-            gitCwd={gitCwd}
+            gitCwd={sourceControlVisible ? gitCwd : null}
+            runtimeSelectionMode={activeThread.runtimeSelectionMode}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
@@ -9774,6 +9795,7 @@ export default function ChatView(props: ChatViewProps) {
             onDeleteProjectScript={deleteProjectScript}
           />
         </WorkspacePageHeader>
+        {homelab.runtimePanel}
 
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -9844,7 +9866,7 @@ export default function ChatView(props: ChatViewProps) {
                 latestTurn={paintOnlyDisplayedTimeline ? null : activeLatestTurn}
                 runningTurnId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
                 turnDiffSummaries={
-                  paintOnlyDisplayedTimeline
+                  paintOnlyDisplayedTimeline || !sourceControlVisible
                     ? EMPTY_HELD_TURN_DIFF_SUMMARIES
                     : activeThread.checkpoints
                 }
@@ -10295,6 +10317,7 @@ export default function ChatView(props: ChatViewProps) {
           agentsAvailable
           deviceAvailable={activeThreadRef !== null}
           liveAgentCount={agentPanelModel.liveCount}
+          homelabSurfaces={homelab.rightPanelSurfaces}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -10352,6 +10375,7 @@ export default function ChatView(props: ChatViewProps) {
             agentsAvailable
             deviceAvailable={activeThreadRef !== null}
             liveAgentCount={agentPanelModel.liveCount}
+            homelabSurfaces={homelab.rightPanelSurfaces}
           >
             {rightPanelContent}
           </RightPanelTabs>

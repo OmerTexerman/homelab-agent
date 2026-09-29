@@ -20,6 +20,7 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
+  ThreadRuntimeMode,
   SnapShotSource,
 } from "@t3tools/contracts";
 import {
@@ -318,6 +319,7 @@ const PersistedDraftThreadState = Schema.Struct({
   loadBalancedEnvironmentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
+  runtimeSelectionMode: Schema.optionalKey(ThreadRuntimeMode),
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
@@ -445,6 +447,8 @@ export interface DraftSessionState {
   loadBalancedEnvironmentId?: EnvironmentId | null;
   createdAt: string;
   runtimeMode: RuntimeMode;
+  /** Homelab: whether the thread shares its project's runtime or gets an isolated clone. */
+  runtimeSelectionMode: ThreadRuntimeMode;
   interactionMode: ProviderInteractionMode;
   branch: string | null;
   worktreePath: string | null;
@@ -521,6 +525,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
@@ -538,6 +543,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
@@ -554,6 +560,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
+      runtimeSelectionMode?: ThreadRuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
@@ -1505,6 +1512,7 @@ function createDraftThreadState(
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
+    runtimeSelectionMode?: ThreadRuntimeMode;
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
@@ -1553,6 +1561,8 @@ function createDraftThreadState(
         : {}),
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    runtimeSelectionMode:
+      options?.runtimeSelectionMode ?? existingThread?.runtimeSelectionMode ?? "shared",
     interactionMode:
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
@@ -1589,6 +1599,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.loadBalancedEnvironmentId === right.loadBalancedEnvironmentId &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
+    left.runtimeSelectionMode === right.runtimeSelectionMode &&
     left.interactionMode === right.interactionMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -1733,6 +1744,8 @@ function normalizePersistedDraftThreads(
         runtimeMode: isRuntimeMode(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
+        runtimeSelectionMode:
+          candidateDraftThread.runtimeSelectionMode === "isolated" ? "isolated" : "shared",
         interactionMode:
           candidateDraftThread.interactionMode === "plan" ||
           candidateDraftThread.interactionMode === "default"
@@ -1799,6 +1812,7 @@ function normalizePersistedDraftThreads(
           logicalProjectKey,
           createdAt: new Date().toISOString(),
           runtimeMode: DEFAULT_RUNTIME_MODE,
+          runtimeSelectionMode: "shared",
           interactionMode: DEFAULT_INTERACTION_MODE,
           branch: null,
           worktreePath: null,
@@ -2482,6 +2496,7 @@ function toHydratedDraftThreadState(
       ),
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
+    runtimeSelectionMode: persistedDraftThread.runtimeSelectionMode ?? "shared",
     interactionMode: persistedDraftThread.interactionMode,
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
@@ -2784,6 +2799,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   ? existing.createdAt
                   : options.createdAt || existing.createdAt,
               runtimeMode: options.runtimeMode ?? existing.runtimeMode,
+              runtimeSelectionMode: options.runtimeSelectionMode ?? existing.runtimeSelectionMode,
               interactionMode: options.interactionMode ?? existing.interactionMode,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
@@ -2800,6 +2816,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.loadBalancedEnvironmentId === existing.loadBalancedEnvironmentId &&
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&
+              nextDraftThread.runtimeSelectionMode === existing.runtimeSelectionMode &&
               nextDraftThread.interactionMode === existing.interactionMode &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&

@@ -1,5 +1,6 @@
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
+import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { runtimeModeConfig, runtimeModeOptions } from "./runtimeModeConfig";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -2595,7 +2596,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : "No pull requests found in this repository.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
+      ? HOMELAB_PRODUCT_COPY.composer.runtimeWorkspaceEmptyState
       : "No matching command.";
   }, [
     composerTrigger,
