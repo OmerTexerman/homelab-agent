@@ -24,6 +24,7 @@ upstream t3code documentation tree.
   Production-like local testing and first deployment requirements: state paths,
   env vars, Docker runtime access, pairing, reverse proxy, and known gaps.
 - [internals/homelab-storage.md](./internals/homelab-storage.md)
+- [internals/runtime-lifecycle.md](./internals/runtime-lifecycle.md)
   The fork's own `homelab.sqlite`: migration id ranges, one-shot JSON imports,
   the additive-schema rule, and backups.
 - [provider-runtime-support.md](./provider-runtime-support.md)

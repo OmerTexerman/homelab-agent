@@ -97,6 +97,11 @@ Call it once while the owning service's layer is being built, before the
 service reads its tables. After the import, the service reads and writes
 SQLite only.
 
+The runtime registry (P4) doesn't use `importJsonOnce`: runtime state is
+rebuildable, so it re-imports when a JSON file's sha256 no longer matches its
+marker (a rolled-back release wrote to it). See
+[runtime-lifecycle.md](./runtime-lifecycle.md#legacy-import).
+
 ## Adding a store (P4–P6)
 
 1. Add the migrations for your tables in your range.
