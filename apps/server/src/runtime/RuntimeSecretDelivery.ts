@@ -95,11 +95,20 @@ export const resolveRuntimeSecrets = Effect.fn("RuntimeSecretDelivery.resolveRun
     readonly isStandalone?: boolean | undefined;
     readonly runtimeKind?: string | undefined;
   }) {
+    return yield* resolveSecretsForProject(yield* resolveRuntimeProjectId(runtime));
+  },
+);
+
+/**
+ * The secrets a runtime for `projectId` receives: global ones plus that project's
+ * scoped ones. Null (scratch, curator, unknown) gets global only.
+ */
+export const resolveSecretsForProject = Effect.fn("RuntimeSecretDelivery.resolveSecretsForProject")(
+  function* (projectId: ProjectId | null) {
     const registry = yield* Effect.serviceOption(HomelabSecretRegistry);
     if (Option.isNone(registry)) {
       return [] as ReadonlyArray<MaterializedHomelabSecret>;
     }
-    const projectId = yield* resolveRuntimeProjectId(runtime);
     return yield* registry.value.materializeSecrets({ projectId });
   },
 );

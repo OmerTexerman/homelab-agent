@@ -9,15 +9,14 @@ import {
 import type { ThreadRuntimeShape } from "./Services/ThreadRuntime.ts";
 
 /**
- * Wake the Project Runtime backing a thread so a workspace file operation can run
- * against a live container: create it from the thread's runtime assignment if no
- * descriptor exists yet, otherwise resume the (possibly idle-stopped) one, then
- * touch it to defer the next idle sweep.
+ * Make sure the runtime behind a thread is up so a workspace file operation
+ * can run against a live container: bind the thread from its runtime
+ * assignment if it has no runtime yet, then `ensureRunning` (inspect-only
+ * when the container already runs, so repeated listings never
+ * re-materialize the runtime), then touch it to defer the next idle sweep.
  *
- * Extracted so the WS workspace handlers and the HTTP file-download route share
- * ONE wake path. They used to diverge — WS created-if-missing while the download
- * route only started an already-existing runtime, so a file you could list/read
- * over WS could 404 on download for a thread whose runtime had not been created.
+ * Shared by the WS workspace handlers and the HTTP file-download route so
+ * the two can't diverge again.
  *
  * Best-effort throughout: individual failures are swallowed so the caller can
  * still attempt the file operation (and surface its own error) rather than being
@@ -27,7 +26,7 @@ export const wakeThreadWorkspaceRuntime = (input: {
   readonly threadId: ThreadId;
   readonly threadRuntime: Pick<
     ThreadRuntimeShape,
-    "getRuntime" | "ensureRuntime" | "startRuntime" | "touchRuntime"
+    "getRuntime" | "ensureRuntime" | "ensureRunning" | "touchRuntime"
   >;
   readonly getReadModel: OrchestrationCommandReadModelShape["getReadModel"];
 }) =>
@@ -36,7 +35,7 @@ export const wakeThreadWorkspaceRuntime = (input: {
 
     const existingRuntime = yield* threadRuntime
       .getRuntime(threadId)
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.orElseSucceed(() => undefined));
 
     if (!existingRuntime) {
       const readModel = yield* getReadModel();
@@ -59,14 +58,16 @@ export const wakeThreadWorkspaceRuntime = (input: {
             runtimeMode: thread.runtimeMode,
             isStandalone: assignment.kind === "scratch",
             runtimeKind: assignment.kind,
+            projectId: project.id,
+            projectTitle: project.title,
             ...(assignment.kind === "project-isolated"
               ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
               : {}),
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
       }
     }
 
-    yield* threadRuntime.startRuntime(threadId).pipe(Effect.catch(() => Effect.void));
-    yield* threadRuntime.touchRuntime(threadId).pipe(Effect.catch(() => Effect.void));
+    yield* threadRuntime.ensureRunning(threadId).pipe(Effect.ignore);
+    yield* threadRuntime.touchRuntime(threadId).pipe(Effect.ignore);
   });

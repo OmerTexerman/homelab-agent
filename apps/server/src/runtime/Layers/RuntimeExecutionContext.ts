@@ -40,11 +40,38 @@ export const CONTAINER_HOME_PATH = `${CONTAINER_RUNTIME_ROOT}/home`;
 export const OPENCODE_MANAGED_SERVER_CONTAINER_HOSTNAME = "0.0.0.0";
 export const OPENCODE_MANAGED_SERVER_CONTAINER_PORT = 4096;
 export const OPENCODE_MANAGED_SERVER_HOST_ENV = "HOMELAB_AGENT_OPENCODE_MANAGED_HOST";
+/**
+ * User-space install prefixes under the persisted home. Only `/workspace` and
+ * `/runtime/home` survive a container recreate, so tools the agent installs
+ * with `npm -g`, `pipx`, `uv tool`, or into `~/.local/bin` land here and stay
+ * on PATH across recreates (apt installs still do not).
+ */
+const RUNTIME_USER_BIN_DIRS = [
+  `${CONTAINER_HOME_PATH}/.local/bin`,
+  `${CONTAINER_HOME_PATH}/.npm-global/bin`,
+] as const;
+const RUNTIME_USER_INSTALL_ENV: Readonly<Record<string, string>> = {
+  NPM_CONFIG_PREFIX: `${CONTAINER_HOME_PATH}/.npm-global`,
+  PIPX_HOME: `${CONTAINER_HOME_PATH}/.local/share/pipx`,
+  PIPX_BIN_DIR: `${CONTAINER_HOME_PATH}/.local/bin`,
+  UV_TOOL_BIN_DIR: `${CONTAINER_HOME_PATH}/.local/bin`,
+};
 // The provider CLI store bin comes first so a store update (an atomic
 // `current` symlink flip on the host, visible through the bind mount)
 // immediately shadows the image-baked fallback CLIs for new processes.
-const DEFAULT_CONTAINER_PATH =
-  "/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_CONTAINER_PATH = [
+  "/runtime/provider-clis/current/bin",
+  "/runtime/home/.homelab/bin",
+  ...RUNTIME_USER_BIN_DIRS,
+  "/opt/homelab/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+].join(":");
+/** Env keys that name the calling thread; shared (per-runtime) launchers drop them. */
+export const RUNTIME_THREAD_IDENTITY_ENV_KEYS = [
+  "T3_THREAD_ID",
+  "HOMELAB_AGENT_THREAD_ID",
+  "HOMELAB_AGENT_RUNTIME_TOKEN",
+  "PWD",
+] as const;
 const CODEX_AUTH_OVERWRITE_RELATIVE_PATHS = ["auth.json", "installation_id", "version.json"];
 const CODEX_AUTH_IF_MISSING_RELATIVE_PATHS = ["config.toml", "rules"];
 const CLAUDE_AUTH_OVERWRITE_RELATIVE_PATHS = [".credentials.json"];
@@ -211,7 +238,7 @@ export function buildRuntimeStorageLayout(input: {
   };
 }
 
-export function buildRuntimeStorageLayoutForRuntime(input: {
+function buildRuntimeStorageLayoutForRuntime(input: {
   readonly threadRuntimesDir: string;
   readonly runtime: Pick<ThreadRuntimeDescriptor, "threadId" | "runtimeId">;
 }): RuntimeStorageLayout {
@@ -307,15 +334,30 @@ export function toExecutionContext(runtime: ThreadRuntimeDescriptor): ThreadExec
 export function toLaunchContext(input: {
   readonly threadRuntimesDir: string;
   readonly runtime: ThreadRuntimeDescriptor;
+  /** Storage key of the runtime record; defaults to the descriptor-derived one. */
+  readonly storageId?: string;
+  /** The thread's own wrapper directory; defaults to the runtime-level bin dir. */
+  readonly hostBinDir?: string;
+  /** Identity-less shell wrapper shared by every thread of the runtime. */
+  readonly runtimeShellWrapperPath?: string;
 }): ThreadRuntimeLaunchContext {
-  const layout = buildRuntimeStorageLayoutForRuntime(input);
+  const layout =
+    input.storageId !== undefined
+      ? buildRuntimeStorageLayout({
+          threadRuntimesDir: input.threadRuntimesDir,
+          runtimeStorageId: input.storageId,
+        })
+      : buildRuntimeStorageLayoutForRuntime(input);
   return {
     execution: toExecutionContext(input.runtime),
     hostRuntimePath: layout.hostRuntimePath,
     hostWorkspacePath: layout.hostWorkspacePath,
     hostHomePath: layout.hostHomePath,
-    hostBinDir: layout.hostBinDir,
+    hostBinDir: input.hostBinDir ?? layout.hostBinDir,
     shellWrapperPath: input.runtime.shell,
+    ...(input.runtimeShellWrapperPath !== undefined
+      ? { runtimeShellWrapperPath: input.runtimeShellWrapperPath }
+      : {}),
     ...(input.runtime.managedOpenCodeServer !== undefined
       ? { managedOpenCodeServer: input.runtime.managedOpenCodeServer }
       : {}),
@@ -386,25 +428,34 @@ export function buildRuntimeEnvironment(
     ...input.materializedEnv,
     ...input.baseEnvironment,
     CODEX_HOME: runtimeCodexAuthPath(input.homePath),
+    // Per-exec identity: every docker exec names its own thread, so threads
+    // sharing a container never see each other's identity.
+    HOMELAB_AGENT_THREAD_ID: String(input.threadId),
   };
 }
 
+/**
+ * The shared `~/.homelab-runtime.env` contents. Per-runtime only: the calling
+ * thread's id and token arrive with each `docker exec` (see the wrappers), so
+ * the file must never carry them, or sourcing it would overwrite them.
+ */
 export function buildRuntimeControlEnvironment(input: {
   readonly secretEnv: Readonly<Record<string, string>>;
   readonly serverUrl: string;
-  readonly threadId: ThreadIdModel;
   readonly scope: "scratch" | "curator" | "project";
-  readonly runtimeAccessToken?: string;
 }): Readonly<Record<string, string>> {
+  const secretEnv = Object.fromEntries(
+    Object.entries(input.secretEnv).filter(
+      ([key]) => key !== "HOMELAB_AGENT_THREAD_ID" && key !== "HOMELAB_AGENT_RUNTIME_TOKEN",
+    ),
+  );
   return {
-    ...input.secretEnv,
+    ...secretEnv,
     HOMELAB_AGENT_SERVER_URL: input.serverUrl,
-    HOMELAB_AGENT_THREAD_ID: String(input.threadId),
     // The in-container homelab CLI uses this to teach scope-appropriate promotion paths:
     // scratch threads have no project to propose into, and curator sessions unlock the
     // `homelab curate` surface.
     HOMELAB_AGENT_SCOPE: input.scope,
-    ...(input.runtimeAccessToken ? { HOMELAB_AGENT_RUNTIME_TOKEN: input.runtimeAccessToken } : {}),
   };
 }
 
@@ -513,38 +564,55 @@ export function buildRuntimeContainerPathValue(): string {
   return DEFAULT_CONTAINER_PATH;
 }
 
+/** Shell init files for a runtime home: `hostHomePath` on disk, `homePath` in the container. */
 export function buildRuntimeShellInitFileSpecs(input: {
-  readonly threadRuntimesDir: string;
-  readonly runtime: ThreadRuntimeDescriptor;
+  readonly hostHomePath: string;
+  readonly homePath: string;
 }): ReadonlyArray<RuntimeGeneratedTextFile> {
-  const layout = buildRuntimeStorageLayoutForRuntime(input);
   return [
     {
-      filePath: runtimeProfilePath(layout.hostHomePath),
-      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "profile" }),
+      filePath: runtimeProfilePath(input.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.homePath, shell: "profile" }),
     },
     {
-      filePath: runtimeBashProfilePath(layout.hostHomePath),
-      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "profile" }),
+      filePath: runtimeBashProfilePath(input.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.homePath, shell: "profile" }),
     },
     {
-      filePath: runtimeBashRcPath(layout.hostHomePath),
-      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "bash" }),
+      filePath: runtimeBashRcPath(input.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.homePath, shell: "bash" }),
     },
     {
-      filePath: runtimeZshEnvPath(layout.hostHomePath),
-      contents: renderShellInitFile({ homePath: input.runtime.homePath, shell: "zsh" }),
+      filePath: runtimeZshEnvPath(input.hostHomePath),
+      contents: renderShellInitFile({ homePath: input.homePath, shell: "zsh" }),
     },
   ];
 }
 
+/**
+ * The provider and shell wrappers for one thread. Each wrapper `docker exec`s
+ * with that thread's cwd and env and, when `tokenFilePath` is set, forwards
+ * the thread's runtime token read from that host-only file at exec time.
+ */
 export function buildRuntimeWrapperScriptSpecs(input: {
   readonly threadRuntimesDir: string;
   readonly runtime: ThreadRuntimeDescriptor;
   readonly dockerBinaryPath: string;
   readonly containerShellPath: string;
+  /** Storage key of the runtime record; defaults to the descriptor-derived one. */
+  readonly storageId?: string;
+  /** Where the wrappers go; defaults to the runtime-level bin dir. */
+  readonly binDir?: string;
+  readonly tokenFilePath?: string;
 }): ReadonlyArray<RuntimeGeneratedTextFile> {
-  const layout = buildRuntimeStorageLayoutForRuntime(input);
+  const layout =
+    input.storageId !== undefined
+      ? buildRuntimeStorageLayout({
+          threadRuntimesDir: input.threadRuntimesDir,
+          runtimeStorageId: input.storageId,
+        })
+      : buildRuntimeStorageLayoutForRuntime(input);
+  const binDir = input.binDir ?? layout.hostBinDir;
   const containerPathValue = buildRuntimeContainerPathValue();
   const base = {
     dockerBinaryPath: input.dockerBinaryPath,
@@ -553,11 +621,12 @@ export function buildRuntimeWrapperScriptSpecs(input: {
     hostWorkspacePath: layout.hostWorkspacePath,
     sourceEnvFilePath: runtimeSecretEnvPath(input.runtime.homePath),
     ...(containerPathValue ? { pathValue: containerPathValue } : {}),
+    ...(input.tokenFilePath !== undefined ? { tokenFilePath: input.tokenFilePath } : {}),
   };
 
   return [
     {
-      filePath: NodePath.join(layout.hostBinDir, CODEX_RUNTIME_WRAPPER),
+      filePath: NodePath.join(binDir, CODEX_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CODEX_RUNTIME_WRAPPER,
@@ -566,7 +635,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: NodePath.join(layout.hostBinDir, CLAUDE_RUNTIME_WRAPPER),
+      filePath: NodePath.join(binDir, CLAUDE_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CLAUDE_RUNTIME_WRAPPER,
@@ -579,7 +648,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: NodePath.join(layout.hostBinDir, CURSOR_RUNTIME_WRAPPER),
+      filePath: NodePath.join(binDir, CURSOR_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: CURSOR_RUNTIME_WRAPPER,
@@ -588,7 +657,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: NodePath.join(layout.hostBinDir, OPENCODE_RUNTIME_WRAPPER),
+      filePath: NodePath.join(binDir, OPENCODE_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: OPENCODE_RUNTIME_WRAPPER,
@@ -597,7 +666,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
       mode: 0o755,
     },
     {
-      filePath: NodePath.join(layout.hostBinDir, SHELL_RUNTIME_WRAPPER),
+      filePath: NodePath.join(binDir, SHELL_RUNTIME_WRAPPER),
       contents: renderDockerExecWrapper({
         ...base,
         command: input.containerShellPath,
@@ -706,6 +775,15 @@ export function renderShellInitFile(input: {
   if (input.shell === "profile") {
     return [
       "# managed by homelab-agent",
+      // User-space install prefixes persist in this home across container
+      // recreates; keep them on PATH for login shells too.
+      ...RUNTIME_USER_BIN_DIRS.map(
+        (dir) => `case ":$PATH:" in *:${dir}:*) ;; *) PATH="${dir}:$PATH" ;; esac`,
+      ),
+      "export PATH",
+      ...Object.entries(RUNTIME_USER_INSTALL_ENV)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `export ${key}="\${${key}:-${value}}"`),
       `[ -f ${shQuote(envPath)} ] && . ${shQuote(envPath)}`,
       "",
     ].join("\n");
@@ -766,6 +844,8 @@ export function renderDockerExecWrapper(input: {
   readonly pathValue?: string;
   readonly sourceEnvFilePath?: string;
   readonly extraEnv?: Readonly<Record<string, string>>;
+  /** Host-only file holding this thread's runtime token, read at exec time. */
+  readonly tokenFilePath?: string;
 }): string {
   const staticEnvEntries = Object.entries(input.runtime.env)
     .filter(
@@ -787,10 +867,25 @@ export function renderDockerExecWrapper(input: {
     `docker_args+=(-e "WORKSPACE=${input.runtime.workspacePath}")`,
     `docker_args+=(-e "CODEX_HOME=${runtimeCodexAuthPath(input.runtime.homePath)}")`,
     ...(input.pathValue ? [`docker_args+=(-e "PATH=${input.pathValue}")`] : []),
+    ...Object.entries(RUNTIME_USER_INSTALL_ENV)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
     ...staticEnvEntries.map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
     ...Object.entries(input.extraEnv ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
+    // The token's value never appears in argv: it is exported here and
+    // forwarded by name.
+    ...(input.tokenFilePath
+      ? [
+          `token_file=${shQuote(input.tokenFilePath)}`,
+          'if [ -r "$token_file" ]; then',
+          '  HOMELAB_AGENT_RUNTIME_TOKEN="$(cat "$token_file")"',
+          "  export HOMELAB_AGENT_RUNTIME_TOKEN",
+          "  docker_args+=(-e HOMELAB_AGENT_RUNTIME_TOKEN)",
+          "fi",
+        ]
+      : []),
   ];
 
   const commandLine = input.sourceEnvFilePath

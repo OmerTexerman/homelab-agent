@@ -23,7 +23,10 @@ export interface RuntimeTerminalStartContext {
   readonly spawnCwd: string;
   readonly worktreePath: string | null;
   readonly runtimeEnv: Record<string, string> | null;
+  /** The thread's own shell wrapper (carries the thread's identity). */
   readonly runtimeShell: string;
+  /** The runtime's identity-less shell wrapper, for terminals shared by its threads. */
+  readonly sharedRuntimeShell: string;
 }
 
 export function normalizedRuntimeEnv(
@@ -53,13 +56,20 @@ export const resolveRuntimeTerminalStartContext = Effect.fn(
   return yield* Effect.gen(function* () {
     const runtimeThreadId = ThreadId.make(input.threadId);
 
-    yield* input.threadRuntime.ensureRuntime({
-      threadId: runtimeThreadId,
-      provider: null,
-      runtimeMode: "full-access",
-      requestedCwd: input.cwd,
-    });
-    yield* input.threadRuntime.startRuntime(runtimeThreadId);
+    // A bound thread keeps its binding (a terminal never rewrites the thread's
+    // cwd or provider); only an unbound thread gets one here.
+    const existing = yield* input.threadRuntime.getRuntime(runtimeThreadId);
+    if (!existing) {
+      yield* input.threadRuntime.ensureRuntime({
+        threadId: runtimeThreadId,
+        provider: null,
+        runtimeMode: "full-access",
+        requestedCwd: input.cwd,
+      });
+    }
+    // Inspect-only when the container already runs: opening a terminal does
+    // not re-materialize the runtime.
+    yield* input.threadRuntime.ensureRunning(runtimeThreadId);
     yield* input.threadRuntime.touchRuntime(runtimeThreadId);
 
     const launchContext = yield* input.threadRuntime.resolveLaunchContext(runtimeThreadId);
@@ -76,6 +86,7 @@ export const resolveRuntimeTerminalStartContext = Effect.fn(
         ...input.env,
       }),
       runtimeShell: runtimeShell || launchContext.shellWrapperPath,
+      sharedRuntimeShell: launchContext.runtimeShellWrapperPath?.trim() || runtimeShell,
     } satisfies RuntimeTerminalStartContext;
   }).pipe(
     Effect.mapError(

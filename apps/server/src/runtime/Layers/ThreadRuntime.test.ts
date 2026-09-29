@@ -1,11 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off importFromBarrel:off preferSchemaOverJson:off globalDate:off globalDateInEffect:off anyUnknownInErrorContext:off
 import * as NodeAssert from "node:assert/strict";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import { AuthSessionId, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import {
   isolatedThreadRuntimeId,
@@ -14,12 +14,24 @@ import {
 import { Effect, FileSystem, Layer, Stream } from "effect";
 
 import { type ProcessRunResult } from "../hostProcessRunner.ts";
+import {
+  SessionCredentialVerificationError,
+  SessionStore,
+  type VerifiedSession,
+} from "../../auth/SessionStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
+import { RuntimeRegistry } from "../RuntimeRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
-import { makeThreadRuntimeLive } from "./ThreadRuntime.ts";
+import { wakeThreadWorkspaceRuntime } from "../wakeThreadWorkspaceRuntime.ts";
+import {
+  makeThreadRuntimeLive,
+  RUNTIME_GENERATION_LABEL,
+  RUNTIME_ID_LABEL,
+} from "./ThreadRuntime.ts";
 
 interface FakeDockerMount {
   readonly source: string;
@@ -61,6 +73,8 @@ class FakeDockerRunner {
   readonly containers = new Map<string, FakeDockerContainer>();
   readonly images = new Set<string>();
   readonly imageLabels = new Map<string, Record<string, string>>();
+  /** One-shot failures by docker command (e.g. "rm"), to simulate a crash mid-operation. */
+  readonly failNext = new Map<string, string>();
   private nextId = 1;
 
   run = (args: ReadonlyArray<string>) =>
@@ -69,6 +83,11 @@ class FakeDockerRunner {
       this.calls.push(input);
 
       const [command, subcommand] = input;
+      const failure = command ? this.failNext.get(command) : undefined;
+      if (command && failure !== undefined) {
+        this.failNext.delete(command);
+        return okResult({ code: 1, stderr: failure });
+      }
       if (command === "container" && subcommand === "inspect") {
         const name = input[2];
         if (!name) {
@@ -337,9 +356,12 @@ function makeRuntimeLayer(overrides: RuntimeLayerOverrides = {}) {
       dockerBinaryPath: "docker",
       containerShellPath: "/bin/zsh",
       dockerRunner: docker.run,
+      reconcileOnStart: false,
+      reconcileIntervalMs: 0,
       ...(dockerNetwork !== undefined ? { dockerNetwork } : {}),
       ...restOverrides,
     }).pipe(
+      Layer.provideMerge(HomelabSqlMemory),
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-test-" }).pipe(
           Layer.provideMerge(NodeServices.layer),
@@ -370,7 +392,10 @@ const runtimeLayerWithSecrets = it.layer(
     dockerNetwork: "homelab-agent-test",
     containerShellPath: "/bin/zsh",
     dockerRunner: docker.run,
+    reconcileOnStart: false,
+    reconcileIntervalMs: 0,
   }).pipe(
+    Layer.provideMerge(HomelabSqlMemory),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-secret-test-" }).pipe(
         Layer.provideMerge(NodeServices.layer),
@@ -470,15 +495,30 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       NodeAssert.equal(launchContext.execution.cwd, executionContext.cwd);
       NodeAssert.equal(launchContext.execution.workspacePath, executionContext.workspacePath);
       NodeAssert.equal(launchContext.execution.homePath, executionContext.homePath);
+      // Each thread gets its own wrappers under the runtime root; the runtime-level
+      // shell wrapper is the identity-less one shared terminals use.
+      const threadBinDir = launchContext.hostBinDir;
+      NodeAssert.equal(
+        NodePath.dirname(NodePath.dirname(NodePath.dirname(threadBinDir))),
+        runtimeRoot,
+      );
       NodeAssert.equal(
         launchContext.shellWrapperPath,
+        NodePath.join(threadBinDir, "runtime-shell"),
+      );
+      NodeAssert.equal(
+        launchContext.runtimeShellWrapperPath,
         NodePath.join(runtimeRoot, "bin", "runtime-shell"),
       );
+      NodeAssert.equal(
+        yield* fileSystem.exists(NodePath.join(runtimeRoot, "bin", "runtime-shell")),
+        true,
+      );
 
-      const codexWrapperPath = NodePath.join(runtimeRoot, "bin", "codex");
-      const claudeWrapperPath = NodePath.join(runtimeRoot, "bin", "claude");
-      const cursorWrapperPath = NodePath.join(runtimeRoot, "bin", "agent");
-      const openCodeWrapperPath = NodePath.join(runtimeRoot, "bin", "opencode");
+      const codexWrapperPath = NodePath.join(threadBinDir, "codex");
+      const claudeWrapperPath = NodePath.join(threadBinDir, "claude");
+      const cursorWrapperPath = NodePath.join(threadBinDir, "agent");
+      const openCodeWrapperPath = NodePath.join(threadBinDir, "opencode");
       const shellWrapperPath = launchContext.shellWrapperPath;
       const bashProfilePath = NodePath.join(runtimeHome, ".bash_profile");
       const bashRcPath = NodePath.join(runtimeHome, ".bashrc");
@@ -514,7 +554,7 @@ runtimeLayer("ThreadRuntimeLive", (it) => {
       NodeAssert.match(shellWrapperContents, /container_workspace='\/workspace'/);
       NodeAssert.match(
         shellWrapperContents,
-        /PATH=\/runtime\/provider-clis\/current\/bin:\/runtime\/home\/\.homelab\/bin:\/opt\/homelab\/bin:/,
+        /PATH=\/runtime\/provider-clis\/current\/bin:\/runtime\/home\/\.homelab\/bin:\/runtime\/home\/\.local\/bin:\/runtime\/home\/\.npm-global\/bin:\/opt\/homelab\/bin:/,
       );
       NodeAssert.match(
         yield* fileSystem.readFileString(bashRcPath),
@@ -1590,57 +1630,535 @@ runtimeLayerWithSecrets("ThreadRuntimeLive secret refresh", (it) => {
   );
 });
 
-it.effect("refuses writes instead of wiping thread runtime records it could not load", () =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const { stateDir } = yield* ServerConfig;
-    const statePath = NodePath.join(stateDir, "thread-runtimes.json");
-    // Parses as JSON but fails schema decoding.
-    const corruptBytes = '{"version":1,"runtimes":[{"threadId":42}]}\n';
-    yield* fileSystem.makeDirectory(stateDir, { recursive: true });
-    yield* fileSystem.writeFileString(statePath, corruptBytes);
+// ---------------------------------------------------------------------------
+// Shared runtimes: one record per container, per-exec identity, lifecycle.
+// ---------------------------------------------------------------------------
 
-    const runtime = yield* ThreadRuntime.pipe(
-      Effect.provide(
-        makeThreadRuntimeLive({
-          dockerBinaryPath: "docker",
-          dockerNetwork: "homelab-agent-test",
-          containerShellPath: "/bin/zsh",
-          dockerRunner: docker.run,
-        }),
-      ),
-    );
-    NodeAssert.deepEqual(yield* runtime.listRuntimes(), []);
+interface FakeSession {
+  readonly sessionId: AuthSessionId;
+  readonly subject: string;
+  readonly scopes: ReadonlyArray<string>;
+  revoked: boolean;
+}
+const fakeSessions = new Map<string, FakeSession>();
+let fakeSessionCounter = 0;
+let secretMaterializations = 0;
+let reapIdleRuntimes: (() => Effect.Effect<void, unknown>) | undefined;
 
-    const failure = yield* runtime
-      .ensureRuntime({
-        threadId: ThreadId.make("thread-runtime-degraded"),
-        provider: "codex",
-        runtimeMode: "full-access",
-      })
-      .pipe(Effect.flip);
-    NodeAssert.match(failure.message, /is degraded/);
-
-    NodeAssert.equal(yield* fileSystem.exists(statePath), false);
-    const corruptFiles = (yield* fileSystem.readDirectory(stateDir)).filter((name) =>
-      name.startsWith("thread-runtimes.json.corrupt-"),
-    );
-    NodeAssert.equal(corruptFiles.length, 1);
-    NodeAssert.equal(
-      yield* fileSystem.readFileString(NodePath.join(stateDir, corruptFiles[0]!)),
-      corruptBytes,
-    );
+const sharedRuntimeLayer = it.layer(
+  makeThreadRuntimeLive({
+    dockerBinaryPath: "docker",
+    dockerNetwork: "homelab-agent-test",
+    containerShellPath: "/bin/zsh",
+    dockerRunner: docker.run,
+    reconcileOnStart: false,
+    reconcileIntervalMs: 0,
+    idleTimeoutMs: 60_000,
+    idlePollIntervalMs: 24 * 60 * 60_000,
+    exposeInternals: (internals) => {
+      reapIdleRuntimes = internals.reapIdleRuntimes;
+    },
   }).pipe(
-    Effect.provide(
-      ServerSettingsService.layerTest({
-        providers: { codex: { homePath: makeCodexAuthDirPath() } },
-      }).pipe(
-        Layer.provideMerge(
-          ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-degraded-test-" }),
-        ),
+    Layer.provideMerge(HomelabSqlMemory),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-shared-test-" }).pipe(
         Layer.provideMerge(NodeServices.layer),
       ),
     ),
-    Effect.scoped,
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providers: { codex: { homePath: makeCodexAuthDirPath() } },
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(HomelabSecretRegistry, {
+        listSecrets: () => Effect.succeed([]),
+        upsertSecret: () => Effect.die("unused"),
+        requestSecret: () => Effect.die("unused"),
+        declineRequest: () => Effect.die("unused"),
+        setScope: () => Effect.die("unused"),
+        deleteSecret: () => Effect.void,
+        materializeSecrets: () =>
+          Effect.sync(() => {
+            secretMaterializations += 1;
+            return [
+              { key: "SHARED_SECRET", value: "value", valueUpdatedAt: "2026-09-01T00:00:00.000Z" },
+            ];
+          }),
+        changes: Stream.empty,
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(SessionStore)({
+        cookieName: "t3_session",
+        legacyCookieName: undefined,
+        issue: (input) =>
+          Effect.sync(() => {
+            fakeSessionCounter += 1;
+            const token = `runtime-token-${fakeSessionCounter}`;
+            const sessionId = AuthSessionId.make(`session-${fakeSessionCounter}`);
+            fakeSessions.set(token, {
+              sessionId,
+              subject: input?.subject ?? "",
+              scopes: input?.scopes ?? [],
+              revoked: false,
+            });
+            return { sessionId, token, scopes: input?.scopes ?? [] } as unknown as Effect.Success<
+              ReturnType<SessionStore["Service"]["issue"]>
+            >;
+          }),
+        verify: (token) => {
+          const session = fakeSessions.get(token);
+          return session && !session.revoked
+            ? Effect.succeed({
+                sessionId: session.sessionId,
+                token,
+                method: "bearer-access-token",
+                subject: session.subject,
+                scopes: session.scopes,
+              } as unknown as VerifiedSession)
+            : Effect.fail(
+                new SessionCredentialVerificationError({
+                  sessionId: AuthSessionId.make("unknown"),
+                  cause: "revoked",
+                }),
+              );
+        },
+        revoke: (sessionId) =>
+          Effect.sync(() => {
+            for (const session of fakeSessions.values()) {
+              if (session.sessionId === sessionId) session.revoked = true;
+            }
+            return true;
+          }),
+      }),
+    ),
+    Layer.provideMerge(NodeServices.layer),
   ),
 );
+
+function resetDocker() {
+  docker.calls.length = 0;
+  docker.containers.clear();
+  docker.images.clear();
+  docker.imageLabels.clear();
+  docker.failNext.clear();
+}
+
+const threadTokenFile = (hostRuntimePath: string, threadId: ThreadId) =>
+  NodePath.join(
+    hostRuntimePath,
+    "threads",
+    Buffer.from(String(threadId), "utf8").toString("base64url"),
+    "runtime-token",
+  );
+
+/** Two threads bound to one shared project runtime, with different cwds. */
+const bindTwoThreads = (label: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* ThreadRuntime;
+    const runtimeId = RuntimeSessionId.make(`project-runtime:${label}`);
+    const threadA = ThreadId.make(`${label}-thread-a`);
+    const threadB = ThreadId.make(`${label}-thread-b`);
+    const a = yield* runtime.ensureRuntime({
+      threadId: threadA,
+      runtimeId,
+      provider: "codex",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace",
+    });
+    const b = yield* runtime.ensureRuntime({
+      threadId: threadB,
+      runtimeId,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace/service-b",
+    });
+    return { runtime, runtimeId, threadA, threadB, a, b };
+  });
+
+sharedRuntimeLayer("ThreadRuntimeLive shared runtimes", (it) => {
+  it.effect("keeps one record per runtime with a binding per thread", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtimeId, threadA, threadB, a, b } = yield* bindTwoThreads("p4-records");
+      const registry = yield* RuntimeRegistry;
+
+      const records = (yield* registry.listRuntimes()).filter(
+        (record) => record.runtimeId === runtimeId,
+      );
+      NodeAssert.equal(records.length, 1);
+      const bindings = yield* registry.listBindings(runtimeId);
+      NodeAssert.deepEqual(
+        bindings.map((binding) => [binding.threadId, binding.cwd]),
+        [
+          [threadA, "/workspace"],
+          [threadB, "/workspace/service-b"],
+        ],
+      );
+      // Same container, per-thread cwd.
+      NodeAssert.equal(a.containerName, b.containerName);
+      NodeAssert.equal(a.cwd, "/workspace");
+      NodeAssert.equal(b.cwd, "/workspace/service-b");
+    }),
+  );
+
+  it.effect("two threads with different cwds share the container without recreating it", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, threadA, threadB } = yield* bindTwoThreads("p4-cwd");
+
+      const startedA = yield* runtime.startRuntime(threadA);
+      const runCall = findRunCall(docker.calls);
+      NodeAssert.ok(runCall);
+      // The container's working dir is fixed; each exec passes its own cwd.
+      NodeAssert.equal(runCall[runCall.indexOf("-w") + 1], "/workspace");
+
+      docker.calls.length = 0;
+      const startedB = yield* runtime.startRuntime(threadB);
+      yield* runtime.startRuntime(threadA);
+
+      NodeAssert.equal(startedB.containerId, startedA.containerId);
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "rm" || call[0] === "run"),
+        false,
+      );
+      const launchB = yield* runtime.resolveLaunchContext(threadB);
+      const wrapperB = yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.readFileString(NodePath.join(launchB.hostBinDir, "claude"))),
+      );
+      NodeAssert.match(wrapperB, /workdir='\/workspace\/service-b'/);
+    }),
+  );
+
+  it.effect("thread B's turn survives thread A going idle and A's hydration", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, runtimeId, threadA, threadB } = yield* bindTwoThreads("p4-idle");
+      const registry = yield* RuntimeRegistry;
+      const stale = new Date(Date.now() - 10 * 60 * 60_000).toISOString();
+
+      const started = yield* runtime.startRuntime(threadB);
+      yield* runtime.setTurnActive(threadB, true);
+
+      // A starts a turn (full hydration), finishes, and goes idle.
+      yield* runtime.startRuntime(threadA);
+      yield* runtime.setTurnActive(threadA, true);
+      yield* runtime.setTurnActive(threadA, false);
+      yield* registry.patchRuntime(runtimeId, { lastActiveAt: stale });
+      docker.calls.length = 0;
+      yield* reapIdleRuntimes!();
+
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "stop" || call[0] === "rm"),
+        false,
+      );
+      NodeAssert.equal(docker.containers.get(started.containerName)?.running, true);
+      NodeAssert.equal(docker.containers.get(started.containerName)?.id, started.containerId);
+
+      // Once B's turn ends and the runtime has been idle long enough, it is stopped.
+      yield* runtime.setTurnActive(threadB, false);
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(started.containerName)?.running, true);
+      yield* registry.patchRuntime(runtimeId, { lastActiveAt: stale });
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(started.containerName)?.running, false);
+      NodeAssert.equal((yield* runtime.getRuntime(threadB))?.status, "stopped");
+    }),
+  );
+
+  it.effect("an attached terminal keeps an idle runtime running", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, runtimeId, threadA } = yield* bindTwoThreads("p4-terminal");
+      const registry = yield* RuntimeRegistry;
+      const started = yield* runtime.startRuntime(threadA);
+      const release = yield* runtime.retainTerminal(threadA);
+      yield* registry.patchRuntime(runtimeId, {
+        lastActiveAt: new Date(Date.now() - 10 * 60 * 60_000).toISOString(),
+      });
+
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(started.containerName)?.running, true);
+
+      release();
+      release();
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(started.containerName)?.running, false);
+    }),
+  );
+
+  it.effect("thread B's token stays valid after thread A hydrates", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { runtime, threadA, threadB } = yield* bindTwoThreads("p4-token");
+      yield* runtime.startRuntime(threadB);
+      const launchB = yield* runtime.resolveLaunchContext(threadB);
+      const tokenB = (yield* fileSystem.readFileString(
+        threadTokenFile(launchB.hostRuntimePath, threadB),
+      )).trim();
+      const tokenA = (yield* fileSystem.readFileString(
+        threadTokenFile(launchB.hostRuntimePath, threadA),
+      )).trim();
+
+      // A hydrates repeatedly: turn starts, env refresh, re-ensure.
+      yield* runtime.startRuntime(threadA);
+      yield* runtime.refreshRuntimeEnvironment(threadA);
+      yield* runtime.ensureRuntime({
+        threadId: threadA,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(threadA);
+
+      NodeAssert.notEqual(tokenA, tokenB);
+      NodeAssert.equal(fakeSessions.get(tokenB)?.revoked, false);
+      NodeAssert.equal(fakeSessions.get(tokenB)?.subject, `thread-runtime:${threadB}`);
+      NodeAssert.equal(fakeSessions.get(tokenA)?.subject, `thread-runtime:${threadA}`);
+      NodeAssert.equal(
+        (yield* fileSystem.readFileString(
+          threadTokenFile(launchB.hostRuntimePath, threadB),
+        )).trim(),
+        tokenB,
+      );
+
+      // Identity rides on each exec; the shared env file carries none.
+      const envFile = yield* fileSystem.readFileString(
+        NodePath.join(launchB.hostHomePath, ".homelab-runtime.env"),
+      );
+      NodeAssert.doesNotMatch(envFile, /HOMELAB_AGENT_THREAD_ID|HOMELAB_AGENT_RUNTIME_TOKEN/);
+      NodeAssert.match(envFile, /SHARED_SECRET/);
+      const wrapperB = yield* fileSystem.readFileString(
+        NodePath.join(launchB.hostBinDir, "claude"),
+      );
+      NodeAssert.match(wrapperB, new RegExp(`HOMELAB_AGENT_THREAD_ID=${threadB}`));
+      NodeAssert.match(wrapperB, /docker_args\+=\(-e HOMELAB_AGENT_RUNTIME_TOKEN\)/);
+      NodeAssert.doesNotMatch(wrapperB, new RegExp(tokenB));
+      NodeAssert.doesNotMatch(wrapperB, new RegExp(`HOMELAB_AGENT_THREAD_ID=${threadA}`));
+
+      // Unbinding A revokes only A's token.
+      yield* runtime.unbindThread(threadA);
+      NodeAssert.equal(fakeSessions.get(tokenA)?.revoked, true);
+      NodeAssert.equal(fakeSessions.get(tokenB)?.revoked, false);
+    }),
+  );
+
+  it.effect("ten workspace listings cause zero materializations", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, threadA } = yield* bindTwoThreads("p4-listings");
+      yield* runtime.startRuntime(threadA);
+      const before = secretMaterializations;
+      docker.calls.length = 0;
+
+      for (let index = 0; index < 10; index += 1) {
+        yield* wakeThreadWorkspaceRuntime({
+          threadId: threadA,
+          threadRuntime: runtime,
+          getReadModel: () => Effect.die("a bound thread never needs the read model"),
+        });
+      }
+
+      NodeAssert.equal(secretMaterializations, before);
+      NodeAssert.deepEqual(
+        docker.calls.map((call) => call.slice(0, 2).join(" ")),
+        Array.from({ length: 10 }, () => "container inspect"),
+      );
+    }),
+  );
+
+  it.effect("labels containers, adopts them on reconcile, and marks missing ones stopped", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, runtimeId, threadA } = yield* bindTwoThreads("p4-reconcile");
+      const registry = yield* RuntimeRegistry;
+      const started = yield* runtime.startRuntime(threadA);
+      const container = docker.containers.get(started.containerName);
+      NodeAssert.ok(container);
+      NodeAssert.equal(container.labels[RUNTIME_ID_LABEL], String(runtimeId));
+      NodeAssert.equal(container.labels[RUNTIME_GENERATION_LABEL], "1");
+
+      // A restart finds a stale record (the server died before recording the start).
+      yield* registry.patchRuntime(runtimeId, { state: "stopped", containerId: null });
+      yield* runtime.reconcile();
+      const adopted = yield* runtime.getRuntime(threadA);
+      NodeAssert.equal(adopted?.status, "running");
+      NodeAssert.equal(adopted?.containerId, started.containerId);
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "run" && call.includes(started.containerName)),
+        true,
+      );
+
+      // The container vanished while the server was down: mark stopped, never recreate.
+      docker.containers.delete(started.containerName);
+      docker.calls.length = 0;
+      yield* runtime.reconcile();
+      const missing = yield* runtime.getRuntime(threadA);
+      NodeAssert.equal(missing?.status, "stopped");
+      NodeAssert.equal(missing?.containerId, null);
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "run" || call[0] === "start"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("a failed start records failed plus lastError and releases the runtime lock", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const runtime = yield* ThreadRuntime;
+      const threadId = ThreadId.make("p4-failed-start");
+      yield* runtime.ensureRuntime({
+        threadId,
+        runtimeId: RuntimeSessionId.make("project-runtime:p4-failed-start"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        imageRef: "registry.example/missing:latest",
+      });
+
+      const failure = yield* runtime.startRuntime(threadId).pipe(Effect.flip);
+      NodeAssert.match(failure.message, /Unable to find image/);
+      const failed = yield* runtime.getRuntime(threadId);
+      NodeAssert.equal(failed?.status, "failed");
+      NodeAssert.match(failed?.lastError ?? "", /Unable to find image/);
+
+      // The lock was released: the next start runs (and here, fails the same way).
+      const second = yield* runtime.startRuntime(threadId).pipe(Effect.flip);
+      NodeAssert.match(second.message, /Unable to find image/);
+    }),
+  );
+
+  it.effect("a crash mid-delete leaves a tombstone the reconciler finishes", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+      const registry = yield* RuntimeRegistry;
+      const threadId = ThreadId.make("p4-delete-crash");
+      const runtimeId = RuntimeSessionId.make("isolated-runtime:p4-delete-crash");
+      yield* runtime.ensureRuntime({
+        threadId,
+        runtimeId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      const started = yield* runtime.startRuntime(threadId);
+      const launch = yield* runtime.resolveLaunchContext(threadId);
+
+      docker.failNext.set("rm", "Error response from daemon: device or resource busy");
+      yield* runtime.destroyRuntime(threadId).pipe(Effect.flip);
+
+      const tombstoned = yield* registry.getRuntime(runtimeId);
+      NodeAssert.ok(tombstoned._tag === "Some" && tombstoned.value.deletingAt !== null);
+      NodeAssert.equal(docker.containers.has(started.containerName), true);
+      NodeAssert.equal(yield* runtime.getRuntime(threadId), undefined);
+
+      yield* runtime.reconcile();
+
+      NodeAssert.equal((yield* registry.getRuntime(runtimeId))._tag, "None");
+      NodeAssert.equal(docker.containers.has(started.containerName), false);
+      NodeAssert.equal(yield* fileSystem.exists(launch.hostRuntimePath), false);
+    }),
+  );
+
+  it.effect("an npm -g tool survives a container recreate", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { runtime, threadA } = yield* bindTwoThreads("p4-npm");
+      const first = yield* runtime.startRuntime(threadA);
+      const launch = yield* runtime.resolveLaunchContext(threadA);
+
+      // What `npm install -g some-tool` leaves behind under the npm prefix.
+      const toolPath = NodePath.join(launch.hostHomePath, ".npm-global", "bin", "some-tool");
+      yield* fileSystem.makeDirectory(NodePath.dirname(toolPath), { recursive: true });
+      yield* fileSystem.writeFileString(toolPath, "#!/bin/sh\necho ok\n");
+
+      // A launch-profile change forces a recreate.
+      const container = docker.containers.get(first.containerName);
+      NodeAssert.ok(container);
+      delete container.labels["homelab.runtime.profile"];
+      yield* runtime.stopRuntime(threadA);
+      docker.calls.length = 0;
+      const recreated = yield* runtime.startRuntime(threadA);
+
+      NodeAssert.notEqual(recreated.containerId, first.containerId);
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "rm"),
+        true,
+      );
+      NodeAssert.equal(yield* fileSystem.exists(toolPath), true);
+      const recreatedContainer = docker.containers.get(recreated.containerName);
+      NodeAssert.ok(
+        recreatedContainer?.mounts.some(
+          (mount) => mount.source === launch.hostHomePath && mount.target === "/runtime/home",
+        ),
+      );
+      NodeAssert.equal(recreatedContainer?.labels[RUNTIME_GENERATION_LABEL], "2");
+
+      // npm installs globals there, and it is on PATH for execs and login shells.
+      const wrapper = yield* fileSystem.readFileString(NodePath.join(launch.hostBinDir, "codex"));
+      NodeAssert.match(wrapper, /NPM_CONFIG_PREFIX=\/runtime\/home\/\.npm-global/);
+      NodeAssert.match(wrapper, /PATH=[^"]*\/runtime\/home\/\.npm-global\/bin/);
+      NodeAssert.match(
+        yield* fileSystem.readFileString(NodePath.join(launch.hostHomePath, ".profile")),
+        /\/runtime\/home\/\.npm-global\/bin/,
+      );
+    }),
+  );
+
+  it.effect("seeds an isolated clone atomically and retries a half copy", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { runtime, runtimeId, threadA } = yield* bindTwoThreads("p4-seed");
+      const parentLaunch = yield* runtime.resolveLaunchContext(threadA);
+      yield* fileSystem.writeFileString(
+        NodePath.join(parentLaunch.hostWorkspacePath, "notes.md"),
+        "from the project runtime",
+      );
+      const registry = yield* RuntimeRegistry;
+      const cloneThread = ThreadId.make("p4-seed-clone");
+      const cloneRuntimeId = RuntimeSessionId.make("isolated-runtime:p4-seed-clone");
+
+      yield* runtime.ensureRuntime({
+        threadId: cloneThread,
+        runtimeId: cloneRuntimeId,
+        provider: "codex",
+        runtimeMode: "full-access",
+        seedFromRuntimeId: runtimeId,
+        runtimeKind: "project-isolated",
+      });
+      const cloneLaunch = yield* runtime.resolveLaunchContext(cloneThread);
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(cloneLaunch.hostWorkspacePath, "notes.md")),
+        "from the project runtime",
+      );
+
+      // Simulate a crash mid-copy: the seed never recorded as finished, partial files left.
+      yield* registry.patchRuntime(cloneRuntimeId, { seededAt: null });
+      yield* fileSystem.remove(NodePath.join(cloneLaunch.hostWorkspacePath, "notes.md"));
+      yield* fileSystem.writeFileString(
+        NodePath.join(cloneLaunch.hostWorkspacePath, "partial.tmp"),
+        "half",
+      );
+      yield* runtime.ensureRuntime({
+        threadId: cloneThread,
+        runtimeId: cloneRuntimeId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      NodeAssert.equal(
+        yield* fileSystem.exists(NodePath.join(cloneLaunch.hostWorkspacePath, "notes.md")),
+        true,
+      );
+      NodeAssert.equal(
+        yield* fileSystem.exists(NodePath.join(cloneLaunch.hostWorkspacePath, "partial.tmp")),
+        false,
+      );
+      const seeded = yield* registry.getRuntime(cloneRuntimeId);
+      NodeAssert.ok(seeded._tag === "Some" && seeded.value.seededAt !== null);
+    }),
+  );
+});

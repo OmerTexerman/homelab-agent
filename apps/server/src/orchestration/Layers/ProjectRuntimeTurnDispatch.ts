@@ -13,7 +13,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { ProjectMemory } from "../../homelab/Services/ProjectMemory.ts";
 import {
   scopeHomelabContextViewToThread,
   writeHomelabContextView,
@@ -29,6 +28,7 @@ import {
 import type { ProviderServiceShape } from "../../provider/Services/ProviderService.ts";
 import type { ProjectionSnapshotQueryShape } from "../Services/ProjectionSnapshotQuery.ts";
 import { planProviderTurnDispatch } from "./ProviderCommandPolicy.ts";
+import { listHomelabViewMemoryEntries } from "../../homelab/ProjectMemoryContextViews.ts";
 
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -104,30 +104,22 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
       isStandalone: assignment.kind === "scratch",
       runtimeKind: assignment.kind,
+      projectId: project.id,
       projectTitle: project.title,
       // A parallel project thread starts from an exact copy of the Project Runtime.
       ...(assignment.kind === "project-isolated"
         ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
         : {}),
     });
+    // The one full start per turn: materializes the runtime (unchanged files
+    // are skipped) and reuses the running container.
     yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
-    const projectMemory = yield* Effect.serviceOption(ProjectMemory);
-    const memoryEntries = Option.isSome(projectMemory)
-      ? yield* projectMemory.value
-          .list({
-            projectId: project.id,
-            limit: 1_000,
-          })
-          .pipe(
-            Effect.catchTag("ProjectMemoryError", (error) =>
-              Effect.logWarning("failed to list project memory for context view", {
-                threadId: input.threadId,
-                detail: error.message,
-              }).pipe(Effect.as([])),
-            ),
-          )
-      : [];
+    // Scoped (scratch and curator threads see only their own memory) before the view limit.
+    const memoryEntries = yield* listHomelabViewMemoryEntries({
+      projectId: project.id,
+      threadId: input.threadId,
+    });
     const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
     const bootstrap = Option.isSome(runtimeBootstrapRegistry)
       ? yield* runtimeBootstrapRegistry.value.getCatalog().pipe(

@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -255,7 +260,7 @@ describe("runtime wrapper planning", () => {
     );
     expect(files.get("runtime-shell")?.contents).toContain("/bin/zsh");
     expect(files.get("runtime-shell")?.contents).toContain(
-      "PATH=/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/opt/homelab/bin:",
+      "PATH=/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/runtime/home/.local/bin:/runtime/home/.npm-global/bin:/opt/homelab/bin:",
     );
     expect(files.get("codex")?.mode).toBe(0o755);
   });
@@ -413,17 +418,74 @@ describe("runtime file rendering", () => {
           SECOND_SECRET: "two",
         },
         serverUrl: "http://host.docker.internal:3456",
-        threadId: ThreadId.make("thread-secrets"),
         scope: "project",
-        runtimeAccessToken: "runtime-token",
       }),
     ).toEqual({
       FIRST_SECRET: "one",
       SECOND_SECRET: "two",
       HOMELAB_AGENT_SCOPE: "project",
       HOMELAB_AGENT_SERVER_URL: "http://host.docker.internal:3456",
-      HOMELAB_AGENT_THREAD_ID: "thread-secrets",
-      HOMELAB_AGENT_RUNTIME_TOKEN: "runtime-token",
     });
+  });
+
+  it("keeps thread identity out of the shared runtime env file", () => {
+    // Sourcing the shared file must never overwrite the calling exec's identity.
+    const env = buildRuntimeControlEnvironment({
+      secretEnv: { HOMELAB_AGENT_THREAD_ID: "old", HOMELAB_AGENT_RUNTIME_TOKEN: "old" },
+      serverUrl: "http://host.docker.internal:3456",
+      scope: "project",
+    });
+    expect(env).not.toHaveProperty("HOMELAB_AGENT_THREAD_ID");
+    expect(env).not.toHaveProperty("HOMELAB_AGENT_RUNTIME_TOKEN");
+  });
+});
+
+describe("runtime wrapper execution", () => {
+  it("wrapper execs with the thread's cwd, id, and token without the token in argv", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "p4-wrapper-"));
+    const fakeDocker = NodePath.join(dir, "docker");
+    NodeFS.writeFileSync(
+      fakeDocker,
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OUT_ARGS"\nprintf "%s" "${HOMELAB_AGENT_RUNTIME_TOKEN:-}" > "$OUT_TOKEN"\n',
+      { mode: 0o755 },
+    );
+    const tokenFile = NodePath.join(dir, "runtime-token");
+    NodeFS.writeFileSync(tokenFile, "secret-token-b\n", { mode: 0o600 });
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: NodePath.join(dir, "thread-runtimes"),
+      threadId: ThreadId.make("thread-b"),
+      runtimeId: RuntimeSessionId.make("project-runtime:p"),
+      provider: "codex",
+      runtimeMode: "full-access",
+      requestedCwd: "/workspace/service-b",
+      bootstrapImageRef: "runtime:test",
+      bootstrapVersion: "v",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-01-01T00:00:00.000Z",
+    });
+    const codex = buildRuntimeWrapperScriptSpecs({
+      threadRuntimesDir: NodePath.join(dir, "thread-runtimes"),
+      runtime,
+      dockerBinaryPath: fakeDocker,
+      containerShellPath: "/bin/bash",
+      binDir: NodePath.join(dir, "bin"),
+      tokenFilePath: tokenFile,
+    }).find((file) => file.filePath.endsWith("/codex"))!;
+    NodeFS.mkdirSync(NodePath.dirname(codex.filePath), { recursive: true });
+    NodeFS.writeFileSync(codex.filePath, codex.contents, { mode: 0o755 });
+    const outArgs = NodePath.join(dir, "args");
+    const outToken = NodePath.join(dir, "token");
+    NodeChildProcess.execFileSync(codex.filePath, ["--version"], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "", OUT_ARGS: outArgs, OUT_TOKEN: outToken },
+    });
+    const args = NodeFS.readFileSync(outArgs, "utf8").split("\n");
+    expect(args.slice(0, 4)).toEqual(["exec", "-i", "-w", "/workspace/service-b"]);
+    expect(args).toContain("HOMELAB_AGENT_THREAD_ID=thread-b");
+    expect(args).toContain("HOMELAB_AGENT_RUNTIME_TOKEN");
+    expect(args.join(" ")).not.toContain("secret-token-b");
+    expect(NodeFS.readFileSync(outToken, "utf8")).toBe("secret-token-b");
+    NodeFS.rmSync(dir, { recursive: true, force: true });
   });
 });

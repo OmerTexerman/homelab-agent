@@ -133,6 +133,9 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
       getRuntime: () => Effect.void.pipe(Effect.as(undefined)),
       listRuntimes: () => Effect.succeed([]),
       startRuntime: (threadId) => Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
+      ensureRunning: (threadId) => Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
+      setTurnActive: () => Effect.void,
+      retainTerminal: () => Effect.succeed(() => undefined),
       stopRuntime: () => Effect.void,
       touchRuntime: () => Effect.void,
       resolveExecutionContext: (threadId) =>

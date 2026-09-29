@@ -78,7 +78,7 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
     };
   };
 
-  return {
+  const threadRuntime: ThreadRuntimeShape = {
     ensureRuntime: (input) =>
       Effect.sync(() => {
         const key = String(input.threadId);
@@ -189,8 +189,24 @@ function makeTestThreadRuntime(): ThreadRuntimeShape {
         runtimes.set(key, runtime);
         return toPassthroughLaunchContext(runtime);
       }),
+    ensureRunning: (threadId) => Effect.suspend(() => threadRuntime.startRuntime(threadId)),
+    setTurnActive: () => Effect.void,
+    retainTerminal: () => Effect.succeed(() => undefined),
+    unbindThread: (threadId) =>
+      Effect.sync(() => {
+        runtimes.delete(String(threadId));
+      }),
+    destroyRuntimeById: (runtimeId) =>
+      Effect.sync(() => {
+        for (const [key, runtime] of runtimes) {
+          if (runtime.runtimeId === runtimeId) runtimes.delete(key);
+        }
+      }),
+    wipeRuntime: () => Effect.void,
+    reconcile: () => Effect.void,
     streamEvents: Stream.empty,
-  } satisfies ThreadRuntimeShape;
+  };
+  return threadRuntime;
 }
 
 export function makeTestThreadRuntimeLayer() {

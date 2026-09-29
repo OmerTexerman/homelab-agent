@@ -402,7 +402,8 @@ describe("homelab HTTP routes", () => {
         makeHomelabApp({
           homelab: {
             threadRuntime: {
-              startRuntime: (threadId) =>
+              // The download route wakes through the inspect-only ensureRunning.
+              ensureRunning: (threadId) =>
                 Effect.sync(() => {
                   started.push(threadId);
                   return makeMockThreadRuntimeDescriptor(threadId);

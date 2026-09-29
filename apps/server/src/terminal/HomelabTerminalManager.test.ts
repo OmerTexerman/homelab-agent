@@ -80,7 +80,14 @@ function makeFakeThreadRuntime(input: {
     getRuntime: (threadId) => Effect.succeed(descriptor(String(threadId))),
     listRuntimes: () => unused,
     startRuntime: (threadId) => Effect.succeed(descriptor(String(threadId))),
+    ensureRunning: (threadId) => Effect.succeed(descriptor(String(threadId))),
     stopRuntime: () => unused,
+    setTurnActive: () => Effect.void,
+    retainTerminal: () => Effect.succeed(() => undefined),
+    unbindThread: () => unused,
+    destroyRuntimeById: () => unused,
+    wipeRuntime: () => unused,
+    reconcile: () => Effect.void,
     touchRuntime: (threadId) => Effect.sync(() => void touched.push(String(threadId))),
     refreshRuntimeEnvironment: () => unused,
     refreshRuntimeSkills: () => unused,
@@ -149,7 +156,9 @@ it.layer(
       const snapshot = yield* manager.open(openInput("thread-1"));
 
       assert.equal(snapshot.threadId, "thread-1");
-      assert.deepEqual(ensured, ["thread-1"]);
+      // The thread is already bound, so opening a terminal never re-ensures
+      // (or rewrites) its binding.
+      assert.deepEqual(ensured, []);
       const spawn = ptyAdapter.spawnInputs[0];
       assert.equal(spawn?.shell, "/runtime/runtime-thread-1/shell");
       assert.equal(spawn?.args, undefined);

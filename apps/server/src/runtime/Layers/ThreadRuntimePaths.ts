@@ -27,6 +27,42 @@ export function homePathForThread(threadRuntimesDir: string, runtimeStorageId: s
   return NodePath.join(runtimeRootPath(threadRuntimesDir, runtimeStorageId), "home");
 }
 
+/**
+ * Host-only per-thread state inside a runtime root: the thread's exec wrappers
+ * and its runtime token. Never mounted into the container, and not part of
+ * snapshots or isolated-runtime seeds.
+ */
+export function threadBindingRootPath(
+  threadRuntimesDir: string,
+  runtimeStorageId: string,
+  threadId: string,
+): string {
+  return NodePath.join(
+    runtimeRootPath(threadRuntimesDir, runtimeStorageId),
+    "threads",
+    encodeThreadSegment(threadId),
+  );
+}
+
+export function threadBindingBinPath(
+  threadRuntimesDir: string,
+  runtimeStorageId: string,
+  threadId: string,
+): string {
+  return NodePath.join(threadBindingRootPath(threadRuntimesDir, runtimeStorageId, threadId), "bin");
+}
+
+export function threadBindingTokenPath(
+  threadRuntimesDir: string,
+  runtimeStorageId: string,
+  threadId: string,
+): string {
+  return NodePath.join(
+    threadBindingRootPath(threadRuntimesDir, runtimeStorageId, threadId),
+    "runtime-token",
+  );
+}
+
 export function isWithinContainerWorkspace(targetPath: string): boolean {
   return (
     targetPath === CONTAINER_WORKSPACE_PATH || targetPath.startsWith(`${CONTAINER_WORKSPACE_PATH}/`)

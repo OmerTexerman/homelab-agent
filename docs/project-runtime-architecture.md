@@ -135,11 +135,13 @@ runtimes now use runtime-id-derived host storage paths and container names. The
 legacy per-thread runtime id path is preserved for existing descriptors so
 upstream-derived behavior does not lose old runtime state.
 
-The lifecycle control slice adds a metadata-backed `ProjectRuntimeLifecycle`
-service over that compatibility layer. It records project runtime state such as
-running, stopped/sleeping, archived, reset-pending/resetting, and failed without
-moving that state back into thread state. Waking a stopped runtime starts the
-runtime and regenerates `.homelab` before provider execution continues.
+Each runtime (container) has one record in `homelab.sqlite`, and threads bind
+to it; `ProjectRuntimeLifecycle` and `ThreadRuntime` share that one lifecycle
+state (running, stopped, archived, resetting, failed, ...). Waking a stopped
+runtime starts it and regenerates `.homelab` before provider execution
+continues. See [internals/runtime-lifecycle.md](./internals/runtime-lifecycle.md)
+for records, per-exec thread identity, the idle reaper, the reconciler, and
+garbage collection.
 
 Runtime containers receive `HOMELAB_AGENT_SERVER_URL` in
 `.homelab-runtime.env` so the generated `homelab` CLI can call the app server.

@@ -168,7 +168,11 @@ it.effect("replaces known secret values with $KEY placeholders in rendered views
         Layer.mock(HomelabSecretRegistry)({
           materializeSecrets: () =>
             Effect.succeed([
-              { key: "API_TOKEN", value: "s3cr3t-token-value", valueUpdatedAt: "2026-09-01T00:00:00.000Z" },
+              {
+                key: "API_TOKEN",
+                value: "s3cr3t-token-value",
+                valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+              },
               { key: "SHORT", value: "abc", valueUpdatedAt: "2026-09-01T00:00:00.000Z" },
             ]),
           changes: Stream.empty,
