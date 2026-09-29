@@ -133,6 +133,10 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { readThreadShell, useAllEnvironmentProjectSnapshotsReady } from "../state/entities";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
+import { useCreateStandaloneThread } from "../homelab/useCreateStandaloneThread";
+import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
+import { homelabThreadMenuItems } from "./sidebar/homelabThreadMenu.logic";
+import { useStandaloneThreadMoveDialogs } from "./sidebar/StandaloneThreadMoveDialogs";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -2194,6 +2198,11 @@ export default function Sidebar() {
     archiveThread,
     deleteThread,
   } = useThreadActions();
+  // Fork: scratch threads get move/promote dialogs, and scratch creation covers
+  // the "no project yet" entry points.
+  const { handleStandaloneThreadMenuAction, standaloneThreadMoveDialogs } =
+    useStandaloneThreadMoveDialogs();
+  const createStandaloneThread = useCreateStandaloneThread();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -4079,35 +4088,39 @@ export default function Sidebar() {
           ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning:
-                thread.session?.status === "running" && thread.session.activeTurnId != null,
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
-              },
-              snoozePresets,
-            }),
+            homelabThreadMenuItems(
+              buildThreadActionMenuItems({
+                branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKey === threadProjectGroup.projectKey,
+                    }
+                  : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning:
+                  thread.session?.status === "running" && thread.session.activeTurnId != null,
+                supports: {
+                  settlement: supportsSettlement,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+              }),
+              thread,
+            ),
             position,
           ),
         );
         if (clicked._tag === "Failure") return;
+        if (handleStandaloneThreadMenuAction(clicked.value, thread)) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -4402,6 +4415,12 @@ export default function Sidebar() {
   // for multi-project setups.
   const handleNewThreadClick = useCallback(
     (event?: ReactMouseEvent) => {
+      // Fork: with no projects there is nothing to pick; start a scratch thread.
+      if (projectGroups.length === 0) {
+        if (isMobile) setOpenMobile(false);
+        void createStandaloneThread();
+        return;
+      }
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
@@ -4418,7 +4437,7 @@ export default function Sidebar() {
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [createStandaloneThread, isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -4579,7 +4598,7 @@ export default function Sidebar() {
               }
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}
-              newThreadDisabled={projects.length === 0}
+              newThreadDisabled={false}
               newThreadShortcutLabel={newThreadShortcutLabel}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
               showNewThreadInProjectHint={projectGroups.length > 1}
@@ -4982,6 +5001,14 @@ export default function Sidebar() {
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void createStandaloneThread()}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    <SquarePenIcon className="-mx-0.5 size-3" />
+                    {HOMELAB_PRODUCT_COPY.standalone.newThreadAction}
+                  </button>
                 </>
               ) : scopedProjectGroup ? (
                 `No threads in ${scopedProjectGroup.displayName} yet`
@@ -4992,6 +5019,7 @@ export default function Sidebar() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      {standaloneThreadMoveDialogs}
       <SidebarChromeFooter />
     </>
   );

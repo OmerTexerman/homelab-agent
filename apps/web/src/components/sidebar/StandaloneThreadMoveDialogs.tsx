@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ProjectId,
-  type ContextMenuItem,
   type ProjectMemoryEntry,
   type ProjectMemoryId,
   type StandaloneThreadMoveMemoryMigrationMode,
@@ -13,7 +12,8 @@ import {
 
 import { describeHomelabError, fetchHomelabJson } from "../../homelab/homelabFetch";
 import { isUserVisibleProject } from "../../homelab/visibleProjects";
-import { newCommandId, newProjectId } from "../../lib/utils";
+import { newCommandId } from "../../homelab/commandIds";
+import { newProjectId } from "../../lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { useProjects } from "../../state/entities";
 import { useEnvironmentHttpBaseUrl } from "../../state/environments";
@@ -48,18 +48,19 @@ type StandaloneThreadSummary = SidebarDraftAwareThreadSummary;
 /**
  * Fork-owned move/promote flows for scratch (standalone) threads, shared by
  * the classic sidebar and Sidebar V2 so the dialogs (including the memory
- * migration choice) exist exactly once. Callers add the context-menu entries
- * below for rows whose projectId satisfies isStandaloneProjectId, then route
- * the clicks to the open functions returned by useStandaloneThreadMoveDialogs.
+ * migration choice) exist exactly once. Callers pass their thread menu through
+ * `homelabThreadMenuItems` (homelabThreadMenu.logic.ts), then hand the clicked
+ * id to `handleStandaloneThreadMenuAction`, which opens the matching dialog.
  */
-export const STANDALONE_THREAD_CONTEXT_MENU_ITEMS: readonly ContextMenuItem[] = [
-  { id: "move-to-project", label: HOMELAB_PRODUCT_COPY.standalone.moveAction },
-  { id: "promote-to-project", label: HOMELAB_PRODUCT_COPY.standalone.promoteAction },
-];
 
 export function useStandaloneThreadMoveDialogs(): {
   openMoveStandaloneThreadDialog: (thread: StandaloneThreadSummary) => void;
   openPromoteStandaloneThreadDialog: (thread: StandaloneThreadSummary) => void;
+  /** Opens the dialog for a scratch-thread menu id; false for any other id. */
+  handleStandaloneThreadMenuAction: (
+    menuId: string | null | undefined,
+    thread: StandaloneThreadSummary,
+  ) => boolean;
   standaloneThreadMoveDialogs: ReactNode;
 } {
   // The unfiltered projects source on purpose: target candidates are all
@@ -388,161 +389,166 @@ export function useStandaloneThreadMoveDialogs(): {
                 : HOMELAB_PRODUCT_COPY.standalone.moveDescription}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p>Chat transcript and thread identity move automatically.</p>
-              <p className="mt-1">{standaloneThreadMoveRuntimeDescription()}</p>
-            </div>
+          <DialogPanel>
+            <div className="space-y-4">
+              <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                <p>Chat transcript and thread identity move automatically.</p>
+                <p className="mt-1">{standaloneThreadMoveRuntimeDescription()}</p>
+              </div>
 
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Target project</span>
-              <Select
-                value={moveProjectId}
-                onValueChange={(value) => {
-                  if (value) {
-                    setMoveProjectId(value);
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Target project">
-                  <SelectValue>
-                    {moveTargetProjects.find((candidate) => String(candidate.id) === moveProjectId)
-                      ?.title ?? "Select project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {moveTargetProjects.map((candidate) => (
-                    <SelectItem
-                      key={String(candidate.id)}
-                      hideIndicator
-                      value={String(candidate.id)}
-                    >
-                      {candidate.title}
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Target project</span>
+                <Select
+                  value={moveProjectId}
+                  onValueChange={(value) => {
+                    if (value) {
+                      setMoveProjectId(value);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="Target project">
+                    <SelectValue>
+                      {moveTargetProjects.find(
+                        (candidate) => String(candidate.id) === moveProjectId,
+                      )?.title ?? "Select project"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {moveTargetProjects.map((candidate) => (
+                      <SelectItem
+                        key={String(candidate.id)}
+                        hideIndicator
+                        value={String(candidate.id)}
+                      >
+                        {candidate.title}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                {moveTargetProjects.length === 0 ? (
+                  <p className="text-xs text-warning">
+                    Create a project before moving this thread.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Scratch memory</span>
+                <Select
+                  value={moveMemoryMode}
+                  onValueChange={(value) => {
+                    if (value === "none" || value === "copy" || value === "move") {
+                      setMoveMemoryMode(value);
+                      if (value === "none") {
+                        setMoveMemorySelection("all-relevant");
+                      }
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="Scratch memory handling">
+                    <SelectValue>
+                      {moveMemoryMode === "none"
+                        ? "Leave memory in Scratch"
+                        : moveMemoryMode === "copy"
+                          ? "Copy memory to target project"
+                          : "Move memory to target project"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    <SelectItem hideIndicator value="none">
+                      Leave memory in Scratch
                     </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              {moveTargetProjects.length === 0 ? (
-                <p className="text-xs text-warning">Create a project before moving this thread.</p>
+                    <SelectItem hideIndicator value="copy">
+                      Copy memory to target project
+                    </SelectItem>
+                    <SelectItem hideIndicator value="move">
+                      Move memory to target project
+                    </SelectItem>
+                  </SelectPopup>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {standaloneThreadMoveMemoryDescription(moveMemoryMode, moveMemorySelection)}
+                </p>
+              </div>
+
+              {moveMemoryMode !== "none" ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant={moveMemorySelection === "all-relevant" ? "secondary" : "outline"}
+                      size="sm"
+                      onClick={() => setMoveMemorySelection("all-relevant")}
+                    >
+                      All relevant
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={moveMemorySelection === "selected" ? "secondary" : "outline"}
+                      size="sm"
+                      onClick={() => setMoveMemorySelection("selected")}
+                    >
+                      Selected
+                    </Button>
+                  </div>
+
+                  {moveMemorySelection === "selected" ? (
+                    <div className="max-h-44 overflow-y-auto rounded-md border border-border">
+                      {isMoveMemoryLoading ? (
+                        <div className="p-3 text-xs text-muted-foreground">Loading memory...</div>
+                      ) : moveRelevantMemoryEntries.length === 0 ? (
+                        <div className="p-3 text-xs text-muted-foreground">
+                          No durable Scratch memory entries reference this thread.
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-border">
+                          {moveRelevantMemoryEntries.map((entry) => {
+                            const checked = moveSelectedMemoryIds.has(String(entry.id));
+                            return (
+                              <label
+                                key={String(entry.id)}
+                                className="flex cursor-pointer items-start gap-2 p-2 text-xs hover:bg-accent/50"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={() => {
+                                    setMoveSelectedMemoryIds((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(String(entry.id))) {
+                                        next.delete(String(entry.id));
+                                      } else {
+                                        next.add(String(entry.id));
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium text-foreground">
+                                    {entry.summary}
+                                  </span>
+                                  {entry.tags.length > 0 ? (
+                                    <span className="block truncate text-muted-foreground">
+                                      {entry.tags.join(", ")}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {isMoveMemoryLoading
+                        ? "Loading memory..."
+                        : `${moveRelevantMemoryEntries.length} relevant entries found.`}
+                    </p>
+                  )}
+                </div>
               ) : null}
             </div>
-
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Scratch memory</span>
-              <Select
-                value={moveMemoryMode}
-                onValueChange={(value) => {
-                  if (value === "none" || value === "copy" || value === "move") {
-                    setMoveMemoryMode(value);
-                    if (value === "none") {
-                      setMoveMemorySelection("all-relevant");
-                    }
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Scratch memory handling">
-                  <SelectValue>
-                    {moveMemoryMode === "none"
-                      ? "Leave memory in Scratch"
-                      : moveMemoryMode === "copy"
-                        ? "Copy memory to target project"
-                        : "Move memory to target project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="none">
-                    Leave memory in Scratch
-                  </SelectItem>
-                  <SelectItem hideIndicator value="copy">
-                    Copy memory to target project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="move">
-                    Move memory to target project
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {standaloneThreadMoveMemoryDescription(moveMemoryMode, moveMemorySelection)}
-              </p>
-            </div>
-
-            {moveMemoryMode !== "none" ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant={moveMemorySelection === "all-relevant" ? "secondary" : "outline"}
-                    size="sm"
-                    onClick={() => setMoveMemorySelection("all-relevant")}
-                  >
-                    All relevant
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={moveMemorySelection === "selected" ? "secondary" : "outline"}
-                    size="sm"
-                    onClick={() => setMoveMemorySelection("selected")}
-                  >
-                    Selected
-                  </Button>
-                </div>
-
-                {moveMemorySelection === "selected" ? (
-                  <div className="max-h-44 overflow-y-auto rounded-md border border-border">
-                    {isMoveMemoryLoading ? (
-                      <div className="p-3 text-xs text-muted-foreground">Loading memory...</div>
-                    ) : moveRelevantMemoryEntries.length === 0 ? (
-                      <div className="p-3 text-xs text-muted-foreground">
-                        No durable Scratch memory entries reference this thread.
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {moveRelevantMemoryEntries.map((entry) => {
-                          const checked = moveSelectedMemoryIds.has(String(entry.id));
-                          return (
-                            <label
-                              key={String(entry.id)}
-                              className="flex cursor-pointer items-start gap-2 p-2 text-xs hover:bg-accent/50"
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={() => {
-                                  setMoveSelectedMemoryIds((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(String(entry.id))) {
-                                      next.delete(String(entry.id));
-                                    } else {
-                                      next.add(String(entry.id));
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              />
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate font-medium text-foreground">
-                                  {entry.summary}
-                                </span>
-                                {entry.tags.length > 0 ? (
-                                  <span className="block truncate text-muted-foreground">
-                                    {entry.tags.join(", ")}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    {isMoveMemoryLoading
-                      ? "Loading memory..."
-                      : `${moveRelevantMemoryEntries.length} relevant entries found.`}
-                  </p>
-                )}
-              </div>
-            ) : null}
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeMoveDialog}>
@@ -577,62 +583,64 @@ export function useStandaloneThreadMoveDialogs(): {
                 : HOMELAB_PRODUCT_COPY.standalone.promoteDescription}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Project name</span>
-              <Input
-                value={promoteName}
-                onChange={(event) => setPromoteName(event.target.value)}
-                placeholder="Project name"
-                autoFocus
-                spellCheck={false}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void submitPromote();
-                  }
-                }}
-              />
-            </div>
+          <DialogPanel>
+            <div className="space-y-4">
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Project name</span>
+                <Input
+                  value={promoteName}
+                  onChange={(event) => setPromoteName(event.target.value)}
+                  placeholder="Project name"
+                  autoFocus
+                  spellCheck={false}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void submitPromote();
+                    }
+                  }}
+                />
+              </div>
 
-            <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Scratch memory</span>
-              <Select
-                value={promoteMemoryMode}
-                onValueChange={(value) => {
-                  if (value === "none" || value === "copy" || value === "move") {
-                    setPromoteMemoryMode(value);
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Scratch memory handling">
-                  <SelectValue>
-                    {promoteMemoryMode === "none"
-                      ? "Leave memory in Scratch"
-                      : promoteMemoryMode === "copy"
-                        ? "Copy memory into the project"
-                        : "Move memory into the project"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="move">
-                    Move memory into the project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="copy">
-                    Copy memory into the project
-                  </SelectItem>
-                  <SelectItem hideIndicator value="none">
-                    Leave memory in Scratch
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {promoteMemoryMode === "none"
-                  ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory stays behind."
-                  : promoteMemoryMode === "copy"
-                    ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory is copied in."
-                    : "The chat transcript, runtime workspace, skills, and durable Scratch memory all move into the project."}
-              </p>
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Scratch memory</span>
+                <Select
+                  value={promoteMemoryMode}
+                  onValueChange={(value) => {
+                    if (value === "none" || value === "copy" || value === "move") {
+                      setPromoteMemoryMode(value);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="Scratch memory handling">
+                    <SelectValue>
+                      {promoteMemoryMode === "none"
+                        ? "Leave memory in Scratch"
+                        : promoteMemoryMode === "copy"
+                          ? "Copy memory into the project"
+                          : "Move memory into the project"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    <SelectItem hideIndicator value="move">
+                      Move memory into the project
+                    </SelectItem>
+                    <SelectItem hideIndicator value="copy">
+                      Copy memory into the project
+                    </SelectItem>
+                    <SelectItem hideIndicator value="none">
+                      Leave memory in Scratch
+                    </SelectItem>
+                  </SelectPopup>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {promoteMemoryMode === "none"
+                    ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory stays behind."
+                    : promoteMemoryMode === "copy"
+                      ? "The chat transcript, runtime workspace, and skills move to the project; durable Scratch memory is copied in."
+                      : "The chat transcript, runtime workspace, skills, and durable Scratch memory all move into the project."}
+                </p>
+              </div>
             </div>
           </DialogPanel>
           <DialogFooter>
@@ -651,9 +659,25 @@ export function useStandaloneThreadMoveDialogs(): {
     </>
   );
 
+  const handleStandaloneThreadMenuAction = useCallback(
+    (menuId: string | null | undefined, thread: StandaloneThreadSummary) => {
+      if (menuId === "move-to-project") {
+        openMoveStandaloneThreadDialog(thread);
+        return true;
+      }
+      if (menuId === "promote-to-project") {
+        openPromoteStandaloneThreadDialog(thread);
+        return true;
+      }
+      return false;
+    },
+    [openMoveStandaloneThreadDialog, openPromoteStandaloneThreadDialog],
+  );
+
   return {
     openMoveStandaloneThreadDialog,
     openPromoteStandaloneThreadDialog,
+    handleStandaloneThreadMenuAction,
     standaloneThreadMoveDialogs,
   };
 }
