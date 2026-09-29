@@ -375,6 +375,12 @@ export class SessionStore extends Context.Service<
       readonly client?: AuthClientMetadata;
       readonly proofKeyThumbprint?: string;
       /**
+       * `internal` sessions (for example thread-runtime bearer tokens) are
+       * excluded from user-facing session lists, change events, and bulk
+       * revocation. Defaults to `user`.
+       */
+      readonly visibility?: AuthSessions.AuthSessionVisibility;
+      /**
        * Atomically revoke active sessions with the same subject and method
        * before storing this session.
        */
@@ -538,7 +544,12 @@ export const make = Effect.gen(function* () {
   const loadActiveSession = (sessionId: AuthSessionId) =>
     Effect.gen(function* () {
       const row = yield* authSessions.getById({ sessionId });
-      if (Option.isNone(row) || row.value.revokedAt !== null) {
+      if (
+        Option.isNone(row) ||
+        row.value.revokedAt !== null ||
+        // Internal sessions never surface in user-facing change events.
+        row.value.visibility === "internal"
+      ) {
         return Option.none<AuthClientSession>();
       }
 
@@ -685,11 +696,13 @@ export const make = Effect.gen(function* () {
       );
       const signature = signPayload(encodedPayload, signingSecret);
       const client = input?.client ?? createDefaultClientMetadata();
+      const visibility = input?.visibility ?? "user";
       const sessionRecord = {
         sessionId,
         subject: claims.sub,
         scopes: claims.scopes,
         method: claims.method,
+        visibility,
         client: {
           label: client.label ?? null,
           ipAddress: client.ipAddress ?? null,
@@ -719,19 +732,21 @@ export const make = Effect.gen(function* () {
           discard: true,
         });
       }
-      yield* emitUpsert(
-        toAuthClientSession({
-          sessionId,
-          subject: claims.sub,
-          scopes: claims.scopes,
-          method: claims.method,
-          client,
-          issuedAt,
-          expiresAt,
-          lastConnectedAt: null,
-          connected: false,
-        }),
-      );
+      if (visibility === "user") {
+        yield* emitUpsert(
+          toAuthClientSession({
+            sessionId,
+            subject: claims.sub,
+            scopes: claims.scopes,
+            method: claims.method,
+            client,
+            issuedAt,
+            expiresAt,
+            lastConnectedAt: null,
+            connected: false,
+          }),
+        );
+      }
 
       return {
         sessionId,
