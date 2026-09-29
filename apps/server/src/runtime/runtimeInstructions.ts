@@ -608,10 +608,24 @@ homelab secret-request SERVICE_API_TOKEN \\
 If a missing secret is blocking the task, run \`homelab secret-request\`
 yourself immediately. Do not tell the user to run the command for you.
 
-The user gets a secure prompt in the UI. Once they provide the value, it
-appears in new shells inside this runtime as an environment variable. The
-\`homelab secret-request\` command waits for fulfillment by default, then you can
-continue. Check availability with \`homelab secrets\`.
+The user gets a secure prompt in the UI. The \`homelab secret-request\` command
+waits until they save a value (or decline, in which case it exits with
+"declined": ask the user how to proceed instead of retrying). Requesting a key
+that already has a value asks the user for a new one, so only do that to
+rotate a stale or wrong credential.
+
+Read secret values on demand instead of relying on environment variables:
+
+\`\`\`bash
+homelab secrets                      # what exists and what this project can use
+TOKEN="$(homelab secret get SERVICE_API_TOKEN)"
+\`\`\`
+
+\`homelab secret get\` reads \`~/.homelab/secrets/<KEY>\`, which the server keeps
+current, so a rotated value is visible immediately, even to processes that
+were already running. Secrets are also exported as environment variables in
+new shells, but a variable keeps the value its process started with. Some
+secrets are limited to specific projects, so another project may not see them.
 
 If \`homelab secrets\` is empty, or a useful credential is missing from the
 registry, create the missing secret references yourself instead of ending with

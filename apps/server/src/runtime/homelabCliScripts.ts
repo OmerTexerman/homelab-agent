@@ -87,7 +87,17 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-secret_value = os.environ.get(args.secret_name)
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.secret_name):
+    fail(f"Invalid secret name '{args.secret_name}'.")
+
+# Prefer the delivered file: it follows rotations, while the environment keeps
+# whatever value this process started with.
+try:
+    secret_value = (
+        pathlib.Path("~/.homelab/secrets").expanduser() / args.secret_name
+    ).read_text(encoding="utf-8")
+except FileNotFoundError:
+    secret_value = os.environ.get(args.secret_name)
 if not secret_value:
     fail(f"Secret '{args.secret_name}' is not set in this runtime.")
 
@@ -512,13 +522,15 @@ def find_secret_descriptor(key: str):
 
 
 RUNTIME_ENV_PATH = os.path.expanduser("~/.homelab-runtime.env")
+# One read-only file per delivered secret, replaced atomically on rotation, plus
+# a manifest of each key's valueUpdatedAt.
+SECRETS_DIR = os.path.expanduser("~/.homelab/secrets")
+SECRETS_MANIFEST_PATH = os.path.join(SECRETS_DIR, ".manifest.json")
+SECRET_DECLINED_EXIT_CODE = 3
 
 
 def secret_present_in_runtime_env(key: str) -> bool:
-    # The registry having a value ("hasValue") does NOT mean the value has reached
-    # THIS runtime: the view/env reactor rewrites ~/.homelab-runtime.env asynchronously.
-    # Waiting only on the registry races that rewrite (and misreports success), so the
-    # authoritative "it is here" signal is the key appearing in the local env file.
+    # Fallback for servers that don't deliver per-key secret files yet.
     try:
         with open(RUNTIME_ENV_PATH, "r", encoding="utf-8") as handle:
             for line in handle:
@@ -535,50 +547,105 @@ def secret_present_in_runtime_env(key: str) -> bool:
     return False
 
 
+def delivered_secret_revision(key: str):
+    try:
+        with open(SECRETS_MANIFEST_PATH, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    entry = (manifest.get("secrets") or {}).get(key) if isinstance(manifest, dict) else None
+    return entry.get("valueUpdatedAt") if isinstance(entry, dict) else None
+
+
+def secret_delivered(descriptor) -> bool:
+    # The registry having a value does NOT mean it has reached THIS runtime: the
+    # server rewrites the runtime's secret files asynchronously. With a
+    # valueUpdatedAt, wait for exactly that revision, so a rotation isn't
+    # reported done while the old value is still on disk.
+    key = descriptor.get("key")
+    revision = descriptor.get("valueUpdatedAt")
+    if revision:
+        return delivered_secret_revision(key) == revision and os.path.exists(
+            os.path.join(SECRETS_DIR, key)
+        )
+    return secret_present_in_runtime_env(key)
+
+
+def read_delivered_secret(key: str):
+    try:
+        with open(os.path.join(SECRETS_DIR, key), "r", encoding="utf-8") as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return os.environ.get(key)
+    except OSError as error:
+        fail(f"Could not read secret {key}: {error}")
+
+
+def cmd_secret_get(args):
+    value = read_delivered_secret(args.key)
+    if value is None:
+        fail(
+            f"Secret {args.key} is not available in this runtime. Check 'homelab secrets'; "
+            f"if it's missing, request it with 'homelab secret-request {args.key}'."
+        )
+    sys.stdout.write(value)
+    sys.stdout.flush()
+
+
 def cmd_secret_request(args):
     payload = {"key": args.key}
     if args.label:
         payload["label"] = args.label
     if args.summary:
         payload["summary"] = args.summary
+    if THREAD_ID:
+        payload["threadId"] = THREAD_ID
     secret = request_json("POST", "/api/homelab/secrets/request", payload=payload)
-    already_ready = (
-        isinstance(secret, dict)
-        and secret.get("hasValue") is True
-        and secret_present_in_runtime_env(args.key)
-    )
-    if args.no_wait or already_ready:
+    if args.no_wait:
         print_json(secret)
         return
 
     timeout_seconds = None if args.timeout_seconds <= 0 else args.timeout_seconds
     poll_started_at = time.monotonic()
     print(
-        f"Waiting for secret {args.key} to be supplied in the UI and materialized "
+        f"Waiting for secret {args.key} to be supplied in the UI and delivered "
         f"into this runtime...",
         file=sys.stderr,
     )
 
+    current = secret
     while True:
-        current = find_secret_descriptor(args.key)
-        has_value = isinstance(current, dict) and current.get("hasValue") is True
-        # Require BOTH: the registry holds a value AND it has landed in this runtime's
-        # env file. Only then is the secret usable by a subsequent command here.
-        if has_value and secret_present_in_runtime_env(args.key):
-            print(
-                f"Secret {args.key} is now materialized in this runtime. It will be "
-                f"present in the environment of your NEXT command; to use it in the "
-                f"current shell run: source ~/.homelab-runtime.env",
-                file=sys.stderr,
+        if not isinstance(current, dict):
+            fail(
+                f"Secret {args.key} is no longer available to this runtime: it was deleted, "
+                f"or it is scoped to other projects.",
+                SECRET_DECLINED_EXIT_CODE,
             )
-            print_json(current)
-            return
+        # A request stays pending until the user saves a (new) value or declines,
+        # even when an older value is already stored (rotation).
+        if current.get("pending") is not True:
+            if current.get("declinedAt"):
+                fail(
+                    f"The user declined the request for secret {args.key}. Any value stored "
+                    f"before stays unchanged. Ask the user how to proceed instead of retrying.",
+                    SECRET_DECLINED_EXIT_CODE,
+                )
+            if current.get("hasValue") is True and secret_delivered(current):
+                print(
+                    f"Secret {args.key} is now available in this runtime. Read it with "
+                    f"'homelab secret get {args.key}' (works in already-running processes); "
+                    f"new shells also get it as an environment variable.",
+                    file=sys.stderr,
+                )
+                print_json(current)
+                return
         if timeout_seconds is not None and time.monotonic() - poll_started_at >= timeout_seconds:
             fail(
                 f"Timed out waiting for secret {args.key}. Re-run with --timeout-seconds 0 to wait indefinitely.",
                 124,
             )
         time.sleep(args.poll_interval_seconds)
+        current = find_secret_descriptor(args.key)
 
 
 def cmd_bootstrap(_args):
@@ -893,6 +960,17 @@ def build_parser():
         help="How often to poll for fulfillment while waiting.",
     )
     secret_request_parser.set_defaults(func=cmd_secret_request)
+
+    secret_parser = subparsers.add_parser(
+        "secret", help="Read secrets delivered to this runtime."
+    )
+    secret_subparsers = secret_parser.add_subparsers(dest="secret_command", required=True)
+    secret_get_parser = secret_subparsers.add_parser(
+        "get",
+        help="Print a secret's current value from ~/.homelab/secrets (rotations included).",
+    )
+    secret_get_parser.add_argument("key", help="Secret env var name, for example API_KEY.")
+    secret_get_parser.set_defaults(func=cmd_secret_get)
 
     bootstrap_parser = subparsers.add_parser(
         "bootstrap",
