@@ -22,8 +22,10 @@ import {
   HomelabGraphSearchInput,
   HomelabObservationId,
   HomelabPromotionEnvelope,
+  HomelabSecretDeclineInput,
   HomelabSecretDeleteInput,
   HomelabSecretRequestInput,
+  HomelabSecretScopeInput,
   HomelabSecretUpsertInput,
   ProjectMemoryCreateInput,
   ProjectMemoryListInput,
@@ -55,7 +57,10 @@ import {
   isServerAuthCredentialError,
   isServerAuthInternalError,
 } from "../auth/EnvironmentAuth.ts";
-import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
+import {
+  HomelabSecretRegistry,
+  type HomelabSecretRegistryError,
+} from "./Services/HomelabSecretRegistry.ts";
 import { KnowledgeGraph, KnowledgeGraphError } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
@@ -367,123 +372,143 @@ export const homelabSnapshotRouteLayer = HttpRouter.add(
   ),
 );
 
+const respondToSecretRegistryError = (error: HomelabSecretRegistryError) =>
+  respondToHomelabHttpError(
+    new HomelabHttpError({
+      message: error.message,
+      status: error.reason === "invalid-input" ? 400 : error.reason === "not-found" ? 404 : 500,
+      cause: error.cause,
+    }),
+  );
+
+const secretBodyError =
+  (label: string) =>
+  <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.mapError(
+        (cause) =>
+          new HomelabHttpError({
+            message: `Invalid homelab secret ${label} payload: ${cause.message}`,
+            status: 400,
+            cause,
+          }),
+      ),
+    );
+
+const withSecretErrors = <A, R>(
+  effect: Effect.Effect<A, HomelabHttpError | HomelabSecretRegistryError, R>,
+) =>
+  effect.pipe(
+    Effect.catchTags({
+      HomelabSecretRegistryError: respondToSecretRegistryError,
+      HomelabHttpError: respondToHomelabHttpError,
+    }),
+  );
+
+// Runtime tokens only see the secrets their project's runtimes receive.
 export const homelabSecretsRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/secrets",
-  Effect.gen(function* () {
-    yield* authenticateHomelabRead;
-    const registry = yield* HomelabSecretRegistry;
-    const secrets = yield* registry.listSecrets();
-    return HttpServerResponse.jsonUnsafe({ secrets } satisfies HomelabSecretsListResult, {
-      status: 200,
-    });
-  }).pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      respondToHomelabHttpError(
-        new HomelabHttpError({
-          message: error.message,
-          status: 500,
-          cause: error.cause,
-        }),
-      ),
-    ),
-    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  withSecretErrors(
+    Effect.gen(function* () {
+      const session = yield* authenticateHomelabRead;
+      const caller = yield* resolveHomelabCallerScope(session);
+      const registry = yield* HomelabSecretRegistry;
+      const secrets = yield* registry.listSecrets(
+        caller.kind === "runtime" ? { projectId: caller.projectId } : undefined,
+      );
+      return HttpServerResponse.jsonUnsafe({ secrets } satisfies HomelabSecretsListResult, {
+        status: 200,
+      });
+    }),
   ),
 );
 
 export const homelabSecretRequestsRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets/request",
-  Effect.gen(function* () {
-    yield* authenticateHomelabOperate;
-    const registry = yield* HomelabSecretRegistry;
-    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretRequestInput).pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Invalid homelab secret request payload.",
-            status: 400,
-            cause,
-          }),
-      ),
-    );
-    const secret = yield* registry.requestSecret(input);
-    return HttpServerResponse.jsonUnsafe(secret, { status: 201 });
-  }).pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      respondToHomelabHttpError(
-        new HomelabHttpError({
-          message: error.message,
-          status: 500,
-          cause: error.cause,
-        }),
-      ),
-    ),
-    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  withSecretErrors(
+    Effect.gen(function* () {
+      const session = yield* authenticateHomelabOperate;
+      const caller = yield* resolveHomelabCallerScope(session);
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretRequestInput).pipe(
+        secretBodyError("request"),
+      );
+      // A runtime can only ask on behalf of the thread its token was minted for.
+      const threadId = caller.kind === "runtime" ? caller.threadId : input.threadId;
+      const secret = yield* registry.requestSecret({
+        key: input.key,
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.summary !== undefined ? { summary: input.summary } : {}),
+        ...(threadId !== undefined ? { threadId } : {}),
+      });
+      return HttpServerResponse.jsonUnsafe(secret, { status: 201 });
+    }),
+  ),
+);
+
+export const homelabSecretDeclineRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/secrets/decline",
+  withSecretErrors(
+    Effect.gen(function* () {
+      const session = yield* authenticateHomelabSecretsAdmin;
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretDeclineInput).pipe(
+        secretBodyError("decline"),
+      );
+      const secret = yield* registry.declineRequest(input, session.subject);
+      return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
+    }),
+  ),
+);
+
+export const homelabSecretScopeRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/secrets/scope",
+  withSecretErrors(
+    Effect.gen(function* () {
+      yield* authenticateHomelabSecretsAdmin;
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretScopeInput).pipe(
+        secretBodyError("scope"),
+      );
+      const secret = yield* registry.setScope(input);
+      return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
+    }),
   ),
 );
 
 export const homelabSecretUpsertRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets",
-  Effect.gen(function* () {
-    yield* authenticateHomelabSecretsAdmin;
-    const registry = yield* HomelabSecretRegistry;
-    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretUpsertInput).pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Invalid homelab secret payload.",
-            status: 400,
-            cause,
-          }),
-      ),
-    );
-    const secret = yield* registry.upsertSecret(input);
-    return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
-  }).pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      respondToHomelabHttpError(
-        new HomelabHttpError({
-          message: error.message,
-          status: 500,
-          cause: error.cause,
-        }),
-      ),
-    ),
-    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  withSecretErrors(
+    Effect.gen(function* () {
+      yield* authenticateHomelabSecretsAdmin;
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretUpsertInput).pipe(
+        secretBodyError("upsert"),
+      );
+      const secret = yield* registry.upsertSecret(input);
+      return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
+    }),
   ),
 );
 
 export const homelabSecretDeleteRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/secrets/delete",
-  Effect.gen(function* () {
-    yield* authenticateHomelabSecretsAdmin;
-    const registry = yield* HomelabSecretRegistry;
-    const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretDeleteInput).pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Invalid homelab secret delete payload.",
-            status: 400,
-            cause,
-          }),
-      ),
-    );
-    yield* registry.deleteSecret(input);
-    return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
-  }).pipe(
-    Effect.catchTag("HomelabSecretRegistryError", (error) =>
-      respondToHomelabHttpError(
-        new HomelabHttpError({
-          message: error.message,
-          status: 500,
-          cause: error.cause,
-        }),
-      ),
-    ),
-    Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
+  withSecretErrors(
+    Effect.gen(function* () {
+      yield* authenticateHomelabSecretsAdmin;
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretDeleteInput).pipe(
+        secretBodyError("delete"),
+      );
+      yield* registry.deleteSecret(input);
+      return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
+    }),
   ),
 );
 
@@ -1494,6 +1519,8 @@ export const homelabRoutesLayer = Layer.mergeAll(
   homelabRuntimeBootstrapRouteLayer,
   homelabSearchRouteLayer,
   homelabSecretRequestsRouteLayer,
+  homelabSecretDeclineRouteLayer,
+  homelabSecretScopeRouteLayer,
   homelabSecretDeleteRouteLayer,
   homelabSecretUpsertRouteLayer,
   homelabSkillsCreateRouteLayer,

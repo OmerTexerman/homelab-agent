@@ -111,6 +111,34 @@ SQLite only.
 5. Search tables (P5) use FTS5. `probeFts5` checks for it at startup, and Node
    24 has it.
 
+## Secrets (P6)
+
+Migration 300 adds three tables. Secret values stay in upstream's encrypted
+`ServerSecretStore`; only metadata is here.
+
+- `homelab_secrets`: `key` (primary key), `label`, `summary`,
+  `value_updated_at` (when the stored value last changed, the revision runtimes
+  record in their secrets manifest), `created_at`, `updated_at`.
+- `homelab_secret_scopes`: `(secret_key, project_id)`, the project allowlist.
+  No rows means global.
+- `homelab_secret_requests`: one row per key with an open (`pending`) or last
+  `declined` request: `requested_at`, `requested_by_thread_id`, `declined_at`,
+  `declined_by`. Saving a value deletes the row; a new request replaces it.
+
+`HomelabSecretRegistryLive` imports `homelab-secrets.json` once (legacy
+`requestedAt` becomes a pending request row, reserved key names are skipped
+with a warning). After that:
+
+- If the JSON file's sha256 no longer matches the import marker (a rolled-back
+  release wrote to it), SQLite stays authoritative and writable, the mismatch
+  is logged as an error, and the file is listed in `DegradedStateFiles`.
+  Secrets that release added are not picked up; re-enter them in Settings,
+  then move the JSON file aside to clear the warning.
+- If the file can't be read or decoded, the registry lists what SQLite has and
+  refuses writes, so a later successful import never has to merge.
+
+The JSON file is never written, moved, or deleted.
+
 ## Backups and smoke
 
 - `scripts/deploy/release.sh snapshot-db <out> [homelab-out]` writes

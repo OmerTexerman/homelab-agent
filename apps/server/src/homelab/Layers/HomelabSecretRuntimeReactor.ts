@@ -11,10 +11,13 @@ import {
 } from "../Services/HomelabSecretRuntimeReactor.ts";
 
 /**
- * Reacts to secret VALUE changes by re-materializing the injected env of every
- * runtime. Running containers pick up the refreshed `.homelab-runtime.env`
- * in place; stopped runtimes re-read it on next start, so an unconditional
- * sweep is correct and idempotent. Individual refresh failures are swallowed —
+ * Reacts to secret changes (a value set or removed, or a scope changed) by
+ * re-delivering secrets into every runtime. `refreshRuntimeEnvironment` runs
+ * RuntimeSecretDelivery's `writeRuntimeSecrets` for the runtime: its per-key
+ * files (read on demand, so running processes see a rotation), the scoped env
+ * shim, and the manifest a waiting `homelab secret-request` watches. Stopped
+ * runtimes get the same delivery on their next start, so an unconditional
+ * sweep is correct and idempotent. Individual refresh failures are swallowed:
  * a single unhealthy runtime must not block propagation to the rest.
  *
  * Change bursts (e.g. a curator provisioning several secrets in a row) are

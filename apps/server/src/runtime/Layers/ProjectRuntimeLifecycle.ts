@@ -90,6 +90,7 @@ const SNAPSHOT_MANIFEST_VERSION = 1;
 const SNAPSHOT_ROOT_NAMES = ["workspace", "home", "bin"] as const;
 const SNAPSHOT_EXCLUDED_RELATIVE_PATHS = [
   "home/.homelab-runtime.env",
+  "home/.homelab/secrets",
   "home/.homelab-runtime-token",
   "home/.codex",
   "home/.claude",

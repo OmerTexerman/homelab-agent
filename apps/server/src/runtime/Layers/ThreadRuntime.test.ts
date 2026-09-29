@@ -390,8 +390,17 @@ const runtimeLayerWithSecrets = it.layer(
         listSecrets: () => Effect.succeed([]),
         upsertSecret: () => Effect.die("unused"),
         requestSecret: () => Effect.die("unused"),
+        declineRequest: () => Effect.die("unused"),
+        setScope: () => Effect.die("unused"),
         deleteSecret: () => Effect.void,
-        materializeEnvironment: () => Effect.succeed(mutableRuntimeSecretEnv),
+        materializeSecrets: () =>
+          Effect.succeed(
+            Object.entries(mutableRuntimeSecretEnv).map(([key, value]) => ({
+              key,
+              value,
+              valueUpdatedAt: "2026-01-01T00:00:00.000Z",
+            })),
+          ),
         changes: Stream.empty,
       }),
     ),
