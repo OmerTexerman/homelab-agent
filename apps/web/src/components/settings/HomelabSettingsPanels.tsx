@@ -26,8 +26,8 @@ import { createModelSelection } from "@t3tools/shared/model";
 import * as Equal from "effect/Equal";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
-import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { describeHomelabError } from "../../homelab/homelabFetch";
+import { useScopeGate } from "../../homelab/useScopeGate";
 import { queryDisplayState } from "../../homelab/queryDisplayState";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -54,6 +54,7 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { ScopeRequiredNotice } from "../homelab/ScopeRequiredNotice";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
@@ -107,12 +108,12 @@ export function MemoryKnowledgeSettingsPanel() {
   const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
-  const sessionState = usePrimarySessionState();
-  // Launching/managing curator sessions needs homelab:curate (the scope curator
-  // runtimes carry and that gates the /curate/* routes). Gate the launcher UI on
-  // it too — optimistic while scopes load, to avoid a disabled-state flash.
-  const curateScopes = sessionState.data?.scopes;
-  const canCurate = curateScopes === undefined || curateScopes.includes(AuthHomelabCurateScope);
+  // Launching/managing curator sessions and reading the knowledge estate need
+  // homelab:curate (the scope curator runtimes carry and that gates the
+  // /curate/* routes). Nothing curator-shaped renders or fetches until the
+  // session proves the scope, so a device without it never fires silent 403s.
+  const curateGate = useScopeGate(AuthHomelabCurateScope);
+  const canCurate = curateGate === "granted";
   const { deleteThread } = useThreadActions();
   const dispatchCuratorCommand = useAtomCommand(dispatchHomelabOrchestrationCommand, {
     reportFailure: false,
@@ -263,19 +264,19 @@ export function MemoryKnowledgeSettingsPanel() {
   const homelabAllMemoryQuery = useQuery(
     homelabAllMemoryQueryOptions({
       environmentId: primaryEnvironmentId,
-      enabled: primaryEnvironmentId !== null,
+      enabled: primaryEnvironmentId !== null && canCurate,
     }),
   );
   const homelabAllSkillsQuery = useQuery(
     homelabAllSkillsQueryOptions({
       environmentId: primaryEnvironmentId,
-      enabled: primaryEnvironmentId !== null,
+      enabled: primaryEnvironmentId !== null && canCurate,
     }),
   );
   const homelabCuratorOverviewQuery = useQuery(
     homelabCuratorOverviewQueryOptions({
       environmentId: primaryEnvironmentId,
-      enabled: primaryEnvironmentId !== null,
+      enabled: primaryEnvironmentId !== null && canCurate,
     }),
   );
   const homelabSetupStatus = homelabSetupStatusQuery.data;
@@ -303,12 +304,9 @@ export function MemoryKnowledgeSettingsPanel() {
           title={HOMELAB_PRODUCT_COPY.curator.settingsCardTitle}
           description={HOMELAB_PRODUCT_COPY.curator.settingsCardDescription}
           control={
-            !canCurate ? (
-              <span className="text-2xs text-muted-foreground">
-                Requires the <span className="font-medium text-foreground">Curate knowledge</span>{" "}
-                permission on this device.
-              </span>
-            ) : (
+            curateGate === "loading" ? (
+              <span className="text-2xs text-muted-foreground">Checking permissions...</span>
+            ) : !canCurate ? null : (
               <div className="flex flex-wrap items-center justify-end gap-1.5">
                 <ProviderModelPicker
                   activeInstanceId={curatorModelSelection.instanceId}
@@ -407,6 +405,12 @@ export function MemoryKnowledgeSettingsPanel() {
                 {HOMELAB_PRODUCT_COPY.curator.autoCleanupNote}
               </div>
             </>
+          ) : curateGate === "denied" ? (
+            <ScopeRequiredNotice
+              scope={AuthHomelabCurateScope}
+              action="run or manage curator sessions"
+              className="mt-3"
+            />
           ) : null}
         </SettingsRow>
         <SettingsRow
@@ -420,31 +424,40 @@ export function MemoryKnowledgeSettingsPanel() {
               </span>
             ) : (
               <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-                {estateLoading || estateSnapshotState === "loading"
-                  ? "Loading"
-                  : estateSnapshot
-                    ? `Updated ${formatRelativeTimeLabel(estateSnapshot.updatedAt)}`
-                    : "Unavailable"}
+                {curateGate === "denied"
+                  ? "Unavailable"
+                  : estateLoading || curateGate === "loading" || estateSnapshotState === "loading"
+                    ? "Loading"
+                    : estateSnapshot
+                      ? `Updated ${formatRelativeTimeLabel(estateSnapshot.updatedAt)}`
+                      : "Unavailable"}
               </span>
             )
           }
         >
           <div className="mt-3 border-t border-border/60 pt-3">
-            <KnowledgeEstateBrowser
-              snapshot={
-                estateSnapshot ?? {
-                  entities: [],
-                  relations: [],
-                  observations: [],
-                  updatedAt: new Date(0).toISOString(),
+            {curateGate === "denied" ? (
+              <ScopeRequiredNotice
+                scope={AuthHomelabCurateScope}
+                action="browse the knowledge estate"
+              />
+            ) : (
+              <KnowledgeEstateBrowser
+                snapshot={
+                  estateSnapshot ?? {
+                    entities: [],
+                    relations: [],
+                    observations: [],
+                    updatedAt: new Date(0).toISOString(),
+                  }
                 }
-              }
-              memoryEntries={estateMemoryEntries}
-              skills={estateSkills}
-              staleEntityIds={homelabCuratorOverviewQuery.data?.staleEntityIds.map(String)}
-              projectNameById={projectNameById}
-              loading={estateLoading}
-            />
+                memoryEntries={estateMemoryEntries}
+                skills={estateSkills}
+                staleEntityIds={homelabCuratorOverviewQuery.data?.staleEntityIds.map(String)}
+                projectNameById={projectNameById}
+                loading={estateLoading || curateGate === "loading"}
+              />
+            )}
           </div>
         </SettingsRow>
         <SettingsRow
