@@ -484,8 +484,8 @@ export const make = Effect.gen(function* () {
       ORDER BY created_at, snapshot_id
     `.pipe(
       Effect.map((rows) =>
-        rows.map(
-          (row): RuntimeSnapshotRow => ({
+        rows.map((row) => {
+          const snapshot: RuntimeSnapshotRow = {
             id: row.id,
             runtimeId: RuntimeSessionId.make(row.runtimeId),
             projectId: ProjectIdSchema.make(row.projectId),
@@ -493,8 +493,9 @@ export const make = Effect.gen(function* () {
             kind: row.kind === "filesystem" ? "filesystem" : "metadata",
             note: row.note,
             createdAt: row.createdAt,
-          }),
-        ),
+          };
+          return snapshot;
+        }),
       ),
       Effect.mapError(toPersistenceSqlError("RuntimeRegistry.listSnapshots")),
     );
@@ -534,16 +535,17 @@ export const make = Effect.gen(function* () {
       FROM runtime_merges WHERE removed_at IS NULL ORDER BY merged_at
     `.pipe(
       Effect.map((rows) =>
-        rows.map(
-          (row): RuntimeMergeRow => ({
+        rows.map((row) => {
+          const merge: RuntimeMergeRow = {
             mergeId: row.mergeId,
             targetRuntimeId: RuntimeSessionId.make(row.targetRuntimeId),
             sourceThreadId: ThreadId.make(row.sourceThreadId),
             mergedPath: row.mergedPath,
             mergedAt: row.mergedAt,
             removedAt: null,
-          }),
-        ),
+          };
+          return merge;
+        }),
       ),
       Effect.mapError(toPersistenceSqlError("RuntimeRegistry.listActiveMerges")),
     );
@@ -773,8 +775,8 @@ function buildLegacyRuntimeImport(input: {
     }
   }
   const snapshots = input.lifecycle.flatMap((record) =>
-    record.snapshots.map(
-      (snapshot): RuntimeSnapshotRow => ({
+    record.snapshots.map((snapshot) => {
+      const row: RuntimeSnapshotRow = {
         id: snapshot.id,
         runtimeId: snapshot.runtimeId,
         projectId: snapshot.projectId,
@@ -782,8 +784,9 @@ function buildLegacyRuntimeImport(input: {
         kind: snapshot.kind,
         note: snapshot.note,
         createdAt: snapshot.createdAt,
-      }),
-    ),
+      };
+      return row;
+    }),
   );
   return { records, bindings, snapshots };
 }
