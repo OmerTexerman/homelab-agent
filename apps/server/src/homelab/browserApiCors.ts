@@ -18,7 +18,9 @@ import * as ServerConfig from "../config.ts";
 import { browserApiCorsLayer } from "../http.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "../httpCors.ts";
 
-export const isHomelabCorsOriginAllowed = (origin: string): boolean => origin.trim().length > 0;
+// The predicate also sees requests without an Origin header, despite its type.
+export const isHomelabCorsOriginAllowed = (origin: string | undefined): boolean =>
+  typeof origin === "string" && origin.trim().length > 0;
 
 export const isWebSocketUpgradeRequest = (request: {
   readonly method: string;
