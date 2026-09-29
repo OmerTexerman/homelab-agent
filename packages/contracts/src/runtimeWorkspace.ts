@@ -159,7 +159,7 @@ export const ProjectRuntimeMergeIsolatedResult = Schema.Struct({
 });
 export type ProjectRuntimeMergeIsolatedResult = typeof ProjectRuntimeMergeIsolatedResult.Type;
 
-export class ProjectRuntimeError extends Schema.TaggedErrorClass<ProjectRuntimeError>()(
+export class ProjectRuntimeError extends Schema.TaggedError<ProjectRuntimeError>()(
   "ProjectRuntimeError",
   {
     message: TrimmedNonEmptyString,

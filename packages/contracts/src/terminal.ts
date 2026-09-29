@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { RuntimeSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
@@ -99,6 +99,7 @@ export type TerminalSessionStatus = typeof TerminalSessionStatus.Type;
 
 export const TerminalSessionSnapshot = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   cwd: Schema.String.check(Schema.isNonEmpty()),
   worktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -155,6 +156,7 @@ export type TerminalMetadataStreamEvent = typeof TerminalMetadataStreamEvent.Typ
 
 const TerminalEventBaseSchema = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  runtimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   sequence: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });

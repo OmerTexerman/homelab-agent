@@ -7,12 +7,12 @@
  * @module ProjectionProjectRepository
  */
 import {
+  HomelabProjectRuntimeFields,
   IsoDateTime,
   ModelSelection,
   ProjectIconOverride,
   ProjectId,
   ProjectScript,
-  RuntimeSessionId,
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -26,7 +26,7 @@ export const ProjectionProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
   workspaceRoot: Schema.String,
-  defaultRuntimeId: Schema.optional(Schema.NullOr(RuntimeSessionId)),
+  ...HomelabProjectRuntimeFields,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   autoPull: Schema.Boolean,

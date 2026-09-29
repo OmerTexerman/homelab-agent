@@ -25,6 +25,13 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  HomelabProjectRuntimeFields,
+  HomelabThreadCreateFields,
+  HomelabThreadPlacementFields,
+  HomelabThreadRuntimeFields,
+  StandaloneThreadMoveMemoryMigration,
+} from "./orchestrationHomelab.ts";
+import {
   PullRequestActor,
   PullRequestChecksState,
   PullRequestMergeability,
@@ -543,6 +550,7 @@ export const OrchestrationProject = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  ...HomelabProjectRuntimeFields,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start. Null/absent means
   // "no override": clients fall back to t3.json, then the global setting.
@@ -793,6 +801,7 @@ export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  ...HomelabThreadRuntimeFields,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -869,6 +878,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  ...HomelabProjectRuntimeFields,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
@@ -884,6 +894,7 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  ...HomelabThreadRuntimeFields,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1088,6 +1099,7 @@ export const ProjectCreateCommand = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+  ...HomelabProjectRuntimeFields,
   // Retained for older clients that sent an automatic create-time seed. The
   // server ignores it; explicit project defaults use project.meta.update.
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
@@ -1121,6 +1133,7 @@ const ThreadCreateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  ...HomelabThreadCreateFields,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1132,6 +1145,66 @@ const ThreadCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
   historyImport: Schema.optional(Schema.Literal(true)),
 });
+
+// Homelab fork commands. They stay in this module (as one block) because they
+// need ModelSelection/RuntimeMode/ProviderInteractionMode from here; a fork file
+// importing them back would form an import cycle.
+const ThreadStandaloneCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ThreadCuratorCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.curator.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const ThreadStandalonePromoteToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.promote-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  // Durable Scratch memory follows the thread into its new project (the thread is
+  // leaving the standalone namespace entirely). Same shape/handling as move-to-project.
+  memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
+  createdAt: IsoDateTime,
+});
+
+const ThreadStandaloneMoveToProjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.standalone.move-to-project"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  memoryMigration: Schema.optional(StandaloneThreadMoveMemoryMigration),
+  // Runtime placement is derived server-side from target-project freshness
+  // (adopt vs join) — the client no longer specifies runtime handling.
+  createdAt: IsoDateTime,
+});
+
+const HomelabThreadCommands = [
+  ThreadStandaloneCreateCommand,
+  ThreadCuratorCreateCommand,
+  ThreadStandalonePromoteToProjectCommand,
+  ThreadStandaloneMoveToProjectCommand,
+] as const;
 
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
@@ -1291,6 +1364,7 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
+  ...HomelabThreadCreateFields,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1429,6 +1503,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ...HomelabThreadCommands,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1463,6 +1538,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ...HomelabThreadCommands,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1733,6 +1809,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  ...HomelabProjectRuntimeFields,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
@@ -1747,6 +1824,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  ...HomelabProjectRuntimeFields,
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
@@ -1758,12 +1836,14 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
 
 export const ProjectDeletedPayload = Schema.Struct({
   projectId: ProjectId,
+  ...HomelabProjectRuntimeFields,
   deletedAt: IsoDateTime,
 });
 
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  ...HomelabThreadRuntimeFields,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1778,6 +1858,7 @@ export const ThreadCreatedPayload = Schema.Struct({
 
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
+  ...HomelabThreadPlacementFields,
   deletedAt: IsoDateTime,
 });
 
@@ -1850,6 +1931,7 @@ export const ThreadAutoSettleSetPayload = Schema.Struct({
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
+  ...HomelabThreadPlacementFields,
   // Order updates use this existing event so older clients can ignore the
   // new field while continuing to decode the event stream.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
