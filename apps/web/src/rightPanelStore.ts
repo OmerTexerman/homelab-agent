@@ -26,6 +26,7 @@ const RIGHT_PANEL_KINDS = [
   "preview",
   "device",
   "terminal",
+  "memory",
   "pull-request",
   "pull-requests",
   "agents",
@@ -53,6 +54,8 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
+  /** Homelab: the thread's project memory browser. */
+  | { id: "memory"; kind: "memory" }
   | {
       id: `file:${string}` | `attachment:${string}`;
       kind: "file";
@@ -187,6 +190,8 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
+    case "memory":
+      return { id: "memory", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
     case "agents":
