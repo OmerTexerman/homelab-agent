@@ -81,7 +81,7 @@ const tokenOnlyFlag = Flag.Boolean("token-only").pipe(
   Flag.withDefault(false),
 );
 
-const adminFlag = Flag.boolean("admin").pipe(
+const adminFlag = Flag.Boolean("admin").pipe(
   Flag.withDescription(
     "Issue the token with administrative scopes (includes access:write) so the paired client can manage devices and sessions.",
   ),
