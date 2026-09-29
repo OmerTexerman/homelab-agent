@@ -3,6 +3,8 @@ import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtim
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageCheckIcon, PackageIcon, RefreshCwIcon } from "lucide-react";
 
+import { describeHomelabError } from "~/homelab/homelabFetch";
+import { queryDisplayState } from "~/homelab/queryDisplayState";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { providerCliEnvironment } from "~/state/homelabRuntime";
@@ -11,7 +13,8 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
-const QUERY_KEY = ["provider-cli-store"] as const;
+const providerCliStoreQueryKey = (environmentId: EnvironmentId | null) =>
+  ["provider-cli-store", environmentId] as const;
 
 async function runProviderCliCommand(
   command: (typeof providerCliEnvironment)["status"],
@@ -49,7 +52,7 @@ export function RuntimeCliUpdatesSection() {
   const queryClient = useQueryClient();
 
   const statusQuery = useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: providerCliStoreQueryKey(environmentId),
     queryFn: () => {
       if (environmentId === null) {
         throw new Error("No primary environment is connected.");
@@ -69,7 +72,7 @@ export function RuntimeCliUpdatesSection() {
       return runProviderCliCommand(providerCliEnvironment.apply, environmentId);
     },
     onSuccess: (status) => {
-      queryClient.setQueryData(QUERY_KEY, status);
+      queryClient.setQueryData(providerCliStoreQueryKey(environmentId), status);
       toastManager.add({
         type: "success",
         title: "Runtime CLIs updated",
@@ -83,14 +86,37 @@ export function RuntimeCliUpdatesSection() {
       toastManager.add({
         type: "error",
         title: "Runtime CLI update failed",
-        description: error instanceof Error ? error.message : "Unknown update error.",
+        description: describeHomelabError(error),
       });
     },
   });
 
+  // "empty" means this server has no shared CLI store, so there is nothing to manage.
+  const displayState = queryDisplayState(statusQuery, (data) => !data.available);
   const status = statusQuery.data;
-  if (!status || !status.available) {
+  if (environmentId === null || displayState === "empty") {
     return null;
+  }
+  if (displayState !== "ready" || !status) {
+    return (
+      <SettingsSection title="Runtime CLIs" icon={<PackageIcon className="size-4" />}>
+        <SettingsRow
+          title={displayState === "loading" ? "Checking runtime CLIs" : "Status unavailable"}
+          description={
+            displayState === "loading"
+              ? "Reading the shared provider CLI store..."
+              : `Could not read the provider CLI store. ${describeHomelabError(statusQuery.error)}`
+          }
+          control={
+            displayState === "error" ? (
+              <Button size="sm" variant="outline" onClick={() => void statusQuery.refetch()}>
+                Retry
+              </Button>
+            ) : null
+          }
+        />
+      </SettingsSection>
+    );
   }
 
   const rows = versionRows(status);
