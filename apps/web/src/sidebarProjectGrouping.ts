@@ -1,5 +1,4 @@
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
-import { STANDALONE_PROJECT_TITLE, isStandaloneProject } from "@t3tools/shared/standaloneProject";
 import { buildProjectGroups, type ProjectGroupingSettings } from "./logicalProject";
 import type { Project } from "./types";
 
@@ -8,13 +7,11 @@ export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
 export interface SidebarProjectGroupMember extends Project {
   physicalProjectKey: string;
   environmentLabel: string | null;
-  isStandalone: boolean;
 }
 
 export interface SidebarProjectSnapshot extends Project {
   projectKey: string;
   displayName: string;
-  isStandalone: boolean;
   groupedProjectCount: number;
   environmentPresence: EnvironmentPresence;
   // True iff every non-primary member of this group lives in a
@@ -89,10 +86,6 @@ export function buildSidebarProjectSnapshots(input: {
         ...project,
         physicalProjectKey,
         environmentLabel: input.resolveEnvironmentLabel(project.environmentId),
-        isStandalone: isStandaloneProject({
-          id: project.id,
-          workspaceRoot: project.workspaceRoot,
-        }),
       }),
     );
     const representative =
@@ -124,15 +117,10 @@ export function buildSidebarProjectSnapshots(input: {
     const allRemoteMembersAreWsl =
       remoteMembers.length > 0 && remoteMembers.every((member) => isWsl(member.environmentId));
 
-    const isStandalone = members.some((member) => member.isStandalone);
-
     return {
       ...representative,
       projectKey: group.key,
-      // Scratch/standalone groups always show the fixed title, never the
-      // upstream-derived group label (which would leak a real thread title).
-      displayName: isStandalone ? STANDALONE_PROJECT_TITLE : group.label,
-      isStandalone,
+      displayName: group.label,
       groupedProjectCount: members.length,
       environmentPresence:
         hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",

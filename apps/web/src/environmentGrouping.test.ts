@@ -14,12 +14,6 @@ import {
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
 } from "./sidebarProjectGrouping";
-import {
-  STANDALONE_PROJECT_ID,
-  STANDALONE_PROJECT_TITLE,
-  createStandaloneProjectWorkspaceRoot,
-} from "@t3tools/shared/standaloneProject";
-import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { orderItemsByPreferredIds } from "./components/Sidebar.logic";
 import { legacyProjectCwdPreferenceKey } from "./uiStateStore";
 import type { Project } from "./types";
@@ -462,58 +456,5 @@ describe("environment grouping", () => {
     });
 
     expect(groups.map((group) => group.displayName)).toEqual(["separate", "shared-repo"]);
-  });
-});
-
-describe("homelab fork grouping", () => {
-  it("ignores repository identity for logical homelab projects", () => {
-    const logicalProjectId = ProjectId.make("local-only-proj");
-    const project = makeProject({
-      id: logicalProjectId,
-      title: "logical-only",
-      workspaceRoot: createLogicalProjectWorkspaceRoot(logicalProjectId),
-      repositoryIdentity,
-    });
-
-    const key = deriveLogicalProjectKey(project);
-    expect(key).toContain(primaryEnvironmentId);
-    expect(key).toContain(logicalProjectId);
-    expect(key).not.toBe(repositoryIdentity.canonicalKey);
-  });
-
-  it("surfaces the hidden standalone project as a separate scratch group", () => {
-    const regularProjects = [
-      makeProject({ repositoryIdentity }),
-      makeProject({
-        id: ProjectId.make("local-only-proj"),
-        title: "local-only",
-        workspaceRoot: "/tmp/local-only",
-      }),
-      makeProject({
-        id: ProjectId.make("remote-only-proj"),
-        environmentId: remoteEnvironmentId,
-        title: "remote-only",
-        workspaceRoot: "/tmp/remote-only",
-      }),
-    ];
-    const standaloneProject = makeProject({
-      id: ProjectId.make(STANDALONE_PROJECT_ID),
-      title: "Internal Standalone Project",
-      workspaceRoot: createStandaloneProjectWorkspaceRoot(),
-    });
-
-    const snapshots = buildSidebarProjectSnapshots({
-      projects: [...regularProjects, standaloneProject],
-      settings: defaultGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: () => null,
-    });
-
-    const standalone = snapshots.find((snapshot) => snapshot.isStandalone);
-    expect(standalone).toBeDefined();
-    expect(standalone?.displayName).toBe(STANDALONE_PROJECT_TITLE);
-    expect(standalone?.memberProjects).toHaveLength(1);
-    expect(standalone?.memberProjects[0]?.isStandalone).toBe(true);
-    expect(snapshots.filter((snapshot) => !snapshot.isStandalone)).toHaveLength(3);
   });
 });

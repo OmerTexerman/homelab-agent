@@ -138,7 +138,7 @@ describe("project surfaces built from visible projects", () => {
     expect(entries.map((entry) => entry.targetProject.id).toSorted()).toEqual(
       [realProject.id, otherRealProject.id].toSorted(),
     );
-    expect(snapshots.some((snapshot) => snapshot.isStandalone)).toBe(false);
+    expect(snapshots.some((snapshot) => !isUserVisibleProject(snapshot))).toBe(false);
   });
 
   it("never picks a hidden namespace as the most recent landing project", () => {
