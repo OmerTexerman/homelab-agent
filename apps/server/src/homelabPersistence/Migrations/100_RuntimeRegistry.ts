@@ -3,7 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
  * The runtime registry (P4): one row per runtime container, plus the threads
- * bound to it, its snapshots, and the `merged/` folders merges created in it.
+ * bound to it and its snapshots.
  * Replaces `thread-runtimes.json` (one record per thread) and
  * `project-runtime-lifecycle.json` (a second per-runtime state machine).
  * See docs/internals/runtime-lifecycle.md.
@@ -69,16 +69,5 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE INDEX IF NOT EXISTS runtime_snapshots_runtime_idx
     ON runtime_snapshots (runtime_id, created_at)
-  `;
-
-  yield* sql`
-    CREATE TABLE IF NOT EXISTS runtime_merges (
-      merge_id TEXT PRIMARY KEY NOT NULL,
-      target_runtime_id TEXT NOT NULL,
-      source_thread_id TEXT NOT NULL,
-      merged_path TEXT NOT NULL,
-      merged_at TEXT NOT NULL,
-      removed_at TEXT
-    )
   `;
 });
