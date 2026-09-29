@@ -57,12 +57,21 @@ import {
   threadWorkspaceReadFileQueryOptions,
 } from "~/lib/threadWorkspaceReactQuery";
 import { cn } from "~/lib/utils";
+import { threadLocalMemoryThreadId } from "~/homelab/memoryScope";
+import { useDebouncedValue } from "~/state/queries";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { Textarea } from "./ui/textarea";
 import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
+import {
+  isWorkspaceEditorDirty,
+  workspaceEditorSaveRequest,
+  workspaceEditorValue,
+  workspaceSavedSnapshotAfterWrite,
+  type WorkspaceFileSnapshot,
+} from "./threadWorkspaceEditor.logic";
 import { toastManager } from "./ui/toast";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import {
@@ -104,6 +113,8 @@ const MEMORY_SEARCH_SCOPES = [
   readonly value: MemoryKnowledgeSearchScope;
   readonly label: string;
 }>;
+
+const MEMORY_SEARCH_DEBOUNCE_MS = 250;
 
 const PROMOTION_DRAFT_MODES = [
   "entity",
@@ -540,10 +551,13 @@ function PromotionField(props: { readonly label: string; readonly children: Reac
 export function ThreadProjectMemoryPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
+  /** The open thread; scratch and curator threads read only their own memory. */
+  readonly threadId?: ThreadId | null;
   readonly open: boolean;
   readonly onOpenSourcePath: (path: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const memoryThreadId = threadLocalMemoryThreadId(props.projectId, props.threadId);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [searchScope, setSearchScope] = useState<MemoryKnowledgeSearchScope>("project-memory");
   const [selectedMemoryId, setSelectedMemoryId] = useState<ProjectMemoryEntry["id"] | null>(null);
@@ -552,11 +566,13 @@ export function ThreadProjectMemoryPanel(props: {
   const [guidedPromotionDraft, setGuidedPromotionDraft] =
     useState<MemoryKnowledgePromotionDraft | null>(null);
   const [rawPromotionDraft, setRawPromotionDraft] = useState("");
-  const trimmedQuery = memoryQuery.trim();
+  // Search requests follow the settled text, not every keystroke.
+  const trimmedQuery = useDebouncedValue(memoryQuery.trim(), MEMORY_SEARCH_DEBOUNCE_MS);
   const listQuery = useQuery(
     homelabProjectMemoryQueryOptions({
       environmentId: props.environmentId,
       projectId: props.projectId,
+      threadId: memoryThreadId,
       enabled: props.open,
       limit: 100,
     }),
@@ -565,6 +581,7 @@ export function ThreadProjectMemoryPanel(props: {
     homelabProjectMemorySearchQueryOptions({
       environmentId: props.environmentId,
       projectId: props.projectId,
+      threadId: memoryThreadId,
       query: trimmedQuery,
       enabled: props.open && trimmedQuery.length > 0 && searchScope !== "global",
       includeTranscripts: searchScope === "transcripts",
@@ -1071,8 +1088,9 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<ThreadWorkspaceEntry["kind"] | null>(null);
-  const [editorValue, setEditorValue] = useState("");
-  const [savedValue, setSavedValue] = useState("");
+  // Both carry their file path; see threadWorkspaceEditor.logic.ts.
+  const [editorDraft, setEditorDraft] = useState<WorkspaceFileSnapshot | null>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState<WorkspaceFileSnapshot | null>(null);
   const [syncedFilePath, setSyncedFilePath] = useState<string | null>(null);
   const [treeInitialized, setTreeInitialized] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -1100,8 +1118,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   const clearSelectedFile = useCallback(() => {
     setSelectedPath(null);
     setSelectedKind(null);
-    setEditorValue("");
-    setSavedValue("");
+    setEditorDraft(null);
+    setSavedSnapshot(null);
     setSyncedFilePath(null);
   }, []);
 
@@ -1204,9 +1222,9 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     if (syncedFilePath === fileQuery.data.path) {
       return;
     }
-    const nextValue = fileQuery.data.contents ?? "";
-    setEditorValue(nextValue);
-    setSavedValue(nextValue);
+    const loaded = { path: fileQuery.data.path, contents: fileQuery.data.contents ?? "" };
+    setEditorDraft(loaded);
+    setSavedSnapshot(loaded);
     setSyncedFilePath(fileQuery.data.path);
   }, [fileQuery.data, selectedKind, selectedPath, syncedFilePath]);
 
@@ -1302,10 +1320,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
   );
 
   const saveMutation = useMutation({
-    mutationFn: async (contents: string) => {
-      if (!selectedPathRef.current) {
-        throw new Error("Select a file before saving.");
-      }
+    // The request carries the path and text captured at click time.
+    mutationFn: async (request: WorkspaceFileSnapshot) => {
       const result = await runAtomCommand(
         appAtomRegistry,
         threadWorkspaceEnvironment.writeFile,
@@ -1313,8 +1329,8 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           environmentId: props.environmentId,
           input: {
             threadId: props.threadId,
-            path: selectedPathRef.current,
-            contents,
+            path: request.path,
+            contents: request.contents,
           },
         },
         { reportFailure: false },
@@ -1324,16 +1340,16 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
       }
       return result.value;
     },
-    onSuccess: async () => {
-      setSavedValue(editorValue);
-      if (selectedPathRef.current) {
-        setSyncedFilePath(selectedPathRef.current);
+    onSuccess: async (_result, request) => {
+      setSavedSnapshot((current) => workspaceSavedSnapshotAfterWrite(current, request));
+      if (selectedPathRef.current === request.path) {
+        setSyncedFilePath(request.path);
       }
       await queryClient.invalidateQueries({ queryKey: threadWorkspaceQueryKeys.all });
       toastManager.add({
         type: "success",
         title: "Workspace file saved",
-        description: selectedPathRef.current ?? undefined,
+        description: request.path,
       });
     },
     onError: (error) => {
@@ -1345,7 +1361,10 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
     },
   });
 
-  const isDirty = selectedKind === "file" && editorValue !== savedValue;
+  const editorFilePath = selectedKind === "file" ? selectedPath : null;
+  const editorValue = workspaceEditorValue(editorDraft, savedSnapshot, editorFilePath);
+  const isDirty = isWorkspaceEditorDirty(editorDraft, savedSnapshot, editorFilePath);
+  const saveRequest = workspaceEditorSaveRequest(editorDraft, savedSnapshot, editorFilePath);
   const editorOpen =
     (embedded || panelMode === "files") && selectedKind === "file" && Boolean(selectedPath);
   const selectedFilePath = selectedPath ?? "";
@@ -1685,6 +1704,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
           <ThreadProjectMemoryPanel
             environmentId={props.environmentId}
             projectId={props.projectId}
+            threadId={props.threadId}
             open={props.open && panelMode === "memory"}
             onOpenSourcePath={(path) => {
               setPanelMode("files");
@@ -1769,7 +1789,11 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   value={editorValue}
                   path={selectedFilePath}
                   theme={props.resolvedTheme}
-                  onChange={setEditorValue}
+                  onChange={(contents) => {
+                    if (editorFilePath !== null) {
+                      setEditorDraft({ path: editorFilePath, contents });
+                    }
+                  }}
                 />
               )}
             </div>
@@ -1782,7 +1806,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   type="button"
                   variant="ghost"
                   size="xs"
-                  onClick={() => setEditorValue(savedValue)}
+                  onClick={() => setEditorDraft(savedSnapshot)}
                   disabled={!isDirty || saveMutation.isPending}
                 >
                   Revert
@@ -1790,8 +1814,14 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 <Button
                   type="button"
                   size="xs"
-                  onClick={() => saveMutation.mutate(editorValue)}
-                  disabled={!isDirty || saveMutation.isPending || selectedFileUnsupported}
+                  onClick={() => {
+                    if (saveRequest !== null) {
+                      saveMutation.mutate(saveRequest);
+                    }
+                  }}
+                  disabled={
+                    saveRequest === null || saveMutation.isPending || selectedFileUnsupported
+                  }
                 >
                   {saveMutation.isPending ? <LoaderIcon className="size-3.5 animate-spin" /> : null}
                   Save
