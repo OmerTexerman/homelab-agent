@@ -1,8 +1,10 @@
+import type { ProjectId } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { refreshActiveProjectContextViews } from "../ProjectMemoryContextViews.ts";
@@ -110,13 +112,23 @@ const make = Effect.gen(function* () {
       }
 
       if (Option.isSome(projectMemory)) {
-        // Memory is project-scoped: refresh only the affected project's running
-        // runtimes. Not debounced globally — coalescing across distinct projects
-        // would drop the per-project targeting; refreshActiveProjectContextViews
-        // is idempotent, so per-event is correct.
+        // Memory is project-scoped: refresh only the affected projects' running runtimes.
+        // Bursts are debounced like the other subtrees; the changed project ids are
+        // collected while the window is open so no project's refresh is dropped.
+        const pendingProjects = yield* Ref.make<ReadonlySet<ProjectId>>(new Set());
         yield* Effect.forkScoped(
           projectMemory.value.changes.pipe(
-            Stream.runForEach((event) => refreshActiveProjectContextViews(event.projectId)),
+            Stream.tap((event) =>
+              Ref.update(pendingProjects, (current) => new Set(current).add(event.projectId)),
+            ),
+            Stream.debounce(SWEEP_DEBOUNCE),
+            Stream.runForEach(() =>
+              Ref.getAndSet(pendingProjects, new Set()).pipe(
+                Effect.flatMap((projectIds) =>
+                  Effect.forEach(projectIds, refreshActiveProjectContextViews, { discard: true }),
+                ),
+              ),
+            ),
             Effect.catchCause((cause) =>
               Effect.logWarning("homelab.view-runtime-reactor.memory-failed", { cause }),
             ),
