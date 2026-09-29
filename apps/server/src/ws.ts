@@ -146,6 +146,8 @@ import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import { makeHomelabWsRpcHandlers } from "./homelab/wsRpcHandlers.ts";
+import { isLogicalWorkspaceRootError } from "./workspace/logicalWorkspaceRoot.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -224,6 +226,8 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
   readonly detail?: string;
 } {
   switch (error._tag) {
+    case "LogicalWorkspaceRootError":
+      return { failure: "logical_workspace_root", normalizedCwd: error.workspaceRoot };
     case "WorkspaceRootNotExistsError":
       return {
         failure: "workspace_root_not_found",
@@ -1872,6 +1876,8 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const homelabRpcHandlers = yield* makeHomelabWsRpcHandlers(observeRpcEffect);
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -2626,6 +2632,7 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        ...homelabRpcHandlers,
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -3123,6 +3130,11 @@ const makeWsRpcLayer = (
                     cwd: input.cwd,
                     relativePath: input.relativePath,
                     ...projectFileFailureContext(cause),
+                    // Homelab: explain logical project roots instead of a generic write failure.
+                    ...(cause._tag === "WorkspaceFileSystemOperationError" &&
+                    isLogicalWorkspaceRootError(cause.cause)
+                      ? { message: cause.cause.message }
+                      : {}),
                     cause,
                   }),
               ),
