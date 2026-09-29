@@ -377,6 +377,7 @@ import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./com
 import { ChatHeader } from "./chat/ChatHeader";
 import { useHomelabChatView } from "./chat/homelabChatView";
 import { withoutProviderInterruptionActivities } from "../homelabWorkLogFilters";
+import { homelabProjectDisplayTitle } from "../homelab/projectDisplayTitle";
 import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -9985,7 +9986,9 @@ export default function ChatView(props: ChatViewProps) {
                         <DraftHeroHeadline
                           draftId={draftId}
                           activeProjectRef={activeProjectRef}
-                          activeProjectTitle={activeProject?.title ?? null}
+                          activeProjectTitle={
+                            activeProject ? homelabProjectDisplayTitle(activeProject) : null
+                          }
                         />
                       </div>
                     </div>
