@@ -111,6 +111,20 @@ describe("deriveDecisionQueueReadModel", () => {
     expect(queue.pendingEntries).toHaveLength(0);
   });
 
+  it("does not surface a declined request again until an agent asks again", () => {
+    const declined = {
+      ...secret("NAS_TOKEN", false),
+      declinedAt: "2026-01-01T00:01:00.000Z",
+    };
+    const secretRequests = (secrets: ReadonlyArray<HomelabSecretDescriptor>) =>
+      deriveDecisionQueueReadModel({
+        secretRequests: { secrets, dismissedSecretKeys: new Set() },
+      }).pendingEntries;
+
+    expect(secretRequests([declined])).toHaveLength(0);
+    expect(secretRequests([{ ...declined, pending: true }])).toHaveLength(1);
+  });
+
   it("lets a provider user-input prompt block the plan follow-up prompt", () => {
     const queue = deriveDecisionQueueReadModel({
       pendingUserInputs: [userInput("input-1", "2026-01-01T00:00:10.000Z")],

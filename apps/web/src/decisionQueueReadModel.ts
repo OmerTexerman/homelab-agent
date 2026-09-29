@@ -177,8 +177,9 @@ export function deriveDecisionQueueReadModel(
   for (const secret of input.secretRequests?.secrets ?? []) {
     // Surface a request when the secret has no value OR an agent explicitly
     // requested a (new) value via `secret-request` — the latter is the rotation
-    // case, where a stale value is already stored (hasValue === true).
-    const awaitingValue = secret.pending || !secret.hasValue;
+    // case, where a stale value is already stored (hasValue === true). A
+    // declined request stays answered until an agent asks again.
+    const awaitingValue = secret.pending || (!secret.hasValue && secret.declinedAt === undefined);
     if (!awaitingValue || input.secretRequests?.dismissedSecretKeys?.has(secret.key)) {
       continue;
     }

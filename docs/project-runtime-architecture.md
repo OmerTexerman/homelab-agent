@@ -43,8 +43,9 @@ global homelab knowledge into a giant prompt file.
   diagnostics and advanced settings.
 - Default execution remains full-access. The safety model is monitoring,
   interruption, visible commands, queueing, and explicit lifecycle controls.
-- All registered homelab secrets are materialized into runtime environment
-  variables. Generated memory/transcript files expose secret placeholders and
+- Global homelab secrets, plus secrets scoped to the runtime's project, are
+  delivered into the runtime as per-key files and environment variables.
+  Generated memory/transcript files expose secret placeholders and
   references, not secret values.
 - Project-local memory is first class, searchable, auditable, and separate from
   global homelab knowledge.
@@ -350,13 +351,43 @@ ensure/start.
 
 The existing broker/injection model remains the right boundary.
 
-Secret metadata and placeholders are durable and searchable. Secret values live
-in the secret store and are materialized into the runtime environment. Project
-runtime `.homelab` files and generated indexes must never include secret values.
+Secret metadata and placeholders are durable and searchable. Secret metadata
+lives in `homelab.sqlite` (see `docs/internals/homelab-storage.md`); values live
+encrypted in the server secret store. Project runtime `.homelab` files and
+generated indexes must never include secret values.
 
-For V1, all registered homelab secrets are injected into each project runtime.
-The control surface is user monitoring, stop/interruption, and provider/runtime
-permission controls where enabled, not per-project secret allowlists.
+Scope: a secret has an optional project allowlist. An empty allowlist means
+global (every runtime, including scratch and curator sessions); otherwise only
+runtimes of the listed projects receive it. Scratch and curator runtimes only
+ever get global secrets.
+
+Delivery (`apps/server/src/runtime/RuntimeSecretDelivery.ts`), on runtime start
+and whenever a value or scope changes (the secret runtime reactor sweeps every
+runtime):
+
+- `~/.homelab/secrets/<KEY>`: one read-only file per secret (0400, directory
+  0700), replaced atomically. `homelab secret get KEY` reads it, so a rotated
+  value reaches processes that were already running. Keys the runtime no
+  longer receives are removed.
+- `~/.homelab-runtime.env`: the compatibility shim every shell sources. It
+  holds the runtime's control env plus only its in-scope secrets, written
+  atomically with mode 0600 from creation. An env variable keeps the value its
+  process started with.
+- `~/.homelab/secrets/.manifest.json`: each delivered key's `valueUpdatedAt`,
+  written last. `homelab secret-request` waits until the request is no longer
+  pending and the manifest shows the new revision, so a rotation never returns
+  the old value.
+
+Requests: `secret-request` records the asking thread and marks the secret
+pending, even when a value exists (rotation). The user fulfills it by saving a
+value, or declines it; decline clears pending, records who declined, keeps any
+stored value, and makes the waiting CLI exit with "declined". Secret names the
+runtime depends on (`PATH`, `HOME`, `LD_*`, `HOMELAB_AGENT_*`, `T3CODE_*`,
+`BASH_ENV`, and similar) are rejected by the contract and the server.
+
+Provider auth: at start, host credential files are copied into the runtime home
+only when the runtime copy is missing or the host copy is newer (by mtime), so
+a login done inside the runtime survives until the host logs in again.
 
 ## Lifecycle
 
@@ -407,6 +438,7 @@ workspace state:
 The excluded known-sensitive paths are:
 
 - `home/.homelab-runtime.env`
+- `home/.homelab/secrets`
 - `home/.homelab-runtime-token`
 - `home/.codex`
 - `home/.claude`

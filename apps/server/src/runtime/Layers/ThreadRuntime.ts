@@ -40,7 +40,6 @@ import { ServerConfig } from "../../config.ts";
 import { layer as ProcessRunnerLayerLive } from "../../processRunner.ts";
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from "../hostProcessRunner.ts";
 import { layer as ServerSettingsLive, ServerSettingsService } from "../../serverSettings.ts";
-import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { RuntimeBootstrapRegistryLive } from "./RuntimeBootstrapRegistry.ts";
 import { RuntimeBootstrapResolver } from "../Services/RuntimeBootstrapResolver.ts";
 import { ProviderCliStore, ProviderCliStoreLive } from "../ProviderCliStore.ts";
@@ -65,12 +64,9 @@ import {
   buildThreadRuntimeDescriptor,
   OPENCODE_MANAGED_SERVER_CONTAINER_PORT,
   type DockerMountSpec,
-  renderSecretEnvFile,
-  type RuntimeAuthSyncEntry,
   runtimeAccessTokenPath,
   runtimeHomelabBinPath,
   runtimeStorageIdFor,
-  runtimeSecretEnvPath,
   type RuntimeHostBindings,
   toExecutionContext,
   toLaunchContext,
@@ -89,6 +85,12 @@ import {
 // actions already do.
 import { TerminalManager } from "../../terminal/Manager.ts";
 import { renderHomelabCliScript, renderHomelabSecretToFileScript } from "../homelabCliScripts.ts";
+import {
+  resolveRuntimeSecrets,
+  runtimeSecretEnv,
+  syncProviderAuthIfNewer,
+  writeRuntimeSecrets,
+} from "../RuntimeSecretDelivery.ts";
 import {
   RUNTIME_AGENTS_FILENAME,
   RUNTIME_CLAUDE_FILENAME,
@@ -373,34 +375,6 @@ function parseCurrentContainerNetwork(
 function parseDurationMs(value: string | undefined, fallback: number): number {
   const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function copyPathSync(sourcePath: string, targetPath: string): void {
-  const stat = NodeFS.statSync(sourcePath);
-  NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true });
-
-  if (stat.isDirectory()) {
-    NodeFS.cpSync(sourcePath, targetPath, { recursive: true, force: true });
-    return;
-  }
-
-  NodeFS.copyFileSync(sourcePath, targetPath);
-}
-
-function syncRuntimeAuthEntry(entry: RuntimeAuthSyncEntry): void {
-  if (!NodeFS.existsSync(entry.sourcePath)) {
-    return;
-  }
-
-  if (entry.mode === "if-missing" && NodeFS.existsSync(entry.targetPath)) {
-    return;
-  }
-
-  if (entry.mode === "overwrite") {
-    NodeFS.rmSync(entry.targetPath, { recursive: true, force: true });
-  }
-
-  copyPathSync(entry.sourcePath, entry.targetPath);
 }
 
 function upsertRuntimeDescriptor(
@@ -1101,7 +1075,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       yield* Effect.try({
         try: () => {
           for (const entry of syncEntries) {
-            syncRuntimeAuthEntry(entry);
+            syncProviderAuthIfNewer(entry);
           }
         },
         catch: (cause) =>
@@ -1116,25 +1090,20 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const syncRuntimeControlEnvIntoRuntimeHome = Effect.fn(
     "threadRuntime.syncRuntimeControlEnvIntoRuntimeHome",
   )(function* (runtime: ThreadRuntimeDescriptor) {
-    const homelabSecretRegistry = yield* Effect.serviceOption(HomelabSecretRegistry);
-    const secretEnv =
-      homelabSecretRegistry._tag === "Some"
-        ? yield* homelabSecretRegistry.value.materializeEnvironment().pipe(
-            Effect.mapError(
-              (cause) =>
-                new ThreadRuntimeError({
-                  message: `Failed to materialize homelab secrets for runtime '${runtime.threadId}'.`,
-                  cause,
-                }),
-            ),
-          )
-        : {};
+    const runtimeSecrets = yield* resolveRuntimeSecrets(runtime).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ThreadRuntimeError({
+            message: `Failed to materialize homelab secrets for runtime '${runtime.threadId}'.`,
+            cause,
+          }),
+      ),
+    );
     const runtimeAccessToken = yield* resolveRuntimeAccessToken(runtime);
     const runtimeHomePath = homePathForThread(threadRuntimesDir, runtimeStorageIdFor(runtime));
-    const secretEnvPath = runtimeSecretEnvPath(runtimeHomePath);
     const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const controlEnv = buildRuntimeControlEnvironment({
-      secretEnv,
+      secretEnv: runtimeSecretEnv(runtimeSecrets),
       serverUrl: runtimeNetworkPlan.serverUrl,
       threadId: runtime.threadId,
       scope:
@@ -1146,8 +1115,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ...(runtimeAccessToken ? { runtimeAccessToken } : {}),
     });
 
-    yield* fileSystem.writeFileString(secretEnvPath, renderSecretEnvFile(controlEnv)).pipe(
-      Effect.tap(() => fileSystem.chmod(secretEnvPath, 0o600)),
+    yield* writeRuntimeSecrets({ runtimeHomePath, secrets: runtimeSecrets, env: controlEnv }).pipe(
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1239,6 +1207,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   // reissued per runtime, and provider auth/state is synced from the host on every start.
   const SEED_EXCLUDED_HOME_RELATIVE_PATHS = [
     ".homelab-runtime.env",
+    ".homelab/secrets",
     ".homelab-runtime-token",
     ".codex",
     ".claude",

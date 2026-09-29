@@ -1,114 +1,122 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
+/**
+ * Secret registry: metadata in homelab.sqlite (`homelab_secrets`, scopes and
+ * requests), values encrypted in upstream's ServerSecretStore.
+ *
+ * The legacy `homelab-secrets.json` is imported once and never written. If it
+ * later differs from the imported copy (a rolled-back release wrote to it),
+ * SQLite stays authoritative and the file is reported through
+ * `DegradedStateFiles`. If it can't be imported at all, the registry refuses
+ * writes, so nothing lands in SQLite that a later successful import would
+ * have to merge with.
+ */
+import * as NodeCrypto from "node:crypto";
+
 import {
+  type HomelabSecretDeclineInput,
   type HomelabSecretDeleteInput,
-  HomelabEntityId,
   type HomelabSecretDescriptor,
-  HomelabSecretKey,
   type HomelabSecretRequestInput,
+  type HomelabSecretScopeInput,
   type HomelabSecretUpsertInput,
+  HomelabEntityId,
   IsoDateTime,
+  ProjectId,
+  reservedHomelabSecretKeyReason,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Path, PubSub, Ref, Schema, Stream } from "effect";
+import {
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  PubSub,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  type JsonStateFileDegradedError,
-  type JsonStateFileWriteError,
-  loadJsonStateFile,
-} from "../../jsonStateFile.ts";
+import { HomelabSql, withHomelabTransaction } from "../../homelabPersistence/HomelabSql.ts";
+import { importJsonOnce } from "../../homelabPersistence/JsonImport.ts";
+import { DegradedStateFiles } from "../../jsonStateFile.ts";
 import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import {
   HomelabSecretRegistry,
   HomelabSecretRegistryError,
   type HomelabSecretChangeEvent,
   type HomelabSecretRegistryShape,
+  type MaterializedHomelabSecret,
 } from "../Services/HomelabSecretRegistry.ts";
 
-const PersistedHomelabSecretMetadata = Schema.Struct({
-  key: HomelabSecretKey,
+export const HOMELAB_SECRETS_JSON_SOURCE = "homelab-secrets.json";
+
+// The legacy file's shape. Keys are only pattern-checked so one reserved key
+// (which the current contract rejects) can't fail the whole import.
+const LegacySecretMetadata = Schema.Struct({
+  key: Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/)),
   label: Schema.optional(TrimmedNonEmptyString),
   summary: Schema.optional(TrimmedNonEmptyString),
-  // Set by requestSecret (a value is wanted), cleared by upsertSecret (value
-  // supplied). Optional so pre-existing persisted state decodes unchanged.
   requestedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-type PersistedHomelabSecretMetadata = typeof PersistedHomelabSecretMetadata.Type;
-
-const PersistedHomelabSecretState = Schema.Struct({
+const LegacySecretState = Schema.Struct({
   version: Schema.Literal(1),
-  secrets: Schema.Array(PersistedHomelabSecretMetadata),
+  secrets: Schema.Array(LegacySecretMetadata),
 });
-type PersistedHomelabSecretState = typeof PersistedHomelabSecretState.Type;
 
-const decodePersistedHomelabSecretState = Schema.decodeUnknownEffect(PersistedHomelabSecretState);
+interface SecretRow {
+  readonly key: string;
+  readonly label: string | null;
+  readonly summary: string | null;
+  readonly valueUpdatedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
 
-function toRegistryError(message: string, cause?: unknown): HomelabSecretRegistryError {
+interface RequestRow {
+  readonly secretKey: string;
+  readonly status: "pending" | "declined";
+  readonly requestedAt: string;
+  readonly requestedByThreadId: string | null;
+  readonly declinedAt: string | null;
+  readonly declinedBy: string | null;
+}
+
+interface SecretRecord extends SecretRow {
+  readonly projectIds: ReadonlyArray<string>;
+  readonly request: RequestRow | undefined;
+}
+
+function registryError(
+  message: string,
+  options?: { readonly reason?: "invalid-input" | "not-found"; readonly cause?: unknown },
+): HomelabSecretRegistryError {
   return new HomelabSecretRegistryError({
     message,
-    ...(cause !== undefined ? { cause } : {}),
+    ...(options?.reason !== undefined ? { reason: options.reason } : {}),
+    ...(options?.cause !== undefined ? { cause: options.cause } : {}),
   });
 }
 
-function upsertSecretMetadata(
-  secrets: ReadonlyArray<PersistedHomelabSecretMetadata>,
-  nextSecret: PersistedHomelabSecretMetadata,
-): ReadonlyArray<PersistedHomelabSecretMetadata> {
-  const existingIndex = secrets.findIndex((secret) => secret.key === nextSecret.key);
-  if (existingIndex === -1) {
-    return [...secrets, nextSecret];
-  }
+const sqlFailure = (operation: string) => (cause: unknown) =>
+  registryError(`Failed to ${operation} homelab secret metadata.`, { cause });
 
-  const nextSecrets = secrets.slice();
-  nextSecrets[existingIndex] = nextSecret;
-  return nextSecrets;
-}
+const rejectReservedKey = (key: string) => {
+  const reason = reservedHomelabSecretKeyReason(key);
+  return reason === undefined
+    ? Effect.void
+    : Effect.fail(registryError(reason, { reason: "invalid-input" }));
+};
 
 function placeholderForSecret(key: string): string {
   return `$${key}`;
-}
-
-function mergeOptionalSecretFields<
-  T extends {
-    readonly label?: string | undefined;
-    readonly summary?: string | undefined;
-  },
->(
-  existing: PersistedHomelabSecretMetadata | undefined,
-  input: T,
-): Pick<PersistedHomelabSecretMetadata, "label" | "summary"> {
-  return {
-    ...(input.label !== undefined
-      ? { label: input.label }
-      : existing?.label !== undefined
-        ? { label: existing.label }
-        : {}),
-    ...(input.summary !== undefined
-      ? { summary: input.summary }
-      : existing?.summary !== undefined
-        ? { summary: existing.summary }
-        : {}),
-  };
-}
-
-function toDescriptor(
-  secret: PersistedHomelabSecretMetadata,
-  hasValue: boolean,
-): HomelabSecretDescriptor {
-  return {
-    key: secret.key,
-    placeholder: placeholderForSecret(secret.key),
-    ...(secret.label !== undefined ? { label: secret.label } : {}),
-    ...(secret.summary !== undefined ? { summary: secret.summary } : {}),
-    hasValue,
-    pending: secret.requestedAt !== undefined,
-    createdAt: secret.createdAt,
-    updatedAt: secret.updatedAt,
-  };
 }
 
 function secretStoreKey(key: string): string {
@@ -119,44 +127,245 @@ function knowledgeGraphEntityId(key: string) {
   return HomelabEntityId.make(`secret:${key}`);
 }
 
+/** Global (no scope rows) or scoped to `projectId`. */
+function reachesProject(record: SecretRecord, projectId: string | null): boolean {
+  return (
+    record.projectIds.length === 0 || (projectId !== null && record.projectIds.includes(projectId))
+  );
+}
+
+function toDescriptor(record: SecretRecord, hasValue: boolean): HomelabSecretDescriptor {
+  const request = record.request;
+  return {
+    key: record.key,
+    placeholder: placeholderForSecret(record.key),
+    ...(record.label !== null ? { label: record.label } : {}),
+    ...(record.summary !== null ? { summary: record.summary } : {}),
+    hasValue,
+    pending: request?.status === "pending",
+    projectIds: record.projectIds.map((projectId) => ProjectId.make(projectId)),
+    ...(hasValue && record.valueUpdatedAt !== null
+      ? { valueUpdatedAt: record.valueUpdatedAt }
+      : {}),
+    ...(request !== undefined ? { requestedAt: request.requestedAt } : {}),
+    ...(request?.requestedByThreadId
+      ? { requestedByThreadId: ThreadId.make(request.requestedByThreadId) }
+      : {}),
+    ...(request?.declinedAt ? { declinedAt: request.declinedAt } : {}),
+    ...(request?.declinedBy ? { declinedBy: request.declinedBy } : {}),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
 const makeHomelabSecretRegistry = Effect.gen(function* () {
   const { stateDir } = yield* ServerConfig;
   const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const sql = yield* HomelabSql;
   const secretStore = yield* ServerSecretStore;
+  const degradedFiles = yield* DegradedStateFiles;
   const writeSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* PubSub.unbounded<HomelabSecretChangeEvent>();
   const publishChange = (event: HomelabSecretChangeEvent) =>
     PubSub.publish(changesPubSub, event).pipe(Effect.asVoid);
-  const statePath = path.join(stateDir, "homelab-secrets.json");
+  const legacyPath = path.join(stateDir, HOMELAB_SECRETS_JSON_SOURCE);
+  const inTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    withHomelabTransaction(effect).pipe(Effect.provideService(HomelabSql, sql));
 
-  // A degraded registry (unloadable file) lists no secrets but refuses writes,
-  // so it can never persist empty metadata over the real file.
-  const stateFile = yield* loadJsonStateFile({
-    storeName: "Homelab secret registry",
-    filePath: statePath,
-    decode: decodePersistedHomelabSecretState,
-  });
-  const toWriteError = (
-    cause: JsonStateFileDegradedError | JsonStateFileWriteError,
-  ): HomelabSecretRegistryError =>
-    toRegistryError(
-      cause._tag === "JsonStateFileDegradedError"
-        ? cause.message
-        : "Failed to persist homelab secret metadata.",
-      cause,
+  const readValue = (key: string) =>
+    secretStore.get(secretStoreKey(key)).pipe(
+      Effect.map(Option.map((bytes) => Buffer.from(bytes).toString("utf8"))),
+      Effect.mapError((cause) =>
+        registryError(`Failed to read stored value for secret '${key}'.`, { cause }),
+      ),
     );
-  const ensureWritable = stateFile.ensureWritable.pipe(Effect.mapError(toWriteError));
+  const hasValue = (key: string) => readValue(key).pipe(Effect.map(Option.isSome));
 
-  const persistState = (secrets: ReadonlyArray<PersistedHomelabSecretMetadata>) => {
-    const persistedState: PersistedHomelabSecretState = { version: 1, secrets: [...secrets] };
-    return stateFile.writeJson(persistedState).pipe(Effect.mapError(toWriteError));
-  };
+  // --- SQL ------------------------------------------------------------------
+
+  const loadRecords = (keys?: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      // The table is small (one row per secret), so filter in memory.
+      const allRows = yield* sql<SecretRow>`
+        SELECT key, label, summary, value_updated_at AS "valueUpdatedAt",
+          created_at AS "createdAt", updated_at AS "updatedAt"
+        FROM homelab_secrets
+        ORDER BY key
+      `;
+      const rows = keys === undefined ? allRows : allRows.filter((row) => keys.includes(row.key));
+      const scopes = yield* sql<{ readonly secretKey: string; readonly projectId: string }>`
+        SELECT secret_key AS "secretKey", project_id AS "projectId"
+        FROM homelab_secret_scopes ORDER BY project_id
+      `;
+      const requests = yield* sql<RequestRow>`
+        SELECT secret_key AS "secretKey", status, requested_at AS "requestedAt",
+          requested_by_thread_id AS "requestedByThreadId", declined_at AS "declinedAt",
+          declined_by AS "declinedBy"
+        FROM homelab_secret_requests
+      `;
+      const requestByKey = new Map(requests.map((request) => [request.secretKey, request]));
+      const records: ReadonlyArray<SecretRecord> = rows.map((row) => ({
+        ...row,
+        projectIds: scopes
+          .filter((scope) => scope.secretKey === row.key)
+          .map((scope) => scope.projectId),
+        request: requestByKey.get(row.key),
+      }));
+      return records;
+    }).pipe(Effect.mapError(sqlFailure("read")));
+
+  const loadRecord = (key: string) =>
+    loadRecords([key]).pipe(Effect.map((records) => Option.fromNullishOr(records[0])));
+
+  const requireRecord = (key: string) =>
+    loadRecord(key).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(registryError(`Secret '${key}' does not exist.`, { reason: "not-found" })),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+
+  const upsertRow = (row: SecretRow) =>
+    sql`
+      INSERT INTO homelab_secrets (key, label, summary, value_updated_at, created_at, updated_at)
+      VALUES (${row.key}, ${row.label}, ${row.summary}, ${row.valueUpdatedAt},
+        ${row.createdAt}, ${row.updatedAt})
+      ON CONFLICT (key) DO UPDATE SET
+        label = excluded.label,
+        summary = excluded.summary,
+        value_updated_at = excluded.value_updated_at,
+        updated_at = excluded.updated_at
+    `;
+
+  const replaceScopes = (key: string, projectIds: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      yield* sql`DELETE FROM homelab_secret_scopes WHERE secret_key = ${key}`;
+      for (const projectId of new Set(projectIds)) {
+        yield* sql`
+          INSERT INTO homelab_secret_scopes (secret_key, project_id) VALUES (${key}, ${projectId})
+        `;
+      }
+    });
+
+  const upsertRequest = (request: RequestRow) =>
+    sql`
+      INSERT INTO homelab_secret_requests
+        (secret_key, status, requested_at, requested_by_thread_id, declined_at, declined_by)
+      VALUES (${request.secretKey}, ${request.status}, ${request.requestedAt},
+        ${request.requestedByThreadId}, ${request.declinedAt}, ${request.declinedBy})
+      ON CONFLICT (secret_key) DO UPDATE SET
+        status = excluded.status,
+        requested_at = excluded.requested_at,
+        requested_by_thread_id = excluded.requested_by_thread_id,
+        declined_at = excluded.declined_at,
+        declined_by = excluded.declined_by
+    `;
+
+  // --- Legacy JSON import ---------------------------------------------------
+
+  const markDegraded = (reason: string) =>
+    Ref.update(degradedFiles, (current) =>
+      new Map(current).set(legacyPath, {
+        storeName: "Homelab secret registry",
+        path: legacyPath,
+        corruptPaths: [],
+        reason,
+        detectedAt: new Date().toISOString(),
+      }),
+    );
+
+  const importLegacy = importJsonOnce({
+    source: HOMELAB_SECRETS_JSON_SOURCE,
+    path: legacyPath,
+    decode: LegacySecretState,
+    apply: (state) =>
+      Effect.gen(function* () {
+        let rows = 0;
+        for (const secret of state.secrets) {
+          const reserved = reservedHomelabSecretKeyReason(secret.key);
+          if (reserved !== undefined) {
+            yield* Effect.logWarning("skipping reserved secret name in homelab-secrets.json", {
+              key: secret.key,
+              reason: reserved,
+            });
+            continue;
+          }
+          const stored = yield* hasValue(secret.key);
+          yield* upsertRow({
+            key: secret.key,
+            label: secret.label ?? null,
+            summary: secret.summary ?? null,
+            valueUpdatedAt: stored ? secret.updatedAt : null,
+            createdAt: secret.createdAt,
+            updatedAt: secret.updatedAt,
+          });
+          if (secret.requestedAt !== undefined) {
+            yield* upsertRequest({
+              secretKey: secret.key,
+              status: "pending",
+              requestedAt: secret.requestedAt,
+              requestedByThreadId: null,
+              declinedAt: null,
+              declinedBy: null,
+            });
+          }
+          rows += 1;
+        }
+        return rows;
+      }),
+  }).pipe(Effect.provideService(HomelabSql, sql));
+
+  const importResult = yield* importLegacy.pipe(
+    Effect.map((result) => ({ ok: true as const, result })),
+    Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
+  );
+
+  let writesRefusedReason: string | undefined;
+  if (!importResult.ok) {
+    writesRefusedReason = `Homelab secret registry is degraded: ${legacyPath} could not be imported (${importResult.error.message}); writes are refused. Fix or remove the file and restart the server.`;
+    yield* Effect.logError("homelab secret metadata import failed; registry is read-only", {
+      path: legacyPath,
+      error: importResult.error,
+    });
+    yield* markDegraded("import failed; writes are refused");
+  } else if (importResult.result.status === "already-imported") {
+    const exists = yield* fileSystem.exists(legacyPath).pipe(Effect.orElseSucceed(() => false));
+    if (exists) {
+      const [marker] = yield* sql<{ readonly sha: string }>`
+        SELECT source_sha256 AS "sha" FROM homelab_imports
+        WHERE source = ${HOMELAB_SECRETS_JSON_SOURCE}
+      `.pipe(Effect.orElseSucceed(() => []));
+      const bytes = yield* fileSystem.readFile(legacyPath).pipe(Effect.option);
+      const currentSha = Option.map(bytes, (value) =>
+        NodeCrypto.createHash("sha256").update(value).digest("hex"),
+      );
+      if (marker !== undefined && Option.isSome(currentSha) && currentSha.value !== marker.sha) {
+        yield* Effect.logError(
+          "homelab-secrets.json changed after it was imported into homelab.sqlite. An older release probably wrote to it after a rollback. homelab.sqlite stays authoritative; secrets added or changed by that release are not shown. Re-enter them in Settings, then move the JSON file aside to clear this warning.",
+          { path: legacyPath, importedSha256: marker.sha, currentSha256: currentSha.value },
+        );
+        yield* markDegraded(
+          "changed after import into homelab.sqlite; homelab.sqlite is authoritative",
+        );
+      }
+    }
+  }
+
+  const ensureWritable =
+    writesRefusedReason === undefined
+      ? Effect.void
+      : Effect.fail(registryError(writesRefusedReason));
+
+  // --- Knowledge graph mirror -----------------------------------------------
 
   const maybeSyncKnowledgeGraph = Effect.fn("homelabSecretRegistry.maybeSyncKnowledgeGraph")(
-    function* (
-      secret: PersistedHomelabSecretMetadata,
-      options?: { readonly deprecated?: boolean },
-    ) {
+    function* (record: SecretRow, options?: { readonly deprecated?: boolean }) {
       const knowledgeGraph = yield* Effect.serviceOption(KnowledgeGraph);
       if (knowledgeGraph._tag === "None") {
         return;
@@ -164,24 +373,24 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
 
       yield* knowledgeGraph.value
         .upsertEntity({
-          id: knowledgeGraphEntityId(secret.key),
+          id: knowledgeGraphEntityId(record.key),
           kind: "secret_ref",
-          name: secret.key,
-          title: secret.label,
-          summary: secret.summary,
+          name: record.key,
+          title: record.label ?? undefined,
+          summary: record.summary ?? undefined,
           status: options?.deprecated ? "deprecated" : "active",
           tags: ["secret", "runtime-env"],
           properties: {
-            envKey: secret.key,
-            placeholder: placeholderForSecret(secret.key),
+            envKey: record.key,
+            placeholder: placeholderForSecret(record.key),
           },
-          createdAt: secret.createdAt,
-          updatedAt: secret.updatedAt,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
         })
         .pipe(
           Effect.catchTag("KnowledgeGraphError", (error) =>
             Effect.logWarning("failed to sync secret reference into knowledge graph", {
-              key: secret.key,
+              key: record.key,
               message: error.message,
             }),
           ),
@@ -189,152 +398,201 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     },
   );
 
-  const secretsRef = yield* Ref.make<ReadonlyArray<PersistedHomelabSecretMetadata>>(
-    stateFile.value?.secrets ?? [],
-  );
+  const describe = (record: SecretRecord) =>
+    hasValue(record.key).pipe(Effect.map((stored) => toDescriptor(record, stored)));
 
-  const listSecrets: HomelabSecretRegistryShape["listSecrets"] = () =>
-    Ref.get(secretsRef).pipe(
-      Effect.flatMap((secrets) =>
-        Effect.forEach(
-          [...secrets].toSorted((left, right) => left.key.localeCompare(right.key)),
-          (secret) =>
-            secretStore.get(secretStoreKey(secret.key)).pipe(
-              Effect.map((value) => toDescriptor(secret, Option.isSome(value))),
-              Effect.mapError((cause) =>
-                toRegistryError(`Failed to read stored value for secret '${secret.key}'.`, cause),
-              ),
-            ),
-          { concurrency: 8 },
-        ),
+  const describeKey = (key: string) => requireRecord(key).pipe(Effect.flatMap(describe));
+
+  const withWriteLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    writeSemaphore.withPermits(1)(effect);
+
+  // --- Operations -------------------------------------------------------------
+
+  const listSecrets: HomelabSecretRegistryShape["listSecrets"] = (input) =>
+    loadRecords().pipe(
+      Effect.map((records) =>
+        input?.projectId === undefined
+          ? records
+          : records.filter((record) => reachesProject(record, input.projectId ?? null)),
       ),
+      Effect.flatMap((records) => Effect.forEach(records, describe, { concurrency: 8 })),
     );
 
-  const materializeEnvironment: HomelabSecretRegistryShape["materializeEnvironment"] = () =>
-    Ref.get(secretsRef).pipe(
-      Effect.flatMap((secrets) =>
+  const materializeSecrets: HomelabSecretRegistryShape["materializeSecrets"] = ({
+    projectId,
+    allScopes,
+  }) =>
+    loadRecords().pipe(
+      Effect.flatMap((records) =>
         Effect.forEach(
-          secrets,
-          (secret) =>
-            secretStore.get(secretStoreKey(secret.key)).pipe(
-              Effect.mapError((cause) =>
-                toRegistryError(`Failed to load secret '${secret.key}' for runtime use.`, cause),
+          records.filter((record) => allScopes === true || reachesProject(record, projectId)),
+          (record) =>
+            readValue(record.key).pipe(
+              Effect.map(
+                Option.map((value) => ({
+                  key: record.key,
+                  value,
+                  valueUpdatedAt: record.valueUpdatedAt ?? record.updatedAt,
+                })),
               ),
-              Effect.map((value) => ({
-                key: secret.key,
-                ...(Option.isSome(value)
-                  ? { value: Buffer.from(value.value).toString("utf8") }
-                  : {}),
-              })),
             ),
           { concurrency: 8 },
         ),
       ),
-      Effect.map((entries) =>
-        entries.reduce<Record<string, string>>((accumulator, entry) => {
-          if ("value" in entry) {
-            accumulator[entry.key] = entry.value;
-          }
-          return accumulator;
-        }, {}),
-      ),
+      Effect.map((entries) => entries.flatMap((entry) => Option.toArray(entry))),
     );
 
   const upsertSecret: HomelabSecretRegistryShape["upsertSecret"] = (
     input: HomelabSecretUpsertInput,
   ) =>
-    writeSemaphore.withPermits(1)(
+    withWriteLock(
       Effect.gen(function* () {
-        const currentSecrets = yield* Ref.get(secretsRef);
-        const existing = currentSecrets.find((secret) => secret.key === input.key);
-        const now = new Date().toISOString();
-        const nextSecret: PersistedHomelabSecretMetadata = {
+        yield* rejectReservedKey(input.key);
+        // Refuse before storing the value so a read-only registry stores nothing.
+        yield* ensureWritable;
+        const existing = yield* loadRecord(input.key);
+        const now = yield* nowIso;
+        const row: SecretRow = {
           key: input.key,
-          ...mergeOptionalSecretFields(existing, input),
-          createdAt: existing?.createdAt ?? now,
+          label: input.label ?? Option.getOrUndefined(existing)?.label ?? null,
+          summary: input.summary ?? Option.getOrUndefined(existing)?.summary ?? null,
+          valueUpdatedAt: now,
+          createdAt: Option.getOrUndefined(existing)?.createdAt ?? now,
           updatedAt: now,
         };
 
-        // Refuse before storing the value so a degraded registry stores nothing.
-        yield* ensureWritable;
         yield* secretStore
           .set(secretStoreKey(input.key), Buffer.from(input.value, "utf8"))
           .pipe(
             Effect.mapError((cause) =>
-              toRegistryError(`Failed to persist secret '${input.key}'.`, cause),
+              registryError(`Failed to persist secret '${input.key}'.`, { cause }),
             ),
           );
+        yield* inTransaction(
+          Effect.gen(function* () {
+            yield* upsertRow(row);
+            if (input.projectIds !== undefined) {
+              yield* replaceScopes(input.key, input.projectIds);
+            }
+            // Supplying a value fulfills any open request and clears a decline.
+            yield* sql`DELETE FROM homelab_secret_requests WHERE secret_key = ${input.key}`;
+          }),
+        ).pipe(Effect.mapError(sqlFailure("persist")));
 
-        const nextSecrets = upsertSecretMetadata(currentSecrets, nextSecret);
-        yield* persistState(nextSecrets);
-        yield* Ref.set(secretsRef, nextSecrets);
-        yield* maybeSyncKnowledgeGraph(nextSecret);
+        yield* maybeSyncKnowledgeGraph(row);
         yield* publishChange({ key: input.key, change: "upserted" });
-
-        return toDescriptor(nextSecret, true);
+        return yield* describeKey(input.key);
       }),
     );
 
   const requestSecret: HomelabSecretRegistryShape["requestSecret"] = (
     input: HomelabSecretRequestInput,
   ) =>
-    writeSemaphore.withPermits(1)(
+    withWriteLock(
       Effect.gen(function* () {
-        const currentSecrets = yield* Ref.get(secretsRef);
-        const existing = currentSecrets.find((secret) => secret.key === input.key);
-        const now = new Date().toISOString();
-        const nextSecret: PersistedHomelabSecretMetadata = {
+        yield* rejectReservedKey(input.key);
+        yield* ensureWritable;
+        const existing = Option.getOrUndefined(yield* loadRecord(input.key));
+        const now = yield* nowIso;
+        const row: SecretRow = {
           key: input.key,
-          ...mergeOptionalSecretFields(existing, input),
-          // Mark the secret as awaiting a (new) value so the request/rotation
-          // dialog surfaces even when a stale value is already stored.
-          requestedAt: now,
+          label: input.label ?? existing?.label ?? null,
+          summary: input.summary ?? existing?.summary ?? null,
+          valueUpdatedAt: existing?.valueUpdatedAt ?? null,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };
+        yield* inTransaction(
+          Effect.gen(function* () {
+            yield* upsertRow(row);
+            // Mark the secret as awaiting a (new) value so the request/rotation
+            // dialog surfaces even when a stale value is already stored.
+            yield* upsertRequest({
+              secretKey: input.key,
+              status: "pending",
+              requestedAt: now,
+              requestedByThreadId: input.threadId ?? null,
+              declinedAt: null,
+              declinedBy: null,
+            });
+          }),
+        ).pipe(Effect.mapError(sqlFailure("persist")));
+        yield* maybeSyncKnowledgeGraph(row);
+        return yield* describeKey(input.key);
+      }),
+    );
 
-        const nextSecrets = upsertSecretMetadata(currentSecrets, nextSecret);
-        yield* persistState(nextSecrets);
-        yield* Ref.set(secretsRef, nextSecrets);
-        yield* maybeSyncKnowledgeGraph(nextSecret);
+  const declineRequest: HomelabSecretRegistryShape["declineRequest"] = (
+    input: HomelabSecretDeclineInput,
+    declinedBy,
+  ) =>
+    withWriteLock(
+      Effect.gen(function* () {
+        yield* ensureWritable;
+        const record = yield* requireRecord(input.key);
+        const request = record.request;
+        if (request?.status === "declined") {
+          return yield* describe(record);
+        }
+        if (request === undefined) {
+          return yield* registryError(`Secret '${input.key}' has no pending request to decline.`, {
+            reason: "not-found",
+          });
+        }
+        const now = yield* nowIso;
+        yield* inTransaction(
+          Effect.gen(function* () {
+            yield* upsertRequest({
+              ...request,
+              status: "declined",
+              declinedAt: now,
+              declinedBy,
+            });
+            yield* sql`UPDATE homelab_secrets SET updated_at = ${now} WHERE key = ${input.key}`;
+          }),
+        ).pipe(Effect.mapError(sqlFailure("persist")));
+        return yield* describeKey(input.key);
+      }),
+    );
 
-        const existingValue = yield* secretStore
-          .get(secretStoreKey(input.key))
-          .pipe(
-            Effect.mapError((cause) =>
-              toRegistryError(`Failed to read stored value for secret '${input.key}'.`, cause),
-            ),
-          );
-
-        return toDescriptor(nextSecret, Option.isSome(existingValue));
+  const setScope: HomelabSecretRegistryShape["setScope"] = (input: HomelabSecretScopeInput) =>
+    withWriteLock(
+      Effect.gen(function* () {
+        yield* ensureWritable;
+        yield* requireRecord(input.key);
+        const now = yield* nowIso;
+        yield* inTransaction(
+          Effect.gen(function* () {
+            yield* replaceScopes(input.key, input.projectIds);
+            yield* sql`UPDATE homelab_secrets SET updated_at = ${now} WHERE key = ${input.key}`;
+          }),
+        ).pipe(Effect.mapError(sqlFailure("persist")));
+        yield* publishChange({ key: input.key, change: "scoped" });
+        return yield* describeKey(input.key);
       }),
     );
 
   const deleteSecret: HomelabSecretRegistryShape["deleteSecret"] = (
     input: HomelabSecretDeleteInput,
   ) =>
-    writeSemaphore.withPermits(1)(
+    withWriteLock(
       Effect.gen(function* () {
-        const currentSecrets = yield* Ref.get(secretsRef);
-        const existing = currentSecrets.find((secret) => secret.key === input.key);
-        const nextSecrets = currentSecrets.filter((secret) => secret.key !== input.key);
-
-        yield* persistState(nextSecrets);
-        yield* Ref.set(secretsRef, nextSecrets);
+        yield* ensureWritable;
+        const existing = yield* loadRecord(input.key);
+        yield* sql`DELETE FROM homelab_secrets WHERE key = ${input.key}`.pipe(
+          Effect.mapError(sqlFailure("delete")),
+        );
         yield* secretStore
           .remove(secretStoreKey(input.key))
           .pipe(
             Effect.mapError((cause) =>
-              toRegistryError(`Failed to delete secret '${input.key}'.`, cause),
+              registryError(`Failed to delete secret '${input.key}'.`, { cause }),
             ),
           );
 
-        if (existing) {
+        if (Option.isSome(existing)) {
           yield* maybeSyncKnowledgeGraph(
-            {
-              ...existing,
-              updatedAt: new Date().toISOString(),
-            },
+            { ...existing.value, updatedAt: new Date().toISOString() },
             { deprecated: true },
           );
         }
@@ -346,8 +604,10 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     listSecrets,
     upsertSecret,
     requestSecret,
+    declineRequest,
+    setScope,
     deleteSecret,
-    materializeEnvironment,
+    materializeSecrets,
     changes: Stream.fromPubSub(changesPubSub),
   } satisfies HomelabSecretRegistryShape;
 });

@@ -182,7 +182,7 @@ contracts and are implemented over these tables.
   unchanged files are skipped. `.homelab/.generation` is bumped after each complete
   pass.
 - Every rendered file passes through `redactSecretValues`, which replaces
-  each secret value (6+ characters, taken from `HomelabSecretRegistry.materializeEnvironment`)
+  each secret value (6+ characters, taken from `HomelabSecretRegistry.materializeSecrets({ allScopes: true })`)
   with its `$KEY` placeholder.
 - `HOMELAB_MEMORY_VIEW_ENTRY_LIMIT` is the one view limit.
   `listHomelabViewMemoryEntries({ projectId, threadId })` lists with it and applies
@@ -190,6 +190,34 @@ contracts and are implemented over these tables.
 - Skills are written to `.homelab/skills`, `~/.claude/skills`, and
   `~/.agents/skills`. Each provider directory has its own
   `.homelab-managed.json` manifest, so pruning only removes skills the view wrote.
+
+## Secrets (P6)
+
+Migration 300 adds three tables. Secret values stay in upstream's encrypted
+`ServerSecretStore`; only metadata is here.
+
+- `homelab_secrets`: `key` (primary key), `label`, `summary`,
+  `value_updated_at` (when the stored value last changed, the revision runtimes
+  record in their secrets manifest), `created_at`, `updated_at`.
+- `homelab_secret_scopes`: `(secret_key, project_id)`, the project allowlist.
+  No rows means global.
+- `homelab_secret_requests`: one row per key with an open (`pending`) or last
+  `declined` request: `requested_at`, `requested_by_thread_id`, `declined_at`,
+  `declined_by`. Saving a value deletes the row; a new request replaces it.
+
+`HomelabSecretRegistryLive` imports `homelab-secrets.json` once (legacy
+`requestedAt` becomes a pending request row, reserved key names are skipped
+with a warning). After that:
+
+- If the JSON file's sha256 no longer matches the import marker (a rolled-back
+  release wrote to it), SQLite stays authoritative and writable, the mismatch
+  is logged as an error, and the file is listed in `DegradedStateFiles`.
+  Secrets that release added are not picked up; re-enter them in Settings,
+  then move the JSON file aside to clear the warning.
+- If the file can't be read or decoded, the registry lists what SQLite has and
+  refuses writes, so a later successful import never has to merge.
+
+The JSON file is never written, moved, or deleted.
 
 ## Backups and smoke
 

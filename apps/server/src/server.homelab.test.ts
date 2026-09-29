@@ -19,9 +19,12 @@ import {
   HomelabPromotionEnvelope,
   ThreadId,
   type AuthEnvironmentScope,
+  type HomelabSecretDescriptor,
+  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
 
@@ -60,6 +63,7 @@ const makeHomelabApp = (
   options: {
     readonly credentialedCors?: boolean;
     readonly homelab?: HomelabServerTestLayerOverrides;
+    readonly threadProjects?: Readonly<Record<string, string>>;
   } = {},
 ) =>
   HttpRouter.serve(HomelabRoutesLive.pipe(Layer.provide(homelabBrowserApiCorsLayer)), {
@@ -69,7 +73,14 @@ const makeHomelabApp = (
     Layer.provide(makeHomelabServerTestLayers(options.homelab)),
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
-        getThreadShellById: () => Effect.succeedNone,
+        getThreadShellById: (threadId) => {
+          const projectId = options.threadProjects?.[threadId];
+          return Effect.succeed(
+            projectId === undefined
+              ? Option.none()
+              : Option.some({ id: threadId, projectId } as unknown as OrchestrationThreadShell),
+          );
+        },
       }),
     ),
     Layer.provideMerge(
@@ -180,6 +191,86 @@ describe("homelab HTTP routes", () => {
         headers: curatorAuth,
       });
       assert.notEqual(curatorResponse.status, 403);
+    }).pipe(Effect.provide(makeHomelabApp())),
+  );
+
+  const secretDescriptor = (key: string): HomelabSecretDescriptor => ({
+    key,
+    placeholder: `$${key}`,
+    hasValue: false,
+    pending: false,
+    createdAt: "2026-04-12T00:00:00.000Z",
+    updatedAt: "2026-04-12T00:00:00.000Z",
+  });
+
+  it.effect("pins a runtime's secret request, list, and decline to its token", () => {
+    const requested: Array<unknown> = [];
+    const listed: Array<unknown> = [];
+    const declined: Array<unknown> = [];
+    return Effect.gen(function* () {
+      const runtimeAuth = yield* bearerHeaders(
+        [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+        "thread-runtime:thread-1",
+      );
+      const request = yield* HttpClient.post("/api/homelab/secrets/request", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "NAS_TOKEN", threadId: "thread-spoofed" }),
+      });
+      assert.equal(request.status, 201);
+      assert.deepEqual(requested, [{ key: "NAS_TOKEN", threadId: "thread-1" }]);
+
+      const list = yield* HttpClient.get("/api/homelab/secrets", { headers: runtimeAuth });
+      assert.equal(list.status, 200);
+      assert.deepEqual(listed, [{ projectId: "project-1" }]);
+
+      // Declining is a human answer to the prompt, not something a runtime can do.
+      const runtimeDecline = yield* HttpClient.post("/api/homelab/secrets/decline", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "NAS_TOKEN" }),
+      });
+      assert.equal(runtimeDecline.status, 403);
+      const ownerDecline = yield* HttpClient.post("/api/homelab/secrets/decline", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json({ key: "NAS_TOKEN" }),
+      });
+      assert.equal(ownerDecline.status, 200);
+      assert.deepEqual(declined, [["NAS_TOKEN", "owner"]]);
+    }).pipe(
+      Effect.provide(
+        makeHomelabApp({
+          threadProjects: { "thread-1": "project-1" },
+          homelab: {
+            homelabSecretRegistry: {
+              requestSecret: (input) => {
+                requested.push(input);
+                return Effect.succeed({ ...secretDescriptor(input.key), pending: true });
+              },
+              listSecrets: (input) => {
+                listed.push(input);
+                return Effect.succeed([]);
+              },
+              declineRequest: (input, declinedBy) => {
+                declined.push([input.key, declinedBy]);
+                return Effect.succeed(secretDescriptor(input.key));
+              },
+            },
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects reserved secret names with a 400 and a clear message", () =>
+    Effect.gen(function* () {
+      for (const key of ["PATH", "LD_PRELOAD", "HOMELAB_AGENT_RUNTIME_TOKEN"]) {
+        const response = yield* HttpClient.post("/api/homelab/secrets", {
+          headers: yield* ownerHeaders,
+          body: yield* HttpBody.json({ key, value: "x" }),
+        });
+        assert.equal(response.status, 400);
+        const body = (yield* response.json) as { readonly error: string };
+        assert.include(body.error, "reserved");
+      }
     }).pipe(Effect.provide(makeHomelabApp())),
   );
 

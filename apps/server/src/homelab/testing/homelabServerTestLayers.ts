@@ -167,7 +167,7 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
           updatedAt: EPOCH,
         }),
       deleteSecret: () => Effect.void,
-      materializeEnvironment: () => Effect.succeed({}),
+      materializeSecrets: () => Effect.succeed([]),
       changes: Stream.empty,
       ...overrides.homelabSecretRegistry,
     }),

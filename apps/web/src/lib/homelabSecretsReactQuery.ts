@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import type {
   EnvironmentId,
   HomelabSecretDescriptor,
+  ProjectId,
   HomelabSecretsListResult,
 } from "@t3tools/contracts";
 
@@ -45,6 +46,8 @@ export function upsertHomelabSecretRequest(input: {
     readonly label?: string;
     readonly summary?: string;
     readonly value: string;
+    /** Omitted keeps the current scope; empty makes the secret global. */
+    readonly projectIds?: ReadonlyArray<ProjectId>;
   };
 }): Promise<HomelabSecretDescriptor> {
   return homelabFetch<HomelabSecretDescriptor>({
@@ -62,5 +65,30 @@ export async function deleteHomelabSecretRequest(input: {
     environmentId: input.environmentId,
     pathname: "/api/homelab/secrets/delete",
     body: { key: input.key },
+  });
+}
+
+/** Answers a pending secret request with "no" without touching any stored value. */
+export function declineHomelabSecretRequest(input: {
+  readonly environmentId: EnvironmentId;
+  readonly key: string;
+}): Promise<HomelabSecretDescriptor> {
+  return homelabFetch<HomelabSecretDescriptor>({
+    environmentId: input.environmentId,
+    pathname: "/api/homelab/secrets/decline",
+    body: { key: input.key },
+  });
+}
+
+/** Limits a secret to `projectIds`' runtimes; an empty list makes it global. */
+export function setHomelabSecretScopeRequest(input: {
+  readonly environmentId: EnvironmentId;
+  readonly key: string;
+  readonly projectIds: ReadonlyArray<ProjectId>;
+}): Promise<HomelabSecretDescriptor> {
+  return homelabFetch<HomelabSecretDescriptor>({
+    environmentId: input.environmentId,
+    pathname: "/api/homelab/secrets/scope",
+    body: { key: input.key, projectIds: input.projectIds },
   });
 }

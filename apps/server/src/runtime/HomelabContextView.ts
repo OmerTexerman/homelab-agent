@@ -714,7 +714,11 @@ const loadViewSecrets = Effect.gen(function* () {
   if (Option.isNone(registry)) {
     return {} as Readonly<Record<string, string>>;
   }
-  return yield* registry.value.materializeEnvironment().pipe(
+  return yield* registry.value.materializeSecrets({ projectId: null, allScopes: true }).pipe(
+    Effect.map(
+      (secrets): Readonly<Record<string, string>> =>
+        Object.fromEntries(secrets.map((secret) => [secret.key, secret.value])),
+    ),
     Effect.catchCause((cause) =>
       Effect.logWarning("failed to load secret values for .homelab view redaction", {
         cause: Cause.pretty(cause),

@@ -20,6 +20,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import Migration0001 from "./Migrations/001_Foundation.ts";
 import Migration0200 from "./Migrations/200_KnowledgeStore.ts";
+import Migration0300 from "./Migrations/300_HomelabSecrets.ts";
 
 /** Id range each owner adds migrations in. Ranges never overlap or move. */
 export const HOMELAB_MIGRATION_RANGES = {
@@ -43,6 +44,7 @@ const homelabMigrationEntries: ReadonlyArray<
 > = [
   [1, "Foundation", Migration0001],
   [200, "KnowledgeStore", Migration0200],
+  [300, "HomelabSecrets", Migration0300],
 ];
 
 export const homelabMigrationManifest = homelabMigrationEntries.map(
