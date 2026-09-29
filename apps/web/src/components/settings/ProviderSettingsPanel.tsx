@@ -112,6 +112,10 @@ import {
   resolveRemoteOperateAccess,
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
+import {
+  ProviderHomelabCardFooter,
+  ProviderRuntimeReadinessSection,
+} from "./ProviderHomelabCardFooter";
 
 function withoutProviderInstanceKey<V>(
   record: Readonly<Record<ProviderInstanceId, V>> | undefined,
@@ -950,6 +954,15 @@ export function EnvironmentProviderSettings({
             />
           ) : null
         }
+        footer={
+          mode === "editor" ? (
+            <ProviderHomelabCardFooter
+              instanceId={row.instanceId}
+              instance={row.instance}
+              liveProvider={liveProvider}
+            />
+          ) : null
+        }
         onUpdate={(next) => {
           const wasEnabled = resolveProviderInstanceEnabled(row.instance);
           const isDisabling = next.enabled === false && wasEnabled;
@@ -1116,6 +1129,8 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      <ProviderRuntimeReadinessSection providers={serverProviders} />
 
       <UsageProviderSettings
         key={environmentId}

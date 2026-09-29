@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import * as NodeFs from "node:fs";
+import * as NodeFS from "node:fs";
 
 import {
   HOMELAB_SETTINGS_SEARCH_ITEMS,
@@ -13,7 +13,7 @@ import { resolveHomelabThreadEnvModeLabel } from "../../productCapabilities";
 
 // The generated route tree lists every registered full path as a string key.
 function registeredRoutePaths(): Set<string> {
-  const source = NodeFs.readFileSync(new URL("../../routeTree.gen.ts", import.meta.url), "utf8");
+  const source = NodeFS.readFileSync(new URL("../../routeTree.gen.ts", import.meta.url), "utf8");
   return new Set(Array.from(source.matchAll(/fullPath: '([^']+)'/g), (match) => match[1]!));
 }
 

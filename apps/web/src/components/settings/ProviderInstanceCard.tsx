@@ -387,6 +387,8 @@ interface ProviderInstanceCardProps {
    */
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
+  /** Extra editor section after Setup (the homelab fork's runtime readiness). */
+  readonly footer?: ReactNode;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -430,6 +432,7 @@ export function ProviderInstanceCard({
   onDelete,
   headerAction,
   setup,
+  footer,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -906,6 +909,7 @@ export function ProviderInstanceCard({
       </SettingsSection>
 
       {setup ? <SettingsSection title="Setup">{setup}</SettingsSection> : null}
+      {footer}
 
       <SettingsSection
         title="Runtime"
