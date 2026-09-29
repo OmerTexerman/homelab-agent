@@ -96,9 +96,12 @@ const SCAN_LIMIT_MESSAGE = "Scan limit reached. Some projects or conversations m
 export function WelcomeWizard({
   localAvailable,
   onDone,
+  hostProjectImport = true,
 }: {
   /** Whether this client is authenticated to the server serving the app. */
   readonly localAvailable: boolean;
+  /** Homelab fork: false skips the host repository import step. */
+  readonly hostProjectImport?: boolean;
   readonly onDone: (projectRef?: ScopedProjectRef) => void | Promise<void>;
 }) {
   const completeOnboarding = useCompleteOnboarding();
@@ -213,7 +216,7 @@ export function WelcomeWizard({
           }
         >
           <WizardSteps
-            steps={ONBOARDING_STAGES}
+            steps={hostProjectImport ? ONBOARDING_STAGES : ONBOARDING_STAGES.slice(0, 2)}
             currentStep={stageIndex}
             isStepDisabled={(index) => isImporting || index >= stageIndex}
             onStepChange={(index) => {
@@ -250,7 +253,10 @@ export function WelcomeWizard({
               }}
             />
           ) : step === "agents" ? (
-            <AgentsStep environmentIds={setupIds} onContinue={() => setStep("import")} />
+            <AgentsStep
+              environmentIds={setupIds}
+              onContinue={() => (hostProjectImport ? setStep("import") : void finish())}
+            />
           ) : (
             <ImportStep
               scans={scans}

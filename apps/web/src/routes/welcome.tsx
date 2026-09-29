@@ -4,6 +4,7 @@ import { useState } from "react";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { WelcomeWizard } from "../components/onboarding/WelcomeWizard";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { shouldShowCompatibilityHostPathProjectUi } from "../productCapabilities";
 
 /** Onboarding overlays the workspace. Visiting /welcome reopens setup. */
 export const Route = createFileRoute("/welcome")({
@@ -35,6 +36,7 @@ function WelcomeRouteView() {
       {isWelcomeRoute && !dismissed ? (
         <WelcomeWizard
           localAvailable={localAvailable}
+          hostProjectImport={shouldShowCompatibilityHostPathProjectUi()}
           onDone={async (projectRef) => {
             setDismissed(true);
             if (projectRef !== undefined) {
