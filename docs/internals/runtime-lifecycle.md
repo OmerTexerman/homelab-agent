@@ -158,6 +158,26 @@ Every `HOMELAB_AGENT_RUNTIME_GC_INTERVAL_MS` (1 hour), `collectGarbage`:
 `merged/<thread>` folders are user work in the project workspace and are never
 collected.
 
+## What survives a pause, a recreate, and a reset
+
+An idle runtime is **stopped** (`docker stop`), never removed, so coming back
+after a pause restarts the same container with everything in it. Materialize
+only writes managed files (instructions, CLI, wrappers, secrets, `.homelab/`,
+skills); it never deletes other content.
+
+| Content                                                    | Idle stop and restart | Recreate | Reset |
+| ---------------------------------------------------------- | --------------------- | -------- | ----- |
+| Files in `/workspace` and the home directory               | kept                  | kept     | wiped |
+| npm/pipx/uv user installs (under `/runtime/home`, on PATH) | kept                  | kept     | wiped |
+| apt installs and anything under `/usr`, `/opt`, `/etc`     | kept                  | **lost** | wiped |
+
+A **recreate** (`docker rm` + `run`) happens when the runtime image fingerprint or
+the security profile (`homelab.runtime.profile`) changes, or on restore. Image
+and profile changes arrive with deploys, so batch them and call them out.
+Issue #13 tracks a per-project tools list rebuilt into a derived image, with
+recreates deferred until idle and their reason shown in the UI, so system
+packages survive recreates too.
+
 ## User-space installs
 
 Only `/workspace` and `/runtime/home` survive a recreate. Wrappers and login

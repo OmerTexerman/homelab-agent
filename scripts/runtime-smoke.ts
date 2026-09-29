@@ -365,7 +365,7 @@ async function bootstrapBearerSession(input: {
   readonly startupCredential: string;
 }): Promise<string> {
   const scope =
-    "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write";
+    "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write homelab:curate homelab:secrets-admin";
   const body = new URLSearchParams({
     grant_type: AuthTokenExchangeGrantType,
     subject_token: input.startupCredential,
@@ -927,7 +927,8 @@ async function main(): Promise<void> {
     const standaloneThreadId = `runtime-smoke-standalone-${suffix}`;
     const sharedRuntimeId = `project-runtime:${projectId}`;
     const isolatedRuntimeId = `isolated-runtime:${isolatedThreadId}`;
-    const standaloneRuntimeId = "project-runtime:system:standalone";
+    // Scratch threads always run in their own isolated runtime.
+    const standaloneRuntimeId = `isolated-runtime:${standaloneThreadId}`;
     const createdAt = new Date().toISOString();
     const modelSelection = { instanceId: "codex", model: "gpt-5" };
 
@@ -1016,7 +1017,7 @@ async function main(): Promise<void> {
     assertEqual(
       standaloneThread.runtimeId,
       standaloneRuntimeId,
-      "Standalone shared thread runtime id mismatch",
+      "Scratch thread runtime id mismatch",
     );
 
     // Seed a durable project-memory entry so the generated `.homelab/memory` view and the
