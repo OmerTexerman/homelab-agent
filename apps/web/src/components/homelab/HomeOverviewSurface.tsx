@@ -7,7 +7,7 @@ import {
   Settings2Icon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, type ReactNode } from "react";
 
@@ -18,6 +18,7 @@ import {
   homelabProjectMemoryQueryOptions,
   homelabSetupStatusQueryOptions,
 } from "../../lib/homelabReactQuery";
+import { projectRuntimeDetailQueryOptions } from "../../lib/projectRuntimeReactQuery";
 import {
   deriveHomeOverviewReadModel,
   type HomeOverviewAttentionItem,
@@ -74,15 +75,22 @@ export function HomeOverviewPage() {
       limit: 50,
     }),
   );
-  // NOTE: live Project Runtime detail polling relied on the per-environment ws
-  // RPC client (`environmentApi`) that was removed in the upstream client-runtime
-  // refactor. Until projectRuntime atoms exist in @t3tools/client-runtime, the
-  // overview derives runtime rows from projects/threads alone (detail: null).
-  const runtimeDetails = runtimeProjects.map((project) => ({
+  // Read-only status per listed project; a failed read leaves that row's detail
+  // null ("Unknown") without failing the page.
+  const runtimeDetailQueries = useQueries({
+    queries: runtimeProjects.map((project) =>
+      projectRuntimeDetailQueryOptions({
+        environmentId: project.environmentId,
+        projectId: project.id,
+        runtimeId: project.defaultRuntimeId ?? null,
+      }),
+    ),
+  });
+  const runtimeDetails = runtimeProjects.map((project, index) => ({
     environmentId: project.environmentId,
     projectId: project.id,
     runtimeId: project.defaultRuntimeId ?? null,
-    detail: null,
+    detail: runtimeDetailQueries[index]?.data ?? null,
   }));
   const model = deriveHomeOverviewReadModel({
     projects,
