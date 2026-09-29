@@ -5,7 +5,21 @@ import {
 } from "@t3tools/shared/standaloneProject";
 import { describe, expect, it } from "vite-plus/test";
 
-import { homelabProjectDisplayTitle } from "./projectDisplayTitle";
+import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
+
+import { homelabProjectDisplayTitle, homelabWorkspaceRootLabel } from "./projectDisplayTitle";
+
+describe("homelabWorkspaceRootLabel", () => {
+  it("hides the internal logical-project root", () => {
+    expect(homelabWorkspaceRootLabel(createLogicalProjectWorkspaceRoot("network"))).toBe(
+      "Project Runtime",
+    );
+  });
+
+  it("keeps a real filesystem root", () => {
+    expect(homelabWorkspaceRootLabel("/home/me/infra")).toBe("/home/me/infra");
+  });
+});
 
 describe("homelabProjectDisplayTitle", () => {
   it("calls the hidden scratch project Scratch", () => {

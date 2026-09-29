@@ -98,6 +98,7 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useServerConfigs, waitForProject } from "../state/entities";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
+import { homelabWorkspaceRootLabel } from "../homelab/projectDisplayTitle";
 import {
   HomelabNewProjectDialog,
   requestHomelabNewProject,
@@ -1266,7 +1267,7 @@ function OpenCommandPaletteDialog(props: {
               environmentLabels={metadata.environmentLabels}
               grouped={members.length > 1}
               location={location}
-              workspaceRoot={project.workspaceRoot}
+              workspaceRoot={homelabWorkspaceRootLabel(project.workspaceRoot)}
             />
           );
         },
@@ -1315,7 +1316,7 @@ function OpenCommandPaletteDialog(props: {
                   <span className="truncate">{location.label}</span>
                 </span>
                 <CommandPaletteMetaDot />
-                <span className="truncate">{project.workspaceRoot}</span>
+                <span className="truncate">{homelabWorkspaceRootLabel(project.workspaceRoot)}</span>
               </span>
             );
           },
