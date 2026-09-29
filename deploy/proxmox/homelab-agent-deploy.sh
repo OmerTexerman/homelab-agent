@@ -62,27 +62,32 @@ prune_backups() {
   fi
 }
 
-# Backs up everything except the live database files (replaced by a consistent
-# VACUUM INTO snapshot) and reinstallable caches.
+# Backs up everything except the live database files (state.sqlite and
+# homelab.sqlite, each replaced by a consistent VACUUM INTO snapshot) and
+# reinstallable caches.
 backup_state() {
   local timestamp backup_path snapshot="$state_dir/userdata/state.backup.sqlite"
+  local homelab_snapshot="$state_dir/userdata/homelab.backup.sqlite"
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   backup_path="${backup_dir}/t3code-home-${timestamp}.tar.gz"
   mkdir -p "$backup_dir"
-  release snapshot-db "$snapshot"
+  release snapshot-db "$snapshot" "$homelab_snapshot"
   log "backing up ${state_dir} to ${backup_path}"
   set +e
   ct_root tar -C "$service_home" -czf - \
     --exclude='.t3/userdata/state.sqlite' \
     --exclude='.t3/userdata/state.sqlite-wal' \
     --exclude='.t3/userdata/state.sqlite-shm' \
+    --exclude='.t3/userdata/homelab.sqlite' \
+    --exclude='.t3/userdata/homelab.sqlite-wal' \
+    --exclude='.t3/userdata/homelab.sqlite-shm' \
     --exclude='.t3/userdata/provider-clis' \
     --exclude='.t3/userdata/logs' \
     --exclude='.t3/caches' \
     .t3 >"$backup_path"
   local tar_rc=${PIPESTATUS[0]}
   set -e
-  ct_root rm -f "$snapshot"
+  ct_root rm -f "$snapshot" "$homelab_snapshot"
   if [[ "$tar_rc" -gt 1 ]]; then
     log "backup tar failed with exit ${tar_rc}"
     rm -f "$backup_path"

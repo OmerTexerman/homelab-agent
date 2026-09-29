@@ -4,7 +4,9 @@
 # (deploy/proxmox/homelab-agent-deploy.sh) calls these subcommands in order:
 #
 #   prepare                  build + smoke the target commit in its own release dir
-#   snapshot-db <out>        consistent copy of state.sqlite (VACUUM INTO)
+#   snapshot-db <out> [homelab-out]
+#                            consistent copy of state.sqlite (VACUUM INTO), and of
+#                            homelab.sqlite into homelab-out when both exist
 #   drain [max-seconds]      wait until no provider turn is running
 #   activate <sha>           point `current` at a prepared release
 #   rollback                 point `current` back at `previous`
@@ -56,6 +58,10 @@ swap_link() {
 
 state_db_path() {
   printf '%s/userdata/state.sqlite' "$state_home"
+}
+
+homelab_db_path() {
+  printf '%s/userdata/homelab.sqlite' "$state_home"
 }
 
 cmd_prepare() {
@@ -110,12 +116,23 @@ cmd_prepare() {
   printf 'READY %s\n' "$target"
 }
 
+# The optional second path stays compatible both ways: older release.sh copies
+# ignore it, and a host without homelab.sqlite yet gets no file there.
 cmd_snapshot_db() {
-  local out="${1:?snapshot-db requires an output path}" db
+  local out="${1:?snapshot-db requires an output path}" homelab_out="${2:-}" db homelab_db
   db="$(state_db_path)"
   [[ -f "$db" ]] || die "no database at $db"
   rm -f "$out"
   "$node_bin" "$state_db_helper" snapshot "$db" "$out"
+  if [[ -n "$homelab_out" ]]; then
+    homelab_db="$(homelab_db_path)"
+    rm -f "$homelab_out"
+    if [[ -f "$homelab_db" ]]; then
+      "$node_bin" "$state_db_helper" snapshot "$homelab_db" "$homelab_out"
+    else
+      log "no homelab database at $homelab_db; skipping its snapshot"
+    fi
+  fi
 }
 
 count_running_turns() {
@@ -226,7 +243,7 @@ case "$subcommand" in
   prune) cmd_prune "$@" ;;
   status) cmd_status "$@" ;;
   *)
-    sed -n '2,16p' "$0" >&2
+    sed -n '2,19p' "$0" >&2
     exit 2
     ;;
 esac

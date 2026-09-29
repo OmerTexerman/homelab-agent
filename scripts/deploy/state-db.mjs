@@ -1,4 +1,5 @@
-// Read-only helpers over a Homelab Agent state.sqlite, used by release.sh.
+// Read-only helpers over a Homelab Agent database, used by release.sh.
+// `snapshot` works on state.sqlite and homelab.sqlite alike.
 // Safe while the live server has the database open (WAL + read-only handle).
 //
 //   node state-db.mjs snapshot <db> <out>   consistent copy via VACUUM INTO

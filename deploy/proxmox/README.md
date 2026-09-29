@@ -12,11 +12,14 @@ minutes.
    commit, inside the container:
    - `prepare`: `git worktree add` the commit into
      `~/homelab-agent-releases/<sha>`, install, build, then run the production
-     smoke against a `VACUUM INTO` copy of the real state (Docker stubbed out).
+     smoke against a `VACUUM INTO` copy of the real state (`state.sqlite`, plus
+     the fork's `homelab.sqlite` when present; Docker stubbed out).
      The live release is never touched. A failing commit is retried up to 3
      times, then skipped until `prod` moves.
-   - Back up `~/.t3` to the NAS (consistent DB snapshot, no caches or provider
-     CLIs), keeping the newest 2.
+   - Back up `~/.t3` to the NAS, keeping the newest 2. The live `state.sqlite`
+     and `homelab.sqlite` files are excluded and replaced by consistent
+     snapshots (`userdata/state.backup.sqlite`, `userdata/homelab.backup.sqlite`);
+     caches and provider CLIs are skipped.
    - `drain`: wait up to 20 minutes for running turns to finish.
    - `activate`: switch `current` to the new release (`previous` keeps the old one).
 3. Restart `t3code.service`, which runs from `current`.
@@ -39,8 +42,12 @@ minutes.
 | Retry a failed commit   | `pct exec 201 -- rm /home/t3code/homelab-agent-releases/<sha>.attempts`                                                                                                                                                                                |
 | Ship while CI is broken | `gh workflow run promote-prod.yml -f sha=<main sha>`                                                                                                                                                                                                   |
 
-Rolling back past a release that ran a migration needs a database restore
-from the backup taken just before it.
+Rolling back past a release that ran a `state.sqlite` migration needs a
+database restore from the backup taken just before it. `homelab.sqlite`
+migrations are additive and leave their JSON sources intact, so they don't
+block an automatic rollback (see `docs/internals/homelab-storage.md`). To
+restore either database, stop the service and copy its `*.backup.sqlite` from
+the backup over the live file, deleting the live `-wal` and `-shm` siblings.
 
 ## Installing or updating
 

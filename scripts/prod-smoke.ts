@@ -125,13 +125,16 @@ function seedBaseDir(input: { readonly sourceHome: string; readonly baseDir: str
   }
   const targetUserdata = NodePath.join(input.baseDir, "userdata");
   NodeFS.mkdirSync(targetUserdata, { recursive: true });
-  const source = new NodeSqlite.DatabaseSync(sourceDb, { readOnly: true });
-  try {
-    source.exec(
-      `VACUUM INTO '${NodePath.join(targetUserdata, "state.sqlite").replaceAll("'", "''")}'`,
-    );
-  } finally {
-    source.close();
+  // homelab.sqlite is optional: hosts that predate it have only state.sqlite.
+  for (const name of ["state.sqlite", "homelab.sqlite"]) {
+    const sourcePath = NodePath.join(sourceUserdata, name);
+    if (!NodeFS.existsSync(sourcePath)) continue;
+    const source = new NodeSqlite.DatabaseSync(sourcePath, { readOnly: true });
+    try {
+      source.exec(`VACUUM INTO '${NodePath.join(targetUserdata, name).replaceAll("'", "''")}'`);
+    } finally {
+      source.close();
+    }
   }
   for (const name of SEEDED_USERDATA_FILES) {
     const sourceFile = NodePath.join(sourceUserdata, name);

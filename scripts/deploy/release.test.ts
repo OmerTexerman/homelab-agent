@@ -195,4 +195,40 @@ describe("scripts/deploy/release.sh", () => {
     });
     copy.close();
   });
+
+  it("snapshots homelab.sqlite alongside state.sqlite when asked and present", () => {
+    const out = NodePath.join(fixture.root, "state.backup.sqlite");
+    const homelabOut = NodePath.join(fixture.root, "homelab.backup.sqlite");
+
+    // No homelab database yet: state is still snapshotted, and no homelab file appears.
+    NodeFS.writeFileSync(homelabOut, "stale");
+    const without = release(fixture, ["snapshot-db", out, homelabOut]);
+    expect(without.status).toBe(0);
+    expect(without.stderr).toContain("skipping its snapshot");
+    expect(NodeFS.existsSync(out)).toBe(true);
+    expect(NodeFS.existsSync(homelabOut)).toBe(false);
+
+    const live = new NodeSqlite.DatabaseSync(
+      NodePath.join(fixture.home, "userdata", "homelab.sqlite"),
+    );
+    live.exec("PRAGMA journal_mode = WAL");
+    live.exec("CREATE TABLE homelab_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    live.exec("INSERT INTO homelab_meta VALUES ('k', 'v')");
+    try {
+      // Taken while the live handle is open, like the running server's.
+      expect(release(fixture, ["snapshot-db", out, homelabOut]).status).toBe(0);
+    } finally {
+      live.close();
+    }
+    const copy = new NodeSqlite.DatabaseSync(homelabOut, { readOnly: true });
+    expect(copy.prepare("SELECT value FROM homelab_meta WHERE key = 'k'").get()).toEqual({
+      value: "v",
+    });
+    copy.close();
+
+    // The one-argument form never writes a homelab snapshot.
+    NodeFS.rmSync(homelabOut);
+    expect(release(fixture, ["snapshot-db", out]).status).toBe(0);
+    expect(NodeFS.existsSync(homelabOut)).toBe(false);
+  });
 });
