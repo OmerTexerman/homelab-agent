@@ -103,7 +103,7 @@ export function WorkspaceCodeEditor(props: {
       theme={props.theme}
       height="100%"
       readOnly={readOnly}
-      className="h-full min-h-full overflow-hidden rounded-md border border-border text-[12px]"
+      className="h-full min-h-full overflow-hidden rounded-md border border-border text-xs"
       basicSetup={{
         lineNumbers: true,
         foldGutter: true,
