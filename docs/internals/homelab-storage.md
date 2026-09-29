@@ -111,6 +111,86 @@ SQLite only.
 5. Search tables (P5) use FTS5. `probeFts5` checks for it at startup, and Node
    24 has it.
 
+## Knowledge store (P5, migration 200)
+
+Graph knowledge and project memory share four tables. The code is
+`apps/server/src/homelab/KnowledgeStore.ts` (the repository),
+`knowledgeMappings.ts` (wire shapes to rows), and `KnowledgeImport.ts`.
+`KnowledgeGraph` and `ProjectMemory` keep their service interfaces and HTTP/CLI
+contracts and are implemented over these tables.
+
+| Table             | Holds                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `knowledge_docs`  | Entities, observations, and memory notes. One row type, `scope` + `kind` tell them apart. |
+| `knowledge_links` | Graph relations, plus memory `_supersedes` / `_replaces` links.                           |
+| `knowledge_audit` | One row per mutation, written in the mutation's transaction (the curator trail, too).     |
+| `knowledge_fts`   | FTS5 over title (name + title), summary, body, and props (flattened `props_json`).        |
+
+- Scopes: graph entities and observations are `global`. Project memory is
+  `project`. Scratch and curator memory is `thread`, with `thread_id` set to the
+  source thread.
+- Kinds: an entity's kind is its graph kind (`host`, `service`, ...). A memory entry
+  is `note`. A plain observation is `_observation`. Kinds and link kinds that start
+  with `_` are internal, and they can't collide with the graph vocabulary, whose
+  kinds start with a letter.
+- Natural key: `(scope, kind, name_key)` is unique for global, non-internal kinds.
+  `name_key` is the trimmed, lowercased name. Entity upserts merge on it, as the
+  JSON graph did.
+- `seq` is an explicit `INTEGER PRIMARY KEY`, so the FTS rowid survives VACUUM.
+  Triggers on `knowledge_docs` keep `knowledge_fts` in sync.
+- Supersession: `superseded_by` is recomputed from the memory links on every
+  memory write. Search hides superseded rows unless the request passes
+  `includeSuperseded`.
+- Search: BM25 (weights title 10, summary 5, props 3, body 1), with scope, kind,
+  and supersession filters in the same SQL, before ranking and limits. The query
+  is split into quoted prefix terms. They are ANDed first, then ORed if nothing
+  matched, and a substring match is the last fallback. Graph results are also
+  multiplied by `freshnessMultiplier`, and an entity gets credit when an
+  observation about it matches. Transcript search in project memory is a
+  `LIKE` with a limit and runs only when memory results leave room.
+- Audit: curator mutations record `curate.*` actions, and these rows are returned
+  as `HomelabSnapshot.observations`, where the UI shows the curator trail.
+  Imported curator observations keep their original JSON
+  (`curate.legacy-observation`).
+- Promotion (`promoteDiscoveries`) runs the graph entries, the promoted memory
+  entry's status, the audit row, the secret-reference requests, and the runtime
+  bootstrap mutations inside one homelab.sqlite transaction. If any step fails,
+  the sqlite side rolls back and the request fails. The secret and bootstrap
+  steps are keyed, so retrying converges.
+
+### Imports and drift
+
+- `homelab-graph.json` is imported with `importJsonOnce` when `KnowledgeGraph` is
+  built. Entities that share a natural key are merged, and their relations and
+  observations are remapped to the canonical id. If the file can't be read or
+  decoded, nothing is imported and the file is left alone. The graph serves
+  sqlite, refuses writes, and appears in `DegradedStateFiles`; the next start
+  retries.
+- `project_memory_entries` is read from `state.sqlite` through the upstream client,
+  with `SELECT` only, when `ProjectMemory` is built. Ids and attribution are kept,
+  and the marker's sha256 is taken over the rows. The upstream table stays until a
+  later contract release.
+- Every start re-hashes the source. A sha256 that differs from the marker means a
+  rolled-back release wrote to the source. The source is never imported again and
+  sqlite is never overwritten from it. The store is logged at error level,
+  registered in `DegradedStateFiles`, and keeps serving and accepting writes.
+
+## `.homelab` views
+
+- Every writer (`writeHomelabContextView`, `writeHomelabGraphView`) holds a
+  per-workspace lock. Files are replaced with a sibling temp file and a rename, and
+  unchanged files are skipped. `.homelab/.generation` is bumped after each complete
+  pass.
+- Every rendered file passes through `redactSecretValues`, which replaces
+  each secret value (6+ characters, taken from `HomelabSecretRegistry.materializeEnvironment`)
+  with its `$KEY` placeholder.
+- `HOMELAB_MEMORY_VIEW_ENTRY_LIMIT` is the one view limit.
+  `listHomelabViewMemoryEntries({ projectId, threadId })` lists with it and applies
+  the thread scope in SQL.
+- Skills are written to `.homelab/skills`, `~/.claude/skills`, and
+  `~/.agents/skills`. Each provider directory has its own
+  `.homelab-managed.json` manifest, so pruning only removes skills the view wrote.
+
 ## Backups and smoke
 
 - `scripts/deploy/release.sh snapshot-db <out> [homelab-out]` writes

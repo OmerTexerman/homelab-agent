@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off
 import * as NodePath from "node:path";
 import type {
   HomelabEntity,
@@ -11,8 +11,13 @@ import type {
 import { threadRuntimeId, threadRuntimeSelectionMode } from "@t3tools/contracts";
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
+
+import { HomelabSecretRegistry } from "../homelab/Services/HomelabSecretRegistry.ts";
 
 interface HomelabViewFile {
   readonly relativePath: string;
@@ -647,74 +652,235 @@ export function renderHomelabGraphFiles(
   return files;
 }
 
+/**
+ * Every `.homelab` writer for one workspace runs under that workspace's lock,
+ * so the turn-start, wake, memory, and graph refreshes (and anything P4's
+ * `materialize(runtime)` adds) serialize instead of pruning each other's files
+ * mid-write. Files are replaced with a sibling temp file plus rename, so a
+ * reader never sees a half-written file, and `.homelab/.generation` is bumped
+ * after each complete pass so readers can tell a finished view from one that
+ * is still being written.
+ */
+const viewLocks = new Map<string, Semaphore.Semaphore>();
+
+const viewLockFor = (hostWorkspacePath: string): Semaphore.Semaphore => {
+  const key = NodePath.resolve(hostWorkspacePath);
+  let lock = viewLocks.get(key);
+  if (lock === undefined) {
+    lock = Semaphore.makeUnsafe(1);
+    viewLocks.set(key, lock);
+  }
+  return lock;
+};
+
+/** Runs `effect` holding the `.homelab` view lock for `hostWorkspacePath`. */
+export const withHomelabViewLock = <A, E, R>(
+  hostWorkspacePath: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> => viewLockFor(hostWorkspacePath).withPermits(1)(effect);
+
+export const HOMELAB_VIEW_GENERATION_FILE = ".homelab/.generation";
+
+/** Secret values shorter than this are not redacted; they would mangle ordinary text. */
+const MIN_REDACTED_SECRET_LENGTH = 6;
+
+/**
+ * Replaces every known secret value in `text` with its `$KEY` placeholder,
+ * longest values first so a value that contains another is replaced whole.
+ */
+export function redactSecretValues(
+  text: string,
+  secrets: Readonly<Record<string, string>>,
+): string {
+  const entries = Object.entries(secrets)
+    .filter(([, value]) => value.length >= MIN_REDACTED_SECRET_LENGTH)
+    .toSorted(([, left], [, right]) => right.length - left.length);
+  let redacted = text;
+  for (const [key, value] of entries) {
+    if (redacted.includes(value)) {
+      redacted = redacted.split(value).join(`$${key}`);
+    }
+  }
+  return redacted;
+}
+
+/**
+ * Loads the current secret values so rendered views never carry them. The
+ * registry is optional (tests, early boot); a failed lookup is logged and the
+ * view is written unredacted rather than not at all.
+ */
+const loadViewSecrets = Effect.gen(function* () {
+  const registry = yield* Effect.serviceOption(HomelabSecretRegistry);
+  if (Option.isNone(registry)) {
+    return {} as Readonly<Record<string, string>>;
+  }
+  return yield* registry.value.materializeEnvironment().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("failed to load secret values for .homelab view redaction", {
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as({} as Readonly<Record<string, string>>)),
+    ),
+  );
+});
+
+let tempCounter = 0;
+
+/** Replaces `targetPath` via a sibling temp file and rename; skips unchanged files. */
+const writeViewFileAtomically = Effect.fn("runtime.writeHomelabViewFile")(function* (
+  targetPath: string,
+  contents: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const current = yield* fileSystem
+    .readFileString(targetPath)
+    .pipe(Effect.orElseSucceed(() => undefined));
+  if (current === contents) {
+    return;
+  }
+  yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true });
+  tempCounter = (tempCounter + 1) % Number.MAX_SAFE_INTEGER;
+  const tempPath = NodePath.join(
+    NodePath.dirname(targetPath),
+    `.${NodePath.basename(targetPath)}.tmp-${process.pid}-${tempCounter}`,
+  );
+  yield* fileSystem.writeFileString(tempPath, contents);
+  yield* fileSystem
+    .rename(tempPath, targetPath)
+    .pipe(Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)));
+});
+
+const writeViewFiles = Effect.fn("runtime.writeHomelabViewFiles")(function* (
+  hostWorkspacePath: string,
+  files: ReadonlyArray<HomelabViewFile>,
+) {
+  const secrets = yield* loadViewSecrets;
+  for (const file of files) {
+    yield* writeViewFileAtomically(
+      NodePath.join(hostWorkspacePath, file.relativePath),
+      redactSecretValues(file.contents, secrets),
+    );
+  }
+});
+
+function parseViewGeneration(raw: string): number {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const generation =
+      parsed !== null && typeof parsed === "object" && "generation" in parsed
+        ? parsed.generation
+        : undefined;
+    return typeof generation === "number" && Number.isSafeInteger(generation) ? generation : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Reads the view generation (0 when absent or unreadable). */
+export const readHomelabViewGeneration = Effect.fn("runtime.readHomelabViewGeneration")(function* (
+  hostWorkspacePath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const raw = yield* fileSystem
+    .readFileString(NodePath.join(hostWorkspacePath, HOMELAB_VIEW_GENERATION_FILE))
+    .pipe(Effect.orElseSucceed(() => ""));
+  return parseViewGeneration(raw);
+});
+
+const bumpViewGeneration = Effect.fn("runtime.bumpHomelabViewGeneration")(function* (
+  hostWorkspacePath: string,
+  subtree: "context" | "graph",
+) {
+  const generation = (yield* readHomelabViewGeneration(hostWorkspacePath)) + 1;
+  yield* writeViewFileAtomically(
+    NodePath.join(hostWorkspacePath, HOMELAB_VIEW_GENERATION_FILE),
+    `${JSON.stringify({ generation, subtree, writtenAt: new Date().toISOString() })}\n`,
+  );
+  return generation;
+});
+
+/**
+ * Writes the data-driven `.homelab` view (threads, memory, bootstrap, and the
+ * graph subtree when graph data is supplied), prunes orphans, and bumps the
+ * generation, all under the workspace's view lock. Secret values are replaced
+ * with `$KEY` placeholders in every rendered file.
+ */
 export const writeHomelabContextView = Effect.fn("runtime.writeHomelabContextView")(function* (
   input: HomelabContextViewInput,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const files = renderHomelabContextViewFiles(input);
-  for (const file of files) {
-    const targetPath = NodePath.join(input.hostWorkspacePath, file.relativePath);
-    yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true });
-    yield* fileSystem.writeFileString(targetPath, file.contents);
-  }
+  yield* withHomelabViewLock(
+    input.hostWorkspacePath,
+    Effect.gen(function* () {
+      yield* writeViewFiles(input.hostWorkspacePath, files);
 
-  // Reconcile-and-prune: the two subtrees below are fully generated and owned by this writer,
-  // and `renderHomelabContextViewFiles` deliberately drops deleted threads and superseded
-  // memory. Without pruning, those leave orphaned files on disk that the agent's `find`/`rg`
-  // still surfaces as stale context. Expected sets are derived from the SAME `files` we just
-  // wrote (single source of truth), so pruning can never delete a file this render produced.
-  // All callers pass the COMPLETE authoritative thread + memory set for the workspace, so the
-  // remaining entries are genuine orphans. Each readDirectory/remove tolerates a missing path,
-  // making the first run (no pre-existing `.homelab`) a no-op.
-  const expectedThreadDirs = new Set<string>();
-  const expectedMemoryFiles = new Set<string>();
-  const expectedGraphEntityFiles = new Set<string>();
-  for (const file of files) {
-    const threadMatch = /^\.homelab\/threads\/(thread_[^/]+)\//.exec(file.relativePath);
-    if (threadMatch?.[1]) {
-      expectedThreadDirs.add(threadMatch[1]);
-      continue;
-    }
-    const memoryMatch = /^\.homelab\/memory\/latest\/([^/]+\.md)$/.exec(file.relativePath);
-    if (memoryMatch?.[1]) {
-      expectedMemoryFiles.add(memoryMatch[1]);
-      continue;
-    }
-    const graphMatch = /^\.homelab\/graph\/entities\/([^/]+\.md)$/.exec(file.relativePath);
-    if (graphMatch?.[1]) {
-      expectedGraphEntityFiles.add(graphMatch[1]);
-    }
-  }
+      // Reconcile-and-prune: the two subtrees below are fully generated and owned by this
+      // writer, and `renderHomelabContextViewFiles` deliberately drops deleted threads and
+      // superseded memory. Without pruning, those leave orphaned files on disk that the
+      // agent's `find`/`rg` still surfaces as stale context. Expected sets are derived from
+      // the SAME `files` we just wrote (single source of truth), so pruning can never delete
+      // a file this render produced. All callers pass the COMPLETE authoritative thread +
+      // memory set for the workspace, so the remaining entries are genuine orphans. Each
+      // readDirectory/remove tolerates a missing path, making the first run a no-op.
+      const expectedThreadDirs = new Set<string>();
+      const expectedMemoryFiles = new Set<string>();
+      const expectedGraphEntityFiles = new Set<string>();
+      for (const file of files) {
+        const threadMatch = /^\.homelab\/threads\/(thread_[^/]+)\//.exec(file.relativePath);
+        if (threadMatch?.[1]) {
+          expectedThreadDirs.add(threadMatch[1]);
+          continue;
+        }
+        const memoryMatch = /^\.homelab\/memory\/latest\/([^/]+\.md)$/.exec(file.relativePath);
+        if (memoryMatch?.[1]) {
+          expectedMemoryFiles.add(memoryMatch[1]);
+          continue;
+        }
+        const graphMatch = /^\.homelab\/graph\/entities\/([^/]+\.md)$/.exec(file.relativePath);
+        if (graphMatch?.[1]) {
+          expectedGraphEntityFiles.add(graphMatch[1]);
+        }
+      }
 
-  const threadsDir = NodePath.join(input.hostWorkspacePath, ".homelab", "threads");
-  const threadEntries = yield* fileSystem
-    .readDirectory(threadsDir, { recursive: false })
-    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-  yield* Effect.forEach(
-    threadEntries.filter((name) => name.startsWith("thread_") && !expectedThreadDirs.has(name)),
-    (name) =>
-      fileSystem.remove(NodePath.join(threadsDir, name), { recursive: true }).pipe(Effect.ignore),
-    { discard: true },
+      const threadsDir = NodePath.join(input.hostWorkspacePath, ".homelab", "threads");
+      const threadEntries = yield* fileSystem
+        .readDirectory(threadsDir, { recursive: false })
+        .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+      yield* Effect.forEach(
+        threadEntries.filter((name) => name.startsWith("thread_") && !expectedThreadDirs.has(name)),
+        (name) =>
+          fileSystem
+            .remove(NodePath.join(threadsDir, name), { recursive: true })
+            .pipe(Effect.ignore),
+        { discard: true },
+      );
+
+      const memoryLatestDir = NodePath.join(
+        input.hostWorkspacePath,
+        ".homelab",
+        "memory",
+        "latest",
+      );
+      const memoryEntries = yield* fileSystem
+        .readDirectory(memoryLatestDir, { recursive: false })
+        .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+      yield* Effect.forEach(
+        memoryEntries.filter(
+          (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
+        ),
+        (name) => fileSystem.remove(NodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
+        { discard: true },
+      );
+
+      // Prune the graph subtree ONLY when this pass managed it (see
+      // shouldManageGraphSubtree). A memory/thread-only refresh omits graph and must
+      // leave every entity page in place — otherwise it deletes the whole mirror.
+      if (shouldManageGraphSubtree(input)) {
+        yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
+      }
+      yield* bumpViewGeneration(input.hostWorkspacePath, "context");
+    }),
   );
-
-  const memoryLatestDir = NodePath.join(input.hostWorkspacePath, ".homelab", "memory", "latest");
-  const memoryEntries = yield* fileSystem
-    .readDirectory(memoryLatestDir, { recursive: false })
-    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-  yield* Effect.forEach(
-    memoryEntries.filter(
-      (name) => name.endsWith(".md") && name !== "README.md" && !expectedMemoryFiles.has(name),
-    ),
-    (name) => fileSystem.remove(NodePath.join(memoryLatestDir, name)).pipe(Effect.ignore),
-    { discard: true },
-  );
-
-  // Prune the graph subtree ONLY when this pass managed it (see
-  // shouldManageGraphSubtree). A memory/thread-only refresh omits graph and must
-  // leave every entity page in place — otherwise it deletes the whole mirror.
-  if (shouldManageGraphSubtree(input)) {
-    yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
-  }
 });
 
 /**
@@ -743,19 +909,14 @@ const pruneHomelabGraphEntities = Effect.fn("runtime.pruneHomelabGraphEntities")
  * and prune orphaned entity pages — leaving threads/memory/bootstrap untouched.
  * This is what the knowledge reactor calls to propagate a graph change into a
  * running runtime without re-rendering (and re-pruning) the rest of the view.
+ * Takes the same workspace lock as {@link writeHomelabContextView}.
  */
 export const writeHomelabGraphView = Effect.fn("runtime.writeHomelabGraphView")(function* (input: {
   readonly hostWorkspacePath: string;
   readonly graphEntities: ReadonlyArray<HomelabEntity>;
   readonly graphRelations: ReadonlyArray<HomelabRelation>;
 }) {
-  const fileSystem = yield* FileSystem.FileSystem;
   const files = renderHomelabGraphFiles(input.graphEntities, input.graphRelations);
-  for (const file of files) {
-    const targetPath = NodePath.join(input.hostWorkspacePath, file.relativePath);
-    yield* fileSystem.makeDirectory(NodePath.dirname(targetPath), { recursive: true });
-    yield* fileSystem.writeFileString(targetPath, file.contents);
-  }
   const expectedGraphEntityFiles = new Set<string>();
   for (const file of files) {
     const graphMatch = /^\.homelab\/graph\/entities\/([^/]+\.md)$/.exec(file.relativePath);
@@ -763,5 +924,12 @@ export const writeHomelabGraphView = Effect.fn("runtime.writeHomelabGraphView")(
       expectedGraphEntityFiles.add(graphMatch[1]);
     }
   }
-  yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
+  yield* withHomelabViewLock(
+    input.hostWorkspacePath,
+    Effect.gen(function* () {
+      yield* writeViewFiles(input.hostWorkspacePath, files);
+      yield* pruneHomelabGraphEntities(input.hostWorkspacePath, expectedGraphEntityFiles);
+      yield* bumpViewGeneration(input.hostWorkspacePath, "graph");
+    }),
+  );
 });

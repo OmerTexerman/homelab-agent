@@ -10,15 +10,22 @@ import * as FileSystem from "effect/FileSystem";
  * Two views are written:
  * - `<workspace>/.homelab/skills/<name>/SKILL.md` plus an index — the canonical, fully
  *   generated view every provider can read (and the one referenced by AGENTS.md).
- * - `<home>/.claude/skills/<name>/SKILL.md` — Claude Code's user-level skills directory,
- *   so skills are auto-discoverable there without extra prompting.
+ * - `<home>/.claude/skills/<name>/SKILL.md` and `<home>/.agents/skills/<name>/SKILL.md` —
+ *   the user-level skill directories Claude Code and Codex/OpenCode discover, so skills
+ *   auto-load for every provider without extra prompting.
  *
- * Both subtrees are reconciled: stale generated skill dirs are pruned. Because
- * agents and host syncs may also write into `.claude/skills`, we only prune
+ * All subtrees are reconciled: stale generated skill dirs are pruned. Because
+ * agents and host syncs may also write into the provider skill dirs, we only prune
  * entries this view previously managed — tracked in a `.homelab-managed.json`
- * manifest — so a renamed/deleted skill stops auto-loading without disturbing
- * skills authored elsewhere.
+ * manifest per directory — so a renamed/deleted skill stops auto-loading without
+ * disturbing skills authored elsewhere.
  */
+
+/** Home-relative skill directories providers auto-discover. */
+export const HOMELAB_PROVIDER_SKILL_DIRS = [
+  [".claude", "skills"],
+  [".agents", "skills"],
+] as const;
 
 export interface HomelabSkillsViewInput {
   readonly workspaceRoot: string;
@@ -83,8 +90,9 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const skillsDir = NodePath.join(input.workspaceRoot, ".homelab", "skills");
-  const claudeSkillsDir = NodePath.join(input.homeRoot, ".claude", "skills");
-  const claudeManifestPath = NodePath.join(claudeSkillsDir, ".homelab-managed.json");
+  const providerSkillDirs = HOMELAB_PROVIDER_SKILL_DIRS.map((segments) =>
+    NodePath.join(input.homeRoot, ...segments),
+  );
 
   const expectedDirs = new Set(input.skills.map((skill) => safeSkillSegment(skill.name)));
 
@@ -102,9 +110,11 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
     yield* fileSystem.makeDirectory(workspaceSkillDir, { recursive: true });
     yield* fileSystem.writeFileString(NodePath.join(workspaceSkillDir, "SKILL.md"), markdown);
 
-    const claudeSkillDir = NodePath.join(claudeSkillsDir, segment);
-    yield* fileSystem.makeDirectory(claudeSkillDir, { recursive: true });
-    yield* fileSystem.writeFileString(NodePath.join(claudeSkillDir, "SKILL.md"), markdown);
+    for (const providerSkillsDir of providerSkillDirs) {
+      const providerSkillDir = NodePath.join(providerSkillsDir, segment);
+      yield* fileSystem.makeDirectory(providerSkillDir, { recursive: true });
+      yield* fileSystem.writeFileString(NodePath.join(providerSkillDir, "SKILL.md"), markdown);
+    }
   }
 
   // Reconcile the fully generated workspace view: prune skill dirs that no longer exist.
@@ -122,27 +132,31 @@ export const writeHomelabSkillsView = Effect.fn("runtime.writeHomelabSkillsView"
     }
   }
 
-  // Reconcile Claude Code's user skills dir. Prune only the segments this view
-  // managed on a previous run (per the manifest) and are now gone — never touch
+  // Reconcile each provider skills dir. Prune only the segments this view managed
+  // on a previous run (per that dir's manifest) and are now gone — never touch
   // skills authored by the agent or synced from the host. Without this, a
-  // deleted/renamed skill kept auto-loading from ~/.claude/skills forever.
-  const previouslyManaged = yield* fileSystem.readFileString(claudeManifestPath).pipe(
-    Effect.map((raw) => {
-      const parsed: unknown = JSON.parse(raw);
-      return Array.isArray(parsed)
-        ? parsed.filter((entry): entry is string => typeof entry === "string")
-        : [];
-    }),
-    Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
-  );
-  for (const segment of previouslyManaged) {
-    if (!expectedDirs.has(segment)) {
-      yield* fileSystem
-        .remove(NodePath.join(claudeSkillsDir, segment), { recursive: true })
-        .pipe(Effect.orElseSucceed(() => undefined));
+  // deleted/renamed skill kept auto-loading forever.
+  for (const providerSkillsDir of providerSkillDirs) {
+    const manifestPath = NodePath.join(providerSkillsDir, ".homelab-managed.json");
+    const previouslyManaged = yield* fileSystem.readFileString(manifestPath).pipe(
+      Effect.map((raw) => {
+        const parsed: unknown = JSON.parse(raw);
+        return Array.isArray(parsed)
+          ? parsed.filter((entry): entry is string => typeof entry === "string")
+          : [];
+      }),
+      Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+    );
+    for (const segment of previouslyManaged) {
+      if (!expectedDirs.has(segment)) {
+        yield* fileSystem
+          .remove(NodePath.join(providerSkillsDir, segment), { recursive: true })
+          .pipe(Effect.orElseSucceed(() => undefined));
+      }
     }
+    yield* fileSystem.makeDirectory(providerSkillsDir, { recursive: true }).pipe(Effect.ignore);
+    yield* fileSystem
+      .writeFileString(manifestPath, `${JSON.stringify([...expectedDirs].sort())}\n`)
+      .pipe(Effect.orElseSucceed(() => undefined));
   }
-  yield* fileSystem
-    .writeFileString(claudeManifestPath, `${JSON.stringify([...expectedDirs].sort())}\n`)
-    .pipe(Effect.orElseSucceed(() => undefined));
 });

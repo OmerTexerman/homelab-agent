@@ -3,8 +3,11 @@ import type {
   OrchestrationProject,
   OrchestrationThread,
   ProjectId,
+  ProjectMemoryEntry,
   ThreadId,
 } from "@t3tools/contracts";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -55,6 +58,43 @@ export function selectProjectContextViewRuntimeThreadIds(input: {
     ).values(),
   ];
 }
+
+function isThreadScopedMemoryProject(projectId: ProjectId): boolean {
+  return isStandaloneProjectId(String(projectId)) || isCuratorProjectId(String(projectId));
+}
+
+/**
+ * The memory entries a runtime's `.homelab` view renders, using the one view limit
+ * ({@link HOMELAB_MEMORY_VIEW_ENTRY_LIMIT}). Pass `threadId` for the thread whose runtime
+ * is being materialized: scratch and curator memory is then filtered to that thread in
+ * SQL before the limit, so a busy sibling thread can never push this thread's notes out.
+ * Failures are logged and yield no entries (the rest of the view still renders).
+ */
+export const listHomelabViewMemoryEntries = (input: {
+  readonly projectId: ProjectId;
+  readonly threadId?: ThreadId | undefined;
+}): Effect.Effect<ReadonlyArray<ProjectMemoryEntry>> =>
+  Effect.gen(function* () {
+    const projectMemory = yield* Effect.serviceOption(ProjectMemory);
+    if (Option.isNone(projectMemory)) {
+      return [];
+    }
+    return yield* projectMemory.value
+      .list({
+        projectId: input.projectId,
+        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+        limit: HOMELAB_MEMORY_VIEW_ENTRY_LIMIT,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to list project memory for .homelab view", {
+            projectId: input.projectId,
+            threadId: input.threadId,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as([] as ReadonlyArray<ProjectMemoryEntry>)),
+        ),
+      );
+  });
 
 export const refreshActiveProjectContextViews = (
   projectId: ProjectId,
@@ -114,15 +154,13 @@ export const refreshActiveProjectContextViews = (
     }
 
     const runtimeBootstrapRegistry = yield* Effect.serviceOption(RuntimeBootstrapRegistry);
-    const [memoryEntries, bootstrap] = yield* Effect.all([
-      projectMemory.value.list({ projectId, limit: HOMELAB_MEMORY_VIEW_ENTRY_LIMIT }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("failed to list project memory for view refresh", {
-            projectId,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as([])),
-        ),
-      ),
+    // Thread-scoped (scratch/curator) memory is listed per thread below, so the scope
+    // filter runs in SQL before the limit; project memory is listed once.
+    const threadScoped = isThreadScopedMemoryProject(projectId);
+    const [projectMemoryEntries, bootstrap] = yield* Effect.all([
+      threadScoped
+        ? Effect.succeed([] as ReadonlyArray<ProjectMemoryEntry>)
+        : listHomelabViewMemoryEntries({ projectId }),
       Option.isSome(runtimeBootstrapRegistry)
         ? runtimeBootstrapRegistry.value.getCatalog().pipe(
             Effect.map(homelabRuntimeBootstrapView),
@@ -141,6 +179,9 @@ export const refreshActiveProjectContextViews = (
       (threadId) =>
         Effect.gen(function* () {
           const launchContext = yield* threadRuntime.value.resolveLaunchContext(threadId);
+          const memoryEntries = threadScoped
+            ? yield* listHomelabViewMemoryEntries({ projectId, threadId })
+            : projectMemoryEntries;
           const scoped = scopeHomelabContextViewToThread({
             project,
             threads: projectThreads,

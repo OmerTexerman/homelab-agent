@@ -171,6 +171,8 @@ export const HomelabGraphSearchInput = Schema.Struct({
   query: TrimmedNonEmptyString,
   kinds: Schema.optional(Schema.Array(HomelabEntityKind)),
   limit: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+  /** Superseded entities are hidden from search unless this is true. */
+  includeSuperseded: Schema.optional(Schema.Boolean),
 });
 export type HomelabGraphSearchInput = typeof HomelabGraphSearchInput.Type;
 
@@ -221,3 +223,62 @@ export const HomelabPromotionRecorded = Schema.Struct({
   recordedAt: IsoDateTime,
 });
 export type HomelabPromotionRecorded = typeof HomelabPromotionRecorded.Type;
+
+/**
+ * Knowledge store documents, as returned by `GET /api/homelab/show?id=` (the
+ * `homelab show <id>` CLI). One row type covers graph entities (scope
+ * `global`), observations (kind `_observation`), and project or thread memory
+ * notes (kind `note`). Kinds starting with `_` are internal document types.
+ */
+export const HomelabKnowledgeScope = Schema.Literals(["thread", "project", "global"]);
+export type HomelabKnowledgeScope = typeof HomelabKnowledgeScope.Type;
+
+export const HomelabKnowledgeDoc = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  scope: HomelabKnowledgeScope,
+  projectId: Schema.NullOr(Schema.String),
+  threadId: Schema.NullOr(Schema.String),
+  kind: Schema.String,
+  name: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  summary: Schema.NullOr(Schema.String),
+  body: Schema.String,
+  props: HomelabRecord,
+  status: Schema.NullOr(Schema.String),
+  confidence: Schema.NullOr(Schema.Number),
+  lastVerifiedAt: Schema.NullOr(Schema.String),
+  supersededBy: Schema.NullOr(Schema.String),
+  sourceThreadId: Schema.NullOr(Schema.String),
+  sourceMessageId: Schema.NullOr(Schema.String),
+  sourcePath: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type HomelabKnowledgeDoc = typeof HomelabKnowledgeDoc.Type;
+
+export const HomelabKnowledgeLink = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  kind: Schema.String,
+  fromId: Schema.String,
+  toId: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+});
+export type HomelabKnowledgeLink = typeof HomelabKnowledgeLink.Type;
+
+/** One knowledge mutation, recorded in the same transaction as the change. */
+export const HomelabKnowledgeAuditEntry = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  at: Schema.String,
+  actorThreadId: Schema.NullOr(Schema.String),
+  action: Schema.String,
+  docId: Schema.NullOr(Schema.String),
+  reason: Schema.NullOr(Schema.String),
+});
+export type HomelabKnowledgeAuditEntry = typeof HomelabKnowledgeAuditEntry.Type;
+
+export const HomelabKnowledgeShowResult = Schema.Struct({
+  doc: HomelabKnowledgeDoc,
+  links: Schema.Array(HomelabKnowledgeLink),
+  audit: Schema.Array(HomelabKnowledgeAuditEntry),
+});
+export type HomelabKnowledgeShowResult = typeof HomelabKnowledgeShowResult.Type;

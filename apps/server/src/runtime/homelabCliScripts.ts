@@ -483,7 +483,13 @@ def cmd_search(args):
         payload["kinds"] = args.kind
     if args.limit is not None:
         payload["limit"] = args.limit
+    if args.include_superseded:
+        payload["includeSuperseded"] = True
     print_json(request_json("POST", "/api/homelab/search", payload=payload))
+
+
+def cmd_show(args):
+    print_json(request_json("GET", "/api/homelab/show", query={"id": args.id}))
 
 
 def cmd_entity(args):
@@ -589,6 +595,8 @@ def cmd_memory_search(args):
     payload = runtime_thread_query(args)
     payload["query"] = args.query
     payload["includeTranscripts"] = not args.no_transcripts
+    if args.include_superseded:
+        payload["includeSuperseded"] = True
     if args.limit is not None:
         payload["limit"] = args.limit
     print_json(request_json("POST", "/api/homelab/project-memory/search", payload=payload))
@@ -847,11 +855,26 @@ def build_parser():
     snapshot_parser = subparsers.add_parser("snapshot", help="Print the full homelab snapshot.")
     snapshot_parser.set_defaults(func=cmd_snapshot)
 
-    search_parser = subparsers.add_parser("search", help="Search the homelab graph.")
-    search_parser.add_argument("query", help="Search query.")
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Full-text search of the homelab graph, best match first (ranked by relevance and freshness).",
+    )
+    search_parser.add_argument("query", help="Search terms; every term must match, else any term.")
     search_parser.add_argument("--kind", action="append", help="Restrict to an entity kind.")
     search_parser.add_argument("--limit", type=int, default=None, help="Max result count.")
+    search_parser.add_argument(
+        "--include-superseded",
+        action="store_true",
+        help="Also return entries a newer entry supersedes (hidden by default).",
+    )
     search_parser.set_defaults(func=cmd_search)
+
+    show_parser = subparsers.add_parser(
+        "show",
+        help="Show one knowledge record by id (entity, observation, or memory entry) with its links and history.",
+    )
+    show_parser.add_argument("id", help="Entity, observation, or memory id.")
+    show_parser.set_defaults(func=cmd_show)
 
     entity_parser = subparsers.add_parser("entity", help="Fetch one entity by id.")
     entity_parser.add_argument("entity_id", help="Entity id.")
@@ -916,6 +939,11 @@ def build_parser():
         "--no-transcripts",
         action="store_true",
         help="Search durable memory only, without raw transcript indexes.",
+    )
+    memory_search_parser.add_argument(
+        "--include-superseded",
+        action="store_true",
+        help="Also return entries a newer entry supersedes (hidden by default).",
     )
     memory_search_parser.set_defaults(func=cmd_memory_search)
 

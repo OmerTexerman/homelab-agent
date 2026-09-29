@@ -17,6 +17,7 @@ import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
 
 import { EnvironmentAuth } from "../auth/EnvironmentAuth.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { HomelabSqlMemory } from "../homelabPersistence/HomelabSql.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import {
   homelabProjectMemoryCreateRouteLayer,
@@ -71,7 +72,11 @@ const routes = Layer.mergeAll(
 const TestLayer = HttpRouter.serve(routes, { disableListenLog: true, disableLogger: true }).pipe(
   Layer.provideMerge(TestEnvironmentAuth),
   Layer.provideMerge(TestProjectionSnapshotQuery),
-  Layer.provideMerge(ProjectMemoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
+  Layer.provideMerge(
+    ProjectMemoryLive.pipe(
+      Layer.provideMerge(Layer.mergeAll(SqlitePersistenceMemory, HomelabSqlMemory)),
+    ),
+  ),
   Layer.provideMerge(NodeHttpServer.layerTest),
 );
 

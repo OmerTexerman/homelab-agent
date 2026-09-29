@@ -192,6 +192,7 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
           promotion,
           recordedAt: EPOCH,
         }),
+      transaction: (effect) => effect,
       changes: Stream.empty,
       ...overrides.knowledgeGraph,
     }),
