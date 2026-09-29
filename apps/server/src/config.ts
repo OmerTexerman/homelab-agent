@@ -101,6 +101,11 @@ export class ServerConfig extends Context.Service<
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
+    /**
+     * Homelab: reflect any browser Origin with credentials on the HTTP API
+     * (reverse-proxy/tailnet deployments). Absent means upstream's CORS policy.
+     */
+    readonly homelabCredentialedCors?: boolean | undefined;
   }
 >()("t3/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */

@@ -154,6 +154,9 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  homelabCredentialedCors: Config.Boolean("T3CODE_HOMELAB_CREDENTIALED_CORS").pipe(
+    Config.withDefault(true),
+  ),
   tailscaleServeEnabled: Config.Boolean("T3CODE_TAILSCALE_SERVE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -448,6 +451,7 @@ export const resolveServerConfig = (
       devUrl,
       ...(devAuthToken === undefined ? {} : { devAuthToken }),
       devAllowedOrigins: env.devAllowedOrigins,
+      homelabCredentialedCors: env.homelabCredentialedCors,
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
