@@ -57,6 +57,7 @@ function thread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSum
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    pullRequests: [],
     ...overrides,
   };
 }

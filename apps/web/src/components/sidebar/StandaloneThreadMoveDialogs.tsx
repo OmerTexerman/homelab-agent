@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  CommandId,
   ProjectId,
   type ContextMenuItem,
   type ProjectMemoryEntry,
@@ -13,7 +14,7 @@ import {
 
 import { describeHomelabError, fetchHomelabJson } from "../../homelab/homelabFetch";
 import { isUserVisibleProject } from "../../homelab/visibleProjects";
-import { newCommandId, newProjectId } from "../../lib/utils";
+import { newProjectId, randomUUID } from "../../lib/utils";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { useProjects } from "../../state/entities";
 import { useEnvironmentHttpBaseUrl } from "../../state/environments";
@@ -179,7 +180,7 @@ export function useStandaloneThreadMoveDialogs(): {
         environmentId: promoteTarget.environmentId,
         input: {
           type: "thread.standalone.promote-to-project",
-          commandId: newCommandId(),
+          commandId: CommandId.make(randomUUID()),
           threadId: promoteTarget.id,
           projectId: newProjectId(),
           title,
@@ -316,7 +317,7 @@ export function useStandaloneThreadMoveDialogs(): {
         environmentId: moveTarget.environmentId,
         input: {
           type: "thread.standalone.move-to-project",
-          commandId: newCommandId(),
+          commandId: CommandId.make(randomUUID()),
           threadId: moveTarget.id,
           projectId: ProjectId.make(moveProjectId),
           memoryMigration: buildStandaloneThreadMoveMemoryMigration({
