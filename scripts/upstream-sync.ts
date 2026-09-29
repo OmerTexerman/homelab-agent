@@ -205,7 +205,8 @@ function verify(): void {
       },
       ...["packages/contracts", "apps/server", "apps/web"].map((cwd) => ({
         cwd,
-        command: NodePath.join(repoRoot, cwd, "node_modules/.bin/tsc"),
+        // TypeScript is a root devDependency, so packages have no tsc bin of their own.
+        command: NodePath.join(repoRoot, "node_modules/.bin/tsc"),
         args: ["--noEmit"],
       })),
     ];
