@@ -1,5 +1,5 @@
 {
-  "@anthropic-ai/claude-code": "2.1.222",
-  "@openai/codex": "0.144.4",
+  "@anthropic-ai/claude-code": "2.1.284",
+  "@openai/codex": "0.158.0",
   "opencode-ai": "1.17.3"
 }
