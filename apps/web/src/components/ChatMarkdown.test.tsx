@@ -52,6 +52,11 @@ vi.mock("../editorPreferences", () => ({
   useOpenInPreferredEditor: () => vi.fn(),
   usePreferredEditor: () => [null, vi.fn()],
 }));
+// Homelab hides editor launch controls; these tests cover upstream's editor path.
+vi.mock("../productCapabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../productCapabilities")>()),
+  shouldShowEditorOpenInControls: () => true,
+}));
 vi.mock("~/lib/openPullRequestLink", () => ({
   findProjectOnChangeRequestHost: () => undefined,
   parseChangeRequestUrl: () => null,
