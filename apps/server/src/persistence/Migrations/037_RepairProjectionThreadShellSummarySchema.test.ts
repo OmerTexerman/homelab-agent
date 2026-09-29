@@ -3,10 +3,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import { migrationManifest, runMigrations } from "../Migrations.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 const legacyMigrationRows = [
   [23, "ProjectionPendingTurnIntent"],
@@ -177,22 +177,10 @@ layer("037_RepairProjectionThreadShellSummarySchema", (it) => {
       );
 
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed, [
-        [37, "RepairProjectionThreadShellSummarySchema"],
-        [38, "BackfillAuthSessionVisibility"],
-        [39, "DeriveThreadRuntimeBindings"],
-        [40, "HomelabSkills"],
-        [41, "AuthPairingProofKeyThumbprint"],
-        [42, "ProjectionThreadsSettled"],
-        [43, "ProjectionThreadsSnoozed"],
-        [44, "ProjectionThreadTitleRegeneration"],
-        [45, "ProjectionThreadsPinned"],
-        [46, "ProjectionTurnsKeysetIndex"],
-        [47, "ProjectionThreadsPinOrderKey"],
-        [48, "ProjectionProjectsDefaultThreadEnvMode"],
-        [49, "ProjectionProjectFaviconPath"],
-        [50, "AuthSessionClientConnection"],
-      ]);
+      assert.deepStrictEqual(
+        executed,
+        migrationManifest.filter(([id]) => id >= 37),
+      );
 
       const afterColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)

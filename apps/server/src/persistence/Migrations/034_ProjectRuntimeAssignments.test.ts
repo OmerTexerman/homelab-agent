@@ -4,9 +4,10 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const freshSqliteLayer = () => it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const freshSqliteLayer = () =>
+  it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 freshSqliteLayer()("034_ProjectRuntimeAssignments backfill", (it) => {
   it.effect("backfills project runtime assignments on existing projections and events", () =>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { migrationEntries } from "./Migrations.ts";
+import { migrationManifest as migrationEntries } from "./Migrations.ts";
 
 // Homelab fork invariant: upstream syncs renumber fork migrations, and a
 // duplicated or out-of-order id silently skips a migration on existing
