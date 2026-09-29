@@ -59,7 +59,7 @@ export interface HomelabServerTestLayerOverrides {
 }
 
 const decodeHomelabSnapshot = Schema.decodeUnknownSync(HomelabSnapshot);
-const EPOCH = new Date(0).toISOString();
+const EPOCH = "1970-01-01T00:00:00.000Z";
 
 export const makeDefaultHomelabSnapshot = () =>
   decodeHomelabSnapshot({ entities: [], relations: [], observations: [], updatedAt: EPOCH });
@@ -130,7 +130,7 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
     }),
     Layer.mock(ThreadRuntime)({
       ensureRuntime: (input) => Effect.succeed(makeMockThreadRuntimeDescriptor(input.threadId)),
-      getRuntime: () => Effect.succeed(undefined),
+      getRuntime: () => Effect.void.pipe(Effect.as(undefined)),
       listRuntimes: () => Effect.succeed([]),
       startRuntime: (threadId) => Effect.succeed(makeMockThreadRuntimeDescriptor(threadId)),
       stopRuntime: () => Effect.void,
@@ -171,7 +171,17 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
       changes: Stream.empty,
       ...overrides.homelabSecretRegistry,
     }),
-    Layer.mock(RuntimeBootstrapRegistry)({ ...overrides.runtimeBootstrapRegistry }),
+    Layer.mock(RuntimeBootstrapRegistry)({
+      recordMutation: (mutation) =>
+        Effect.succeed({
+          backend: "docker",
+          imageRef: "homelab-agent-runtime:test",
+          bootstrapVersion: "bootstrap-test",
+          mutations: [mutation],
+          updatedAt: EPOCH,
+        }),
+      ...overrides.runtimeBootstrapRegistry,
+    }),
     Layer.mock(KnowledgeGraph)({
       getSnapshot: () => Effect.succeed(makeDefaultHomelabSnapshot()),
       listEntities: () => Effect.succeed([]),

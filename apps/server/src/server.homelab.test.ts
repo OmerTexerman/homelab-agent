@@ -6,6 +6,7 @@
  * with homelab services from `homelabServerTestLayers`.
  */
 import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   AuthAdministrativeScopes,
@@ -21,7 +22,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
 
@@ -42,6 +42,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 
 const decodeHomelabEntity = Schema.decodeUnknownSync(HomelabEntity);
 const decodeHomelabPromotionEnvelope = Schema.decodeUnknownSync(HomelabPromotionEnvelope);
+
 const REVERSE_PROXY_ORIGIN = "https://agent.example.test";
 
 const makeConfigLayer = (homelabCredentialedCors: boolean) =>
@@ -68,7 +69,7 @@ const makeHomelabApp = (
     Layer.provide(makeHomelabServerTestLayers(options.homelab)),
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeedNone,
       }),
     ),
     Layer.provideMerge(
@@ -84,6 +85,7 @@ const makeHomelabApp = (
     ),
     Layer.provide(makeConfigLayer(options.credentialedCors ?? true)),
     Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 /** A bearer token with exactly `scopes`, as the runtime token minting issues them. */
@@ -195,13 +197,14 @@ describe("homelab HTTP routes", () => {
     }).pipe(Effect.provide(makeHomelabApp())),
   );
 
-  const grafana = decodeHomelabEntity({
+  const grafanaFields = {
     id: "service-grafana",
     kind: "service",
     name: "grafana",
     createdAt: "2026-04-12T00:00:00.000Z",
     updatedAt: "2026-04-12T00:00:00.000Z",
-  });
+  } as const;
+  const grafana = decodeHomelabEntity(grafanaFields);
 
   it.effect("filters homelab entities by kind", () =>
     Effect.gen(function* () {
@@ -209,7 +212,11 @@ describe("homelab HTTP routes", () => {
         headers: yield* ownerHeaders,
       });
       assert.equal(response.status, 200);
-      assert.deepEqual(yield* response.json, [JSON.parse(JSON.stringify(grafana))]);
+      const body = (yield* response.json) as ReadonlyArray<unknown>;
+      assert.deepEqual(
+        body.map((entity) => decodeHomelabEntity(entity)),
+        [grafana],
+      );
     }).pipe(
       Effect.provide(
         makeHomelabApp({
@@ -231,7 +238,7 @@ describe("homelab HTTP routes", () => {
     threadId: ThreadId.make("thread-knowledge"),
     summary: "Promote grafana service",
     createdAt: "2026-04-12T00:00:00.000Z",
-    entries: [{ action: "upsert_entity", entity: JSON.parse(JSON.stringify(grafana)) }],
+    entries: [{ action: "upsert_entity", entity: grafanaFields }],
   });
   const recorded = {
     eventId: EventId.make("homelab-promotion-1"),
@@ -246,7 +253,13 @@ describe("homelab HTTP routes", () => {
         body: yield* HttpBody.json(promotion),
       });
       assert.equal(response.status, 201);
-      assert.deepEqual(yield* response.json, JSON.parse(JSON.stringify(recorded)));
+      const body = (yield* response.json) as Omit<typeof recorded, "promotion"> & {
+        readonly promotion: unknown;
+      };
+      assert.deepEqual(
+        { ...body, promotion: decodeHomelabPromotionEnvelope(body.promotion) },
+        recorded,
+      );
     }).pipe(
       Effect.provide(
         makeHomelabApp({

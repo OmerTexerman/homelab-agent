@@ -780,9 +780,9 @@ const buildAppUnderTest = (options?: {
         routerConfig: HTTP_ROUTER_CONFIG,
       },
     ).pipe(
-      Layer.provide(makeHomelabServerTestLayers(options?.layers?.homelab)),
       Layer.provide(
         Layer.mergeAll(
+          makeHomelabServerTestLayers(options?.layers?.homelab),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({
               keybindings: [],
@@ -1398,7 +1398,7 @@ const exchangeAccessToken = (
         requested_token_type: AuthAccessTokenType,
         scope:
           options?.scope ??
-          "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+          "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write homelab:curate homelab:secrets-admin",
         ...(options?.clientMetadata?.label ? { client_label: options.clientMetadata.label } : {}),
         ...(options?.clientMetadata?.deviceType
           ? { client_device_type: options.clientMetadata.deviceType }
@@ -2371,7 +2371,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(tokenBody.token_type, "Bearer");
       assert.equal(
         tokenBody.scope,
-        "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+        "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write homelab:curate homelab:secrets-admin",
       );
       assert.equal(typeof tokenBody.access_token, "string");
 
@@ -2399,6 +2399,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "access:read",
         "access:write",
         "relay:write",
+        "homelab:curate",
+        "homelab:secrets-admin",
       ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
