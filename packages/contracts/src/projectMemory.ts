@@ -75,6 +75,8 @@ export const ProjectMemorySearchInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   query: TrimmedNonEmptyString,
   includeTranscripts: Schema.optional(Schema.Boolean),
+  /** Entries superseded or replaced by a newer entry are hidden unless this is true. */
+  includeSuperseded: Schema.optional(Schema.Boolean),
   limit: Schema.optional(PositiveInt),
 });
 export type ProjectMemorySearchInput = typeof ProjectMemorySearchInput.Type;
