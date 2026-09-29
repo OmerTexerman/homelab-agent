@@ -80,6 +80,7 @@ import {
   type ProjectionThreadPullRequests,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+import * as Homelab from "../homelabProjection.ts";
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
@@ -400,6 +401,7 @@ function mapProjectShellRow(
     id: row.projectId,
     title: row.title,
     workspaceRoot: row.workspaceRoot,
+    ...Homelab.homelabProjectRuntime(row),
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
@@ -543,6 +545,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          default_runtime_id AS "defaultRuntimeId",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -567,6 +570,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -615,6 +620,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -690,6 +697,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -1182,6 +1191,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          default_runtime_id AS "defaultRuntimeId",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -1208,6 +1218,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           workspace_root AS "workspaceRoot",
+          default_runtime_id AS "defaultRuntimeId",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
@@ -1294,6 +1305,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          runtime_id AS "runtimeId",
+          runtime_selection_mode AS "runtimeSelectionMode",
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
@@ -2352,6 +2365,7 @@ pending_approval_requests AS (
                 id: row.projectId,
                 title: row.title,
                 workspaceRoot: row.workspaceRoot,
+                ...Homelab.homelabProjectRuntime(row),
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                 defaultModelSelection: row.defaultModelSelection,
                 defaultThreadEnvMode: row.defaultThreadEnvMode,
@@ -2367,6 +2381,7 @@ pending_approval_requests AS (
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
+                ...Homelab.homelabThreadRuntime(row),
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -2521,6 +2536,7 @@ pending_approval_requests AS (
                   id: row.projectId,
                   title: row.title,
                   workspaceRoot: row.workspaceRoot,
+                  ...Homelab.homelabProjectRuntime(row),
                   repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                   defaultModelSelection: row.defaultModelSelection,
                   defaultThreadEnvMode: row.defaultThreadEnvMode,
@@ -2613,6 +2629,7 @@ pending_approval_requests AS (
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
+                  ...Homelab.homelabThreadRuntime(row),
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -2774,6 +2791,7 @@ pending_approval_requests AS (
                     ? Result.succeed({
                         id: row.threadId,
                         projectId: row.projectId,
+                        ...Homelab.homelabThreadRuntime(row),
                         title: row.title,
                         modelSelection: row.modelSelection,
                         runtimeMode: row.runtimeMode,
@@ -2957,46 +2975,49 @@ pending_approval_requests AS (
                       )
                     : Result.failVoid,
                 ),
-                threads: threadRows.map((row): OrchestrationThreadShell => ({
-                  id: row.threadId,
-                  projectId: row.projectId,
-                  title: row.title,
-                  modelSelection: row.modelSelection,
-                  runtimeMode: row.runtimeMode,
-                  interactionMode: row.interactionMode,
-                  branch: row.branch,
-                  worktreePath: row.worktreePath,
-                  branchPullRequest: row.branchPullRequest,
-                  ...mapThreadPullRequests(
-                    pullRequestsByThread.get(row.threadId) ?? [],
-                    row.projectId,
-                    repositoryIdentities.get(row.projectId),
-                  ),
-                  latestTurn: latestTurnByThread.get(row.threadId) ?? null,
-                  createdAt: row.createdAt,
-                  updatedAt: row.updatedAt,
-                  archivedAt: row.archivedAt,
-                  settledOverride: row.settledOverride,
-                  settledAt: row.settledAt,
-                  unsettledAt: row.unsettledAt,
-                  snoozedUntil: row.snoozedUntil,
-                  snoozedAt: row.snoozedAt,
-                  pinnedAt: row.pinnedAt,
-                  pinOrderKey: row.pinOrderKey ?? null,
-                  activeOrderKey: row.activeOrderKey ?? null,
-                  autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
-                  titleRegeneration: mapTitleRegeneration(row),
-                  titleState: row.titleState,
-                  session: sessionByThread.get(row.threadId) ?? null,
-                  latestUserMessageAt: row.latestUserMessageAt,
-                  hasPendingApprovals: row.pendingApprovalCount > 0,
-                  hasPendingUserInput: row.pendingUserInputCount > 0,
-                  hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
-                  backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
-                    row.threadId,
-                  ),
-                  planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
-                })),
+                threads: threadRows.map(
+                  (row): OrchestrationThreadShell => ({
+                    id: row.threadId,
+                    projectId: row.projectId,
+                    ...Homelab.homelabThreadRuntime(row),
+                    title: row.title,
+                    modelSelection: row.modelSelection,
+                    runtimeMode: row.runtimeMode,
+                    interactionMode: row.interactionMode,
+                    branch: row.branch,
+                    worktreePath: row.worktreePath,
+                    branchPullRequest: row.branchPullRequest,
+                    ...mapThreadPullRequests(
+                      pullRequestsByThread.get(row.threadId) ?? [],
+                      row.projectId,
+                      repositoryIdentities.get(row.projectId),
+                    ),
+                    latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt,
+                    archivedAt: row.archivedAt,
+                    settledOverride: row.settledOverride,
+                    settledAt: row.settledAt,
+                    unsettledAt: row.unsettledAt,
+                    snoozedUntil: row.snoozedUntil,
+                    snoozedAt: row.snoozedAt,
+                    pinnedAt: row.pinnedAt,
+                    pinOrderKey: row.pinOrderKey ?? null,
+                    activeOrderKey: row.activeOrderKey ?? null,
+                    autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
+                    titleRegeneration: mapTitleRegeneration(row),
+                    titleState: row.titleState,
+                    session: sessionByThread.get(row.threadId) ?? null,
+                    latestUserMessageAt: row.latestUserMessageAt,
+                    hasPendingApprovals: row.pendingApprovalCount > 0,
+                    hasPendingUserInput: row.pendingUserInputCount > 0,
+                    hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                    backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
+                      row.threadId,
+                    ),
+                    planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                  }),
+                ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationShellSnapshot;
             }),
@@ -3032,10 +3053,12 @@ pending_approval_requests AS (
           "ProjectionSnapshotQuery.getCounts:decodeRow",
         ),
       ),
-      Effect.map((row): ProjectionSnapshotCounts => ({
-        projectCount: row.projectCount,
-        threadCount: row.threadCount,
-      })),
+      Effect.map(
+        (row): ProjectionSnapshotCounts => ({
+          projectCount: row.projectCount,
+          threadCount: row.threadCount,
+        }),
+      ),
     );
 
   const getEventReplayStats: ProjectionSnapshotQueryShape["getEventReplayStats"] = (input) =>
@@ -3046,10 +3069,12 @@ pending_approval_requests AS (
           "ProjectionSnapshotQuery.getEventReplayStats:decodeRow",
         ),
       ),
-      Effect.map((row): ProjectionEventReplayStats => ({
-        eventCount: row.eventCount,
-        payloadBytes: row.payloadBytes,
-      })),
+      Effect.map(
+        (row): ProjectionEventReplayStats => ({
+          eventCount: row.eventCount,
+          payloadBytes: row.payloadBytes,
+        }),
+      ),
     );
 
   const searchThreads: ProjectionSnapshotQueryShape["searchThreads"] = Effect.fn(
@@ -3096,6 +3121,7 @@ pending_approval_requests AS (
                     id: option.value.projectId,
                     title: option.value.title,
                     workspaceRoot: option.value.workspaceRoot,
+                    ...Homelab.homelabProjectRuntime(option.value),
                     repositoryIdentity,
                     defaultModelSelection: option.value.defaultModelSelection,
                     defaultThreadEnvMode: option.value.defaultThreadEnvMode,
@@ -3221,15 +3247,17 @@ pending_approval_requests AS (
         projectId: threadRow.value.projectId,
         workspaceRoot: threadRow.value.workspaceRoot,
         worktreePath: threadRow.value.worktreePath,
-        checkpoints: checkpointRows.map((row): OrchestrationCheckpointSummary => ({
-          turnId: row.turnId,
-          checkpointTurnCount: row.checkpointTurnCount,
-          checkpointRef: row.checkpointRef,
-          status: row.status,
-          files: row.files,
-          assistantMessageId: row.assistantMessageId,
-          completedAt: row.completedAt,
-        })),
+        checkpoints: checkpointRows.map(
+          (row): OrchestrationCheckpointSummary => ({
+            turnId: row.turnId,
+            checkpointTurnCount: row.checkpointTurnCount,
+            checkpointRef: row.checkpointRef,
+            status: row.status,
+            files: row.files,
+            assistantMessageId: row.assistantMessageId,
+            completedAt: row.completedAt,
+          }),
+        ),
       });
     });
 
@@ -3306,6 +3334,7 @@ pending_approval_requests AS (
       return Option.some({
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        ...Homelab.homelabThreadRuntime(threadRow.value),
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
@@ -3608,6 +3637,7 @@ pending_approval_requests AS (
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        ...Homelab.homelabThreadRuntime(threadRow.value),
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,

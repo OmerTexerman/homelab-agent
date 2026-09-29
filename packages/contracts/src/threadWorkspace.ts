@@ -66,7 +66,7 @@ export const ThreadWorkspaceWriteFileResult = Schema.Struct({
 });
 export type ThreadWorkspaceWriteFileResult = typeof ThreadWorkspaceWriteFileResult.Type;
 
-export class ThreadWorkspaceError extends Schema.TaggedErrorClass<ThreadWorkspaceError>()(
+export class ThreadWorkspaceError extends Schema.TaggedError<ThreadWorkspaceError>()(
   "ThreadWorkspaceError",
   {
     message: TrimmedNonEmptyString,

@@ -28,6 +28,11 @@ import {
 } from "../opencodeRuntime.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
+import {
+  isManagedOpenCodeRuntime,
+  MANAGED_OPENCODE_PROVIDER_PROBE,
+  managedOpenCodeDefaultModels,
+} from "./managedOpenCode.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
@@ -438,6 +443,22 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
           ? "OpenCode is disabled in T3 Code settings. A server URL is configured."
           : "OpenCode is disabled in T3 Code settings.",
       },
+    });
+  }
+
+  // Homelab: sessions run the runtime image's OpenCode, so the host CLI
+  // probe does not decide readiness.
+  if (yield* isManagedOpenCodeRuntime(openCodeSettings.serverUrl)) {
+    return buildServerProvider({
+      presentation: OPENCODE_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: providerModelsFromSettings(
+        managedOpenCodeDefaultModels(DEFAULT_OPENCODE_MODEL_CAPABILITIES),
+        customModels,
+        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      ),
+      probe: MANAGED_OPENCODE_PROVIDER_PROBE,
     });
   }
 

@@ -81,6 +81,7 @@ import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
+import { makeHomelabSessionPlacement } from "./ProviderSessionRuntime.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -486,6 +487,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const resolveHomelabSessionPlacement = yield* makeHomelabSessionPlacement;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
@@ -1276,6 +1278,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const homelabPlacement = yield* resolveHomelabSessionPlacement({
+        operation: input.operation,
+        threadId: input.binding.threadId,
+        instanceId: bindingInstanceId,
+        provider: input.binding.provider,
+        runtimeMode: input.binding.runtimeMode ?? "full-access",
+        requestedCwd: persistedCwd,
+        modelSelection: persistedModelSelection,
+      });
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
       const resumed = yield* adapter
@@ -1284,6 +1295,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
+          ...homelabPlacement,
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
@@ -1492,7 +1504,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
         });
-        if (effectiveCwd !== undefined) {
+        const homelabPlacement = yield* resolveHomelabSessionPlacement({
+          operation: "ProviderService.startSession",
+          threadId,
+          instanceId: resolvedInstanceId,
+          provider: resolvedProvider,
+          runtimeId: input.runtimeId,
+          runtimeMode: input.runtimeMode,
+          requestedCwd: effectiveCwd,
+          modelSelection: input.modelSelection,
+        });
+        if (effectiveCwd !== undefined && homelabPlacement === undefined) {
           // Fail fast with an actionable error when the workspace folder is
           // gone (e.g. moved, deleted, or replaced by a plain file).
           // Otherwise every adapter surfaces this as a misleading "failed to
@@ -1514,6 +1536,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...input,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+            ...homelabPlacement,
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));

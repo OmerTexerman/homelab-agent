@@ -48,6 +48,8 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { resolveProjectRuntimeAssignment } from "../../runtime/ProjectRuntimePolicy.ts";
+import { makeProjectRuntimeTurnDispatch } from "./ProjectRuntimeTurnDispatch.ts";
 import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
@@ -224,6 +226,10 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const projectRuntimeTurnDispatch = yield* makeProjectRuntimeTurnDispatch({
+    projectionSnapshotQuery,
+    providerService,
+  });
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -725,6 +731,11 @@ const make = Effect.gen(function* () {
     const sessionTitle =
       manualTitle.length > 0 && manualTitle !== promptSeed ? thread.title : undefined;
 
+    // Homelab: provider sessions run inside the thread's runtime, never on the host.
+    if (!project) {
+      return yield* Effect.die(new Error(`Project '${thread.projectId}' was not found.`));
+    }
+    const runtimeAssignment = resolveProjectRuntimeAssignment({ project, thread });
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
@@ -732,6 +743,7 @@ const make = Effect.gen(function* () {
       providerService
         .startSession(threadId, {
           threadId,
+          runtimeId: runtimeAssignment.runtimeId,
           ...(preferredProvider ? { provider: preferredProvider } : {}),
           providerInstanceId: desiredInstanceId,
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -1521,10 +1533,16 @@ const make = Effect.gen(function* () {
       .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
-    yield* send.pipe(
-      Effect.ensuring(resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void),
-      Effect.forkScoped,
-    );
+    yield* projectRuntimeTurnDispatch.dispatchTurnStart({
+      thread,
+      modelSelection: event.payload.modelSelection ?? thread.modelSelection,
+      runtimeMode: event.payload.runtimeMode,
+      createdAt: event.payload.createdAt,
+      sendTurn: send,
+      settle: resumed ? Deferred.succeed(resumed.sent, undefined).pipe(Effect.asVoid) : Effect.void,
+      onFailure: handleTurnStartFailure,
+      onUnrecoverableFailure: recoverTurnStartFailure,
+    });
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

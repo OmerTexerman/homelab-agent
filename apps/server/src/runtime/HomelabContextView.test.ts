@@ -69,6 +69,7 @@ function makeThread(
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    pullRequests: [],
     session: null,
     ...overrides,
   };
