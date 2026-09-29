@@ -1429,6 +1429,10 @@ const makeWsRpcLayer = (
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
+                // Homelab: shared or isolated runtime for the new thread.
+                ...(bootstrap.createThread.runtimeSelectionMode !== undefined
+                  ? { runtimeSelectionMode: bootstrap.createThread.runtimeSelectionMode }
+                  : {}),
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,

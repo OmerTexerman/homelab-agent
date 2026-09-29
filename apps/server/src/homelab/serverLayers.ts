@@ -24,6 +24,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { layer as RuntimeProviderVersionManifestLive } from "../provider/RuntimeProviderVersionManifest.ts";
 import { layer as RuntimeProviderVersionReconcilerLive } from "../provider/RuntimeProviderVersionReconciler.ts";
 import { ProjectRuntimeLifecycleLive } from "../runtime/Layers/ProjectRuntimeLifecycle.ts";
+import { RuntimeTurnKeepaliveLive } from "../runtime/Layers/RuntimeTurnKeepalive.ts";
 import { RuntimeWorkspaceLive } from "../runtime/Layers/RuntimeWorkspace.ts";
 import { ThreadRuntimeLive } from "../runtime/Layers/ThreadRuntime.ts";
 import { ThreadWorkspaceLive } from "../runtime/Layers/ThreadWorkspace.ts";
@@ -68,6 +69,8 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
   // Mirrors probed host CLI versions into the provider-versions override so
   // host and container CLIs stay in lockstep.
   RuntimeProviderVersionReconcilerLive,
+  // Keeps a runtime from idling out while a provider turn is in flight.
+  RuntimeTurnKeepaliveLive,
   // Started by serverRuntimeStartup in its reactor scope.
   HomelabStartup.layer.pipe(
     Layer.provide(

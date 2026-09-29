@@ -96,7 +96,7 @@ import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
-import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import { ProviderRegistryRuntimeProjectionLive } from "./provider/ProviderRegistryRuntimeProjection.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -526,7 +526,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
-  Layer.provideMerge(ProviderRegistryLive),
+  Layer.provideMerge(ProviderRegistryRuntimeProjectionLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
