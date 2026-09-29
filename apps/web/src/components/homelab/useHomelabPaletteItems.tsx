@@ -17,7 +17,11 @@ import { CopyPlusIcon, FolderInputIcon, SquarePenIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { newCommandId } from "../../homelab/commandIds";
-import type { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import type { ChatThreadActionContext } from "../../lib/chatThreadActions";
+import {
+  startNewIsolatedThreadFromContext,
+  startNewIsolatedThreadInProjectFromContext,
+} from "../../lib/homelabThreadActions";
 import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { standaloneThreadEnvironment } from "../../state/homelabOrchestration";
@@ -35,9 +39,6 @@ interface PaletteProject {
   readonly environmentId: EnvironmentId;
   readonly title: string;
 }
-
-// Isolated creation relies on the fork's `runtimeSelectionMode` new-thread option.
-type HandleNewThread = ReturnType<typeof useHandleNewThread>["handleNewThread"];
 
 /** Projects a scratch thread can move into: same environment, sorted by title. */
 export function standaloneMoveTargets<T extends PaletteProject>(
@@ -57,17 +58,25 @@ export function useHomelabPaletteItems(input: {
     readonly projectId: ProjectId;
     readonly environmentId: EnvironmentId;
   } | null;
+  readonly activeDraftThread: ChatThreadActionContext["activeDraftThread"];
   readonly defaultProjectRef: ScopedProjectRef | null;
-  readonly handleNewThread: HandleNewThread;
+  readonly handleNewThread: ChatThreadActionContext["handleNewThread"];
   readonly setOpen: (open: boolean) => void;
 }): Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> {
-  const { projects, activeThread, defaultProjectRef, handleNewThread, setOpen } = input;
+  const { projects, activeThread, activeDraftThread, defaultProjectRef, handleNewThread, setOpen } =
+    input;
   const createStandaloneThread = useCreateStandaloneThread();
   const moveStandaloneThread = useAtomCommand(standaloneThreadEnvironment.moveToProject, {
     reportFailure: false,
   });
 
   return useMemo(() => {
+    const threadActionContext: ChatThreadActionContext = {
+      activeDraftThread,
+      activeThread: activeThread ?? undefined,
+      defaultProjectRef,
+      handleNewThread,
+    };
     const items: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
       {
         kind: "action",
@@ -163,7 +172,7 @@ export function useHomelabPaletteItems(input: {
         description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
         icon: <CopyPlusIcon className={ITEM_ICON_CLASS} />,
         run: async () => {
-          await handleNewThread(defaultProjectRef, { runtimeSelectionMode: "isolated" });
+          await startNewIsolatedThreadFromContext(threadActionContext);
         },
       });
     }
@@ -187,9 +196,10 @@ export function useHomelabPaletteItems(input: {
             description: HOMELAB_PRODUCT_COPY.projectRuntime.newIsolatedThreadDescription,
             icon: <CopyPlusIcon className={ITEM_ICON_CLASS} />,
             run: async () => {
-              await handleNewThread(scopeProjectRef(project.environmentId, project.id), {
-                runtimeSelectionMode: "isolated",
-              });
+              await startNewIsolatedThreadInProjectFromContext(
+                threadActionContext,
+                scopeProjectRef(project.environmentId, project.id),
+              );
             },
           })),
         },
@@ -197,6 +207,7 @@ export function useHomelabPaletteItems(input: {
     });
     return items;
   }, [
+    activeDraftThread,
     activeThread,
     createStandaloneThread,
     defaultProjectRef,

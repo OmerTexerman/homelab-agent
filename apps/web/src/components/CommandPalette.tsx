@@ -738,6 +738,7 @@ function OpenCommandPaletteDialog(props: {
   const homelabPaletteItems = useHomelabPaletteItems({
     projects,
     activeThread: activeThread ?? null,
+    activeDraftThread,
     defaultProjectRef,
     handleNewThread,
     setOpen,

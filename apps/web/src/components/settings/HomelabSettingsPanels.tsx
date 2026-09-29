@@ -38,6 +38,7 @@ import {
   homelabSetupStatusQueryOptions,
 } from "../../lib/homelabReactQuery";
 import { newCommandId } from "../../homelab/commandIds";
+import { waitForThreadShell } from "../../homelab/waitForThreadShell";
 import { newMessageId, newThreadId } from "../../lib/utils";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { HOMELAB_PRODUCT_COPY, shouldShowPrimarySourceControlUi } from "../../productCapabilities";
@@ -227,9 +228,11 @@ export function MemoryKnowledgeSettingsPanel() {
             },
           });
         }
+        const threadRef = scopeThreadRef(primaryEnvironmentId, threadId);
+        await waitForThreadShell(threadRef);
         await navigate({
           to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, threadId)),
+          params: buildThreadRouteParams(threadRef),
         });
       } catch (error) {
         toastManager.add(

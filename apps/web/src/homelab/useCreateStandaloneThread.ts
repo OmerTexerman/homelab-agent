@@ -18,6 +18,7 @@ import { primaryServerProvidersAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { newCommandId } from "./commandIds";
+import { waitForThreadShell } from "./waitForThreadShell";
 
 /** The `thread.standalone.create` command a scratch-thread entry point dispatches. */
 export function buildStandaloneThreadCreateCommand(input: {
@@ -90,9 +91,11 @@ export function useCreateStandaloneThread(environmentIdOverride?: EnvironmentId 
       }
       return false;
     }
+    const threadRef = scopeThreadRef(environmentId, threadId);
+    await waitForThreadShell(threadRef);
     await navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+      params: buildThreadRouteParams(threadRef),
     });
     return true;
   }, [createStandaloneThread, environmentId, navigate, providers]);

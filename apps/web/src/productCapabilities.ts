@@ -161,34 +161,6 @@ export const HOMELAB_PRODUCT_COPY = {
     contextOpenLocation: "Open location",
     treeResizeAction: "Resize Runtime Workspace file tree",
   },
-  chatExport: {
-    action: "Export thread",
-    title: "Export thread",
-    description:
-      "Export the full thread with messages, work logs, decisions, plans, metadata, and changed files.",
-    formats: {
-      markdown: {
-        label: "Markdown",
-        description: "Readable transcript for docs, notes, and project memory review.",
-      },
-      json: {
-        label: "JSON",
-        description: "Structured versioned data for tools, reprocessing, and audit trails.",
-      },
-      text: {
-        label: "Plain text",
-        description: "Searchable flat transcript that works anywhere.",
-      },
-      html: {
-        label: "HTML",
-        description: "Self-contained offline page with print-friendly styling.",
-      },
-      pdf: {
-        label: "PDF",
-        description: "Open a print view and save to PDF from the browser.",
-      },
-    },
-  },
   providers: {
     title: "Providers",
     runtimeReadinessTitle: "Runtime readiness",
