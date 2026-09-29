@@ -98,6 +98,11 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useServerConfigs, waitForProject } from "../state/entities";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
+import {
+  HomelabNewProjectDialog,
+  requestHomelabNewProject,
+} from "./homelab/HomelabNewProjectDialog";
+import { useHomelabPaletteItems } from "./homelab/useHomelabPaletteItems";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -639,6 +644,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           clearOpenIntent={clearOpenIntent}
         />
       </CommandDialog>
+      <HomelabNewProjectDialog />
     </ComposerHandleContext>
   );
 }
@@ -729,6 +735,13 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useUserVisibleProjects();
+  const homelabPaletteItems = useHomelabPaletteItems({
+    projects,
+    activeThread: activeThread ?? null,
+    defaultProjectRef,
+    handleNewThread,
+    setOpen,
+  });
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some(
@@ -1606,6 +1619,10 @@ function OpenCommandPaletteDialog(props: {
         );
         return;
       }
+      if (requestHomelabNewProject(environmentId)) {
+        setOpen(false);
+        return;
+      }
       setAddProjectEnvironmentId(environmentId);
       setAddProjectCloneFlow(null);
       pushPaletteView({
@@ -1785,6 +1802,8 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
   }
+
+  actionItems.push(...homelabPaletteItems);
 
   if (activeThreadReferenceCopyTarget !== null) {
     actionItems.push({
