@@ -7,7 +7,8 @@
  * side of that chain they need:
  *
  * - `HomelabRuntimeServicesLive` provides runtimes, knowledge, and secrets from
- *   foundation services only (config, sqlite, secret store). It sits late in
+ *   foundation services only (config, sqlite, secret store), plus `HomelabSql`
+ *   (the fork's own homelab.sqlite, opened and migrated here). It sits late in
  *   the chain so upstream consumers (terminal, provider adapters, reactors) can
  *   use `ThreadRuntime` and friends.
  * - `HomelabRuntimeConsumersLive` holds fork services and reactors that depend
@@ -21,6 +22,7 @@ import * as Layer from "effect/Layer";
 
 import { ThreadRuntimeReactorLive } from "../orchestration/Layers/ThreadRuntimeReactor.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { HomelabSqlLive } from "../homelabPersistence/HomelabSql.ts";
 import { layer as RuntimeProviderVersionManifestLive } from "../provider/RuntimeProviderVersionManifest.ts";
 import { layer as RuntimeProviderVersionReconcilerLive } from "../provider/RuntimeProviderVersionReconciler.ts";
 import { ProjectRuntimeLifecycleLive } from "../runtime/Layers/ProjectRuntimeLifecycle.ts";
@@ -43,7 +45,7 @@ import { threadWorkspaceFileRouteLayer } from "./threadWorkspaceFileRoute.ts";
 
 const ProviderCliStoreLayerLive = ProviderCliStoreLive.pipe(Layer.provide(ProcessRunner.layer));
 
-/** Runtimes, knowledge, and secrets. Needs only foundation services. */
+/** Runtimes, knowledge, secrets, and homelab.sqlite. Needs only foundation services. */
 export const HomelabRuntimeServicesLive = Layer.mergeAll(
   ThreadRuntimeLive,
   ProviderCliStoreLayerLive,
@@ -55,6 +57,10 @@ export const HomelabRuntimeServicesLive = Layer.mergeAll(
   ProjectMemoryLive,
   HomelabSkillsLive,
   RuntimeProviderVersionManifestLive,
+).pipe(
+  // Opened and migrated before any fork service is built; failing to open it
+  // (or a missing FTS5) fails server startup.
+  Layer.provideMerge(HomelabSqlLive),
 );
 
 /** Fork services and reactors built on upstream orchestration, terminals, and providers. */
