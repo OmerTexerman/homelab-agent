@@ -131,12 +131,8 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import {
-  readThreadShell,
-  useAllEnvironmentProjectSnapshotsReady,
-  useProjects,
-  useThreadShells,
-} from "../state/entities";
+import { readThreadShell, useAllEnvironmentProjectSnapshotsReady } from "../state/entities";
+import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -2173,9 +2169,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const projects = useProjects();
+  const projects = useUserVisibleProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const threads = useUserVisibleThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
