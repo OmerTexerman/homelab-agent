@@ -1,6 +1,8 @@
-import { AuthHomelabSecretsAdminScope } from "@t3tools/contracts";
+import { AuthHomelabSecretsAdminScope, type ProjectId } from "@t3tools/contracts";
+import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
+import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useQuery } from "@tanstack/react-query";
-import { KeyRoundIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { FolderIcon, KeyRoundIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { formatRelativeTime } from "~/timestampFormat";
@@ -8,6 +10,7 @@ import {
   deleteHomelabSecretRequest,
   homelabSecretsQueryKeys,
   homelabSecretsQueryOptions,
+  setHomelabSecretScopeRequest,
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
 import { describeHomelabError } from "~/homelab/homelabFetch";
@@ -15,14 +18,83 @@ import { queryDisplayState } from "~/homelab/queryDisplayState";
 import { useHomelabMutation } from "~/homelab/useHomelabMutation";
 import { ensureLocalApi } from "~/localApi";
 import { usePrimarySessionState } from "../../environments/primary/sessionState";
+import { useProjects } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Menu, MenuCheckboxItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 
 function normalizeOptionalValue(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+interface ScopeProjectOption {
+  readonly id: ProjectId;
+  readonly title: string;
+}
+
+function describeScope(
+  projectIds: ReadonlyArray<ProjectId>,
+  projects: ReadonlyArray<ScopeProjectOption>,
+): string {
+  if (projectIds.length === 0) {
+    return "All projects";
+  }
+  const titles = projectIds.map(
+    (projectId) => projects.find((project) => project.id === projectId)?.title ?? "Removed project",
+  );
+  return titles.length <= 2 ? titles.join(", ") : `${titles.length} projects`;
+}
+
+/**
+ * Which projects' runtimes receive a secret. No selection means every runtime
+ * (global); scratch and curator sessions only ever get global secrets.
+ */
+function SecretScopePicker(props: {
+  readonly projectIds: ReadonlyArray<ProjectId>;
+  readonly projects: ReadonlyArray<ScopeProjectOption>;
+  readonly disabled?: boolean;
+  readonly onChange: (projectIds: ReadonlyArray<ProjectId>) => void;
+}) {
+  const { projectIds, projects, onChange } = props;
+  return (
+    <Menu>
+      <MenuTrigger
+        render={<Button size="sm" variant="outline" disabled={props.disabled ?? false} />}
+      >
+        <FolderIcon className="size-3.5" />
+        {describeScope(projectIds, projects)}
+      </MenuTrigger>
+      <MenuPopup align="start" side="bottom">
+        <MenuCheckboxItem
+          checked={projectIds.length === 0}
+          onCheckedChange={(checked) => {
+            if (checked) onChange([]);
+          }}
+        >
+          All projects
+        </MenuCheckboxItem>
+        {projects.length > 0 ? <MenuSeparator /> : null}
+        {projects.map((project) => (
+          <MenuCheckboxItem
+            key={project.id}
+            checked={projectIds.includes(project.id)}
+            onCheckedChange={(checked) =>
+              onChange(
+                checked
+                  ? [...projectIds, project.id]
+                  : projectIds.filter((projectId) => projectId !== project.id),
+              )
+            }
+          >
+            {project.title}
+          </MenuCheckboxItem>
+        ))}
+      </MenuPopup>
+    </Menu>
+  );
 }
 
 export function HomelabSecretsSection() {
@@ -41,6 +113,21 @@ export function HomelabSecretsSection() {
   const [label, setLabel] = useState("");
   const [summary, setSummary] = useState("");
   const [value, setValue] = useState("");
+  const [projectIds, setProjectIds] = useState<ReadonlyArray<ProjectId>>([]);
+  const allProjects = useProjects();
+  const scopeProjects = useMemo(
+    () =>
+      allProjects
+        .filter(
+          (project) =>
+            project.environmentId === primaryEnvironmentId &&
+            !isStandaloneProjectId(project.id) &&
+            !isCuratorProjectId(project.id),
+        )
+        .map((project) => ({ id: project.id, title: project.title }))
+        .toSorted((left, right) => left.title.localeCompare(right.title)),
+    [allProjects, primaryEnvironmentId],
+  );
 
   const secretsQuery = useQuery(
     homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
@@ -54,10 +141,17 @@ export function HomelabSecretsSection() {
     setLabel("");
     setSummary("");
     setValue("");
+    setProjectIds([]);
   }, []);
 
   const upsertSecretMutation = useHomelabMutation({
-    mutationFn: async (input: { key: string; label?: string; summary?: string; value: string }) => {
+    mutationFn: async (input: {
+      key: string;
+      label?: string;
+      summary?: string;
+      value: string;
+      projectIds?: ReadonlyArray<ProjectId>;
+    }) => {
       if (!primaryEnvironmentId) {
         throw new Error("No environment is available to store secrets.");
       }
@@ -92,6 +186,24 @@ export function HomelabSecretsSection() {
     errorToast: "Could not remove secret",
   });
 
+  const scopeSecretMutation = useHomelabMutation({
+    mutationFn: async (input: { key: string; projectIds: ReadonlyArray<ProjectId> }) => {
+      if (!primaryEnvironmentId) {
+        throw new Error("No environment is available to change secrets.");
+      }
+      return setHomelabSecretScopeRequest({ environmentId: primaryEnvironmentId, ...input });
+    },
+    invalidate: [homelabSecretsQueryKeys.all],
+    successToast: (secret) => ({
+      title: `Updated ${secret.placeholder}`,
+      description:
+        (secret.projectIds ?? []).length === 0
+          ? "Every Project Runtime receives it."
+          : "Only the selected projects' runtimes receive it.",
+    }),
+    errorToast: "Could not change the secret's projects",
+  });
+
   const isSaving = upsertSecretMutation.isPending;
   const deletingKey = deleteSecretMutation.variables ?? null;
 
@@ -113,10 +225,15 @@ export function HomelabSecretsSection() {
       value: string;
       label?: string;
       summary?: string;
+      projectIds?: ReadonlyArray<ProjectId>;
     } = {
       key: normalizedKey,
       value,
     };
+    // Editing an existing secret changes its scope from the row's picker instead.
+    if (editingKey === null) {
+      nextSecret.projectIds = projectIds;
+    }
     if (normalizedLabel !== undefined) {
       nextSecret.label = normalizedLabel;
     }
@@ -125,7 +242,7 @@ export function HomelabSecretsSection() {
     }
 
     upsertSecretMutation.submit(nextSecret);
-  }, [key, label, summary, upsertSecretMutation, value]);
+  }, [editingKey, key, label, projectIds, summary, upsertSecretMutation, value]);
 
   const handleEdit = useCallback((secret: (typeof secrets)[number]) => {
     setEditingKey(secret.key);
@@ -152,8 +269,8 @@ export function HomelabSecretsSection() {
     <SettingsSection title="Secrets" icon={<KeyRoundIcon className="size-3.5" />}>
       <SettingsRow
         title="Runtime secrets"
-        description="Store API keys, SSH tokens, and other values once, then inject them into every Project Runtime as environment variables."
-        status="Agents and terminals receive these as env vars like $API_KEY. The raw values stay out of chat history."
+        description="Store API keys, SSH tokens, and other values once, then deliver them to every Project Runtime, or only to the projects you pick."
+        status="Agents read them with `homelab secret get API_KEY`, and new shells also get env vars like $API_KEY. The raw values stay out of chat history."
       >
         {canManageSecrets ? null : (
           <div className="mt-4 rounded-lg border border-border/60 bg-muted/25 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
@@ -213,6 +330,16 @@ export function HomelabSecretsSection() {
               autoCorrect="off"
             />
           </label>
+          {editingKey ? null : (
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+              <span className="text-xs font-medium text-foreground">Available to</span>
+              <SecretScopePicker
+                projectIds={projectIds}
+                projects={scopeProjects}
+                onChange={setProjectIds}
+              />
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
             <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
               {isSaving ? "Saving..." : editingKey ? `Save $${editingKey}` : "Save secret"}
@@ -256,9 +383,20 @@ export function HomelabSecretsSection() {
                       {secret.label ?? secret.key}
                     </span>
                     <span className="rounded-full border border-border/70 px-2 py-0.5 text-3xs uppercase tracking-wider text-muted-foreground">
-                      {secret.pending ? "Requested" : secret.hasValue ? "Stored" : "Missing"}
+                      {secret.pending
+                        ? "Requested"
+                        : secret.declinedAt && !secret.hasValue
+                          ? "Declined"
+                          : secret.hasValue
+                            ? "Stored"
+                            : "Missing"}
                     </span>
                   </div>
+                  {canManageSecrets ? null : (
+                    <p className="text-2xs text-muted-foreground">
+                      {describeScope(secret.projectIds ?? [], scopeProjects)}
+                    </p>
+                  )}
                   {secret.summary ? (
                     <p className="text-xs leading-relaxed text-muted-foreground/80">
                       {secret.summary}
@@ -274,7 +412,15 @@ export function HomelabSecretsSection() {
                   ) : null}
                 </div>
                 {canManageSecrets ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SecretScopePicker
+                      projectIds={secret.projectIds ?? []}
+                      projects={scopeProjects}
+                      disabled={scopeSecretMutation.isPending}
+                      onChange={(nextProjectIds) =>
+                        scopeSecretMutation.submit({ key: secret.key, projectIds: nextProjectIds })
+                      }
+                    />
                     <Button size="sm" variant="ghost" onClick={() => handleEdit(secret)}>
                       <PencilIcon className="size-3.5" />
                       Edit
