@@ -19,16 +19,21 @@ import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
+import { Route as SettingsSecretsRouteImport } from './routes/settings.secrets'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
+import { Route as SettingsProjectRuntimeRouteImport } from './routes/settings.project-runtime'
 import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/settings.open-source-licenses'
+import { Route as SettingsMemoryRouteImport } from './routes/settings.memory'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
+import { Route as SettingsDevicesRouteImport } from './routes/settings.devices'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
+import { Route as SettingsAdvancedRouteImport } from './routes/settings.advanced'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -83,6 +88,11 @@ const SettingsSnapShotRoute = SettingsSnapShotRouteImport.update({
   path: '/snap-shot',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsSecretsRoute = SettingsSecretsRouteImport.update({
+  id: '/secrets',
+  path: '/secrets',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
@@ -93,12 +103,22 @@ const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsProjectRuntimeRoute = SettingsProjectRuntimeRouteImport.update({
+  id: '/project-runtime',
+  path: '/project-runtime',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsOpenSourceLicensesRoute =
   SettingsOpenSourceLicensesRouteImport.update({
     id: '/open-source-licenses',
     path: '/open-source-licenses',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsMemoryRoute = SettingsMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
@@ -119,6 +139,11 @@ const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   path: '/diagnostics',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
+  id: '/devices',
+  path: '/devices',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   id: '/connections',
   path: '/connections',
@@ -132,6 +157,11 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: '/appearance',
   path: '/appearance',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsAdvancedRoute = SettingsAdvancedRouteImport.update({
+  id: '/advanced',
+  path: '/advanced',
   getParentRoute: () => SettingsRoute,
 } as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
@@ -165,16 +195,21 @@ export interface FileRoutesByFullPath {
   '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/advanced': typeof SettingsAdvancedRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/memory': typeof SettingsMemoryRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
+  '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/secrets': typeof SettingsSecretsRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
@@ -189,16 +224,21 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/advanced': typeof SettingsAdvancedRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/memory': typeof SettingsMemoryRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
+  '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/secrets': typeof SettingsSecretsRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
@@ -216,16 +256,21 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/advanced': typeof SettingsAdvancedRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/memory': typeof SettingsMemoryRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
+  '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/secrets': typeof SettingsSecretsRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
@@ -244,16 +289,21 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/advanced'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/devices'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/memory'
     | '/settings/open-source-licenses'
+    | '/settings/project-runtime'
     | '/settings/projects'
     | '/settings/providers'
+    | '/settings/secrets'
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
@@ -268,16 +318,21 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/advanced'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/devices'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/memory'
     | '/settings/open-source-licenses'
+    | '/settings/project-runtime'
     | '/settings/projects'
     | '/settings/providers'
+    | '/settings/secrets'
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
@@ -294,16 +349,21 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_chat/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/advanced'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
+    | '/settings/devices'
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/memory'
     | '/settings/open-source-licenses'
+    | '/settings/project-runtime'
     | '/settings/projects'
     | '/settings/providers'
+    | '/settings/secrets'
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
@@ -394,6 +454,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSnapShotRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/secrets': {
+      id: '/settings/secrets'
+      path: '/secrets'
+      fullPath: '/settings/secrets'
+      preLoaderRoute: typeof SettingsSecretsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/providers': {
       id: '/settings/providers'
       path: '/providers'
@@ -408,11 +475,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProjectsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/project-runtime': {
+      id: '/settings/project-runtime'
+      path: '/project-runtime'
+      fullPath: '/settings/project-runtime'
+      preLoaderRoute: typeof SettingsProjectRuntimeRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/open-source-licenses': {
       id: '/settings/open-source-licenses'
       path: '/open-source-licenses'
       fullPath: '/settings/open-source-licenses'
       preLoaderRoute: typeof SettingsOpenSourceLicensesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/memory': {
+      id: '/settings/memory'
+      path: '/memory'
+      fullPath: '/settings/memory'
+      preLoaderRoute: typeof SettingsMemoryRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/keybindings': {
@@ -443,6 +524,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsDiagnosticsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/devices': {
+      id: '/settings/devices'
+      path: '/devices'
+      fullPath: '/settings/devices'
+      preLoaderRoute: typeof SettingsDevicesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/connections': {
       id: '/settings/connections'
       path: '/connections'
@@ -462,6 +550,13 @@ declare module '@tanstack/react-router' {
       path: '/appearance'
       fullPath: '/settings/appearance'
       preLoaderRoute: typeof SettingsAppearanceRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/advanced': {
+      id: '/settings/advanced'
+      path: '/advanced'
+      fullPath: '/settings/advanced'
+      preLoaderRoute: typeof SettingsAdvancedRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/projects/$projectKey': {
@@ -512,32 +607,42 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface SettingsRouteChildren {
+  SettingsAdvancedRoute: typeof SettingsAdvancedRoute
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
+  SettingsDevicesRoute: typeof SettingsDevicesRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsMemoryRoute: typeof SettingsMemoryRoute
   SettingsOpenSourceLicensesRoute: typeof SettingsOpenSourceLicensesRoute
+  SettingsProjectRuntimeRoute: typeof SettingsProjectRuntimeRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
+  SettingsSecretsRoute: typeof SettingsSecretsRoute
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStorageRoute: typeof SettingsStorageRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAdvancedRoute: SettingsAdvancedRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
+  SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsMemoryRoute: SettingsMemoryRoute,
   SettingsOpenSourceLicensesRoute: SettingsOpenSourceLicensesRoute,
+  SettingsProjectRuntimeRoute: SettingsProjectRuntimeRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsSecretsRoute: SettingsSecretsRoute,
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStorageRoute: SettingsStorageRoute,
