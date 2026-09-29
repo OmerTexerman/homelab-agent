@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { runtimeEventToActivities } from "./ProviderRuntimeProjectionPolicy.ts";
+import { runtimeEventToActivities } from "./ProviderRuntimeIngestion.ts";
 
 const base = {
   provider: ProviderDriverKind.make("codex"),

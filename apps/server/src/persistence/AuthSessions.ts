@@ -21,6 +21,15 @@ import {
   PersistenceSqlError,
 } from "./Errors.ts";
 
+/**
+ * `user` sessions belong to devices people paired and show up in
+ * Devices & Sessions; `internal` sessions are machinery (for example
+ * thread-runtime bearer tokens) and stay out of user-facing lists and
+ * bulk revocation.
+ */
+export const AuthSessionVisibility = Schema.Literals(["user", "internal"]);
+export type AuthSessionVisibility = typeof AuthSessionVisibility.Type;
+
 export const AuthSessionClientMetadataRecord = Schema.Struct({
   label: Schema.NullOr(Schema.String),
   ipAddress: Schema.NullOr(Schema.String),
@@ -36,6 +45,7 @@ export const AuthSessionRecord = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
+  visibility: AuthSessionVisibility,
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -49,6 +59,8 @@ export const CreateAuthSessionInput = Schema.Struct({
   subject: Schema.String,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
+  // Omitted by upstream callers; defaults to a user-visible session.
+  visibility: Schema.optional(AuthSessionVisibility),
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -136,6 +148,7 @@ const AuthSessionDbRow = Schema.Struct({
   subject: Schema.String,
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   method: ServerAuthSessionMethod,
+  visibility: AuthSessionVisibility,
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
   clientUserAgent: Schema.NullOr(Schema.String),
@@ -153,6 +166,7 @@ const AuthSessionRawDbRow = Schema.Struct({
   subject: Schema.Unknown,
   scopes: Schema.Unknown,
   method: Schema.Unknown,
+  visibility: Schema.Unknown,
   clientLabel: Schema.Unknown,
   clientIpAddress: Schema.Unknown,
   clientUserAgent: Schema.Unknown,
@@ -173,6 +187,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     subject: row.subject,
     scopes: row.scopes,
     method: row.method,
+    visibility: row.visibility,
     client: {
       label: row.clientLabel,
       ipAddress: row.clientIpAddress,
@@ -217,6 +232,7 @@ export const make = Effect.gen(function* () {
           subject,
           scopes,
           method,
+          visibility,
           client_label,
           client_ip_address,
           client_user_agent,
@@ -232,6 +248,7 @@ export const make = Effect.gen(function* () {
           ${input.subject},
           ${JSON.stringify(input.scopes)},
           ${input.method},
+          ${input.visibility ?? "user"},
           ${input.client.label},
           ${input.client.ipAddress},
           ${input.client.userAgent},
@@ -258,6 +275,7 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
+          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -284,6 +302,7 @@ export const make = Effect.gen(function* () {
           AND method = ${session.method}
           AND revoked_at IS NULL
           AND expires_at > ${revokedAt}
+          AND visibility = 'user'
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -298,6 +317,7 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           scopes AS "scopes",
           method AS "method",
+          visibility AS "visibility",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
           client_user_agent AS "clientUserAgent",
@@ -311,6 +331,7 @@ export const make = Effect.gen(function* () {
         FROM auth_sessions
         WHERE revoked_at IS NULL
           AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
+          AND visibility = 'user'
         ORDER BY issued_at DESC, session_id DESC
       `,
   });
@@ -362,6 +383,7 @@ export const make = Effect.gen(function* () {
         SET revoked_at = ${revokedAt}
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
+          AND visibility = 'user'
         RETURNING session_id AS "sessionId"
       `,
   });

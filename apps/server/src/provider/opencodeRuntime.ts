@@ -32,6 +32,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
+import {
+  pickManagedOpenCodeServerOptions,
+  runOpenCodeServerCleanup,
+  selectReachableOpenCodeServerUrl,
+  type ManagedOpenCodeServerOptions,
+} from "./Layers/managedOpenCode.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
@@ -195,13 +201,14 @@ export type OpenCodeSlashCommand = Pick<Command, "name" | "description" | "sourc
 /** Command templates stay in OpenCode, which expands arguments and runs MCP prompts. */
 export const loadOpenCodeCommands = (client: OpencodeClient) =>
   runOpenCodeSdk("command.list", (signal) => client.command.list(undefined, { signal })).pipe(
-    Effect.map((result): ReadonlyArray<OpenCodeSlashCommand> =>
-      (result.data ?? []).map(({ name, description, source, hints }) => ({
-        name,
-        ...(description === undefined ? {} : { description }),
-        ...(source === undefined ? {} : { source }),
-        hints,
-      })),
+    Effect.map(
+      (result): ReadonlyArray<OpenCodeSlashCommand> =>
+        (result.data ?? []).map(({ name, description, source, hints }) => ({
+          name,
+          ...(description === undefined ? {} : { description }),
+          ...(source === undefined ? {} : { source }),
+          hints,
+        })),
     ),
   );
 
@@ -232,30 +239,34 @@ export interface OpenCodeRuntimeShape {
    * Consumers that want a long-lived server must create and hold a scope explicitly
    * (see {@link Scope.make}) and close it when done.
    */
-  readonly startOpenCodeServerProcess: (input: {
-    readonly binaryPath: string;
-    readonly directory: string;
-    readonly serverPassword?: string;
-    readonly environment?: NodeJS.ProcessEnv;
-    readonly port?: number;
-    readonly hostname?: string;
-    readonly timeoutMs?: number;
-  }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
+  readonly startOpenCodeServerProcess: (
+    input: {
+      readonly binaryPath: string;
+      readonly directory: string;
+      readonly serverPassword?: string;
+      readonly environment?: NodeJS.ProcessEnv;
+      readonly port?: number;
+      readonly hostname?: string;
+      readonly timeoutMs?: number;
+    } & ManagedOpenCodeServerOptions,
+  ) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   /**
    * Returns a handle to either an externally-managed OpenCode server (when
    * `serverUrl` is provided — no lifetime is attached to the caller's scope) or a
    * freshly spawned local server whose lifetime is bound to the caller's scope.
    */
-  readonly connectToOpenCodeServer: (input: {
-    readonly binaryPath: string;
-    readonly directory: string;
-    readonly serverUrl?: string | null;
-    readonly serverPassword?: string;
-    readonly environment?: NodeJS.ProcessEnv;
-    readonly port?: number;
-    readonly hostname?: string;
-    readonly timeoutMs?: number;
-  }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
+  readonly connectToOpenCodeServer: (
+    input: {
+      readonly binaryPath: string;
+      readonly directory: string;
+      readonly serverUrl?: string | null;
+      readonly serverPassword?: string;
+      readonly environment?: NodeJS.ProcessEnv;
+      readonly port?: number;
+      readonly hostname?: string;
+      readonly timeoutMs?: number;
+    } & ManagedOpenCodeServerOptions,
+  ) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
     readonly args: ReadonlyArray<string>;
@@ -707,6 +718,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
             },
             extendEnv: input.environment === undefined,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
           }),
         )
         .pipe(
@@ -734,6 +746,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               }
             });
       const terminateChild = killOpenCodeProcessGroup("SIGTERM").pipe(
+        Effect.andThen(runOpenCodeServerCleanup(spawner, input.cleanupCommand, input)),
         Effect.andThen(Effect.sleep("1 second")),
         Effect.andThen(killOpenCodeProcessGroup("SIGKILL")),
         Effect.ignore,
@@ -836,7 +849,23 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       yield* Ref.set(stdoutRef, null);
       yield* Ref.set(stderrRef, null);
 
-      const url = readyOption.value;
+      // Managed runtime servers print a container-internal URL; verify via the
+      // first reachable published URL instead.
+      const url = input.reachableUrls?.length
+        ? yield* selectReachableOpenCodeServerUrl(
+            input.reachableUrls,
+            input.reachableUrlTimeoutMs,
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OpenCodeRuntimeError({
+                  operation: "startOpenCodeServerProcess",
+                  detail: cause.detail,
+                  cause,
+                }),
+            ),
+          )
+        : readyOption.value;
       const version = yield* verifyOpenCodeServerVersion(
         createOpenCodeSdkClient({
           baseUrl: url,
@@ -889,6 +918,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...pickManagedOpenCodeServerOptions(input),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

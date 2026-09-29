@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -30,6 +31,18 @@ import type { ProjectionSnapshotQueryShape } from "../Services/ProjectionSnapsho
 import { planProviderTurnDispatch } from "./ProviderCommandPolicy.ts";
 
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+
+export interface DispatchTurnStartInput<E> {
+  readonly thread: Pick<OrchestrationThread, "id" | "projectId" | "runtimeSelectionMode">;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly createdAt: string;
+  readonly sendTurn: Effect.Effect<void>;
+  /** Runs once the turn is sent or abandoned (e.g. settles a resumed turn's `sent` Deferred). */
+  readonly settle?: Effect.Effect<void>;
+  readonly onFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void, E>;
+  readonly onUnrecoverableFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>;
+}
 
 export interface ProjectRuntimeTurnDispatchDeps {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
@@ -150,15 +163,9 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
     );
   });
 
-  const dispatchTurnStart = Effect.fn("dispatchProviderTurnStart")(function* <E>(input: {
-    readonly thread: OrchestrationThread;
-    readonly modelSelection: ModelSelection;
-    readonly runtimeMode: RuntimeMode;
-    readonly createdAt: string;
-    readonly sendTurn: Effect.Effect<void>;
-    readonly onFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void, E>;
-    readonly onUnrecoverableFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>;
-  }) {
+  const prepareTurnStart = Effect.fn("prepareProviderTurnStart")(function* <E>(
+    input: DispatchTurnStartInput<E>,
+  ) {
     const thread = input.thread;
     const project = yield* projectionSnapshotQuery
       .getProjectShellById(thread.projectId)
@@ -167,7 +174,7 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       yield* input.onUnrecoverableFailure(
         Cause.fail(new Error(`Project '${thread.projectId}' was not found.`)),
       );
-      return;
+      return Option.none<Effect.Effect<void>>();
     }
     const runtimeAssignment = resolveProjectRuntimeAssignment({ project, thread });
     const providerInfo = yield* providerService.getInstanceInfo(input.modelSelection.instanceId);
@@ -176,7 +183,7 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       yield* input.onUnrecoverableFailure(
         Cause.fail(new Error(`Provider driver '${providerDriver}' is not available.`)),
       );
-      return;
+      return Option.none<Effect.Effect<void>>();
     }
 
     const runtimeContextReady = yield* refreshRuntimeContextView({
@@ -203,7 +210,7 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       ),
     );
     if (!runtimeContextReady) {
-      return;
+      return Option.none<Effect.Effect<void>>();
     }
 
     const dispatchPlan = planProviderTurnDispatch({
@@ -213,11 +220,31 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       projectId: project.id,
       threadId: thread.id,
     });
-    const queuedSendTurn =
+    return Option.some(
       dispatchPlan.action === "queue" && Option.isSome(projectRuntimeQueue)
         ? projectRuntimeQueue.value.run(dispatchPlan.options, input.sendTurn)
-        : input.sendTurn;
-    yield* queuedSendTurn.pipe(Effect.forkScoped);
+        : input.sendTurn,
+    );
+  });
+
+  /**
+   * Prepares the runtime, then forks `sendTurn` (queued when the runtime is a
+   * shared single writer). `settle` runs exactly once: when the forked send
+   * finishes, or right away when the turn is not sent at all.
+   */
+  const dispatchTurnStart = Effect.fn("dispatchProviderTurnStart")(function* <E>(
+    input: DispatchTurnStartInput<E>,
+  ) {
+    const settle = input.settle ?? Effect.void;
+    const prepared = yield* prepareTurnStart(input).pipe(
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit) && Option.isSome(exit.value) ? Effect.void : settle,
+      ),
+    );
+    if (Option.isNone(prepared)) {
+      return;
+    }
+    yield* prepared.value.pipe(Effect.ensuring(settle), Effect.forkScoped);
   });
 
   return { refreshRuntimeContextView, dispatchTurnStart } as const;

@@ -66,6 +66,7 @@ import {
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
+import { ThreadRuntimeReactor } from "../src/orchestration/Services/ThreadRuntimeReactor.ts";
 import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../src/orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
@@ -397,6 +398,9 @@ export const makeOrchestrationIntegrationHarness = (
           start: () => Effect.void,
           drainThrough: () => Effect.void,
         }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadRuntimeReactor, { start: () => Effect.void, drain: Effect.void }),
       ),
       Layer.provideMerge(
         Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {

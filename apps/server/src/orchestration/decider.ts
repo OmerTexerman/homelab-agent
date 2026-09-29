@@ -45,6 +45,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import * as Homelab from "./deciderHomelab.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -221,6 +222,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   OrchestrationCommandRejection | PlatformError.PlatformError,
   Crypto.Crypto
 > {
+  if (Homelab.isHomelabOrchestrationCommand(command)) {
+    return yield* Homelab.decideHomelabCommand({ command, readModel, withEventBase });
+  }
   switch (command.type) {
     case "project.create": {
       yield* requireProjectAbsent({
@@ -247,6 +251,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: command.projectId,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          ...Homelab.homelabProjectCreatedFields(command),
           // Project creation has no user model choice. Older clients sent an
           // automatic seed here, but only a metadata update records an
           // explicit project default.
@@ -370,6 +375,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.deleted" as const,
         payload: {
           projectId: command.projectId,
+          ...Homelab.homelabProjectDeletedFields(readModel, command.projectId),
           deletedAt: occurredAt,
         },
       };
@@ -381,6 +387,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      yield* Homelab.requireHomelabThreadCreateTarget(command);
       yield* requireThreadAbsent({
         readModel,
         command,
@@ -398,6 +405,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          ...Homelab.homelabThreadCreatedFields(readModel, command),
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -427,6 +435,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.deleted",
         payload: {
           threadId: command.threadId,
+          ...Homelab.homelabThreadDeletedFields(readModel, command.threadId),
           deletedAt: occurredAt,
         },
       };

@@ -117,6 +117,12 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { spawnAndCollect } from "../providerSnapshot.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  claudeStreamFailureDetail,
+  makeClaudeStderrTail,
+  type ClaudeStderrTail,
+} from "./claudeStderrTail.ts";
+import { resolveClaudeRuntimeLaunch } from "./runtimeLaunch.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const encodeHistoryArgs = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -312,10 +318,12 @@ function toSessionPermissionUpdates(
   toolName: string,
   suggestions: ReadonlyArray<PermissionUpdate> | undefined,
 ): Array<PermissionUpdate> {
-  const sessionScoped = (suggestions ?? []).map((suggestion): PermissionUpdate => ({
-    ...suggestion,
-    destination: "session",
-  }));
+  const sessionScoped = (suggestions ?? []).map(
+    (suggestion): PermissionUpdate => ({
+      ...suggestion,
+      destination: "session",
+    }),
+  );
   if (sessionScoped.length > 0) {
     return sessionScoped;
   }
@@ -408,6 +416,7 @@ function rememberPendingTaskModel(
 }
 
 interface ClaudeSessionContext {
+  readonly stderrTail?: ClaudeStderrTail;
   session: ProviderSession;
   startInput: Parameters<ClaudeAdapterShape["startSession"]>[0];
   readonly turnStartMessageIds: Array<string | null>;
@@ -3999,6 +4008,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // wire-only subtypes (like vcs_state_changed).
         message satisfies never;
         const unknownMessage = message as never as { subtype: string };
+        // Homelab: content-less notices would render as empty warning rows.
+        if (previewUnknownSdkContent(message) === undefined) {
+          yield* Effect.logDebug("claude system message with no displayable content", {
+            subtype: unknownMessage.subtype,
+          });
+          return;
+        }
         yield* emitRuntimeWarning(
           context,
           describeUnknownSdkMessage(`Claude system message '${unknownMessage.subtype}'`, message),
@@ -4203,7 +4219,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         new ProviderAdapterProcessError({
           provider: PROVIDER,
           threadId: context.session.threadId,
-          detail: "Claude runtime stream failed.",
+          detail: claudeStreamFailureDetail(cause, context.stderrTail),
           cause,
         }),
     ).pipe(
@@ -4241,10 +4257,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           Cause.isFailReason(reason) ? [reason.error] : [],
         );
         const message = failures[0]?.detail ?? "Claude runtime stream failed.";
-        yield* emitRuntimeError(context, message, {
-          failureCount: failures.length,
-          failureTags: failures.map((failure) => failure._tag),
-        });
+        // Homelab: with no turn in flight the CLI died between turns, almost
+        // always the idle reaper stopping the Project Runtime (exit 137).
+        // That is expected lifecycle, not an error row.
+        yield* context.turnState
+          ? emitRuntimeError(context, message, {
+              failureCount: failures.length,
+              failureTags: failures.map((failure) => failure._tag),
+            })
+          : Effect.logDebug("claude runtime stream ended with no active turn", { detail: message });
         yield* completeTurn(context, "failed", message);
       }
     } else if (context.turnState) {
@@ -4827,7 +4848,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions,
       ) => runPromise(handleResumeDialog(request, callbackOptions));
 
-      const claudeBinaryPath = claudeSdkExecutablePath;
+      const homelabLaunch = yield* resolveClaudeRuntimeLaunch(input.threadId);
+      const claudeBinaryPath = homelabLaunch?.executablePath ?? claudeSdkExecutablePath;
+      const providerCwd = homelabLaunch?.providerCwd ?? input.cwd;
+      const stderrTail = makeClaudeStderrTail();
       const {
         "permission-mode": launchArgPermissionMode,
         "dangerously-skip-permissions": launchArgSkipPermissions,
@@ -4904,11 +4928,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // approval prompt. It is a leaf directory holding only attachment
       // files; siblings like secrets/ and state.sqlite stay ungranted.
       const additionalDirectories = [
-        ...(input.cwd ? [input.cwd] : []),
+        ...(providerCwd ? [providerCwd] : []),
         serverConfig.attachmentsDir,
       ];
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(homelabLaunch ? { cwd: homelabLaunch.queryCwd } : {}),
+        stderr: stderrTail.append,
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         systemPrompt: {
@@ -5008,7 +5034,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         providerInstanceId: boundInstanceId,
         status: "ready",
         runtimeMode: input.runtimeMode,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(providerCwd ? { cwd: providerCwd } : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         ...(threadId ? { threadId } : {}),
         resumeCursor: {
@@ -5025,6 +5051,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       };
 
       const context: ClaudeSessionContext = {
+        stderrTail,
         session,
         startInput: input,
         turnStartMessageIds: resumeState?.turnStartMessageIds
@@ -5081,7 +5108,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         payload: {
           config: {
             ...(apiModelId ? { model: apiModelId } : {}),
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(providerCwd ? { cwd: providerCwd } : {}),
             ...(effectiveEffort ? { effort: effectiveEffort } : {}),
             ...(permissionMode ? { permissionMode } : {}),
             ...(fastMode ? { fastMode: true } : {}),

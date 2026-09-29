@@ -15,6 +15,7 @@ import * as NodeURL from "node:url";
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const MIGRATIONS_DIR = "apps/server/src/persistence/Migrations/";
 const HOSTED_RUNNER = "ubuntu-24.04";
+const FORK_RUN_WORKFLOWS = ["ci.yml"] as const;
 
 export interface ConflictForecastEntry {
   readonly path: string;
@@ -154,10 +155,11 @@ function startMerge(): void {
   git("switch", "-c", branch);
   git("branch", "-f", `checkpoint/pre-${branch.replace("/", "-")}`, "HEAD");
   const merge = tryGit("merge", "--no-ff", "--no-commit", "upstream/main");
-  const workflowsDir = NodePath.join(repoRoot, ".github/workflows");
-  for (const name of NodeFS.readdirSync(workflowsDir)) {
-    if (!/\.ya?ml$/u.test(name)) continue;
-    const path = NodePath.join(workflowsDir, name);
+  // Only workflows the fork runs; the rest stay disabled (`gh workflow disable`)
+  // and untouched, so they add no fork footprint.
+  for (const name of FORK_RUN_WORKFLOWS) {
+    const path = NodePath.join(repoRoot, ".github/workflows", name);
+    if (!NodeFS.existsSync(path)) continue;
     const before = NodeFS.readFileSync(path, "utf8");
     const after = rewriteBlacksmithRunners(before);
     if (after !== before) {
@@ -180,7 +182,6 @@ function startMerge(): void {
 
 function verify(): void {
   const vp = NodePath.join(repoRoot, "node_modules/.bin/vp");
-  const tsgo = NodePath.join(repoRoot, "node_modules/.bin/tsgo");
   const homelabTests = lines(git("ls-files", "*.homelab.test.ts", "*.homelab.test.tsx"));
   const steps: Array<{ readonly cwd: string; readonly command: string; readonly args: string[] }> =
     [
@@ -204,7 +205,7 @@ function verify(): void {
       },
       ...["packages/contracts", "apps/server", "apps/web"].map((cwd) => ({
         cwd,
-        command: tsgo,
+        command: NodePath.join(repoRoot, cwd, "node_modules/.bin/tsc"),
         args: ["--noEmit"],
       })),
     ];

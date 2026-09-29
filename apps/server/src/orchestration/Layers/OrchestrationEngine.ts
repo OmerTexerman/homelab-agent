@@ -8,6 +8,7 @@ import type {
 import { OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -45,6 +46,11 @@ import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
+import { makeHomelabCommandEffects } from "../homelabCommandEffects.ts";
+import {
+  OrchestrationCommandReadModel,
+  type OrchestrationCommandReadModelShape,
+} from "../Services/OrchestrationCommandReadModel.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -89,6 +95,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
+  const homelabCommandEffects = yield* makeHomelabCommandEffects;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -284,6 +291,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 attachmentCleanups.push(cleanup);
                 committedEvents.push(savedEvent);
               }
+              yield* homelabCommandEffects.inTransaction({
+                command: envelope.command,
+                committedEvents,
+              });
 
               const lastSavedEvent = committedEvents.at(-1) ?? null;
               if (lastSavedEvent === null) {
@@ -320,6 +331,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        yield* homelabCommandEffects.afterCommit({ command: envelope.command });
         for (const cleanup of committedCommand.attachmentCleanups) {
           yield* cleanup;
         }
@@ -464,10 +476,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // consistent, committed value — reassignment of `commandReadModel` is
     // atomic on the single-threaded event loop.
     latestSequence: Effect.sync(() => commandReadModel.snapshotSequence),
-  } satisfies OrchestrationEngineShape;
+    getReadModel: () => Effect.succeed(commandReadModel),
+  } satisfies OrchestrationEngineShape & OrchestrationCommandReadModelShape;
 });
 
-export const OrchestrationEngineLive = Layer.effect(
-  OrchestrationEngineService,
-  makeOrchestrationEngine,
+export const OrchestrationEngineLive = Layer.effectContext(
+  Effect.map(makeOrchestrationEngine, (engine) =>
+    Context.make(OrchestrationEngineService, engine).pipe(
+      Context.add(OrchestrationCommandReadModel, { getReadModel: engine.getReadModel }),
+    ),
+  ),
 );

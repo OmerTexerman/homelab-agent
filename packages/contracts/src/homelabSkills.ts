@@ -68,7 +68,7 @@ export const HomelabSkillPromoteInput = Schema.Struct({
 });
 export type HomelabSkillPromoteInput = typeof HomelabSkillPromoteInput.Type;
 
-export class HomelabSkillError extends Schema.TaggedErrorClass<HomelabSkillError>()(
+export class HomelabSkillError extends Schema.TaggedError<HomelabSkillError>()(
   "HomelabSkillError",
   {
     message: TrimmedNonEmptyString,
