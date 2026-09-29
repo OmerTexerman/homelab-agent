@@ -133,10 +133,10 @@ describe("HomelabSql", () => {
       assert.deepEqual(
         yield* runHomelabMigrations(sql, [
           ...foundation,
-          [100, "RuntimeLater", create("r1")],
+          [150, "RuntimeLater", create("r1")],
           [200, "KnowledgeFirst", create("k1")],
         ]),
-        [[100, "RuntimeLater"]],
+        [[150, "RuntimeLater"]],
       );
       assert.includeMembers(yield* tableNames(sql), ["k1", "r1"]);
       // Ids recorded by newer code are tolerated after a rollback.

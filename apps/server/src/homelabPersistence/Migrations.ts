@@ -19,6 +19,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import Migration0001 from "./Migrations/001_Foundation.ts";
+import Migration0100 from "./Migrations/100_RuntimeRegistry.ts";
 
 /** Id range each owner adds migrations in. Ranges never overlap or move. */
 export const HOMELAB_MIGRATION_RANGES = {
@@ -39,7 +40,10 @@ type HomelabMigration = Effect.Effect<void, SqlError, SqlClient.SqlClient>;
  */
 const homelabMigrationEntries: ReadonlyArray<
   readonly [id: number, name: string, migration: HomelabMigration]
-> = [[1, "Foundation", Migration0001]];
+> = [
+  [1, "Foundation", Migration0001],
+  [100, "RuntimeRegistry", Migration0100],
+];
 
 export const homelabMigrationManifest = homelabMigrationEntries.map(
   ([id, name]) => [id, name] as const,
