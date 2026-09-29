@@ -187,6 +187,7 @@ import {
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
+import { shouldShowEditorOpenInControls } from "../productCapabilities";
 import { isAbsolutePath, resolvePathLinkTarget } from "../terminal-links";
 import {
   isBrowserPreviewFile,
@@ -2647,7 +2648,9 @@ function useChatMarkdownState({
           copyMarkdown={copyMarkdown}
           theme={resolvedTheme}
           threadRef={threadRef}
-          {...(canUseShellActions ? { onOpen: openInPreferredEditor } : {})}
+          {...(canUseShellActions && shouldShowEditorOpenInControls()
+            ? { onOpen: openInPreferredEditor }
+            : {})}
           onOpenInPanel={openFileInPanel}
           onOpenMedia={
             threadRef && canPreviewMedia
