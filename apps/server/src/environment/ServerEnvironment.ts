@@ -20,6 +20,7 @@ import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { HOMELAB_PULL_REQUESTS_ENABLED } from "./homelabCapabilities.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 
@@ -219,7 +220,7 @@ export const make = Effect.gen(function* () {
       attachmentUploads: true,
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
-      pullRequests: true,
+      pullRequests: HOMELAB_PULL_REQUESTS_ENABLED,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,

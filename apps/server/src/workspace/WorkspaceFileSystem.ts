@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
+import { rejectLogicalWorkspaceRoot } from "./logicalWorkspaceRoot.ts";
 
 const PROJECT_READ_FILE_MAX_BYTES = 1024 * 1024;
 
@@ -306,7 +307,7 @@ export const make = Effect.gen(function* () {
   const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
   )(function* (input) {
-    const filesystemRoot = yield* workspacePaths.resolveFilesystemWorkspaceRoot(input.cwd).pipe(
+    yield* rejectLogicalWorkspaceRoot(input.cwd).pipe(
       Effect.mapError(
         (cause) =>
           new WorkspaceFileSystemOperationError({
@@ -320,7 +321,7 @@ export const make = Effect.gen(function* () {
       ),
     );
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
-      workspaceRoot: filesystemRoot,
+      workspaceRoot: input.cwd,
       relativePath: input.relativePath,
     });
 

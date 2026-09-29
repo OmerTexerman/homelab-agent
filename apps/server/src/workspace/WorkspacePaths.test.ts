@@ -179,20 +179,6 @@ it.layer(TestLayer)("WorkspacePathsLive", (it) => {
     );
   });
 
-  describe("resolveFilesystemWorkspaceRoot", () => {
-    it.effect("rejects logical project workspace roots", () =>
-      Effect.gen(function* () {
-        const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-
-        const error = yield* workspacePaths
-          .resolveFilesystemWorkspaceRoot("homelab://project/project-alpha")
-          .pipe(Effect.flip);
-
-        expect(error.message).toContain("Logical project roots are not filesystem paths:");
-      }),
-    );
-  });
-
   describe("resolveRelativePathWithinRoot", () => {
     it.effect("resolves relative paths inside the workspace root", () =>
       Effect.gen(function* () {

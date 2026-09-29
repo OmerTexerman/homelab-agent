@@ -1,0 +1,325 @@
+/**
+ * Server-level tests for the fork's HTTP surface: homelab routes, the thread
+ * workspace download route, runtime-token scope gates, and credentialed CORS.
+ *
+ * Serves the fork routes behind the real `EnvironmentAuth` and CORS layers
+ * with homelab services from `homelabServerTestLayers`.
+ */
+import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import {
+  AuthAdministrativeScopes,
+  AuthHomelabCurateScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  EnvironmentId,
+  EventId,
+  HomelabEntity,
+  HomelabPromotionEnvelope,
+  ThreadId,
+  type AuthEnvironmentScope,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
+
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SessionStore from "./auth/SessionStore.ts";
+import * as ServerConfig from "./config.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import { homelabBrowserApiCorsLayer, isWebSocketUpgradeRequest } from "./homelab/browserApiCors.ts";
+import { HomelabRoutesLive } from "./homelab/serverLayers.ts";
+import {
+  type HomelabServerTestLayerOverrides,
+  makeHomelabServerTestLayers,
+  makeMockThreadRuntimeDescriptor,
+} from "./homelab/testing/homelabServerTestLayers.ts";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+
+const decodeHomelabEntity = Schema.decodeUnknownSync(HomelabEntity);
+const decodeHomelabPromotionEnvelope = Schema.decodeUnknownSync(HomelabPromotionEnvelope);
+
+const REVERSE_PROXY_ORIGIN = "https://agent.example.test";
+
+const makeConfigLayer = (homelabCredentialedCors: boolean) =>
+  Layer.effect(
+    ServerConfig.ServerConfig,
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      return { ...config, homelabCredentialedCors } satisfies ServerConfig.ServerConfig["Service"];
+    }),
+  ).pipe(
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-server-homelab-test-" })),
+  );
+
+const makeHomelabApp = (
+  options: {
+    readonly credentialedCors?: boolean;
+    readonly homelab?: HomelabServerTestLayerOverrides;
+  } = {},
+) =>
+  HttpRouter.serve(HomelabRoutesLive.pipe(Layer.provide(homelabBrowserApiCorsLayer)), {
+    disableListenLog: true,
+    disableLogger: true,
+  }).pipe(
+    Layer.provide(makeHomelabServerTestLayers(options.homelab)),
+    Layer.provide(
+      Layer.mock(ProjectionSnapshotQuery)({
+        getThreadShellById: () => Effect.succeedNone,
+      }),
+    ),
+    Layer.provideMerge(
+      EnvironmentAuth.layer.pipe(
+        Layer.provideMerge(SqlitePersistenceMemory),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(
+          Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-homelab-test")),
+          }),
+        ),
+      ),
+    ),
+    Layer.provide(makeConfigLayer(options.credentialedCors ?? true)),
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+/** A bearer token with exactly `scopes`, as the runtime token minting issues them. */
+const bearerHeaders = (scopes: ReadonlyArray<AuthEnvironmentScope>, subject = "owner") =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStore.SessionStore;
+    const issued = yield* sessions.issue({ subject, method: "bearer-access-token", scopes });
+    return { authorization: `Bearer ${issued.token}` };
+  });
+
+const ownerHeaders = bearerHeaders(AuthAdministrativeScopes);
+
+describe("homelab CORS", () => {
+  it("recognizes WebSocket upgrade requests so they bypass CORS", () => {
+    assert.isTrue(
+      isWebSocketUpgradeRequest({
+        method: "GET",
+        headers: { upgrade: "websocket", connection: "keep-alive, Upgrade" },
+      }),
+    );
+    assert.isFalse(isWebSocketUpgradeRequest({ method: "GET", headers: {} }));
+    assert.isFalse(
+      isWebSocketUpgradeRequest({
+        method: "POST",
+        headers: { upgrade: "websocket", connection: "upgrade" },
+      }),
+    );
+  });
+
+  it.effect("reflects reverse-proxy origins with credentials when enabled", () =>
+    Effect.gen(function* () {
+      const preflight = yield* HttpClient.options("/api/homelab/snapshot", {
+        headers: { origin: REVERSE_PROXY_ORIGIN, "access-control-request-method": "GET" },
+      });
+      assert.equal(preflight.headers["access-control-allow-origin"], REVERSE_PROXY_ORIGIN);
+      assert.equal(preflight.headers["access-control-allow-credentials"], "true");
+
+      const response = yield* HttpClient.get("/api/homelab/snapshot", {
+        headers: { ...(yield* ownerHeaders), origin: REVERSE_PROXY_ORIGIN },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["access-control-allow-origin"], REVERSE_PROXY_ORIGIN);
+      assert.equal(response.headers["access-control-allow-credentials"], "true");
+    }).pipe(Effect.provide(makeHomelabApp({ credentialedCors: true }))),
+  );
+
+  it.effect("keeps upstream's CORS policy when disabled", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get("/api/homelab/snapshot", {
+        headers: { ...(yield* ownerHeaders), origin: REVERSE_PROXY_ORIGIN },
+      });
+      assert.equal(response.status, 200);
+      assert.notEqual(response.headers["access-control-allow-origin"], REVERSE_PROXY_ORIGIN);
+      assert.isUndefined(response.headers["access-control-allow-credentials"]);
+    }).pipe(Effect.provide(makeHomelabApp({ credentialedCors: false }))),
+  );
+});
+
+describe("homelab HTTP routes", () => {
+  it.effect("denies a scoped runtime token the curator and secret-admin homelab routes", () =>
+    Effect.gen(function* () {
+      // What runtime token minting issues for a non-curator runtime.
+      const runtimeAuth = yield* bearerHeaders(
+        [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+        "thread-runtime:thread-1",
+      );
+
+      const curate = yield* HttpClient.get("/api/homelab/curate/overview", {
+        headers: runtimeAuth,
+      });
+      assert.equal(curate.status, 403);
+
+      const upsert = yield* HttpClient.post("/api/homelab/secrets", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "RUNTIME_BLOCKED", value: "nope" }),
+      });
+      assert.equal(upsert.status, 403);
+
+      const remove = yield* HttpClient.post("/api/homelab/secrets/delete", {
+        headers: runtimeAuth,
+        body: yield* HttpBody.json({ key: "RUNTIME_BLOCKED" }),
+      });
+      assert.equal(remove.status, 403);
+
+      // A curator runtime token also holds homelab:curate, so the gate is
+      // capability-based rather than a blanket block.
+      const curatorAuth = yield* bearerHeaders(
+        [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthHomelabCurateScope],
+        "thread-runtime:thread-curator",
+      );
+      const curatorResponse = yield* HttpClient.get("/api/homelab/curate/overview", {
+        headers: curatorAuth,
+      });
+      assert.notEqual(curatorResponse.status, 403);
+    }).pipe(Effect.provide(makeHomelabApp())),
+  );
+
+  it.effect("serves homelab snapshots to authenticated owner sessions only", () =>
+    Effect.gen(function* () {
+      const anonymous = yield* HttpClient.get("/api/homelab/snapshot");
+      assert.equal(anonymous.status, 401);
+
+      const response = yield* HttpClient.get("/api/homelab/snapshot", {
+        headers: yield* ownerHeaders,
+      });
+      const body = (yield* response.json) as { readonly entities: ReadonlyArray<unknown> };
+      assert.equal(response.status, 200);
+      assert.deepEqual(body.entities, []);
+    }).pipe(Effect.provide(makeHomelabApp())),
+  );
+
+  const grafanaFields = {
+    id: "service-grafana",
+    kind: "service",
+    name: "grafana",
+    createdAt: "2026-04-12T00:00:00.000Z",
+    updatedAt: "2026-04-12T00:00:00.000Z",
+  } as const;
+  const grafana = decodeHomelabEntity(grafanaFields);
+
+  it.effect("filters homelab entities by kind", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get("/api/homelab/entities?kinds=service", {
+        headers: yield* ownerHeaders,
+      });
+      assert.equal(response.status, 200);
+      const body = (yield* response.json) as ReadonlyArray<unknown>;
+      assert.deepEqual(
+        body.map((entity) => decodeHomelabEntity(entity)),
+        [grafana],
+      );
+    }).pipe(
+      Effect.provide(
+        makeHomelabApp({
+          homelab: {
+            knowledgeGraph: {
+              listEntities: (options) => {
+                assert.deepEqual(options, { kinds: ["service"] });
+                return Effect.succeed([grafana]);
+              },
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
+  const promotion = decodeHomelabPromotionEnvelope({
+    id: "promotion-1",
+    threadId: ThreadId.make("thread-knowledge"),
+    summary: "Promote grafana service",
+    createdAt: "2026-04-12T00:00:00.000Z",
+    entries: [{ action: "upsert_entity", entity: grafanaFields }],
+  });
+  const recorded = {
+    eventId: EventId.make("homelab-promotion-1"),
+    promotion,
+    recordedAt: "2026-04-12T00:01:00.000Z",
+  };
+
+  it.effect("records homelab promotions", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.post("/api/homelab/promotions", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json(promotion),
+      });
+      assert.equal(response.status, 201);
+      const body = (yield* response.json) as Omit<typeof recorded, "promotion"> & {
+        readonly promotion: unknown;
+      };
+      assert.deepEqual(
+        { ...body, promotion: decodeHomelabPromotionEnvelope(body.promotion) },
+        recorded,
+      );
+    }).pipe(
+      Effect.provide(
+        makeHomelabApp({
+          homelab: {
+            knowledgeGraph: {
+              applyPromotion: (input) => {
+                assert.deepEqual(input, promotion);
+                return Effect.succeed(recorded);
+              },
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
+  it.effect("returns promotion schema detail for invalid promotion payloads", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.post("/api/homelab/promotions", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json({
+          id: "promotion-invalid",
+          summary: "Broken payload",
+          createdAt: "2026-04-12T00:00:00.000Z",
+          entries: [],
+        }),
+      });
+      const body = (yield* response.json) as { readonly error: string };
+      assert.equal(response.status, 400);
+      assert.include(body.error, "Invalid homelab promotion payload:");
+      assert.include(body.error, "threadId");
+      assert.include(body.error, "homelab promote --schema");
+    }).pipe(Effect.provide(makeHomelabApp())),
+  );
+
+  it.effect("downloads thread workspace files after waking the runtime", () => {
+    const started: string[] = [];
+    return Effect.gen(function* () {
+      const response = yield* HttpClient.get(
+        "/api/thread-workspace/file?threadId=thread-1&path=notes/report.txt",
+        { headers: yield* ownerHeaders },
+      );
+      assert.equal(response.status, 200);
+      assert.equal(yield* response.text, "download:notes/report.txt");
+      assert.equal(response.headers["content-disposition"], 'attachment; filename="report.txt"');
+      assert.deepEqual(started, ["thread-1"]);
+    }).pipe(
+      Effect.provide(
+        makeHomelabApp({
+          homelab: {
+            threadRuntime: {
+              startRuntime: (threadId) =>
+                Effect.sync(() => {
+                  started.push(threadId);
+                  return makeMockThreadRuntimeDescriptor(threadId);
+                }),
+            },
+          },
+        }),
+      ),
+    );
+  });
+});

@@ -9,6 +9,7 @@ import { HttpServer } from "effect/unstable/http";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { homelabMcpCapabilities } from "../environment/homelabCapabilities.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
 
@@ -125,10 +126,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set<McpInvocationContext.McpCapability>([
-          "pull-requests",
-          ...request.capabilities,
-        ]),
+        capabilities: new Set<McpInvocationContext.McpCapability>(
+          homelabMcpCapabilities(["pull-requests", ...request.capabilities]),
+        ),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {

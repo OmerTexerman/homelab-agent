@@ -47,9 +47,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
-import { CuratorSessionReaper } from "./homelab/Services/CuratorSessionReaper.ts";
-import { HomelabSecretRuntimeReactor } from "./homelab/Services/HomelabSecretRuntimeReactor.ts";
-import { HomelabViewRuntimeReactor } from "./homelab/Services/HomelabViewRuntimeReactor.ts";
+import { HomelabStartup } from "./homelab/HomelabStartup.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -904,9 +902,7 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
-    const curatorSessionReaper = yield* CuratorSessionReaper;
-    const homelabSecretRuntimeReactor = yield* HomelabSecretRuntimeReactor;
-    const homelabViewRuntimeReactor = yield* HomelabViewRuntimeReactor;
+    const homelabStartup = yield* HomelabStartup;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -969,9 +965,7 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-          yield* curatorSessionReaper.start().pipe(Scope.provide(reactorScope));
-          yield* homelabSecretRuntimeReactor.start().pipe(Scope.provide(reactorScope));
-          yield* homelabViewRuntimeReactor.start().pipe(Scope.provide(reactorScope));
+          yield* homelabStartup.start().pipe(Scope.provide(reactorScope));
         }),
       );
 
@@ -1037,7 +1031,7 @@ export const make = (options?: StartupOptions) =>
             const startupBrowserTarget = yield* resolveStartupBrowserTarget;
             if (serverConfig.mode !== "desktop") {
               yield* Effect.logInfo(
-                "Authentication required. Open Homelab Agent using the pairing URL.",
+                "Authentication required. Open T3 Code using the pairing URL.",
               ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
             }
             yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));

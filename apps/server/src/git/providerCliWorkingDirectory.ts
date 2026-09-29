@@ -27,7 +27,7 @@ export const resolveProviderCliWorkingDirectory = Effect.fn("resolveProviderCliW
     const stateDirFallback = Effect.gen(function* () {
       yield* fileSystem
         .makeDirectory(serverConfig.stateDir, { recursive: true })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       return serverConfig.stateDir;
     });
 
@@ -35,9 +35,7 @@ export const resolveProviderCliWorkingDirectory = Effect.fn("resolveProviderCliW
       return yield* stateDirFallback;
     }
 
-    const cwdStat = yield* fileSystem
-      .stat(input.cwd)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const cwdStat = yield* fileSystem.stat(input.cwd).pipe(Effect.orElseSucceed(() => null));
     if (cwdStat?.type === "Directory") {
       return input.cwd;
     }
