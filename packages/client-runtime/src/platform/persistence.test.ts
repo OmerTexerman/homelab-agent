@@ -51,5 +51,7 @@ describe("encodeShellSnapshotForCache", () => {
       expect(projects.length).toBeGreaterThan(0);
       expect(yield* encodeShellSnapshotForCache(snapshot)).toEqual(yield* encodeSnapshot(snapshot));
     }),
+    // Homelab fork: CI runs on smaller GitHub-hosted runners than upstream's.
+    30_000,
   );
 });
