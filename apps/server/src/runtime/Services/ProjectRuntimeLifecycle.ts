@@ -48,6 +48,18 @@ export interface ProjectRuntimeLifecycleShape {
   readonly mergeIsolated: (
     input: ProjectRuntimeMergeIsolatedInput,
   ) => Effect.Effect<ProjectRuntimeMergeIsolatedResult, ProjectRuntimeError>;
+  /**
+   * One garbage-collection pass (also run on a slow tick): keeps the newest
+   * snapshots per runtime, removes `merged/` folders and destroys retired
+   * runtimes once they are older than the retention window.
+   */
+  readonly collectGarbage: (now?: Date) => Effect.Effect<ProjectRuntimeGarbageReport>;
+}
+
+export interface ProjectRuntimeGarbageReport {
+  readonly snapshotsRemoved: number;
+  readonly mergesRemoved: number;
+  readonly runtimesDestroyed: number;
 }
 
 export class ProjectRuntimeLifecycle extends Context.Service<

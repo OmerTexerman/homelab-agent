@@ -29,6 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { RUNTIME_THREAD_IDENTITY_ENV_KEYS } from "../runtime/Layers/RuntimeExecutionContext.ts";
 import { ThreadRuntime, type ThreadRuntimeShape } from "../runtime/Services/ThreadRuntime.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
@@ -130,7 +131,17 @@ export function makeHomelabTerminalManager(input: {
         runtimeId: context.runtimeId,
       });
       state.activeThreadByOwner.set(ownerId, launch.threadId);
-      const { T3_THREAD_ID: threadIdEnv, ...sharedEnv } = context.runtimeEnv ?? {};
+      const ownedByThread = ownerId === launch.threadId;
+      // A shared terminal belongs to the runtime, not to whichever thread
+      // opened it: it runs the runtime's identity-less shell and drops the
+      // per-thread env (thread id, cwd), so sibling opens don't restart it.
+      const env = Object.fromEntries(
+        Object.entries(context.runtimeEnv ?? {}).filter(
+          ([key]) =>
+            ownedByThread ||
+            !(RUNTIME_THREAD_IDENTITY_ENV_KEYS as ReadonlyArray<string>).includes(key),
+        ),
+      );
       return {
         ...launch,
         threadId: ownerId,
@@ -139,13 +150,10 @@ export function makeHomelabTerminalManager(input: {
         cwd: context.spawnCwd,
         worktreePath: context.worktreePath,
         env: {
-          // A shared terminal belongs to the runtime, not to whichever thread
-          // opened it; dropping T3_THREAD_ID keeps sibling opens from restarting it.
-          ...(ownerId === launch.threadId && threadIdEnv !== undefined
-            ? { T3_THREAD_ID: threadIdEnv }
-            : {}),
-          ...sharedEnv,
-          [HOMELAB_TERMINAL_SHELL_ENV]: context.runtimeShell,
+          ...env,
+          [HOMELAB_TERMINAL_SHELL_ENV]: ownedByThread
+            ? context.runtimeShell
+            : context.sharedRuntimeShell,
           [HOMELAB_TERMINAL_OWNER_ENV]: ownerId,
         },
       };
@@ -166,7 +174,18 @@ export function makeHomelabTerminalManager(input: {
       const cwd = request.cwd;
       const launch: Effect.Effect<TerminalAttachInput, TerminalError> =
         cwd === undefined ? withOwner(request) : toRuntimeLaunch({ ...request, cwd });
-      return launch.pipe(Effect.flatMap((mapped) => inner.attachStream(mapped, listener)));
+      return launch.pipe(
+        Effect.flatMap((mapped) => inner.attachStream(mapped, listener)),
+        // An attached terminal client keeps the runtime from idling out.
+        Effect.flatMap((unsubscribe) =>
+          threadRuntime.retainTerminal(ThreadId.make(request.threadId)).pipe(
+            Effect.map((release) => () => {
+              release();
+              unsubscribe();
+            }),
+          ),
+        ),
+      );
     },
     write: (request) =>
       Effect.andThen(touchThreadRuntime(threadRuntime, request.threadId), () =>

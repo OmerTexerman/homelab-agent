@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off anyUnknownInErrorContext:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,14 +14,15 @@ import {
   type ProjectMemoryEntry,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
+import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { ProjectMemory, type ProjectMemoryShape } from "../../homelab/Services/ProjectMemory.ts";
 import {
   ProjectionSnapshotQuery,
@@ -31,15 +32,23 @@ import { TerminalManager } from "../../terminal/Manager.ts";
 import { isolatedThreadRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { makeProjectRuntimeQueue, ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import {
+  layer as RuntimeRegistryLayer,
+  RuntimeRegistry,
+  type RuntimeRecord,
+} from "../RuntimeRegistry.ts";
+import {
   ThreadRuntime,
+  ThreadRuntimeError,
   ThreadRuntimeNotFoundError,
   type ThreadRuntimeDescriptor,
   type ThreadRuntimeLaunchContext,
-  type ThreadRuntimeEvent,
   type ThreadRuntimeShape,
 } from "../Services/ThreadRuntime.ts";
 import { encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
-import { makeProjectRuntimeLifecycle } from "./ProjectRuntimeLifecycle.ts";
+import {
+  makeProjectRuntimeLifecycleWith,
+  type ProjectRuntimeLifecycleOptions,
+} from "./ProjectRuntimeLifecycle.ts";
 
 const now = "2026-05-16T00:00:00.000Z";
 const projectId = ProjectId.make("project-1");
@@ -185,7 +194,13 @@ function makeLaunchContext(
 }
 
 function makeManagedHostWorkspacePath(baseDir: string): string {
-  return NodePath.join(baseDir, "userdata", "thread-runtimes", "runtime-storage", "workspace");
+  return NodePath.join(
+    baseDir,
+    "userdata",
+    "thread-runtimes",
+    encodeRuntimeSegment(String(runtimeId)),
+    "workspace",
+  );
 }
 
 function makeSnapshotArchivePath(baseDir: string, snapshotId: string): string {
@@ -199,6 +214,43 @@ function makeSnapshotArchivePath(baseDir: string, snapshotId: string): string {
   );
 }
 
+function makeRecord(input: {
+  readonly runtimeId: RuntimeSessionId;
+  readonly state?: RuntimeRecord["state"];
+}): RuntimeRecord {
+  return {
+    runtimeId: input.runtimeId,
+    storageId: String(input.runtimeId),
+    projectId,
+    runtimeKind: "project-shared",
+    isStandalone: false,
+    projectTitle: "Homelab Core",
+    containerName: "project-runtime-project-1",
+    containerId: null,
+    imageRef: "runtime:test",
+    bootstrapVersion: null,
+    state: input.state ?? "stopped",
+    health: "unknown",
+    lastError: null,
+    generation: 0,
+    managedOpenCodeServer: null,
+    seedSourceRuntimeId: null,
+    seededAt: now,
+    createdAt: now,
+    updatedAt: now,
+    lastActiveAt: now,
+    lastStartedAt: null,
+    lastStoppedAt: null,
+    retiredAt: null,
+    deletingAt: null,
+  };
+}
+
+/**
+ * A ThreadRuntime double over the real RuntimeRegistry: it writes the same
+ * runtime records the real one does, so the lifecycle's single state machine
+ * is exercised end to end, minus Docker.
+ */
 function makeHarness(input: {
   readonly baseDir: string;
   readonly hostWorkspacePath: string;
@@ -206,17 +258,15 @@ function makeHarness(input: {
   readonly threads?: ReadonlyArray<OrchestrationThread>;
   readonly descriptors?: ReadonlyArray<ThreadRuntimeDescriptor>;
   readonly project?: OrchestrationProject;
-  readonly runtimeEvents?: Stream.Stream<ThreadRuntimeEvent>;
+  readonly failStart?: string;
+  readonly failWipe?: string;
+  readonly lifecycleOptions?: ProjectRuntimeLifecycleOptions;
 }) {
-  const descriptors = new Map<string, ThreadRuntimeDescriptor>(
-    (input.descriptors ?? [makeDescriptor({ threadId, status: "stopped" })]).map((descriptor) => [
-      String(descriptor.threadId),
-      descriptor,
-    ]),
-  );
   const closedTerminalThreadIds: string[] = [];
   const stoppedThreadIds: ThreadId[] = [];
-  const destroyedThreadIds: ThreadId[] = [];
+  const wipedRuntimeIds: RuntimeSessionId[] = [];
+  const destroyedRuntimeIds: RuntimeSessionId[] = [];
+  const failures = { start: input.failStart, wipe: input.failWipe };
 
   const readModel = makeReadModel(input.hostWorkspacePath, input.threads, input.project);
   const projectionSnapshotQuery = {
@@ -258,90 +308,144 @@ function makeHarness(input: {
     getThreadDetailSnapshot: () => Effect.succeedNone,
   } satisfies ProjectionSnapshotQueryShape;
 
-  const threadRuntime = {
-    ensureRuntime: (launchInput) =>
-      Effect.sync(() => {
-        const launchContext = makeLaunchContext(
-          makeDescriptor({ threadId: launchInput.threadId, status: "stopped" }),
-          input.hostWorkspacePath,
+  const hostRuntimePath = NodePath.dirname(input.hostWorkspacePath);
+  const threadRuntimeLayer = Layer.effect(
+    ThreadRuntime,
+    Effect.gen(function* () {
+      const registry = yield* RuntimeRegistry;
+      const bindingOf = (id: ThreadId) =>
+        registry.getBinding(id).pipe(Effect.orDie, Effect.map(Option.getOrUndefined));
+      const recordOf = (id: RuntimeSessionId) =>
+        registry.getRuntime(id).pipe(Effect.orDie, Effect.map(Option.getOrUndefined));
+      const describe = (id: ThreadId) =>
+        Effect.gen(function* () {
+          const binding = yield* bindingOf(id);
+          if (!binding) return undefined;
+          const record = yield* recordOf(binding.runtimeId);
+          if (!record) return undefined;
+          return {
+            ...makeDescriptor({
+              threadId: id,
+              status: record.state === "running" ? "running" : "stopped",
+            }),
+            runtimeId: record.runtimeId,
+          } satisfies ThreadRuntimeDescriptor;
+        });
+      const bind = (id: ThreadId, runtime: RuntimeSessionId) =>
+        Effect.gen(function* () {
+          yield* registry
+            .insertRuntimeIfMissing(makeRecord({ runtimeId: runtime }))
+            .pipe(Effect.orDie);
+          yield* registry
+            .upsertBinding({
+              threadId: id,
+              runtimeId: runtime,
+              provider: null,
+              runtimeMode: "full-access",
+              cwd: "/workspace",
+              env: {},
+              createdAt: now,
+              updatedAt: now,
+            })
+            .pipe(Effect.orDie);
+        });
+      for (const descriptor of input.descriptors ?? [
+        makeDescriptor({ threadId, status: "stopped" }),
+      ]) {
+        yield* bind(descriptor.threadId, descriptor.runtimeId);
+      }
+      const requireDescriptor = (id: ThreadId) =>
+        describe(id).pipe(
+          Effect.flatMap((descriptor) =>
+            descriptor
+              ? Effect.succeed(descriptor)
+              : Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id })),
+          ),
         );
-        NodeFS.mkdirSync(launchContext.hostRuntimePath, { recursive: true });
-        NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
-        NodeFS.mkdirSync(launchContext.hostHomePath, { recursive: true });
-        NodeFS.mkdirSync(launchContext.hostBinDir, { recursive: true });
-        const descriptor =
-          descriptors.get(String(launchInput.threadId)) ??
-          makeDescriptor({ threadId: launchInput.threadId, status: "stopped" });
-        descriptors.set(String(launchInput.threadId), descriptor);
-        return descriptor;
-      }),
-    getRuntime: (id) => Effect.succeed(descriptors.get(String(id))),
-    listRuntimes: () => Effect.succeed([...descriptors.values()]),
-    startRuntime: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.sync(() => {
-        const next = makeDescriptor({ threadId: id, status: "running" });
-        descriptors.set(String(id), next);
-        return next;
-      });
-    },
-    stopRuntime: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.sync(() => {
-        stoppedThreadIds.push(id);
-        descriptors.set(String(id), makeDescriptor({ threadId: id, status: "stopped" }));
-      });
-    },
-    touchRuntime: () => Effect.void,
-    refreshRuntimeEnvironment: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.succeed(descriptor);
-    },
-    refreshRuntimeSkills: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.succeed(descriptor);
-    },
-    destroyRuntime: (id) =>
-      Effect.sync(() => {
-        const descriptor = descriptors.get(String(id));
-        destroyedThreadIds.push(id);
-        descriptors.delete(String(id));
-        if (descriptor) {
-          const launchContext = makeLaunchContext(descriptor, input.hostWorkspacePath);
-          NodeFS.rmSync(launchContext.hostRuntimePath, { recursive: true, force: true });
-        }
-      }),
-    resolveExecutionContext: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.succeed(makeLaunchContext(descriptor, input.hostWorkspacePath).execution);
-    },
-    resolveLaunchContext: (id) => {
-      const descriptor = descriptors.get(String(id));
-      if (!descriptor) {
-        return Effect.fail(new ThreadRuntimeNotFoundError({ threadId: id }));
-      }
-      return Effect.sync(() => {
-        NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
-        return makeLaunchContext(descriptor, input.hostWorkspacePath);
-      });
-    },
-    streamEvents: input.runtimeEvents ?? Stream.empty,
-  } satisfies ThreadRuntimeShape;
+      const launchContextFor = (id: ThreadId) =>
+        requireDescriptor(id).pipe(
+          Effect.map((descriptor) => {
+            NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
+            return makeLaunchContext(descriptor, input.hostWorkspacePath);
+          }),
+        );
+
+      return {
+        ensureRuntime: (launchInput) =>
+          Effect.gen(function* () {
+            NodeFS.mkdirSync(input.hostWorkspacePath, { recursive: true });
+            NodeFS.mkdirSync(NodePath.join(hostRuntimePath, "home"), { recursive: true });
+            NodeFS.mkdirSync(NodePath.join(hostRuntimePath, "bin"), { recursive: true });
+            yield* bind(launchInput.threadId, launchInput.runtimeId ?? runtimeId);
+            return yield* requireDescriptor(launchInput.threadId).pipe(Effect.orDie);
+          }),
+        getRuntime: describe,
+        listRuntimes: () => Effect.succeed([]),
+        ensureRunning: (id) => requireDescriptor(id),
+        startRuntime: (id) =>
+          Effect.gen(function* () {
+            const binding = yield* bindingOf(id);
+            if (!binding) return yield* new ThreadRuntimeNotFoundError({ threadId: id });
+            if (failures.start !== undefined) {
+              yield* registry
+                .patchRuntime(binding.runtimeId, { state: "failed", lastError: failures.start })
+                .pipe(Effect.orDie);
+              return yield* new ThreadRuntimeError({ message: failures.start });
+            }
+            yield* registry
+              .patchRuntime(binding.runtimeId, { state: "running", containerId: "container-1" })
+              .pipe(Effect.orDie);
+            return yield* requireDescriptor(id);
+          }),
+        stopRuntime: (id) =>
+          Effect.gen(function* () {
+            const binding = yield* bindingOf(id);
+            if (!binding) return yield* new ThreadRuntimeNotFoundError({ threadId: id });
+            stoppedThreadIds.push(id);
+            const record = yield* recordOf(binding.runtimeId);
+            yield* registry
+              .patchRuntime(binding.runtimeId, {
+                state:
+                  record?.state === "archived" || record?.state === "resetting"
+                    ? record.state
+                    : "stopped",
+                containerId: null,
+              })
+              .pipe(Effect.orDie);
+          }),
+        touchRuntime: () => Effect.void,
+        setTurnActive: () => Effect.void,
+        retainTerminal: () => Effect.succeed(() => undefined),
+        refreshRuntimeEnvironment: requireDescriptor,
+        refreshRuntimeSkills: requireDescriptor,
+        destroyRuntime: () => Effect.void,
+        unbindThread: () => Effect.void,
+        destroyRuntimeById: (id) =>
+          Effect.sync(() => void destroyedRuntimeIds.push(id)).pipe(
+            Effect.andThen(registry.deleteRuntime(id).pipe(Effect.orDie)),
+          ),
+        wipeRuntime: (id, options) =>
+          Effect.gen(function* () {
+            if (failures.wipe !== undefined) {
+              return yield* new ThreadRuntimeError({ message: failures.wipe });
+            }
+            wipedRuntimeIds.push(id);
+            NodeFS.rmSync(hostRuntimePath, { recursive: true, force: true });
+            if (options?.refill) {
+              yield* options.refill(hostRuntimePath).pipe(Effect.orDie);
+            }
+            yield* registry
+              .patchRuntime(id, { state: "stopped", containerId: null })
+              .pipe(Effect.orDie);
+          }),
+        reconcile: () => Effect.void,
+        resolveExecutionContext: (id) =>
+          launchContextFor(id).pipe(Effect.map((context) => context.execution)),
+        resolveLaunchContext: launchContextFor,
+        streamEvents: Stream.empty,
+      } satisfies ThreadRuntimeShape;
+    }),
+  );
 
   const terminalManager = {
     open: () => Effect.die("unused"),
@@ -373,36 +477,57 @@ function makeHarness(input: {
     changes: Stream.empty,
   } satisfies ProjectMemoryShape;
 
-  const layer = Layer.mergeAll(
+  const foundation = Layer.mergeAll(
     ServerConfig.layerTest(process.cwd(), input.baseDir),
+    HomelabSqlMemory,
+  ).pipe(Layer.provideMerge(NodeServices.layer));
+  const layer = Layer.mergeAll(
     Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery),
-    Layer.succeed(ThreadRuntime, threadRuntime),
+    threadRuntimeLayer,
     Layer.succeed(TerminalManager, terminalManager),
     Layer.succeed(ProjectMemory, projectMemory),
     Layer.effect(ProjectRuntimeQueue, makeProjectRuntimeQueue),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(RuntimeRegistryLayer), Layer.provideMerge(foundation));
+
+  /** Builds the layer in the caller's scope and the lifecycle over it. */
+  const start = Effect.gen(function* () {
+    const context = yield* Layer.build(layer);
+    const lifecycle = yield* makeProjectRuntimeLifecycleWith({
+      gcIntervalMs: 0,
+      ...input.lifecycleOptions,
+    }).pipe(Effect.provide(context));
+    return {
+      lifecycle,
+      context,
+      registry: Context.get(context, RuntimeRegistry),
+      threadRuntime: Context.get(context, ThreadRuntime),
+    };
+  });
 
   return {
-    layer,
+    start,
     readModel,
-    descriptors,
+    failures,
     closedTerminalThreadIds,
     stoppedThreadIds,
-    destroyedThreadIds,
+    wipedRuntimeIds,
+    destroyedRuntimeIds,
   };
 }
+
+const tempDirFor = (prefix: string) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return yield* fileSystem.makeTempDirectoryScoped({ prefix });
+  });
 
 it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("wakes a stopped runtime and regenerates .homelab views before use", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-wake-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-wake-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle } = yield* makeHarness({ baseDir: tempDir, hostWorkspacePath }).start;
 
         const result = yield* lifecycle.wake({ projectId, threadId });
 
@@ -422,12 +547,9 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("regenerates .homelab memory views from durable project memory on wake", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-memory-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-memory-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({
+        const { lifecycle, context } = yield* makeHarness({
           baseDir: tempDir,
           hostWorkspacePath,
           memoryEntries: [
@@ -437,12 +559,11 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
               body: "Verified from the scheduler config; retention is 30 days.",
             }),
           ],
-        });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        }).start;
 
         // ProjectMemory is read via Effect.serviceOption at wake time (it is optional), so it
         // must be in the ambient context when wake runs — mirroring the server's global wiring.
-        yield* lifecycle.wake({ projectId, threadId }).pipe(Effect.provide(harness.layer));
+        yield* lifecycle.wake({ projectId, threadId }).pipe(Effect.provide(context));
 
         const memoryIndex = NodeFS.readFileSync(
           NodePath.join(hostWorkspacePath, ".homelab", "memory", "index.jsonl"),
@@ -474,13 +595,9 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("cleans scratch output while preserving .homelab and durable files", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-cleanup-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-cleanup-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle } = yield* makeHarness({ baseDir: tempDir, hostWorkspacePath }).start;
         yield* lifecycle.wake({ projectId, threadId });
 
         NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, "dist"), { recursive: true });
@@ -505,13 +622,10 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("archives, snapshots, and resets runtime state without deleting project history", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-reset-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-reset-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
         const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle } = yield* harness.start;
         yield* lifecycle.wake({ projectId, threadId });
 
         const archived = yield* lifecycle.archive({ projectId, threadId });
@@ -523,6 +637,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           threadId,
           name: "before-reset",
         });
+        // A snapshot of an archived runtime leaves it archived.
+        assert.equal(snapshot.runtime.runtime.lifecycleState, "archived");
         assert.equal(snapshot.runtime.snapshots.length, 1);
         assert.equal(snapshot.runtime.snapshots[0]?.kind, "filesystem");
         assert.equal(snapshot.runtime.snapshots[0]?.restoreAvailable, true);
@@ -530,8 +646,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
 
         const reset = yield* lifecycle.reset({ projectId, threadId });
         assert.equal(reset.runtime.runtime.lifecycleState, "stopped");
-        assert.deepStrictEqual(harness.destroyedThreadIds, [threadId]);
-        assert.isUndefined(harness.descriptors.get(String(threadId)));
+        assert.equal(reset.runtime.runtime.lastError, null);
+        assert.deepStrictEqual(harness.wipedRuntimeIds, [runtimeId]);
         assert.equal(reset.runtime.snapshots.length, 1);
       }),
     ),
@@ -540,16 +656,12 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("creates a restorable filesystem archive with runtime secret/auth paths excluded", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-snapshot-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-snapshot-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
         const hostRuntimePath = NodePath.dirname(hostWorkspacePath);
         const hostHomePath = NodePath.join(hostRuntimePath, "home");
         const hostBinPath = NodePath.join(hostRuntimePath, "bin");
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle } = yield* makeHarness({ baseDir: tempDir, hostWorkspacePath }).start;
         yield* lifecycle.wake({ projectId, threadId });
 
         NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "before");
@@ -601,16 +713,13 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("restores workspace, home, and bin files while preserving project metadata", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-restore-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-restore-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
         const hostRuntimePath = NodePath.dirname(hostWorkspacePath);
         const hostHomePath = NodePath.join(hostRuntimePath, "home");
         const hostBinPath = NodePath.join(hostRuntimePath, "bin");
         const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle, threadRuntime } = yield* harness.start;
         yield* lifecycle.wake({ projectId, threadId });
 
         NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "before");
@@ -623,9 +732,8 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         });
         const snapshot = snapshotResult.runtime.snapshots[0]!;
         harness.stoppedThreadIds.splice(0);
-        harness.destroyedThreadIds.splice(0);
 
-        harness.descriptors.set(String(threadId), makeDescriptor({ threadId, status: "running" }));
+        yield* threadRuntime.startRuntime(threadId);
         NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "after");
         NodeFS.writeFileSync(NodePath.join(hostHomePath, ".profile"), "home-after");
         NodeFS.writeFileSync(NodePath.join(hostBinPath, "tool"), "tool-after");
@@ -641,9 +749,7 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.equal(restored.runtime.snapshots.length, 1);
         assert.equal(restored.runtime.snapshots[0]?.restoreAvailable, true);
         assert.equal(harness.readModel.threads.length, 2);
-        assert.deepStrictEqual(harness.stoppedThreadIds, [threadId]);
-        assert.deepStrictEqual(harness.destroyedThreadIds, [threadId]);
-        assert.isUndefined(harness.descriptors.get(String(threadId)));
+        assert.deepStrictEqual(harness.wipedRuntimeIds, [runtimeId]);
         assert.equal(
           NodeFS.readFileSync(NodePath.join(hostWorkspacePath, "notes.md"), "utf8"),
           "before",
@@ -661,13 +767,10 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
     ),
   );
 
-  it.effect("keeps metadata-only snapshots non-restorable", () =>
+  it.effect("imports legacy lifecycle snapshots and keeps metadata-only ones non-restorable", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-old-snapshot-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-old-snapshot-");
         const stateDir = NodePath.join(tempDir, "userdata");
         NodeFS.mkdirSync(stateDir, { recursive: true });
         NodeFS.writeFileSync(
@@ -702,8 +805,7 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           )}\n`,
         );
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle } = yield* makeHarness({ baseDir: tempDir, hostWorkspacePath }).start;
 
         const detail = yield* lifecycle.get({ projectId, threadId });
         assert.equal(detail.runtime.snapshots[0]?.restoreAvailable, false);
@@ -721,34 +823,57 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
     ),
   );
 
-  it.effect("refuses writes instead of wiping lifecycle metadata it could not load", () =>
+  it.effect("a failed reset records failed plus lastError and releases the runtime lock", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-degraded-",
-        });
-        const stateDir = NodePath.join(tempDir, "userdata");
-        const statePath = NodePath.join(stateDir, "project-runtime-lifecycle.json");
-        const corruptBytes = '{"version":1,"runtimes":[{"runtimeId":';
-        NodeFS.mkdirSync(stateDir, { recursive: true });
-        NodeFS.writeFileSync(statePath, corruptBytes);
+        const tempDir = yield* tempDirFor("project-runtime-reset-failure-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const harness = makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          failWipe: "docker rm failed: permission denied",
+        });
+        const { lifecycle } = yield* harness.start;
 
-        const failure = yield* lifecycle.archive({ projectId, threadId }).pipe(Effect.flip);
-        assert.include(failure.message, "is degraded");
+        const failure = yield* lifecycle.reset({ projectId, threadId }).pipe(Effect.flip);
+        assert.include(failure.message, "Failed to reset project runtime");
 
-        assert.isFalse(NodeFS.existsSync(statePath));
-        const corruptFiles = NodeFS.readdirSync(stateDir).filter((name) =>
-          name.startsWith("project-runtime-lifecycle.json.corrupt-"),
-        );
-        assert.lengthOf(corruptFiles, 1);
-        assert.equal(
-          NodeFS.readFileSync(NodePath.join(stateDir, corruptFiles[0]!), "utf8"),
-          corruptBytes,
-        );
+        const detail = yield* lifecycle.get({ projectId });
+        // Not stuck in "resetting": the failure is recorded and visible.
+        assert.equal(detail.runtime.runtime.lifecycleState, "failed");
+        assert.include(detail.runtime.runtime.lastError ?? "", "permission denied");
+        assert.equal(detail.runtime.queue.executionLock, "idle");
+
+        // The single-writer lock was released: the next operation runs and recovers.
+        harness.failures.wipe = undefined;
+        const recovered = yield* lifecycle.reset({ projectId, threadId });
+        assert.equal(recovered.runtime.runtime.lifecycleState, "stopped");
+        assert.equal(recovered.runtime.runtime.lastError, null);
+      }),
+    ),
+  );
+
+  it.effect("a failed wake records failed plus lastError instead of staying provisioning", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tempDir = yield* tempDirFor("project-runtime-wake-failure-");
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const harness = makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          failStart: "image pull failed",
+        });
+        const { lifecycle } = yield* harness.start;
+
+        yield* lifecycle.wake({ projectId, threadId }).pipe(Effect.flip);
+        const detail = yield* lifecycle.get({ projectId });
+        assert.equal(detail.runtime.runtime.lifecycleState, "failed");
+        assert.include(detail.runtime.runtime.lastError ?? "", "image pull failed");
+
+        harness.failures.start = undefined;
+        const woken = yield* lifecycle.wake({ projectId, threadId });
+        assert.equal(woken.runtime.runtime.lifecycleState, "running");
+        assert.equal(woken.runtime.runtime.lastError, null);
       }),
     ),
   );
@@ -756,20 +881,16 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
   it.effect("reports a project runtime with no bound thread as idle instead of failing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-unbound-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-unbound-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
         // No threads are bound to the project runtime, and nothing has been
         // provisioned for it yet.
-        const harness = makeHarness({
+        const { lifecycle } = yield* makeHarness({
           baseDir: tempDir,
           hostWorkspacePath,
           threads: [],
           descriptors: [],
-        });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        }).start;
 
         // A status read (used by the home overview poller) must not fail just
         // because the runtime has no bound thread — it reports as idle instead.
@@ -781,67 +902,27 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
     ),
   );
 
-  it.effect("reports a live container as running even when stale metadata says archived", () =>
+  it.effect("a thread starting work un-archives the runtime (one state machine)", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-stale-archive-",
-        });
+        const tempDir = yield* tempDirFor("project-runtime-stale-archive-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+        const { lifecycle, threadRuntime } = yield* makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+        }).start;
 
         yield* lifecycle.archive({ projectId });
-        // A thread starts work without going through wake(): the ThreadRuntime
-        // descriptor is the observed truth and must outrank the archive marker.
-        harness.descriptors.set(String(threadId), makeDescriptor({ threadId, status: "running" }));
+        assert.equal(
+          (yield* lifecycle.get({ projectId })).runtime.runtime.lifecycleState,
+          "archived",
+        );
+        // A thread starts work without going through wake(): the start writes the
+        // same record the status reads, so there is no stale marker to outrank.
+        yield* threadRuntime.startRuntime(threadId);
 
         const detail = yield* lifecycle.get({ projectId });
         assert.equal(detail.runtime.runtime.lifecycleState, "running");
-      }),
-    ),
-  );
-
-  it.effect("clears the archived marker when a runtime.started event arrives", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "project-runtime-event-unarchive-",
-        });
-        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const events = yield* PubSub.unbounded<ThreadRuntimeEvent>();
-        const harness = makeHarness({
-          baseDir: tempDir,
-          hostWorkspacePath,
-          runtimeEvents: Stream.fromPubSub(events),
-        });
-        const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
-
-        yield* lifecycle.archive({ projectId });
-        yield* PubSub.publish(events, {
-          kind: "runtime.started",
-          threadId,
-          runtimeId,
-          createdAt: now,
-          payload: makeDescriptor({ threadId, status: "running" }),
-        });
-
-        // The reconciler consumes events on a forked fiber; the descriptor
-        // stays "stopped" here, so once the marker clears the derived state
-        // falls through to the descriptor instead of the stale "archived".
-        const settled = yield* Effect.gen(function* () {
-          for (let attempt = 0; attempt < 50; attempt += 1) {
-            const detail = yield* lifecycle.get({ projectId });
-            if (detail.runtime.runtime.lifecycleState !== "archived") {
-              return detail.runtime.runtime.lifecycleState;
-            }
-            yield* Effect.yieldNow;
-          }
-          return "archived" as const;
-        });
-        assert.equal(settled, "stopped");
       }),
     ),
   );
@@ -851,10 +932,7 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const fileSystem = yield* FileSystem.FileSystem;
-          const tempDir = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "project-runtime-adopted-",
-          });
+          const tempDir = yield* tempDirFor("project-runtime-adopted-");
           const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
 
           // A promoted scratch thread keeps its own `isolated-runtime:<thread>` id, and the
@@ -874,14 +952,13 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
             ...makeDescriptor({ threadId, status: "stopped" }),
             runtimeId: adoptedRuntimeId,
           };
-          const harness = makeHarness({
+          const { lifecycle } = yield* makeHarness({
             baseDir: tempDir,
             hostWorkspacePath,
             project,
             threads: [thread],
             descriptors: [descriptor],
-          });
-          const lifecycle = yield* makeProjectRuntimeLifecycle.pipe(Effect.provide(harness.layer));
+          }).start;
 
           const detail = yield* lifecycle.get({ projectId });
 
@@ -889,5 +966,52 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
           assert.equal(detail.runtime.runtime.parentRuntimeId, null);
         }),
       ),
+  );
+
+  it.effect("garbage collection keeps the newest snapshots and prunes old merged/ folders", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tempDir = yield* tempDirFor("project-runtime-gc-");
+        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+        const { lifecycle, registry } = yield* makeHarness({
+          baseDir: tempDir,
+          hostWorkspacePath,
+          lifecycleOptions: { snapshotKeep: 2, retentionDays: 14 },
+        }).start;
+        yield* lifecycle.wake({ projectId, threadId });
+
+        const first = yield* lifecycle.createSnapshot({ projectId, threadId, name: "one" });
+        const firstId = first.runtime.snapshots[0]!.id;
+        yield* lifecycle.createSnapshot({ projectId, threadId, name: "two" });
+        const third = yield* lifecycle.createSnapshot({ projectId, threadId, name: "three" });
+        assert.deepStrictEqual(
+          third.runtime.snapshots.map((snapshot) => snapshot.name),
+          ["two", "three"],
+        );
+        assert.isFalse(NodeFS.existsSync(makeSnapshotArchivePath(tempDir, firstId)));
+
+        const mergedPath = NodePath.join("merged", "old-work-1234");
+        NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, mergedPath), { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, mergedPath, "file.txt"), "x");
+        yield* registry.insertMerge({
+          mergeId: "merge-old",
+          targetRuntimeId: runtimeId,
+          sourceThreadId: secondThreadId,
+          mergedPath,
+          mergedAt: "2026-01-01T00:00:00.000Z",
+          removedAt: null,
+        });
+
+        // Inside the retention window nothing is removed.
+        const early = yield* lifecycle.collectGarbage(new Date("2026-01-10T00:00:00.000Z"));
+        assert.equal(early.mergesRemoved, 0);
+        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, mergedPath)));
+
+        const late = yield* lifecycle.collectGarbage(new Date("2026-02-01T00:00:00.000Z"));
+        assert.equal(late.mergesRemoved, 1);
+        assert.isFalse(NodeFS.existsSync(NodePath.join(hostWorkspacePath, mergedPath)));
+        assert.lengthOf(yield* registry.listActiveMerges(), 0);
+      }),
+    ),
   );
 });

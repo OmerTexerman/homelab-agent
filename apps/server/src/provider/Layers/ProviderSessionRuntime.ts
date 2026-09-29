@@ -108,7 +108,9 @@ export const makeHomelabSessionPlacement = Effect.gen(function* () {
         runtimeMode: input.runtimeMode,
         ...(input.requestedCwd ? { requestedCwd: input.requestedCwd } : {}),
       });
-      yield* runtime.startRuntime(input.threadId);
+      // Turn dispatch already started and materialized the runtime; this only
+      // makes sure the container is up (e.g. a session resumed without a turn).
+      yield* runtime.ensureRunning(input.threadId);
       yield* runtime.touchRuntime(input.threadId).pipe(
         Effect.catchTags({
           ThreadRuntimeError: () => Effect.void,

@@ -255,7 +255,7 @@ describe("runtime wrapper planning", () => {
     );
     expect(files.get("runtime-shell")?.contents).toContain("/bin/zsh");
     expect(files.get("runtime-shell")?.contents).toContain(
-      "PATH=/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/opt/homelab/bin:",
+      "PATH=/runtime/provider-clis/current/bin:/runtime/home/.homelab/bin:/runtime/home/.local/bin:/runtime/home/.npm-global/bin:/opt/homelab/bin:",
     );
     expect(files.get("codex")?.mode).toBe(0o755);
   });
@@ -413,17 +413,24 @@ describe("runtime file rendering", () => {
           SECOND_SECRET: "two",
         },
         serverUrl: "http://host.docker.internal:3456",
-        threadId: ThreadId.make("thread-secrets"),
         scope: "project",
-        runtimeAccessToken: "runtime-token",
       }),
     ).toEqual({
       FIRST_SECRET: "one",
       SECOND_SECRET: "two",
       HOMELAB_AGENT_SCOPE: "project",
       HOMELAB_AGENT_SERVER_URL: "http://host.docker.internal:3456",
-      HOMELAB_AGENT_THREAD_ID: "thread-secrets",
-      HOMELAB_AGENT_RUNTIME_TOKEN: "runtime-token",
     });
+  });
+
+  it("keeps thread identity out of the shared runtime env file", () => {
+    // Sourcing the shared file must never overwrite the calling exec's identity.
+    const env = buildRuntimeControlEnvironment({
+      secretEnv: { HOMELAB_AGENT_THREAD_ID: "old", HOMELAB_AGENT_RUNTIME_TOKEN: "old" },
+      serverUrl: "http://host.docker.internal:3456",
+      scope: "project",
+    });
+    expect(env).not.toHaveProperty("HOMELAB_AGENT_THREAD_ID");
+    expect(env).not.toHaveProperty("HOMELAB_AGENT_RUNTIME_TOKEN");
   });
 });

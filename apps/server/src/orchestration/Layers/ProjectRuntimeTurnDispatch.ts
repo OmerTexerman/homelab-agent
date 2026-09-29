@@ -104,14 +104,19 @@ export const makeProjectRuntimeTurnDispatch = Effect.fnUntraced(function* (
       ...(effectiveCwd ? { requestedCwd: effectiveCwd } : {}),
       isStandalone: assignment.kind === "scratch",
       runtimeKind: assignment.kind,
+      projectId: project.id,
       projectTitle: project.title,
       // A parallel project thread starts from an exact copy of the Project Runtime.
       ...(assignment.kind === "project-isolated"
         ? { seedFromRuntimeId: defaultRuntimeIdForProject(project) }
         : {}),
     });
+    // The one full start per turn: materializes the runtime (unchanged files
+    // are skipped) and reuses the running container.
     yield* threadRuntime.value.startRuntime(input.threadId);
     const launchContext = yield* threadRuntime.value.resolveLaunchContext(input.threadId);
+    // P5-INTEGRATION: replace this list (limit 1000) and the scopeHomelabContextViewToThread
+    // filter below with listHomelabViewMemoryEntries({ projectId, threadId }).
     const projectMemory = yield* Effect.serviceOption(ProjectMemory);
     const memoryEntries = Option.isSome(projectMemory)
       ? yield* projectMemory.value

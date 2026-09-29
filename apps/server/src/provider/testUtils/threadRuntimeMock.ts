@@ -104,8 +104,15 @@ export function makeThreadRuntimeMock(input: {
       }),
     getRuntime: (threadId) => Effect.succeed(descriptor(threadId)),
     listRuntimes: () => Effect.succeed([]),
+    ensureRunning: (threadId) => Effect.succeed(descriptor(threadId)),
     startRuntime: (threadId) => Effect.succeed(descriptor(threadId)),
     stopRuntime: () => Effect.void,
+    setTurnActive: () => Effect.void,
+    retainTerminal: () => Effect.succeed(() => undefined),
+    unbindThread: () => Effect.void,
+    destroyRuntimeById: () => Effect.void,
+    wipeRuntime: () => Effect.void,
+    reconcile: () => Effect.void,
     touchRuntime: (threadId) =>
       Effect.sync(() => {
         input.touchCalls?.push(threadId);

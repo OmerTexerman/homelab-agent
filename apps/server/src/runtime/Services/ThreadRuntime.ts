@@ -1,16 +1,23 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 /**
- * ThreadRuntime - Container-first execution boundary for one thread.
+ * ThreadRuntime - the container execution boundary for threads.
  *
- * The current fork still routes provider and terminal work through cwd/worktree
- * assumptions inherited from upstream. This service marks the intended v3 seam:
- * each thread owns an isolated runtime, and providers/terminals resolve their
- * execution context from that runtime instead of from project-local filesystem
- * conventions.
+ * A runtime is one container (the shared `project-runtime:<project>` or an
+ * `isolated-runtime:<thread>`) with one record in the RuntimeRegistry. Threads
+ * bind to a runtime; most calls here are keyed by thread id and act on the
+ * thread's runtime. Each thread's `docker exec`s carry that thread's own cwd,
+ * id, and runtime token, so threads sharing a container never overwrite each
+ * other's identity. See docs/internals/runtime-lifecycle.md.
  *
  * @module ThreadRuntime
  */
-import type { ProviderKind, RuntimeMode, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import type {
+  ProjectId,
+  ProviderKind,
+  RuntimeMode,
+  RuntimeSessionId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { Context, Data } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -100,6 +107,8 @@ export interface ThreadRuntimeLaunchInput {
   readonly isStandalone?: boolean;
   /** Human-readable owning project title, when known. Used only for the persona copy. */
   readonly projectTitle?: string;
+  /** Owning project, when known. Recorded on the runtime for lifecycle and GC. */
+  readonly projectId?: ProjectId;
 }
 
 export interface ThreadExecutionContext {
@@ -122,6 +131,12 @@ export interface ThreadRuntimeLaunchContext {
   readonly hostHomePath: string;
   readonly hostBinDir: string;
   readonly shellWrapperPath: string;
+  /**
+   * Shell wrapper shared by every thread of the runtime. It carries no thread
+   * identity (no thread id or runtime token), so a terminal owned by a shared
+   * runtime doesn't change when a sibling thread opens it.
+   */
+  readonly runtimeShellWrapperPath?: string | undefined;
   readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 
@@ -165,7 +180,16 @@ export interface ThreadRuntimeShape {
     ThreadRuntimeError
   >;
 
-  /** Start or resume the concrete runtime backing a thread. */
+  /**
+   * Make sure the thread's runtime container is running. Inspect-only when it
+   * already is (no materialization); otherwise the same as `startRuntime`.
+   * Workspace reads/writes, downloads, and terminals use this.
+   */
+  readonly ensureRunning: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
+
+  /** Start or resume the thread's runtime and re-materialize its runtime files. */
   readonly startRuntime: (
     threadId: ThreadId,
   ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
@@ -180,6 +204,18 @@ export interface ThreadRuntimeShape {
     threadId: ThreadId,
   ) => Effect.Effect<void, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
 
+  /**
+   * Record that a thread has (or no longer has) a provider turn in flight.
+   * The idle reaper never stops a runtime while any bound thread has one.
+   */
+  readonly setTurnActive: (threadId: ThreadId, active: boolean) => Effect.Effect<void>;
+
+  /**
+   * Hold the thread's runtime awake while a terminal client is attached.
+   * Returns the release; calling it more than once is a no-op.
+   */
+  readonly retainTerminal: (threadId: ThreadId) => Effect.Effect<() => void>;
+
   /** Refresh runtime-scoped env files and shell bootstrap without restarting the container. */
   readonly refreshRuntimeEnvironment: (
     threadId: ThreadId,
@@ -190,10 +226,50 @@ export interface ThreadRuntimeShape {
     threadId: ThreadId,
   ) => Effect.Effect<ThreadRuntimeDescriptor, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
 
-  /** Destroy one runtime and any durable runtime-specific resources. */
+  /**
+   * Unbind the thread and destroy its runtime when no other thread is bound:
+   * tombstone, then container, then data, then record.
+   */
   readonly destroyRuntime: (
     threadId: ThreadId,
   ) => Effect.Effect<void, ThreadRuntimeError | ThreadRuntimeNotFoundError>;
+
+  /**
+   * Remove the thread's binding (its wrappers and runtime token) and leave the
+   * runtime in place. With `retireIfUnbound`, a runtime left without threads
+   * is stopped and marked retired; garbage collection destroys it later.
+   */
+  readonly unbindThread: (
+    threadId: ThreadId,
+    options?: { readonly retireIfUnbound?: boolean },
+  ) => Effect.Effect<void, ThreadRuntimeError>;
+
+  /** Destroy a runtime by id, whatever is bound to it. */
+  readonly destroyRuntimeById: (
+    runtimeId: RuntimeSessionId,
+  ) => Effect.Effect<void, ThreadRuntimeError>;
+
+  /**
+   * Remove the runtime's container and data but keep its record and thread
+   * bindings (reset and restore). With `reseed`, an isolated clone copies its
+   * parent again on next ensure. `refill` runs under the runtime's lock right
+   * after the wipe with the (now empty) host runtime root, e.g. to restore a
+   * snapshot into it before anything can start the runtime again.
+   */
+  readonly wipeRuntime: (
+    runtimeId: RuntimeSessionId,
+    options?: {
+      readonly reseed?: boolean;
+      readonly refill?: (hostRuntimePath: string) => Effect.Effect<void, unknown>;
+    },
+  ) => Effect.Effect<void, ThreadRuntimeError>;
+
+  /**
+   * Check every runtime record against Docker: adopt matching containers,
+   * mark missing ones stopped, and finish tombstoned deletions. Never creates
+   * a container. Runs at startup and on a slow tick.
+   */
+  readonly reconcile: () => Effect.Effect<void>;
 
   /** Resolve the execution context provider adapters and terminals should use. */
   readonly resolveExecutionContext: (

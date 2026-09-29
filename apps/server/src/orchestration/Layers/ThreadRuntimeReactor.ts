@@ -70,16 +70,15 @@ const make = Effect.gen(function* () {
     event: ThreadDeletedEvent,
   ) {
     const activeThreads = yield* readActiveThreadBindings;
-    if (!shouldDestroyRuntimeForThreadDeletion({ event, activeThreads })) {
-      return;
-    }
-
-    yield* threadRuntime.destroyRuntime(event.payload.threadId).pipe(
-      Effect.catchTags({
-        ThreadRuntimeError: () => Effect.void,
-        ThreadRuntimeNotFoundError: () => Effect.void,
-      }),
-    );
+    // Every deleted thread loses its binding and runtime token. A runtime it
+    // owned alone (isolated, scratch, curator) is retired: stopped now and
+    // destroyed by garbage collection after the retention window. A shared
+    // project runtime stays; it belongs to the project.
+    yield* threadRuntime
+      .unbindThread(event.payload.threadId, {
+        retireIfUnbound: shouldDestroyRuntimeForThreadDeletion({ event, activeThreads }),
+      })
+      .pipe(Effect.catchTag("ThreadRuntimeError", () => Effect.void));
   });
 
   const processProjectDeleted = Effect.fn("threadRuntimeReactor.processProjectDeleted")(function* (
@@ -89,22 +88,9 @@ const make = Effect.gen(function* () {
     if (runtimeId === undefined || runtimeId === null) {
       return;
     }
-    const descriptors = yield* threadRuntime.listRuntimes().pipe(
-      Effect.catchTags({
-        ThreadRuntimeError: () => Effect.succeed([]),
-      }),
-    );
-    yield* Effect.forEach(
-      descriptors.filter((descriptor) => descriptor.runtimeId === runtimeId),
-      (descriptor) =>
-        threadRuntime.destroyRuntime(descriptor.threadId).pipe(
-          Effect.catchTags({
-            ThreadRuntimeError: () => Effect.void,
-            ThreadRuntimeNotFoundError: () => Effect.void,
-          }),
-        ),
-      { discard: true },
-    );
+    yield* threadRuntime
+      .destroyRuntimeById(runtimeId)
+      .pipe(Effect.catchTag("ThreadRuntimeError", () => Effect.void));
   });
 
   const processDomainEventSafely = Effect.fn("threadRuntimeReactor.processDomainEventSafely")(

@@ -39,8 +39,10 @@ it.effect(
       const providerService = {
         streamEvents: Stream.fromPubSub(events),
       } as unknown as ProviderServiceShape;
+      const activity: Array<readonly [ThreadId, boolean]> = [];
       const threadRuntime = {
         touchRuntime: (id) => Effect.sync(() => void touches.push(id)),
+        setTurnActive: (id, active) => Effect.sync(() => void activity.push([id, active])),
       } as Partial<ThreadRuntimeShape> as ThreadRuntimeShape;
 
       const layer = makeRuntimeTurnKeepaliveLive({ interval: Duration.seconds(1) }).pipe(
@@ -73,6 +75,9 @@ it.effect(
         const atTurnEnd = touches.length;
         yield* TestClock.adjust(Duration.seconds(5));
         assert.strictEqual(touches.length, atTurnEnd, "no further touches after the turn ends");
+        // The reaper's refcount: active from turn start, inactive at turn end.
+        assert.deepStrictEqual(activity.at(0), [threadId, true]);
+        assert.deepStrictEqual(activity.at(-1), [threadId, false]);
       }).pipe(Effect.provide(layer));
     }),
 );
