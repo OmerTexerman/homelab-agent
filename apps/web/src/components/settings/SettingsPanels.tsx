@@ -170,6 +170,7 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { environmentsSupportPullRequests } from "./homelabSettingsCatalog";
 import {
   shouldShowCompatibilityHostPathProjectUi,
   shouldShowPrimarySourceControlUi,
@@ -2176,6 +2177,7 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.threadAutoSettlement === true,
     );
+  const supportsPullRequests = environmentsSupportPullRequests(connectedEnvironments);
   const supportsRestartContinuation =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
@@ -2280,6 +2282,7 @@ export function GeneralSettingsPanel() {
         {supportsAutoSettlement ? (
           <>
             <SettingsRow
+              hidden={!supportsPullRequests}
               serverScoped
               settingKeys={["sidebarAutoSettleOnMerge"]}
               {...searchableSetting("auto-settle-merged-threads")}

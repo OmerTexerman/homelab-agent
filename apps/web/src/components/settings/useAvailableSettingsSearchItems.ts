@@ -63,6 +63,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
             getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length >
             0,
         }),
+        { environments },
       ),
     [
       canManageLocalBackend,

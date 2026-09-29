@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import routeTreeSource from "../../routeTree.gen.ts?raw";
 
 import {
+  environmentsSupportPullRequests,
   HOMELAB_SETTINGS_SEARCH_ITEMS,
   HOMELAB_UNSCOPED_SETTINGS_PATHS,
   withHomelabSettingsSearchItems,
@@ -48,6 +49,20 @@ describe("homelab settings search", () => {
 
   it("keeps exactly one entry for the new-thread runtime default", () => {
     expect(ids.filter((id) => id === "new-threads")).toHaveLength(1);
+  });
+
+  it("drops auto-settle-on-merge when no environment tracks pull requests", () => {
+    const environment = (pullRequests: boolean) => ({
+      serverConfig: { environment: { capabilities: { pullRequests } } },
+    });
+    const idsFor = (environments: ReadonlyArray<ReturnType<typeof environment>>) =>
+      withHomelabSettingsSearchItems(SETTINGS_SEARCH_ITEMS as ReadonlyArray<SettingsSearchItem>, {
+        environments,
+      }).map((item) => item.id);
+
+    expect(idsFor([environment(false)])).not.toContain("auto-settle-merged-threads");
+    expect(idsFor([environment(false), environment(true)])).toContain("auto-settle-merged-threads");
+    expect(environmentsSupportPullRequests([{ serverConfig: null }])).toBe(false);
   });
 });
 
