@@ -10,17 +10,14 @@
  */
 import type { McpCapability } from "../mcp/McpInvocationContext.ts";
 
-/** Spread after upstream's capability literal in `ServerEnvironment`. */
-export const HOMELAB_ENVIRONMENT_CAPABILITY_OVERRIDES = {
-  pullRequests: false,
-} as const;
+/** Advertised as `capabilities.pullRequests` by `ServerEnvironment`. */
+export const HOMELAB_PULL_REQUESTS_ENABLED: boolean = false;
 
 /** Drops MCP capabilities whose environment capability is switched off. */
 export function homelabMcpCapabilities(
   capabilities: Iterable<McpCapability>,
 ): ReadonlyArray<McpCapability> {
   return Array.from(capabilities).filter(
-    (capability) =>
-      capability !== "pull-requests" || HOMELAB_ENVIRONMENT_CAPABILITY_OVERRIDES.pullRequests,
+    (capability) => capability !== "pull-requests" || HOMELAB_PULL_REQUESTS_ENABLED,
   );
 }

@@ -29,6 +29,8 @@ export class LogicalWorkspaceRootError extends Schema.TaggedError<LogicalWorkspa
   }
 }
 
+export const isLogicalWorkspaceRootError = Schema.is(LogicalWorkspaceRootError);
+
 /** Canonical logical root for `workspaceRoot`, or `undefined` for host paths. */
 export function normalizeLogicalWorkspaceRoot(workspaceRoot: string): string | undefined {
   const projectId = parseLogicalProjectWorkspaceRoot(workspaceRoot);
