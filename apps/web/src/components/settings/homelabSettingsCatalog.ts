@@ -11,6 +11,7 @@ import {
   shouldShowPrimarySourceControlUi,
   shouldShowSidebarProjectGroupingControls,
 } from "../../productCapabilities";
+import { shouldShowMultiEnvironmentConnections } from "./homelabConnections";
 import type { SettingsPath, SettingsSearchItem } from "./settingsSearch";
 
 export type HomelabSettingsPath =
@@ -64,6 +65,13 @@ function hiddenSettingsSearchIds(): ReadonlySet<string> {
   }
   if (!shouldShowSidebarProjectGroupingControls()) {
     hidden.add("project-grouping");
+  }
+  if (!shouldShowPrimarySourceControlUi()) {
+    hidden.add("github-routing");
+  }
+  if (!shouldShowMultiEnvironmentConnections()) {
+    hidden.add("remote-environments");
+    hidden.add("load-balancing");
   }
   return hidden;
 }

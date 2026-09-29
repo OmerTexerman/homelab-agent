@@ -70,6 +70,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { keybindingSearchAnchorId, searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { shouldShowEditorOpenInControls } from "../../productCapabilities";
 
 function KeybindingPill({ value }: { value: string }) {
   // Keys dedupe repeated parts; a literal "+" in a shortcut splits into empty strings.
@@ -1537,23 +1538,26 @@ export function KeybindingsSettingsPanel() {
               />
               <TooltipPopup side="top">Add keybinding</TooltipPopup>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost-muted"
-                    disabled={!keybindingsConfigPath}
-                    onClick={openKeybindingsFile}
-                    aria-label="Open keybindings.json"
-                  >
-                    <FileJsonIcon />
-                  </Button>
-                }
-              />
-              <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
-            </Tooltip>
+            {/* Homelab fork: the file lives on the server, not beside this browser. */}
+            {shouldShowEditorOpenInControls() ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      disabled={!keybindingsConfigPath}
+                      onClick={openKeybindingsFile}
+                      aria-label="Open keybindings.json"
+                    >
+                      <FileJsonIcon />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
+              </Tooltip>
+            ) : null}
           </div>
         }
       >

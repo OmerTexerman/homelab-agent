@@ -182,6 +182,11 @@ import {
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
 } from "../../keybindings";
+import {
+  HOMELAB_PAIRING_SCOPE_OPTIONS,
+  shouldShowMultiEnvironmentConnections,
+} from "./homelabConnections";
+import { shouldShowPrimarySourceControlUi } from "../../productCapabilities";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -231,6 +236,7 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     title: "Write reviews",
     description: "Create comments while reviewing changes.",
   },
+  ...HOMELAB_PAIRING_SCOPE_OPTIONS,
   {
     scope: AuthAccessReadScope,
     title: "View access",
@@ -3695,86 +3701,88 @@ export function ConnectionsSettings() {
   return (
     <SettingsPageContainer width="wide">
       {primarySettings}
-      <SettingsSection
-        {...searchableSetting("remote-environments")}
-        title="Environments"
-        headerAction={
-          <div className="flex items-center gap-1">
-            {savedServerUpdateTargets.length > 0 ? (
-              <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
-            ) : null}
-            <Dialog
-              open={addBackendDialogOpen}
-              onOpenChange={(open) => {
-                setAddBackendDialogOpen(open);
-                if (!open) {
-                  setSavedBackendError(null);
-                }
-              }}
-            >
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <DialogTrigger
-                      render={
-                        <Button size="xs" variant="ghost-muted" aria-label="Add environment">
-                          <PlusIcon className="size-3" />
-                          <span>Add environment</span>
-                        </Button>
-                      }
-                    />
+      {shouldShowMultiEnvironmentConnections() ? (
+        <SettingsSection
+          {...searchableSetting("remote-environments")}
+          title="Environments"
+          headerAction={
+            <div className="flex items-center gap-1">
+              {savedServerUpdateTargets.length > 0 ? (
+                <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
+              ) : null}
+              <Dialog
+                open={addBackendDialogOpen}
+                onOpenChange={(open) => {
+                  setAddBackendDialogOpen(open);
+                  if (!open) {
+                    setSavedBackendError(null);
                   }
-                />
-                <TooltipPopup side="top">Add environment</TooltipPopup>
-              </Tooltip>
-              <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
-                <DialogHeader>
-                  <DialogTitle>Add Environment</DialogTitle>
-                  <DialogDescription>Pair another environment to this client.</DialogDescription>
-                </DialogHeader>
-                <DialogPanel>
-                  <div className="space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {renderConnectionModeCard({
-                        mode: "remote",
-                        title: "Remote link",
-                        description: "Enter a backend host and pairing code.",
-                        icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
-                      })}
-                      {desktopBridge
-                        ? renderConnectionModeCard({
-                            mode: "ssh",
-                            title: "SSH",
-                            description:
-                              "Use local SSH config, agent, and tunnels for the backend.",
-                            icon: <TerminalIcon aria-hidden className="size-4" />,
-                          })
-                        : null}
+                }}
+              >
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <DialogTrigger
+                        render={
+                          <Button size="xs" variant="ghost-muted" aria-label="Add environment">
+                            <PlusIcon className="size-3" />
+                            <span>Add environment</span>
+                          </Button>
+                        }
+                      />
+                    }
+                  />
+                  <TooltipPopup side="top">Add environment</TooltipPopup>
+                </Tooltip>
+                <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
+                  <DialogHeader>
+                    <DialogTitle>Add Environment</DialogTitle>
+                    <DialogDescription>Pair another environment to this client.</DialogDescription>
+                  </DialogHeader>
+                  <DialogPanel>
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {renderConnectionModeCard({
+                          mode: "remote",
+                          title: "Remote link",
+                          description: "Enter a backend host and pairing code.",
+                          icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
+                        })}
+                        {desktopBridge
+                          ? renderConnectionModeCard({
+                              mode: "ssh",
+                              title: "SSH",
+                              description:
+                                "Use local SSH config, agent, and tunnels for the backend.",
+                              icon: <TerminalIcon aria-hidden className="size-4" />,
+                            })
+                          : null}
+                      </div>
+                      <AnimatedHeight>
+                        {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
+                      </AnimatedHeight>
                     </div>
-                    <AnimatedHeight>
-                      {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
-                    </AnimatedHeight>
-                  </div>
-                </DialogPanel>
-              </DialogPopup>
-            </Dialog>
-          </div>
-        }
-      >
-        {listedEnvironments.map((environment) => (
-          <SavedBackendListRow
-            key={environment.environmentId}
-            environment={environment}
-            removingEnvironmentId={removingSavedEnvironmentId}
-            onSetEnabled={handleSetSavedBackendEnabled}
-            onRemove={handleRemoveSavedBackend}
+                  </DialogPanel>
+                </DialogPopup>
+              </Dialog>
+            </div>
+          }
+        >
+          {listedEnvironments.map((environment) => (
+            <SavedBackendListRow
+              key={environment.environmentId}
+              environment={environment}
+              removingEnvironmentId={removingSavedEnvironmentId}
+              onSetEnabled={handleSetSavedBackendEnabled}
+              onRemove={handleRemoveSavedBackend}
+            />
+          ))}
+          <CloudRemoteEnvironmentRows
+            primaryEnvironmentId={primaryEnvironmentId}
+            savedEnvironments={savedEnvironments}
           />
-        ))}
-        <CloudRemoteEnvironmentRows
-          primaryEnvironmentId={primaryEnvironmentId}
-          savedEnvironments={savedEnvironments}
-        />
-      </SettingsSection>
+        </SettingsSection>
+      ) : null}
       {hasCloudPublicConfig() ? (
         <RemoveT3ConnectEnvironmentDialog
           environmentLabel={pendingT3ConnectRemoval?.label ?? null}
@@ -3786,8 +3794,12 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
-      <LoadBalancingSettings environments={loadBalancingEnvironments} />
-      <GitHubRoutingSettings environments={loadBalancingEnvironments} />
+      {shouldShowMultiEnvironmentConnections() ? (
+        <LoadBalancingSettings environments={loadBalancingEnvironments} />
+      ) : null}
+      {shouldShowPrimarySourceControlUi() ? (
+        <GitHubRoutingSettings environments={loadBalancingEnvironments} />
+      ) : null}
     </SettingsPageContainer>
   );
 }
