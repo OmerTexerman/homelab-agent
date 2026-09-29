@@ -4,6 +4,7 @@ import {
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type ThreadRuntimeMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -33,8 +34,10 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
+import { ThreadRuntimeModeBadge } from "./ThreadRuntimeModeBadge";
 import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { shouldShowEditorOpenInControls } from "../../productCapabilities";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { readLocalApi } from "~/localApi";
@@ -61,6 +64,8 @@ interface ChatHeaderProps {
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  /** Homelab: isolated/Scratch/curator threads get a runtime badge. */
+  runtimeSelectionMode?: ThreadRuntimeMode | undefined;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
@@ -109,7 +114,9 @@ export function shouldShowOpenInPicker(input: {
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly remoteOpenMode: RemoteOpenMode;
+  readonly editorOpenInControls?: boolean;
 }): boolean {
+  if (input.editorOpenInControls === false) return false;
   if (!input.activeProjectName) return false;
   if (
     input.primaryEnvironmentId !== null &&
@@ -130,6 +137,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   isServerThread,
   activeProject,
+  runtimeSelectionMode,
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -207,6 +215,7 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     primaryEnvironmentId,
     remoteOpenMode: remoteOpenState.mode,
+    editorOpenInControls: shouldShowEditorOpenInControls(),
   });
   const activeThreadRef = useMemo(
     () => scopeThreadRef(activeThreadEnvironmentId, activeThreadId),
@@ -487,6 +496,7 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <ThreadRuntimeModeBadge project={activeProject} runtimeSelectionMode={runtimeSelectionMode} />
       <div
         ref={headerActionsRef}
         data-chat-header-actions

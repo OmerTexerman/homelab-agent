@@ -1,11 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  describeActiveThreadRuntimeMode,
-  resolveRenameCommit,
-  shouldShowOpenInPicker,
-} from "./ChatHeader";
+import { resolveRenameCommit, shouldShowOpenInPicker } from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -71,47 +67,10 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        remoteOpenMode: "local-exec",
         editorOpenInControls: false,
       }),
     ).toBe(false);
-  });
-});
-
-describe("describeActiveThreadRuntimeMode", () => {
-  it("describes the project runtime source for isolated thread clones", () => {
-    expect(
-      describeActiveThreadRuntimeMode({
-        runtimeSelectionMode: "isolated",
-        activeProjectName: "Router migration",
-        projectDefaultRuntimeId: "project-runtime:router" as never,
-      }),
-    ).toContain("isolated clone of Router migration's Project Runtime");
-    expect(
-      describeActiveThreadRuntimeMode({
-        runtimeSelectionMode: "isolated",
-        activeProjectName: "Router migration",
-        projectDefaultRuntimeId: "project-runtime:router" as never,
-      }),
-    ).toContain("Source runtime: project-runtime:router");
-  });
-
-  it("describes isolated standalone threads as Scratch runtime work", () => {
-    expect(
-      describeActiveThreadRuntimeMode({
-        runtimeSelectionMode: "isolated",
-        isStandaloneThread: true,
-        activeProjectName: "Standalone Threads",
-      }),
-    ).toBe("This standalone thread uses its own Scratch runtime outside any Project.");
-  });
-
-  it("stays quiet for normal shared Project Runtime threads", () => {
-    expect(
-      describeActiveThreadRuntimeMode({
-        runtimeSelectionMode: "shared",
-        activeProjectName: "Router migration",
-      }),
-    ).toBeNull();
   });
 });
 
