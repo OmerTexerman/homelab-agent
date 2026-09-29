@@ -207,15 +207,14 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
         FROM homelab_secret_requests
       `;
       const requestByKey = new Map(requests.map((request) => [request.secretKey, request]));
-      return rows.map(
-        (row): SecretRecord => ({
-          ...row,
-          projectIds: scopes
-            .filter((scope) => scope.secretKey === row.key)
-            .map((scope) => scope.projectId),
-          request: requestByKey.get(row.key),
-        }),
-      );
+      const records: ReadonlyArray<SecretRecord> = rows.map((row) => ({
+        ...row,
+        projectIds: scopes
+          .filter((scope) => scope.secretKey === row.key)
+          .map((scope) => scope.projectId),
+        request: requestByKey.get(row.key),
+      }));
+      return records;
     }).pipe(Effect.mapError(sqlFailure("read")));
 
   const loadRecord = (key: string) =>
@@ -427,13 +426,11 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
           (record) =>
             readValue(record.key).pipe(
               Effect.map(
-                Option.map(
-                  (value): MaterializedHomelabSecret => ({
-                    key: record.key,
-                    value,
-                    valueUpdatedAt: record.valueUpdatedAt ?? record.updatedAt,
-                  }),
-                ),
+                Option.map((value) => ({
+                  key: record.key,
+                  value,
+                  valueUpdatedAt: record.valueUpdatedAt ?? record.updatedAt,
+                })),
               ),
             ),
           { concurrency: 8 },
