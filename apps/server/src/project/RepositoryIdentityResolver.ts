@@ -3,6 +3,7 @@ import {
   detectSourceControlProviderFromGitRemoteUrl,
   normalizeGitRemoteUrl,
 } from "@t3tools/shared/git";
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -181,6 +182,8 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
   // git keep their own spans.
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fnUntraced(
     function* (cwd, options) {
+      // Homelab: logical project roots have no host checkout to probe.
+      if (isLogicalProjectWorkspaceRoot(cwd)) return null;
       if (options?.refresh) yield* Cache.invalidate(repositoryRootCache, cwd);
       const cacheKey = yield* Cache.get(repositoryRootCache, cwd);
       if (cacheKey === null) return null;

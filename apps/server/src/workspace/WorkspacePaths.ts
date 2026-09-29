@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
+import { normalizeLogicalWorkspaceRoot } from "./logicalWorkspaceRoot.ts";
 
 export class WorkspaceRootNotExistsError extends Schema.TaggedError<WorkspaceRootNotExistsError>()(
   "WorkspaceRootNotExistsError",
@@ -152,6 +153,9 @@ export const make = Effect.gen(function* () {
   const normalizeWorkspaceRoot: WorkspacePaths["Service"]["normalizeWorkspaceRoot"] = Effect.fn(
     "WorkspacePaths.normalizeWorkspaceRoot",
   )(function* (workspaceRoot, options) {
+    // Homelab: logical project roots are identifiers, not host directories.
+    const logicalRoot = normalizeLogicalWorkspaceRoot(workspaceRoot);
+    if (logicalRoot !== undefined) return logicalRoot;
     const normalizedWorkspaceRoot = path.resolve(expandHomePathWith(workspaceRoot.trim(), path));
     let workspaceStat = yield* statWorkspaceRoot(
       workspaceRoot,
