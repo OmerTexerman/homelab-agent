@@ -108,7 +108,14 @@ const FORWARDED_ENV_DENYLIST = new Set([
   "SHLVL",
   "UID",
   "WORKSPACE",
+  // A host path, only read by the wrapper itself.
+  "HOMELAB_AGENT_RUNTIME_TOKEN_FILE",
 ]);
+/**
+ * Env var naming the host-only token file of the thread a shared shell was
+ * started for; the runtime-level shell wrapper reads it at exec time.
+ */
+export const RUNTIME_TOKEN_FILE_ENV = "HOMELAB_AGENT_RUNTIME_TOKEN_FILE";
 
 export interface DockerMountSpec {
   readonly source: string;
@@ -340,6 +347,8 @@ export function toLaunchContext(input: {
   readonly hostBinDir?: string;
   /** Identity-less shell wrapper shared by every thread of the runtime. */
   readonly runtimeShellWrapperPath?: string;
+  /** The thread's host-only runtime token file. */
+  readonly runtimeTokenPath?: string;
 }): ThreadRuntimeLaunchContext {
   const layout =
     input.storageId !== undefined
@@ -358,6 +367,7 @@ export function toLaunchContext(input: {
     ...(input.runtimeShellWrapperPath !== undefined
       ? { runtimeShellWrapperPath: input.runtimeShellWrapperPath }
       : {}),
+    ...(input.runtimeTokenPath !== undefined ? { runtimeTokenPath: input.runtimeTokenPath } : {}),
     ...(input.runtime.managedOpenCodeServer !== undefined
       ? { managedOpenCodeServer: input.runtime.managedOpenCodeServer }
       : {}),
@@ -604,6 +614,8 @@ export function buildRuntimeWrapperScriptSpecs(input: {
   /** Where the wrappers go; defaults to the runtime-level bin dir. */
   readonly binDir?: string;
   readonly tokenFilePath?: string;
+  /** Read the token file path from the caller's `HOMELAB_AGENT_RUNTIME_TOKEN_FILE` instead. */
+  readonly tokenFileFromEnv?: boolean;
 }): ReadonlyArray<RuntimeGeneratedTextFile> {
   const layout =
     input.storageId !== undefined
@@ -622,6 +634,7 @@ export function buildRuntimeWrapperScriptSpecs(input: {
     sourceEnvFilePath: runtimeSecretEnvPath(input.runtime.homePath),
     ...(containerPathValue ? { pathValue: containerPathValue } : {}),
     ...(input.tokenFilePath !== undefined ? { tokenFilePath: input.tokenFilePath } : {}),
+    ...(input.tokenFileFromEnv === true ? { tokenFileFromEnv: true } : {}),
   };
 
   return [
@@ -846,6 +859,8 @@ export function renderDockerExecWrapper(input: {
   readonly extraEnv?: Readonly<Record<string, string>>;
   /** Host-only file holding this thread's runtime token, read at exec time. */
   readonly tokenFilePath?: string;
+  /** Take the token file path from `HOMELAB_AGENT_RUNTIME_TOKEN_FILE` at exec time. */
+  readonly tokenFileFromEnv?: boolean;
 }): string {
   const staticEnvEntries = Object.entries(input.runtime.env)
     .filter(
@@ -876,10 +891,12 @@ export function renderDockerExecWrapper(input: {
       .map(([key, value]) => `docker_args+=(-e "${key}=${value}")`),
     // The token's value never appears in argv: it is exported here and
     // forwarded by name.
-    ...(input.tokenFilePath
+    ...(input.tokenFilePath || input.tokenFileFromEnv
       ? [
-          `token_file=${shQuote(input.tokenFilePath)}`,
-          'if [ -r "$token_file" ]; then',
+          input.tokenFilePath
+            ? `token_file=${shQuote(input.tokenFilePath)}`
+            : `token_file="\${${RUNTIME_TOKEN_FILE_ENV}:-}"`,
+          'if [ -n "$token_file" ] && [ -r "$token_file" ]; then',
           '  HOMELAB_AGENT_RUNTIME_TOKEN="$(cat "$token_file")"',
           "  export HOMELAB_AGENT_RUNTIME_TOKEN",
           "  docker_args+=(-e HOMELAB_AGENT_RUNTIME_TOKEN)",

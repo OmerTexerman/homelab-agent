@@ -8,6 +8,7 @@ import {
   type ThreadRuntimeShape,
 } from "../runtime/Services/ThreadRuntime.ts";
 import { TerminalCwdStatError } from "@t3tools/contracts";
+import { RUNTIME_TOKEN_FILE_ENV } from "../runtime/Layers/RuntimeExecutionContext.ts";
 
 export interface RuntimeTerminalContextInput {
   readonly threadRuntime: ThreadRuntimeShape;
@@ -25,8 +26,10 @@ export interface RuntimeTerminalStartContext {
   readonly runtimeEnv: Record<string, string> | null;
   /** The thread's own shell wrapper (carries the thread's identity). */
   readonly runtimeShell: string;
-  /** The runtime's identity-less shell wrapper, for terminals shared by its threads. */
+  /** The runtime's shell wrapper, for terminals shared by its threads. */
   readonly sharedRuntimeShell: string;
+  /** Env that gives the shared shell this thread's identity (thread id, token file). */
+  readonly threadIdentityEnv: Record<string, string>;
 }
 
 export function normalizedRuntimeEnv(
@@ -87,6 +90,12 @@ export const resolveRuntimeTerminalStartContext = Effect.fn(
       }),
       runtimeShell: runtimeShell || launchContext.shellWrapperPath,
       sharedRuntimeShell: launchContext.runtimeShellWrapperPath?.trim() || runtimeShell,
+      threadIdentityEnv: {
+        HOMELAB_AGENT_THREAD_ID: String(runtimeThreadId),
+        ...(launchContext.runtimeTokenPath
+          ? { [RUNTIME_TOKEN_FILE_ENV]: launchContext.runtimeTokenPath }
+          : {}),
+      },
     } satisfies RuntimeTerminalStartContext;
   }).pipe(
     Effect.mapError(

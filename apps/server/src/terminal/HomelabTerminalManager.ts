@@ -87,6 +87,12 @@ interface HomelabTerminalState {
   /** Latest thread that used each owner session; output activity touches its runtime. */
   readonly activeThreadByOwner: Map<string, string>;
   readonly lastOutputTouchByOwner: Map<string, number>;
+  /**
+   * The identity a shared (runtime-owned) terminal was started with: the
+   * thread that opened it. Kept so sibling opens don't change the env (which
+   * would restart the session); a restart takes the restarting thread's.
+   */
+  readonly identityByOwner: Map<string, Record<string, string>>;
 }
 
 const touchThreadRuntime = (threadRuntime: ThreadRuntimeShape, threadId: string) =>
@@ -117,6 +123,7 @@ export function makeHomelabTerminalManager(input: {
     },
   >(
     launch: Launch,
+    mode: "open" | "restart" = "open",
   ) =>
     Effect.gen(function* () {
       const context = yield* resolveRuntimeTerminalStartContext({
@@ -142,6 +149,15 @@ export function makeHomelabTerminalManager(input: {
             !(RUNTIME_THREAD_IDENTITY_ENV_KEYS as ReadonlyArray<string>).includes(key),
         ),
       );
+      // The shared shell runs as the thread that started the session, so the
+      // `homelab` CLI works in it. Every thread of a shared runtime is in the
+      // same project, so that thread's token has the right project scope.
+      let identity: Record<string, string> = {};
+      if (!ownedByThread) {
+        const existing = state.identityByOwner.get(ownerId);
+        identity = mode === "open" && existing ? existing : context.threadIdentityEnv;
+        state.identityByOwner.set(ownerId, identity);
+      }
       return {
         ...launch,
         threadId: ownerId,
@@ -151,6 +167,7 @@ export function makeHomelabTerminalManager(input: {
         worktreePath: context.worktreePath,
         env: {
           ...env,
+          ...identity,
           [HOMELAB_TERMINAL_SHELL_ENV]: ownedByThread
             ? context.runtimeShell
             : context.sharedRuntimeShell,
@@ -169,7 +186,7 @@ export function makeHomelabTerminalManager(input: {
 
   return {
     open: (request) => toRuntimeLaunch(request).pipe(Effect.flatMap(inner.open)),
-    restart: (request) => toRuntimeLaunch(request).pipe(Effect.flatMap(inner.restart)),
+    restart: (request) => toRuntimeLaunch(request, "restart").pipe(Effect.flatMap(inner.restart)),
     attachStream: (request, listener) => {
       const cwd = request.cwd;
       const launch: Effect.Effect<TerminalAttachInput, TerminalError> =
@@ -196,7 +213,15 @@ export function makeHomelabTerminalManager(input: {
         withOwner(request).pipe(Effect.flatMap(inner.resize)),
       ),
     clear: (request) => withOwner(request).pipe(Effect.flatMap(inner.clear)),
-    close: (request) => withOwner(request).pipe(Effect.flatMap(inner.close)),
+    close: (request) =>
+      withOwner(request).pipe(
+        Effect.tap((mapped) =>
+          Effect.sync(() => {
+            if (request.terminalId === undefined) state.identityByOwner.delete(mapped.threadId);
+          }),
+        ),
+        Effect.flatMap(inner.close),
+      ),
     closeIdle: (request) => withOwner(request).pipe(Effect.flatMap(inner.closeIdle)),
     subscribe: inner.subscribe,
     subscribeMetadata: inner.subscribeMetadata,
@@ -217,6 +242,7 @@ export const makeWith = Effect.fn("HomelabTerminalManager.makeWith")(function* <
   const state: HomelabTerminalState = {
     activeThreadByOwner: new Map(),
     lastOutputTouchByOwner: new Map(),
+    identityByOwner: new Map(),
   };
 
   const touchOwnerOnOutput = (ownerId: string) =>
