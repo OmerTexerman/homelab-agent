@@ -45,36 +45,9 @@ Follow-up:
 
 ## Chat Export
 
-Goal: export a thread transcript without making export a provider- or UI-specific feature.
-
-Completed first slice:
-
-- Added active-chat header actions for `Export Markdown` and `Export JSON`.
-- Added a client-side `chatExport` read model that renders from the local
-  thread timeline read model and active project/thread/provider metadata.
-- JSON includes an export version, exported timestamp, project/thread/runtime
-  metadata, provider/model context, timeline entries, messages, work log
-  entries, pending approvals/user-input prompts, proposed plans, active plans,
-  and turn diff summaries.
-- Markdown includes readable project/thread/runtime/provider metadata,
-  chronological user and assistant messages, tool/work log entries, proposed
-  plans, pending approvals/user-input prompts, active plans, changed files, and
-  timestamps.
-- Export stays client-side and avoids provider-specific raw event payloads.
-
-Completed V2:
-
-- Replaced the simple header export actions with a compact `Export Chat`
-  popover.
-- Added Markdown, JSON, plain text, HTML, and PDF print-view export paths.
-- JSON is versioned at export schema V2 and includes project/thread/runtime,
-  provider/model, timeline, work logs, decisions, pending prompts, plans,
-  changed-file summaries, and standalone/shared/isolated runtime metadata.
-- Markdown and plain text include a raw searchable JSONL transcript section for
-  local grep/search and durable review.
-- HTML exports are self-contained, offline-readable, and print-friendly.
-- PDF uses the browser print/save-to-PDF flow from the same print-friendly HTML
-  rather than adding a direct PDF dependency.
+Removed in the 2026-09 upstream sync (it conflicted with upstream's chat
+surface). Follow-up: rebuild a small Markdown/JSON export on upstream's
+current thread data model.
 
 ## Home And Project Overview
 
@@ -129,7 +102,7 @@ Completed coverage:
   `isolated-runtime:<thread-id>` for isolated work, and
   `project-runtime:system:standalone` for Scratch before move-to-project.
 - The browser portion verifies queue read models, runtime panel RPC routing,
-  chat export read-model runtime metadata, sidebar new-thread affordances, and
+  sidebar new-thread affordances, and
   command palette actions for new project and standalone thread creation.
 - With `--with-runtime`, the smoke wakes a runtime, opens a runtime terminal,
   verifies generated `.homelab` entries, and probes the in-runtime `homelab`
@@ -141,7 +114,7 @@ Completed coverage:
 Remaining follow-ups:
 
 - Add deeper visual regression coverage for project/thread sidebar states,
-  settings panels, Runtime Workspace, and active chat export popovers.
+  settings panels, and Runtime Workspace.
 - Add end-to-end provider prompt coverage once Codex/Claude auth fixtures are
   available without touching a real user's provider accounts.
 - Add restore/merge smoke coverage when isolated runtime merge/discard and
@@ -162,7 +135,7 @@ Completed after the upstream sync:
   bootstrap paths.
 - First-run pairing, reverse-proxy-style browser session, CORS, and cookie
   behavior tests.
-- Homelab-aligned home overview and chat export copy that avoids repo/Git-first
+- Homelab-aligned home overview copy that avoids repo/Git-first
   labels unless compatibility fields are actually present.
 
 Remaining risks before a broader deployment:
