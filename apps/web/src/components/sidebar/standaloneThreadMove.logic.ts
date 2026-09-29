@@ -64,3 +64,20 @@ export function buildStandaloneThreadMoveMemoryMigration(input: {
     mode: input.mode,
   };
 }
+
+/**
+ * Runs a dialog submit with its "Moving…"/"Promoting…" flag set, and always
+ * clears the flag afterwards: on success, on a reported failure result, and
+ * when the task throws.
+ */
+export async function runWithSubmittingState<T>(
+  setSubmitting: (submitting: boolean) => void,
+  task: () => Promise<T>,
+): Promise<T> {
+  setSubmitting(true);
+  try {
+    return await task();
+  } finally {
+    setSubmitting(false);
+  }
+}
