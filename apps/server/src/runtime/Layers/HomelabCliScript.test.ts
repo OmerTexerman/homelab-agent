@@ -80,6 +80,12 @@ async function handleCliTestRequest(
     case "/api/homelab/secrets":
       respondJson(response, { secrets: [] });
       return;
+    case "/api/homelab/search":
+      respondJson(response, []);
+      return;
+    case "/api/homelab/show":
+      respondJson(response, { doc: { id: url.searchParams.get("id") }, links: [], audit: [] });
+      return;
     case "/api/homelab/curate/overview":
       respondJson(response, { entityCount: 0 });
       return;
@@ -199,6 +205,27 @@ describe("generated homelab CLI", () => {
       {
         method: "GET",
         path: "/api/homelab/runtime-bootstrap",
+        authorization: "Bearer test-runtime-token",
+      },
+    ]);
+  });
+
+  it("ranks graph search on the server and shows one record by id", async () => {
+    await expect(
+      runHomelabCli(["search", "nas storage", "--kind", "host", "--include-superseded"]),
+    ).resolves.toContain("[]");
+    await expect(runHomelabCli(["show", "host:nas01"])).resolves.toContain('"host:nas01"');
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/api/homelab/search",
+        authorization: "Bearer test-runtime-token",
+        bodyJson: { query: "nas storage", kinds: ["host"], includeSuperseded: true },
+      },
+      {
+        method: "GET",
+        path: "/api/homelab/show?id=host%3Anas01",
         authorization: "Bearer test-runtime-token",
       },
     ]);

@@ -323,8 +323,8 @@ promotion. Promotion from project memory to the global graph is explicit.`;
 
 Skills are reusable SKILL.md documents — concise, named instructions for how to do one
 thing well (a runbook, a vendor workflow, a debugging recipe). The skills visible to this
-runtime are materialized under \`.homelab/skills/\` (see \`index.jsonl\`) and, for Claude
-Code, under \`~/.claude/skills/\`.
+runtime are materialized under \`.homelab/skills/\` (see \`index.jsonl\`), under
+\`~/.claude/skills/\` for Claude Code, and under \`~/.agents/skills/\` for Codex and OpenCode.
 
 | Command | What it does |
 |---------|-------------|
@@ -479,8 +479,9 @@ source code or wrapper scripts before using it.
 | Command | What it does |
 |---------|-------------|
 | \`homelab snapshot\` | Full dump of all entities, relations, and metadata |
-| \`homelab search <query>\` | Search entities by name, kind, or description |
+| \`homelab search <query>\` | Full-text search of entities and observations, best match first |
 | \`homelab search <query> --kind host\` | Filter search to a specific entity kind |
+| \`homelab show <id>\` | Show any entity, observation, or memory entry with its links and history |
 | \`homelab memory search <query>\` | Search ${isScratch ? "this thread's" : "project"} memory and transcript indexes |
 | \`homelab memory list\` | List durable ${memoryScopeShort} memory entries |
 | \`homelab skill list\` | List reusable skills visible to this runtime |
