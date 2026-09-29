@@ -2,7 +2,8 @@
 /**
  * ProjectRuntimeLifecycle - user-facing lifecycle operations on a runtime
  * (wake, sleep, archive, reset, snapshot, restore, merge) plus garbage
- * collection of snapshots, `merged/` folders, and retired runtimes.
+ * collection of snapshots and retired runtimes. `merged/` folders are user
+ * work in the project workspace and are never collected.
  *
  * Runtime state has one home: the runtime's RuntimeRegistry record. Every
  * mutating operation goes through `withLifecycleTransition`, which records the
@@ -53,7 +54,6 @@ import { RuntimeRegistry, type RuntimeRecord } from "../RuntimeRegistry.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { CONTAINER_HOME_PATH, encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
-import { managedWorkspacePath } from "./ThreadRuntimePaths.ts";
 import {
   ProjectRuntimeLifecycle,
   type ProjectRuntimeGarbageReport,
@@ -102,7 +102,7 @@ const DAY_MS = 24 * 60 * 60_000;
 export interface ProjectRuntimeLifecycleOptions {
   /** Snapshots kept per runtime; older ones are removed (archive and record). */
   readonly snapshotKeep?: number;
-  /** Days a `merged/` folder or a retired runtime is kept before GC removes it. */
+  /** Days a retired runtime is kept before GC destroys it. */
   readonly retentionDays?: number;
   /** GC tick; 0 disables the periodic pass. */
   readonly gcIntervalMs?: number;
@@ -340,7 +340,6 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
     const registry = yield* RuntimeRegistry;
     const terminalManager = yield* TerminalManager;
     const queue = yield* ProjectRuntimeQueue;
-    const threadRuntimesDir = NodePath.join(config.stateDir, "thread-runtimes");
     const snapshotKeep =
       options?.snapshotKeep ??
       envNumber("HOMELAB_AGENT_RUNTIME_SNAPSHOT_KEEP", DEFAULT_SNAPSHOT_KEEP);
@@ -1175,16 +1174,6 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
             }),
         }),
       );
-      yield* registry
-        .insertMerge({
-          mergeId: `runtime-merge-${NodeCrypto.randomUUID()}`,
-          targetRuntimeId: resolved.runtimeId,
-          sourceThreadId: input.threadId,
-          mergedPath,
-          mergedAt: new Date().toISOString(),
-          removedAt: null,
-        })
-        .pipe(Effect.catchCause((cause) => Effect.logWarning("failed to record merge", { cause })));
 
       const result = yield* describeRuntime({ projectId: input.projectId });
       return { runtime: result.runtime, mergedPath };
@@ -1199,37 +1188,6 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
         let snapshotsRemoved = 0;
         for (const record of records) {
           snapshotsRemoved += yield* pruneSnapshots(record.runtimeId);
-        }
-
-        // `merged/<thread>` folders are a hand-off area in the project runtime;
-        // they are removed once older than the retention window.
-        let mergesRemoved = 0;
-        const recordsById = new Map(records.map((record) => [String(record.runtimeId), record]));
-        const merges = yield* registry.listActiveMerges().pipe(Effect.orElseSucceed(() => []));
-        for (const merge of merges.filter((entry) => entry.mergedAt < cutoff)) {
-          const target = recordsById.get(String(merge.targetRuntimeId));
-          const removed = yield* Effect.gen(function* () {
-            if (target) {
-              const workspace = managedWorkspacePath(threadRuntimesDir, target.storageId);
-              const folder = NodePath.resolve(workspace, merge.mergedPath);
-              if (!folder.startsWith(`${NodePath.resolve(workspace, "merged")}${NodePath.sep}`)) {
-                return false;
-              }
-              yield* Effect.tryPromise(() =>
-                NodeFS.promises.rm(folder, { recursive: true, force: true }),
-              );
-            }
-            yield* registry.markMergeRemoved(merge.mergeId, new Date(now).toISOString());
-            return true;
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to remove an old merged/ folder", {
-                mergeId: merge.mergeId,
-                cause: Cause.pretty(cause),
-              }).pipe(Effect.as(false)),
-            ),
-          );
-          if (removed) mergesRemoved += 1;
         }
 
         // Runtimes retired when their (only) thread was deleted.
@@ -1250,7 +1208,6 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
         }
         return {
           snapshotsRemoved,
-          mergesRemoved,
           runtimesDestroyed,
         } satisfies ProjectRuntimeGarbageReport;
       });

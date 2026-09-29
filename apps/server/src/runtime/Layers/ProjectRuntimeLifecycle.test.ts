@@ -968,50 +968,50 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
       ),
   );
 
-  it.effect("garbage collection keeps the newest snapshots and prunes old merged/ folders", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const tempDir = yield* tempDirFor("project-runtime-gc-");
-        const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
-        const { lifecycle, registry } = yield* makeHarness({
-          baseDir: tempDir,
-          hostWorkspacePath,
-          lifecycleOptions: { snapshotKeep: 2, retentionDays: 14 },
-        }).start;
-        yield* lifecycle.wake({ projectId, threadId });
+  it.effect(
+    "garbage collection keeps the newest snapshots, destroys old retired runtimes, and keeps merged/",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tempDir = yield* tempDirFor("project-runtime-gc-");
+          const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
+          const harness = makeHarness({
+            baseDir: tempDir,
+            hostWorkspacePath,
+            lifecycleOptions: { snapshotKeep: 2, retentionDays: 14 },
+          });
+          const { lifecycle, registry } = yield* harness.start;
+          yield* lifecycle.wake({ projectId, threadId });
 
-        const first = yield* lifecycle.createSnapshot({ projectId, threadId, name: "one" });
-        const firstId = first.runtime.snapshots[0]!.id;
-        yield* lifecycle.createSnapshot({ projectId, threadId, name: "two" });
-        const third = yield* lifecycle.createSnapshot({ projectId, threadId, name: "three" });
-        assert.deepStrictEqual(
-          third.runtime.snapshots.map((snapshot) => snapshot.name),
-          ["two", "three"],
-        );
-        assert.isFalse(NodeFS.existsSync(makeSnapshotArchivePath(tempDir, firstId)));
+          const first = yield* lifecycle.createSnapshot({ projectId, threadId, name: "one" });
+          const firstId = first.runtime.snapshots[0]!.id;
+          yield* lifecycle.createSnapshot({ projectId, threadId, name: "two" });
+          const third = yield* lifecycle.createSnapshot({ projectId, threadId, name: "three" });
+          assert.deepStrictEqual(
+            third.runtime.snapshots.map((snapshot) => snapshot.name),
+            ["two", "three"],
+          );
+          assert.isFalse(NodeFS.existsSync(makeSnapshotArchivePath(tempDir, firstId)));
 
-        const mergedPath = NodePath.join("merged", "old-work-1234");
-        NodeFS.mkdirSync(NodePath.join(hostWorkspacePath, mergedPath), { recursive: true });
-        NodeFS.writeFileSync(NodePath.join(hostWorkspacePath, mergedPath, "file.txt"), "x");
-        yield* registry.insertMerge({
-          mergeId: "merge-old",
-          targetRuntimeId: runtimeId,
-          sourceThreadId: secondThreadId,
-          mergedPath,
-          mergedAt: "2026-01-01T00:00:00.000Z",
-          removedAt: null,
-        });
+          // merged/ folders are user work in the project workspace: never collected.
+          const mergedFile = NodePath.join(
+            hostWorkspacePath,
+            "merged",
+            "old-work-1234",
+            "file.txt",
+          );
+          NodeFS.mkdirSync(NodePath.dirname(mergedFile), { recursive: true });
+          NodeFS.writeFileSync(mergedFile, "x");
 
-        // Inside the retention window nothing is removed.
-        const early = yield* lifecycle.collectGarbage(new Date("2026-01-10T00:00:00.000Z"));
-        assert.equal(early.mergesRemoved, 0);
-        assert.isTrue(NodeFS.existsSync(NodePath.join(hostWorkspacePath, mergedPath)));
-
-        const late = yield* lifecycle.collectGarbage(new Date("2026-02-01T00:00:00.000Z"));
-        assert.equal(late.mergesRemoved, 1);
-        assert.isFalse(NodeFS.existsSync(NodePath.join(hostWorkspacePath, mergedPath)));
-        assert.lengthOf(yield* registry.listActiveMerges(), 0);
-      }),
-    ),
+          // A retired runtime survives inside the retention window, then is destroyed.
+          yield* registry.patchRuntime(runtimeId, { retiredAt: "2026-01-01T00:00:00.000Z" });
+          const early = yield* lifecycle.collectGarbage(new Date("2026-01-10T00:00:00.000Z"));
+          assert.equal(early.runtimesDestroyed, 0);
+          const late = yield* lifecycle.collectGarbage(new Date("2026-02-01T00:00:00.000Z"));
+          assert.equal(late.runtimesDestroyed, 1);
+          assert.deepStrictEqual(harness.destroyedRuntimeIds, [runtimeId]);
+          assert.isTrue(NodeFS.existsSync(mergedFile));
+        }),
+      ),
   );
 });

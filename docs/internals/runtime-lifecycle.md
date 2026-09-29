@@ -16,7 +16,6 @@ A runtime is one container. Its record lives in `homelab.sqlite` (see
 | `runtimes`          | One row per container: name, id, image, `generation`, the lifecycle `state` and `last_error`, activity times, the seed status of an isolated clone, `retired_at`, and the `deleting_at` tombstone. |
 | `runtime_threads`   | One row per bound thread: its runtime, provider, runtime mode, in-container cwd, and env.                                                                                                          |
 | `runtime_snapshots` | Snapshot metadata. The archives stay under `project-runtime-snapshots/`.                                                                                                                           |
-| `runtime_merges`    | The `merged/<thread>` folders that `mergeIsolated` created, for garbage collection.                                                                                                                |
 
 `state` is the one lifecycle state machine the UI shows
 (`ProjectRuntimeLifecycleState`): container states (`provisioning`,
@@ -65,10 +64,15 @@ Threads that share a container never share identity:
   by its own thread and then removed from the home.
 - Files in the container are per-runtime: `~/.homelab-runtime.env` holds
   secrets, the server URL, and the scope, never a thread id or token.
-- `<runtime root>/bin/runtime-shell` is an identity-less shell wrapper. The
-  terminal of a shared project runtime uses it, so a sibling thread opening
-  the terminal doesn't restart it. The `homelab` CLI needs a thread token, so
-  it only works in a thread's own terminal (isolated and scratch runtimes).
+- `<runtime root>/bin/runtime-shell` is the shell wrapper for the terminal
+  of a shared project runtime. It bakes in no thread; the terminal starts it
+  with the identity of the thread that opened the session
+  (`HOMELAB_AGENT_THREAD_ID`, and `HOMELAB_AGENT_RUNTIME_TOKEN_FILE` naming
+  that thread's token file, which the wrapper reads and forwards by name).
+  Every thread of a shared runtime is in the same project, so the `homelab`
+  CLI works with the right project scope. Sibling threads reuse the session
+  and its identity without a restart; a restart takes the restarting
+  thread's identity.
 
 ## Materialize and ensureRunning
 
@@ -148,9 +152,11 @@ Every `HOMELAB_AGENT_RUNTIME_GC_INTERVAL_MS` (1 hour), `collectGarbage`:
 
 - keeps the newest `HOMELAB_AGENT_RUNTIME_SNAPSHOT_KEEP` (10) snapshots per
   runtime, and removes older ones, archive first and then the row;
-- removes `merged/<thread>` folders older than
-  `HOMELAB_AGENT_RUNTIME_RETENTION_DAYS` (14);
-- destroys retired runtimes older than the same window.
+- destroys runtimes retired longer than `HOMELAB_AGENT_RUNTIME_RETENTION_DAYS`
+  (14).
+
+`merged/<thread>` folders are user work in the project workspace and are never
+collected.
 
 ## User-space installs
 

@@ -489,3 +489,59 @@ describe("runtime wrapper execution", () => {
     NodeFS.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("shared runtime shell identity", () => {
+  it("a shell started for a shared runtime carries the opening thread's identity", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "p4-shared-shell-"));
+    const fakeDocker = NodePath.join(dir, "docker");
+    NodeFS.writeFileSync(
+      fakeDocker,
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OUT_ARGS"\nprintf "%s" "${HOMELAB_AGENT_RUNTIME_TOKEN:-}" > "$OUT_TOKEN"\n',
+      { mode: 0o755 },
+    );
+    const tokenFile = NodePath.join(dir, "runtime-token");
+    NodeFS.writeFileSync(tokenFile, "token-of-thread-a\n", { mode: 0o600 });
+    const runtime = buildThreadRuntimeDescriptor({
+      threadRuntimesDir: NodePath.join(dir, "thread-runtimes"),
+      threadId: ThreadId.make("runtime-view"),
+      runtimeId: RuntimeSessionId.make("project-runtime:p"),
+      provider: null,
+      runtimeMode: "full-access",
+      bootstrapImageRef: "runtime:test",
+      bootstrapVersion: "v",
+      bootstrapEnv: {},
+      containerShellPath: "/bin/bash",
+      now: "2026-01-01T00:00:00.000Z",
+    });
+    const shell = buildRuntimeWrapperScriptSpecs({
+      threadRuntimesDir: NodePath.join(dir, "thread-runtimes"),
+      runtime: { ...runtime, env: {} },
+      dockerBinaryPath: fakeDocker,
+      containerShellPath: "/bin/bash",
+      binDir: NodePath.join(dir, "bin"),
+      tokenFileFromEnv: true,
+    }).find((file) => file.filePath.endsWith("/runtime-shell"))!;
+    NodeFS.mkdirSync(NodePath.dirname(shell.filePath), { recursive: true });
+    NodeFS.writeFileSync(shell.filePath, shell.contents, { mode: 0o755 });
+    const outArgs = NodePath.join(dir, "args");
+    const outToken = NodePath.join(dir, "token");
+    NodeChildProcess.execFileSync(shell.filePath, ["-c", "true"], {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? "",
+        OUT_ARGS: outArgs,
+        OUT_TOKEN: outToken,
+        HOMELAB_AGENT_THREAD_ID: "thread-a",
+        HOMELAB_AGENT_RUNTIME_TOKEN_FILE: tokenFile,
+      },
+    });
+    const args = NodeFS.readFileSync(outArgs, "utf8").split("\n");
+    // The thread id is forwarded from the terminal's env, the token by name only.
+    expect(args).toContain("HOMELAB_AGENT_THREAD_ID");
+    expect(args).toContain("HOMELAB_AGENT_RUNTIME_TOKEN");
+    expect(args).not.toContain("HOMELAB_AGENT_RUNTIME_TOKEN_FILE");
+    expect(args.join(" ")).not.toContain("token-of-thread-a");
+    expect(NodeFS.readFileSync(outToken, "utf8")).toBe("token-of-thread-a");
+    NodeFS.rmSync(dir, { recursive: true, force: true });
+  });
+});

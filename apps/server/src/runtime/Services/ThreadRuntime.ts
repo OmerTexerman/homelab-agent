@@ -132,11 +132,15 @@ export interface ThreadRuntimeLaunchContext {
   readonly hostBinDir: string;
   readonly shellWrapperPath: string;
   /**
-   * Shell wrapper shared by every thread of the runtime. It carries no thread
-   * identity (no thread id or runtime token), so a terminal owned by a shared
-   * runtime doesn't change when a sibling thread opens it.
+   * Shell wrapper shared by every thread of the runtime. It bakes in no
+   * thread identity; the caller passes `HOMELAB_AGENT_THREAD_ID` and
+   * `HOMELAB_AGENT_RUNTIME_TOKEN_FILE` in its env, so a shared terminal keeps
+   * the identity of the thread that started it and a sibling opening it
+   * doesn't restart it.
    */
   readonly runtimeShellWrapperPath?: string | undefined;
+  /** This thread's host-only runtime token file (for the shared shell's env). */
+  readonly runtimeTokenPath?: string | undefined;
   readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
 }
 

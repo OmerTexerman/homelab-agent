@@ -791,6 +791,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       storageId: record.storageId,
       hostBinDir: threadBinDir(record, binding.threadId),
       runtimeShellWrapperPath: runtimeShellWrapperPath(record),
+      runtimeTokenPath: threadTokenPath(record, binding.threadId),
     });
 
   const publishEvent = (
@@ -1429,7 +1430,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     },
   );
 
-  /** The identity-less shell wrapper shared terminals use; drops the old runtime-level provider wrappers. */
+  /**
+   * The runtime-level shell wrapper shared terminals use. It bakes in no
+   * thread identity: the terminal passes the identity of the thread that
+   * started it through the exec env. Also drops the old runtime-level
+   * provider wrappers.
+   */
   const writeRuntimeSharedShellWrapper = Effect.fn("threadRuntime.writeRuntimeSharedShellWrapper")(
     function* (record: RuntimeRecord, bindings: ReadonlyArray<RuntimeThreadBinding>) {
       const binDir = runtimeBinDirForThread(threadRuntimesDir, record.storageId);
@@ -1447,6 +1453,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         containerShellPath,
         storageId: record.storageId,
         binDir,
+        tokenFileFromEnv: true,
       }).find((file) => NodePath.basename(file.filePath) === SHELL_RUNTIME_WRAPPER);
       if (shell) {
         yield* writeFile(

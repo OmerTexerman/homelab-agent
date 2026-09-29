@@ -5,8 +5,8 @@
  * One `runtimes` row per container (shared `project-runtime:*` or
  * `isolated-runtime:*`), carrying the container facts and the single
  * lifecycle `state` the UI shows. `runtime_threads` binds threads to it and
- * holds the per-thread launch facts (cwd, provider, env). Snapshots and
- * `merged/` folders hang off the runtime id.
+ * holds the per-thread launch facts (cwd, provider, env). Snapshots hang off
+ * the runtime id.
  *
  * Writes are column-scoped UPDATEs (`patchRuntime`), never a read-modify-write
  * of a whole record, so a slow operation can't write a stale copy back over a
@@ -112,16 +112,6 @@ export interface RuntimeSnapshotRow {
   readonly createdAt: string;
 }
 
-export interface RuntimeMergeRow {
-  readonly mergeId: string;
-  readonly targetRuntimeId: RuntimeSessionIdModel;
-  readonly sourceThreadId: ThreadIdModel;
-  /** Workspace-relative path, e.g. `merged/fix-dns-1a2b3c4d`. */
-  readonly mergedPath: string;
-  readonly mergedAt: string;
-  readonly removedAt: string | null;
-}
-
 export interface RuntimeRegistryShape {
   readonly getRuntime: (
     runtimeId: RuntimeSessionIdModel,
@@ -159,16 +149,6 @@ export interface RuntimeRegistryShape {
     snapshot: RuntimeSnapshotRow,
   ) => Effect.Effect<void, PersistenceSqlError>;
   readonly deleteSnapshot: (snapshotId: string) => Effect.Effect<void, PersistenceSqlError>;
-
-  readonly insertMerge: (merge: RuntimeMergeRow) => Effect.Effect<void, PersistenceSqlError>;
-  readonly listActiveMerges: () => Effect.Effect<
-    ReadonlyArray<RuntimeMergeRow>,
-    PersistenceSqlError
-  >;
-  readonly markMergeRemoved: (
-    mergeId: string,
-    removedAt: string,
-  ) => Effect.Effect<void, PersistenceSqlError>;
 }
 
 export class RuntimeRegistry extends Context.Service<RuntimeRegistry, RuntimeRegistryShape>()(
@@ -514,48 +494,6 @@ export const make = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("RuntimeRegistry.deleteSnapshot")),
     );
 
-  const insertMerge: RuntimeRegistryShape["insertMerge"] = (merge) =>
-    sql`
-      INSERT INTO runtime_merges
-        (merge_id, target_runtime_id, source_thread_id, merged_path, merged_at, removed_at)
-      VALUES (${merge.mergeId}, ${merge.targetRuntimeId}, ${merge.sourceThreadId},
-        ${merge.mergedPath}, ${merge.mergedAt}, ${merge.removedAt})
-    `.pipe(Effect.asVoid, Effect.mapError(toPersistenceSqlError("RuntimeRegistry.insertMerge")));
-
-  const listActiveMerges: RuntimeRegistryShape["listActiveMerges"] = () =>
-    sql<{
-      readonly mergeId: string;
-      readonly targetRuntimeId: string;
-      readonly sourceThreadId: string;
-      readonly mergedPath: string;
-      readonly mergedAt: string;
-    }>`
-      SELECT merge_id AS "mergeId", target_runtime_id AS "targetRuntimeId",
-        source_thread_id AS "sourceThreadId", merged_path AS "mergedPath", merged_at AS "mergedAt"
-      FROM runtime_merges WHERE removed_at IS NULL ORDER BY merged_at
-    `.pipe(
-      Effect.map((rows) =>
-        rows.map((row) => {
-          const merge: RuntimeMergeRow = {
-            mergeId: row.mergeId,
-            targetRuntimeId: RuntimeSessionId.make(row.targetRuntimeId),
-            sourceThreadId: ThreadId.make(row.sourceThreadId),
-            mergedPath: row.mergedPath,
-            mergedAt: row.mergedAt,
-            removedAt: null,
-          };
-          return merge;
-        }),
-      ),
-      Effect.mapError(toPersistenceSqlError("RuntimeRegistry.listActiveMerges")),
-    );
-
-  const markMergeRemoved: RuntimeRegistryShape["markMergeRemoved"] = (mergeId, removedAt) =>
-    sql`UPDATE runtime_merges SET removed_at = ${removedAt} WHERE merge_id = ${mergeId}`.pipe(
-      Effect.asVoid,
-      Effect.mapError(toPersistenceSqlError("RuntimeRegistry.markMergeRemoved")),
-    );
-
   return RuntimeRegistry.of({
     getRuntime,
     listRuntimes,
@@ -569,9 +507,6 @@ export const make = Effect.gen(function* () {
     listSnapshots,
     insertSnapshot,
     deleteSnapshot,
-    insertMerge,
-    listActiveMerges,
-    markMergeRemoved,
   });
 });
 

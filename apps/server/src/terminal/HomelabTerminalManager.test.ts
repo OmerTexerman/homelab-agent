@@ -103,6 +103,8 @@ function makeFakeThreadRuntime(input: {
         },
         hostWorkspacePath: input.hostWorkspace,
         shellWrapperPath: `/runtime/${input.runtimeIdFor(String(threadId))}/shell`,
+        runtimeShellWrapperPath: `/runtime/${input.runtimeIdFor(String(threadId))}/shared-shell`,
+        runtimeTokenPath: `/runtime/threads/${String(threadId)}/runtime-token`,
       } as unknown as ThreadRuntimeLaunchContext),
     streamEvents: Stream.empty,
   };
@@ -181,6 +183,14 @@ it.layer(
       assert.equal(second.threadId, SHARED_RUNTIME);
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
       assert.equal(ptyAdapter.spawnInputs[0]?.env.T3_THREAD_ID, undefined);
+      // The shared shell runs as the thread that started it, so `homelab` works.
+      const spawn = ptyAdapter.spawnInputs[0];
+      assert.equal(spawn?.shell, `/runtime/${SHARED_RUNTIME}/shared-shell`);
+      assert.equal(spawn?.env.HOMELAB_AGENT_THREAD_ID, "thread-1");
+      assert.equal(
+        spawn?.env.HOMELAB_AGENT_RUNTIME_TOKEN_FILE,
+        "/runtime/threads/thread-1/runtime-token",
+      );
 
       yield* manager.write({
         threadId: "thread-2",
