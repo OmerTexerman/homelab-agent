@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
   HomelabEntity,
@@ -83,9 +83,9 @@ function CollectionBadge(props: { readonly children: string; readonly tone?: "in
   return (
     <span
       className={cn(
-        "inline-flex h-4 shrink-0 items-center rounded border px-1 text-[9px] font-medium uppercase leading-none",
+        "inline-flex h-4 shrink-0 items-center rounded border px-1 text-3xs font-medium uppercase leading-none",
         props.tone === "warn"
-          ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          ? "border-warning/30 bg-warning/8 text-warning-foreground"
           : "border-border bg-muted/40 text-muted-foreground",
       )}
     >
@@ -105,7 +105,7 @@ function FilterChip(props: {
       type="button"
       onClick={props.onClick}
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors",
+        "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-2xs transition-colors",
         props.active
           ? "border-primary/50 bg-primary/10 text-foreground"
           : "border-border text-muted-foreground hover:bg-accent/50",
@@ -128,8 +128,8 @@ function DetailGrid(props: {
     <div className="grid gap-x-4 gap-y-1 sm:grid-cols-[auto_minmax(0,1fr)]">
       {visible.map(([label, value]) => (
         <div key={label} className="contents">
-          <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-          <div className="min-w-0 break-words text-[11px] text-foreground/90">{value}</div>
+          <div className="text-2xs font-medium text-muted-foreground">{label}</div>
+          <div className="min-w-0 break-words text-2xs text-foreground/90">{value}</div>
         </div>
       ))}
     </div>
@@ -297,7 +297,6 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
             left.kind.localeCompare(right.kind) ||
             entityName(left.fromEntityId).localeCompare(entityName(right.fromEntityId)),
         ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [entityById, query, snapshot.relations],
   );
   const filteredObservations = useMemo(
@@ -321,7 +320,6 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
             ),
         )
         .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [entityById, observationSourceFilter, query, snapshot.observations],
   );
   const filteredMemory = useMemo(
@@ -418,18 +416,18 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
             )}
           >
             {label}
-            <span className="text-[10px] opacity-70">{count}</span>
+            <span className="text-3xs opacity-70">{count}</span>
           </button>
         ))}
       </div>
 
-      <label className="relative block">
-        <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+      <label className="block">
         <Input
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
           placeholder="Search everything in this collection — names, IPs, tags, bodies, properties..."
-          className="h-8 pl-7 text-xs"
+          size="compact"
+          aria-label="Search this collection"
         />
       </label>
 
@@ -567,7 +565,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                       {staleEntityIdSet.has(String(entity.id)) ? (
                         <CollectionBadge tone="warn">stale</CollectionBadge>
                       ) : null}
-                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
                         {relations.length > 0 ? `${relations.length} rel · ` : ""}
                         {formatRelativeTimeLabel(entity.updatedAt)}
                       </span>
@@ -596,7 +594,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                   />
                   {entity.properties && Object.keys(entity.properties).length > 0 ? (
                     <div>
-                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+                      <div className="mb-1 text-2xs font-medium text-muted-foreground">
                         Properties
                       </div>
                       <DetailGrid
@@ -608,7 +606,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                   ) : null}
                   {relations.length > 0 ? (
                     <div>
-                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+                      <div className="mb-1 text-2xs font-medium text-muted-foreground">
                         Relations
                       </div>
                       <div className="space-y-0.5">
@@ -620,7 +618,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                           return (
                             <div
                               key={String(relation.id)}
-                              className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+                              className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground"
                             >
                               <span>{outgoing ? "→" : "←"}</span>
                               <span>{formatLabel(relation.kind)}</span>
@@ -639,14 +637,14 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                   ) : null}
                   {observations.length > 0 ? (
                     <div>
-                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+                      <div className="mb-1 text-2xs font-medium text-muted-foreground">
                         Latest observations
                       </div>
                       <div className="space-y-0.5">
                         {observations.slice(0, 5).map((observation) => (
                           <div
                             key={String(observation.id)}
-                            className="text-[11px] text-muted-foreground"
+                            className="text-2xs text-muted-foreground"
                           >
                             <span className="text-foreground/80">
                               {formatRelativeTimeLabel(observation.createdAt)}
@@ -693,7 +691,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                       >
                         {entityName(relation.toEntityId)}
                       </button>
-                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
                         {formatRelativeTimeLabel(relation.updatedAt)}
                       </span>
                     </>
@@ -735,7 +733,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                         {observation.summary}
                       </span>
                       <CollectionBadge>{observation.sourceKind}</CollectionBadge>
-                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
                         {formatRelativeTimeLabel(observation.createdAt)}
                       </span>
                     </>
@@ -747,7 +745,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                     </div>
                   ) : null}
                   {(observation.entityIds?.length ?? 0) > 0 ? (
-                    <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
                       <span>Entities:</span>
                       {(observation.entityIds ?? []).map((entityId) => (
                         <button
@@ -770,7 +768,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                     ]}
                   />
                   {observation.payload !== undefined ? (
-                    <pre className="max-h-48 overflow-auto rounded bg-muted/40 p-2 text-[10px] leading-snug">
+                    <pre className="max-h-48 overflow-auto rounded bg-muted/40 p-2 text-3xs leading-snug">
                       {JSON.stringify(observation.payload, null, 2)}
                     </pre>
                   ) : null}
@@ -798,7 +796,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                       {entry.promotionStatus !== "none" ? (
                         <CollectionBadge>{entry.promotionStatus}</CollectionBadge>
                       ) : null}
-                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
                         {formatRelativeTimeLabel(entry.updatedAt)}
                       </span>
                     </>
@@ -848,7 +846,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                         {skill.name}
                       </span>
                       <CollectionBadge>{skill.scope}</CollectionBadge>
-                      <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                      <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
                         {formatRelativeTimeLabel(skill.updatedAt)}
                       </span>
                     </>
@@ -873,7 +871,7 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
                     ]}
                   />
                   {skill.body ? (
-                    <pre className="max-h-64 overflow-auto rounded bg-muted/40 p-2 text-[10px] leading-snug whitespace-pre-wrap">
+                    <pre className="max-h-64 overflow-auto rounded bg-muted/40 p-2 text-3xs leading-snug whitespace-pre-wrap">
                       {skill.body}
                     </pre>
                   ) : null}

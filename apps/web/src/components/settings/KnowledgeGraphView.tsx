@@ -339,7 +339,7 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
                     <circle
                       r={radius + 3}
                       fill="none"
-                      stroke="hsl(40 90% 55%)"
+                      stroke="var(--color-warning)"
                       strokeWidth={1.5}
                       strokeDasharray="3 2"
                     />
@@ -379,19 +379,19 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
                 {selectedNode.entity.title ?? selectedNode.entity.name}
               </span>
             </div>
-            <div className="text-[11px] text-muted-foreground">
+            <div className="text-2xs text-muted-foreground">
               {selectedNode.entity.kind.replaceAll("_", " ")}
               {selectedNode.entity.status ? ` · ${selectedNode.entity.status}` : ""}
               {` · ${selectedNode.degree} relation${selectedNode.degree === 1 ? "" : "s"}`}
             </div>
             {selectedNode.entity.summary ? (
-              <div className="line-clamp-3 text-[11px] text-foreground/80">
+              <div className="line-clamp-3 text-2xs text-foreground/80">
                 {selectedNode.entity.summary}
               </div>
             ) : null}
             <button
               type="button"
-              className="text-[11px] font-medium text-primary underline-offset-2 hover:underline"
+              className="text-2xs font-medium text-primary underline-offset-2 hover:underline"
               onClick={() => onOpenEntity(selectedNode.entity.id)}
             >
               View full record →
@@ -403,13 +403,13 @@ export function KnowledgeGraphView(props: KnowledgeGraphViewProps) {
         {presentKinds.map((kind) => (
           <span
             key={kind}
-            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+            className="inline-flex items-center gap-1 text-3xs text-muted-foreground"
           >
             <span className="size-2 rounded-full" style={{ backgroundColor: kindColor(kind) }} />
             {kind.replaceAll("_", " ")}
           </span>
         ))}
-        <span className="ml-auto text-[10px] text-muted-foreground/70">
+        <span className="ml-auto text-3xs text-muted-foreground/70">
           Scroll to zoom · drag to pan · click a node to inspect
         </span>
       </div>

@@ -301,7 +301,7 @@ export function MemoryKnowledgeSettingsPanel() {
           description={HOMELAB_PRODUCT_COPY.curator.settingsCardDescription}
           control={
             !canCurate ? (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 Requires the <span className="font-medium text-foreground">Curate knowledge</span>{" "}
                 permission on this device.
               </span>
@@ -358,7 +358,7 @@ export function MemoryKnowledgeSettingsPanel() {
             <>
               {curatorSessions.length > 0 ? (
                 <div className="mt-3 space-y-1 border-t border-border/60 pt-3">
-                  <div className="text-[11px] font-medium text-muted-foreground">
+                  <div className="text-2xs font-medium text-muted-foreground">
                     {HOMELAB_PRODUCT_COPY.curator.recentSessionsLabel}
                   </div>
                   {curatorSessions.slice(0, 8).map((thread) => (
@@ -374,15 +374,15 @@ export function MemoryKnowledgeSettingsPanel() {
                         className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-xs"
                       >
                         <span className="min-w-0 truncate text-foreground">{thread.title}</span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                        <span className="shrink-0 text-2xs text-muted-foreground">
                           {formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt)}
                         </span>
                       </Link>
                       <Button
-                        variant="ghost"
+                        variant="ghost-destructive"
                         size="icon-sm"
                         aria-label={`Delete "${thread.title}"`}
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                        className="shrink-0"
                         onClick={() => {
                           // Deleting the session destroys its isolated runtime container and
                           // storage server-side; the sidebar hides curator threads, so this is
@@ -400,7 +400,7 @@ export function MemoryKnowledgeSettingsPanel() {
                   {HOMELAB_PRODUCT_COPY.curator.emptySessionsLabel}
                 </div>
               )}
-              <div className="mt-2 text-[11px] text-muted-foreground/80">
+              <div className="mt-2 text-2xs text-muted-foreground/80">
                 {HOMELAB_PRODUCT_COPY.curator.autoCleanupNote}
               </div>
             </>
@@ -412,7 +412,7 @@ export function MemoryKnowledgeSettingsPanel() {
           control={
             homelabCuratorOverviewQuery.data &&
             homelabCuratorOverviewQuery.data.staleEntityCount > 0 ? (
-              <span className="inline-flex min-h-8 items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-600 dark:text-amber-400">
+              <span className="inline-flex min-h-8 items-center rounded-md border border-warning/30 bg-warning/8 px-3 text-xs font-medium text-warning-foreground">
                 {homelabCuratorOverviewQuery.data.staleEntityCount} stale entities
               </span>
             ) : (

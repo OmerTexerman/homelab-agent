@@ -252,10 +252,10 @@ export function HomelabSecretsSection() {
                     <code className="text-xs font-medium text-foreground">
                       {secret.placeholder}
                     </code>
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                       {secret.label ?? secret.key}
                     </span>
-                    <span className="rounded-full border border-border/70 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                    <span className="rounded-full border border-border/70 px-2 py-0.5 text-3xs uppercase tracking-wider text-muted-foreground">
                       {secret.pending ? "Requested" : secret.hasValue ? "Stored" : "Missing"}
                     </span>
                   </div>
@@ -265,7 +265,7 @@ export function HomelabSecretsSection() {
                     </p>
                   ) : null}
                   {updatedRelative ? (
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-2xs text-muted-foreground">
                       Updated{" "}
                       {updatedRelative.suffix
                         ? `${updatedRelative.value} ${updatedRelative.suffix}`
@@ -281,8 +281,7 @@ export function HomelabSecretsSection() {
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
-                      className="text-destructive hover:text-destructive"
+                      variant="ghost-destructive"
                       disabled={deleteSecretMutation.isPending}
                       onClick={() => void handleDelete(secret.key)}
                     >

@@ -98,7 +98,7 @@ export function HomeOverviewPage() {
   const isRefreshing = homelabSetupStatusQuery.isFetching || projectMemoryQuery.isFetching;
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           {isElectron ? (
@@ -347,7 +347,7 @@ function ActivitySection(props: {
                 <span className="block truncate text-sm font-medium text-foreground">
                   {thread.title}
                 </span>
-                <span className="mt-0.5 flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
+                <span className="mt-0.5 flex min-w-0 items-baseline gap-2 text-2xs text-muted-foreground">
                   <span className="shrink-0 font-mono uppercase tracking-wider">
                     {thread.contextLabel}
                   </span>
@@ -404,7 +404,7 @@ function RuntimesSection({ rows }: { readonly rows: readonly HomeOverviewRuntime
                     {row.projectName}
                   </span>
                 </span>
-                <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="shrink-0 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
                   {row.statusLabel}
                 </span>
               </div>
@@ -481,7 +481,7 @@ function KnowledgeSection(props: {
             {knowledge.relationCount === 1 ? "relation" : "relations"}
           </p>
           {knowledge.kindGroups.length > 0 ? (
-            <p className="font-mono text-[11px] leading-5 text-muted-foreground">
+            <p className="font-mono text-2xs leading-5 text-muted-foreground">
               {knowledge.kindGroups.map((group) => `${group.label} ${group.count}`).join(" · ")}
             </p>
           ) : null}
@@ -499,7 +499,7 @@ function KnowledgeSection(props: {
                   className="flex items-baseline justify-between gap-2 py-1.5 text-xs"
                 >
                   <span className="truncate text-foreground">{entity.label}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  <span className="shrink-0 font-mono text-3xs text-muted-foreground">
                     {entity.kind.replaceAll("_", " ")}
                   </span>
                 </li>
@@ -551,11 +551,11 @@ function SetupSection({ model }: { readonly model: HomeOverviewReadModel }) {
 function SectionLabel(props: { readonly children: ReactNode; readonly count?: number }) {
   return (
     <div className="flex items-center gap-3">
-      <h2 className="shrink-0 font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+      <h2 className="shrink-0 font-mono text-2xs font-medium uppercase tracking-widest text-muted-foreground">
         {props.children}
       </h2>
       {props.count !== undefined ? (
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
+        <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground/70">
           {props.count}
         </span>
       ) : null}
