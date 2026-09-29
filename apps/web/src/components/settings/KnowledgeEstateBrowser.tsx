@@ -12,6 +12,7 @@ import type {
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 
+import { KNOWLEDGE_ESTATE_MEMORY_LIMIT } from "../../lib/homelabReactQuery";
 import { cn } from "../../lib/utils";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Input } from "../ui/input";
@@ -777,6 +778,12 @@ export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
             })
           : null}
 
+        {tab === "memory" && memoryEntries.length >= KNOWLEDGE_ESTATE_MEMORY_LIMIT ? (
+          <div className="px-2 py-1 text-2xs text-muted-foreground">
+            Showing the {KNOWLEDGE_ESTATE_MEMORY_LIMIT.toLocaleString()} most recently updated
+            memory entries.
+          </div>
+        ) : null}
         {tab === "memory"
           ? filteredMemory.map((entry) => {
               const rowId = `memory:${String(entry.id)}`;

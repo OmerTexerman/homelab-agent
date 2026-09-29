@@ -11,6 +11,7 @@ import type {
   ProjectMemoryListResult,
   ProjectMemoryPromoteInput,
   ProjectMemorySearchResultList,
+  ThreadId,
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
@@ -21,11 +22,15 @@ export const homelabQueryKeys = {
   all: ["homelab"] as const,
   setupStatus: (environmentId: EnvironmentId | null) =>
     ["homelab", "setupStatus", environmentId ?? null] as const,
-  projectMemory: (environmentId: EnvironmentId | null, projectId: ProjectId | null) =>
-    ["homelab", "projectMemory", environmentId ?? null, projectId ?? null] as const,
+  projectMemory: (
+    environmentId: EnvironmentId | null,
+    projectId: ProjectId | null,
+    threadId: ThreadId | null = null,
+  ) => ["homelab", "projectMemory", environmentId ?? null, projectId ?? null, threadId] as const,
   projectMemorySearch: (
     environmentId: EnvironmentId | null,
     projectId: ProjectId | null,
+    threadId: ThreadId | null,
     query: string,
     includeTranscripts: boolean,
   ) =>
@@ -34,6 +39,7 @@ export const homelabQueryKeys = {
       "projectMemorySearch",
       environmentId ?? null,
       projectId ?? null,
+      threadId,
       query,
       includeTranscripts,
     ] as const,
@@ -76,11 +82,14 @@ export function homelabSetupStatusQueryOptions(input: {
 export function homelabProjectMemoryQueryOptions(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
+  /** Narrows to one thread's memory (scratch and curator threads keep thread-local memory). */
+  readonly threadId?: ThreadId | null;
   readonly enabled?: boolean;
   readonly limit?: number;
 }) {
+  const threadId = input.threadId ?? null;
   return queryOptions({
-    queryKey: homelabQueryKeys.projectMemory(input.environmentId, input.projectId),
+    queryKey: homelabQueryKeys.projectMemory(input.environmentId, input.projectId, threadId),
     queryFn: async ({ signal }) => {
       if (!input.environmentId || !input.projectId) {
         throw new Error("Project memory is unavailable.");
@@ -90,6 +99,7 @@ export function homelabProjectMemoryQueryOptions(input: {
         pathname: "/api/homelab/project-memory",
         searchParams: {
           projectId: input.projectId,
+          ...(threadId !== null ? { threadId } : {}),
           limit: String(input.limit ?? 100),
         },
         signal,
@@ -104,14 +114,17 @@ export function homelabProjectMemoryQueryOptions(input: {
 export function homelabProjectMemorySearchQueryOptions(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
+  readonly threadId?: ThreadId | null;
   readonly query: string;
   readonly enabled?: boolean;
   readonly includeTranscripts?: boolean;
   readonly limit?: number;
 }) {
+  const threadId = input.threadId ?? null;
   const queryKey = homelabQueryKeys.projectMemorySearch(
     input.environmentId,
     input.projectId,
+    threadId,
     input.query.trim(),
     input.includeTranscripts ?? true,
   );
@@ -126,6 +139,7 @@ export function homelabProjectMemorySearchQueryOptions(input: {
         pathname: "/api/homelab/project-memory/search",
         body: {
           projectId: input.projectId,
+          ...(threadId !== null ? { threadId } : {}),
           query: input.query.trim(),
           includeTranscripts: input.includeTranscripts ?? true,
           limit: input.limit ?? 20,
@@ -139,8 +153,8 @@ export function homelabProjectMemorySearchQueryOptions(input: {
       input.projectId !== null &&
       input.query.trim().length > 0,
     staleTime: 2_000,
-    // Keep results while the query text changes within the same project.
-    placeholderData: keepPreviousDataWithinScope(queryKey, 4),
+    // Keep results while the query text changes within the same project and thread.
+    placeholderData: keepPreviousDataWithinScope(queryKey, 5),
     refetchOnWindowFocus: false,
   });
 }
@@ -183,6 +197,13 @@ export function homelabGraphSearchQueryOptions(input: {
   });
 }
 
+/**
+ * How many memory entries the knowledge-estate browser loads and renders. It
+ * filters client-side, so a full result at this size means older entries are
+ * not shown.
+ */
+export const KNOWLEDGE_ESTATE_MEMORY_LIMIT = 1_000;
+
 /** Every project's memory entries (including scratch/curator namespaces), via the curator read route. */
 export function homelabAllMemoryQueryOptions(input: {
   readonly environmentId: EnvironmentId | null;
@@ -197,7 +218,7 @@ export function homelabAllMemoryQueryOptions(input: {
       return homelabFetch<CuratorMemoryListResult>({
         environmentId: input.environmentId,
         pathname: "/api/homelab/curate/memory",
-        searchParams: { limit: "10000" },
+        searchParams: { limit: String(KNOWLEDGE_ESTATE_MEMORY_LIMIT) },
         signal,
       });
     },

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { HomelabHttpError } from "./homelabFetch";
 import {
+  createSingleFlight,
   createSubmitGuard,
   runHomelabMutation,
   type HomelabMutationEffects,
@@ -127,5 +128,32 @@ describe("createSubmitGuard", () => {
     await Promise.resolve();
 
     expect(guard.isInFlight()).toBe(false);
+  });
+});
+
+describe("createSingleFlight", () => {
+  it("skips a second run while the first is in flight, then allows another", async () => {
+    const flight = createSingleFlight();
+    const first = deferred<string>();
+    const task = vi.fn(() => first.promise);
+
+    const firstRun = flight.run(task, "skipped");
+    await expect(flight.run(task, "skipped")).resolves.toBe("skipped");
+    expect(task).toHaveBeenCalledTimes(1);
+
+    first.resolve("created");
+    await expect(firstRun).resolves.toBe("created");
+    expect(flight.isInFlight()).toBe(false);
+    await expect(flight.run(async () => "again", "skipped")).resolves.toBe("again");
+  });
+
+  it("releases the flight when the task throws", async () => {
+    const flight = createSingleFlight();
+    await expect(
+      flight.run(async () => {
+        throw new Error("boom");
+      }, null),
+    ).rejects.toThrow("boom");
+    expect(flight.isInFlight()).toBe(false);
   });
 });

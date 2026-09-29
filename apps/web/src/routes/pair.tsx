@@ -5,7 +5,13 @@ import {
   PairingPendingSurface,
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
-import { submitServerAuthCredential, takePairingTokenFromUrl } from "../environments/primary";
+import { RePairFailedSurface } from "../components/homelab/RePairFailedSurface";
+import {
+  isPrimaryEnvironmentPairingCredentialRejectedError,
+  submitServerAuthCredential,
+  takePairingTokenFromUrl,
+} from "../environments/primary";
+import { describeRePairFailure } from "../homelab/rePairFailure";
 
 export const Route = createFileRoute("/pair")({
   beforeLoad: async ({ context }) => {
@@ -22,19 +28,26 @@ export const Route = createFileRoute("/pair")({
       // instead of bouncing to the app with the old session.
       const token = takePairingTokenFromUrl();
       if (token !== null) {
-        const submitted = await submitServerAuthCredential(token).then(
-          () => true,
+        const failure = await submitServerAuthCredential(token).then(
+          () => null,
           (error: unknown) => {
             console.error("Pairing token exchange failed; keeping the current session.", error);
-            return false;
+            return { error };
           },
         );
-        if (submitted) {
+        if (failure === null) {
           // Hard reload so every session-state consumer picks up the
           // re-scoped session cookie.
           window.location.replace("/");
           return new Promise<never>(() => {});
         }
+        return {
+          authGateState,
+          rePairErrorMessage: describeRePairFailure(
+            failure.error,
+            isPrimaryEnvironmentPairingCredentialRejectedError,
+          ),
+        };
       }
       throw redirect({ to: "/", replace: true });
     }
@@ -51,11 +64,26 @@ export const Route = createFileRoute("/pair")({
 });
 
 function PairRouteView() {
-  const { authGateState } = Route.useRouteContext();
+  const routeContext = Route.useRouteContext();
+  const { authGateState } = routeContext;
   const navigate = useNavigate();
 
   if (!authGateState) {
     return null;
+  }
+
+  if (authGateState.status === "authenticated") {
+    // Only reached when an already-paired device's re-pair link was rejected.
+    return (
+      <RePairFailedSurface
+        message={
+          "rePairErrorMessage" in routeContext
+            ? routeContext.rePairErrorMessage
+            : describeRePairFailure(null, () => false)
+        }
+        onContinue={() => void navigate({ to: "/", replace: true })}
+      />
+    );
   }
 
   if (authGateState.status === "hosted-pairing") {

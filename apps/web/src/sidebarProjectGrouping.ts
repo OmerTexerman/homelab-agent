@@ -1,4 +1,5 @@
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
+import { homelabProjectDisplayTitle } from "./homelab/projectDisplayTitle";
 import { buildProjectGroups, type ProjectGroupingSettings } from "./logicalProject";
 import type { Project } from "./types";
 
@@ -120,7 +121,7 @@ export function buildSidebarProjectSnapshots(input: {
     return {
       ...representative,
       projectKey: group.key,
-      displayName: group.label,
+      displayName: homelabProjectDisplayTitle(representative, group.label),
       groupedProjectCount: members.length,
       environmentPresence:
         hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",

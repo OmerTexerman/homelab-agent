@@ -84,6 +84,7 @@ export function useHomelabChatView(input: HomelabChatViewInput): HomelabChatView
         <ThreadProjectMemoryPanel
           environmentId={activeThread.environmentId}
           projectId={activeThread.projectId}
+          threadId={activeThread.id}
           open
           onOpenSourcePath={openFilesSurface}
         />

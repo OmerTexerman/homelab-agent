@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { CommandId, EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { resolveFallbackModelSelection } from "../lib/defaultModelSelection";
@@ -18,6 +18,7 @@ import { primaryServerProvidersAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { newCommandId } from "./commandIds";
+import { createSingleFlight } from "./homelabMutationCore";
 import { waitForThreadShell } from "./waitForThreadShell";
 
 /** The `thread.standalone.create` command a scratch-thread entry point dispatches. */
@@ -46,7 +47,8 @@ export function buildStandaloneThreadCreateCommand(input: {
  * the command palette, and the home overview.
  *
  * Resolves to `true` once the thread exists and navigation started; failures
- * are toasted and resolve to `false`.
+ * are toasted and resolve to `false`. A call made while one is still running
+ * is ignored and resolves to `false`.
  */
 export function useCreateStandaloneThread(environmentIdOverride?: EnvironmentId | null) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -56,8 +58,10 @@ export function useCreateStandaloneThread(environmentIdOverride?: EnvironmentId 
   const createStandaloneThread = useAtomCommand(standaloneThreadEnvironment.create, {
     reportFailure: false,
   });
+  // A double click must not create two scratch threads.
+  const [flight] = useState(createSingleFlight);
 
-  return useCallback(async (): Promise<boolean> => {
+  const createNow = useCallback(async (): Promise<boolean> => {
     if (environmentId === null) {
       toastManager.add(
         stackedThreadToast({
@@ -99,4 +103,6 @@ export function useCreateStandaloneThread(environmentIdOverride?: EnvironmentId 
     });
     return true;
   }, [createStandaloneThread, environmentId, navigate, providers]);
+
+  return useCallback(() => flight.run(createNow, false), [createNow, flight]);
 }

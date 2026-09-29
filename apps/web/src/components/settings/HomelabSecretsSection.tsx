@@ -14,8 +14,9 @@ import { describeHomelabError } from "~/homelab/homelabFetch";
 import { queryDisplayState } from "~/homelab/queryDisplayState";
 import { useHomelabMutation } from "~/homelab/useHomelabMutation";
 import { ensureLocalApi } from "~/localApi";
-import { usePrimarySessionState } from "../../environments/primary/sessionState";
+import { useScopeGate } from "~/homelab/useScopeGate";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { ScopeRequiredNotice } from "../homelab/ScopeRequiredNotice";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
@@ -28,14 +29,12 @@ function normalizeOptionalValue(value: string): string | undefined {
 export function HomelabSecretsSection() {
   useRelativeTimeTick();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const sessionState = usePrimarySessionState();
   // Writing secrets needs homelab:secrets-admin (server-enforced on the HTTP
   // routes). Gate the write UI on it too so a device paired without the scope
-  // sees a read-only view instead of a 403 toast on save. Optimistic while the
-  // session scopes are still loading, to avoid a disabled-state flash.
-  const sessionScopes = sessionState.data?.scopes;
-  const canManageSecrets =
-    sessionScopes === undefined || sessionScopes.includes(AuthHomelabSecretsAdminScope);
+  // sees a read-only view instead of a 403 toast on save. The write UI stays
+  // hidden until the session proves the scope; a failed session read denies.
+  const secretsAdminGate = useScopeGate(AuthHomelabSecretsAdminScope);
+  const canManageSecrets = secretsAdminGate === "granted";
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [label, setLabel] = useState("");
@@ -155,13 +154,13 @@ export function HomelabSecretsSection() {
         description="Store API keys, SSH tokens, and other values once, then inject them into every Project Runtime as environment variables."
         status="Agents and terminals receive these as env vars like $API_KEY. The raw values stay out of chat history."
       >
-        {canManageSecrets ? null : (
-          <div className="mt-4 rounded-lg border border-border/60 bg-muted/25 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-            This device can view secret references but can't add, edit, or remove them. Pair it with
-            the <span className="font-medium text-foreground">Manage secrets</span> permission to
-            change secret values.
-          </div>
-        )}
+        {secretsAdminGate === "denied" ? (
+          <ScopeRequiredNotice
+            scope={AuthHomelabSecretsAdminScope}
+            action="add, edit, or remove secrets"
+            className="mt-4"
+          />
+        ) : null}
         <div
           className="mt-4 grid gap-3 border-t border-border/60 py-4 sm:grid-cols-2"
           hidden={!canManageSecrets}

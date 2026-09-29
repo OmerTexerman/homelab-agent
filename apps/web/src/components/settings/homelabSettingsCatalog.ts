@@ -76,6 +76,25 @@ function hiddenSettingsSearchIds(): ReadonlySet<string> {
   return hidden;
 }
 
+interface PullRequestCapabilityEnvironment {
+  readonly serverConfig: {
+    readonly environment: { readonly capabilities: { readonly pullRequests?: boolean } };
+  } | null;
+}
+
+/**
+ * Whether any of these environments tracks pull requests. "Auto-settle merged
+ * threads" only acts on merged pull requests, so its row and search entry are
+ * hidden when none does (the homelab server disables pull requests).
+ */
+export function environmentsSupportPullRequests(
+  environments: ReadonlyArray<PullRequestCapabilityEnvironment>,
+): boolean {
+  return environments.some(
+    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+  );
+}
+
 export function isHomelabSettingsPathVisible(path: SettingsPath): boolean {
   return shouldShowPrimarySourceControlUi() || !SOURCE_CONTROL_SETTINGS_PATHS.has(path);
 }
@@ -127,8 +146,12 @@ export const HOMELAB_SETTINGS_SEARCH_ITEMS: ReadonlyArray<SettingsSearchItem> = 
 /** Upstream's available search items plus the fork pages, minus hidden surfaces. */
 export function withHomelabSettingsSearchItems(
   items: ReadonlyArray<SettingsSearchItem>,
+  options: { readonly environments?: ReadonlyArray<PullRequestCapabilityEnvironment> } = {},
 ): ReadonlyArray<SettingsSearchItem> {
-  const hiddenIds = hiddenSettingsSearchIds();
+  const hiddenIds = new Set(hiddenSettingsSearchIds());
+  if (options.environments && !environmentsSupportPullRequests(options.environments)) {
+    hiddenIds.add("auto-settle-merged-threads");
+  }
   return [...items, ...HOMELAB_SETTINGS_SEARCH_ITEMS].filter(
     (item) => isHomelabSettingsPathVisible(item.to) && !hiddenIds.has(item.id),
   );

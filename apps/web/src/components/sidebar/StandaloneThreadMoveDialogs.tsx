@@ -21,6 +21,7 @@ import { standaloneThreadEnvironment } from "../../state/homelabOrchestration";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   buildStandaloneThreadMoveMemoryMigration,
+  runWithSubmittingState,
   standaloneThreadMoveMemoryDescription,
   standaloneThreadMoveRuntimeDescription,
   type SidebarDraftAwareThreadSummary,
@@ -311,52 +312,53 @@ export function useStandaloneThreadMoveDialogs(): {
       return;
     }
 
-    setIsMoveSubmitting(true);
-    try {
-      const result = await moveStandaloneThread({
-        environmentId: moveTarget.environmentId,
-        input: {
-          type: "thread.standalone.move-to-project",
-          commandId: newCommandId(),
-          threadId: moveTarget.id,
-          projectId: ProjectId.make(moveProjectId),
-          memoryMigration: buildStandaloneThreadMoveMemoryMigration({
-            mode: moveMemoryMode,
-            selection: moveMemorySelection,
-            selectedMemoryIds,
-          }),
-          createdAt: new Date().toISOString(),
-        },
-      });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to move thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
+    // Every exit, including a failure result, must clear "Moving…".
+    await runWithSubmittingState(setIsMoveSubmitting, async () => {
+      try {
+        const result = await moveStandaloneThread({
+          environmentId: moveTarget.environmentId,
+          input: {
+            type: "thread.standalone.move-to-project",
+            commandId: newCommandId(),
+            threadId: moveTarget.id,
+            projectId: ProjectId.make(moveProjectId),
+            memoryMigration: buildStandaloneThreadMoveMemoryMigration({
+              mode: moveMemoryMode,
+              selection: moveMemorySelection,
+              selectedMemoryIds,
             }),
-          );
+            createdAt: new Date().toISOString(),
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to move thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
         }
-        return;
+        toastManager.add({
+          type: "success",
+          title: "Thread moved to project",
+          description: targetProject.title,
+        });
+        closeMoveDialog();
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to move thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
       }
-      toastManager.add({
-        type: "success",
-        title: "Thread moved to project",
-        description: targetProject.title,
-      });
-      closeMoveDialog();
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to move thread",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-      setIsMoveSubmitting(false);
-    }
+    });
   }, [
     closeMoveDialog,
     isMoveSubmitting,
