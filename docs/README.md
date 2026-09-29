@@ -39,7 +39,7 @@ operations runbooks.
 - [Organizing threads](./user/thread-sidebar.md)
 - [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
-- [Mobile appearance](./user/mobile-appearance.md)
+- [Appearance](./user/appearance.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
@@ -51,9 +51,7 @@ Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 ### Internals
 
 - [Architecture overview](./internals/overview.md)
-- [Workspace layout](./internals/workspace-layout.md)
 - [Glossary](./internals/glossary.md)
-- [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
 - [Remote environments](./internals/remote.md)
@@ -61,8 +59,6 @@ Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 - [Resource telemetry](./internals/resource-telemetry.md)
 - [Environment auth](./internals/environment-auth.md)
 - [T3 Connect](./internals/t3-connect.md)
-- [CI gates](./internals/ci.md)
-- [Engineering work artifacts](./internals/work-artifacts.md)
 
 ### Runbooks
 
