@@ -28,7 +28,6 @@ import {
   HomelabProjectRuntimeFields,
   HomelabThreadCreateFields,
   HomelabThreadPlacementFields,
-  HomelabThreadProjectMoveFields,
   HomelabThreadRuntimeFields,
   StandaloneThreadMoveMemoryMigration,
 } from "./orchestrationHomelab.ts";
@@ -1316,7 +1315,6 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
   threadId: ThreadId,
-  ...HomelabThreadProjectMoveFields,
   title: Schema.optional(TrimmedNonEmptyString),
   regenerateTitle: Schema.optional(Schema.Literal(true)),
   modelSelection: Schema.optional(ModelSelection),

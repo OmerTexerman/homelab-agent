@@ -28,14 +28,12 @@ export const HomelabThreadCreateFields = {
   runtimeSelectionMode: Schema.optional(ThreadRuntimeMode),
 };
 
-/** Moves a thread between projects (`thread.meta.update`). */
-export const HomelabThreadProjectMoveFields = {
-  projectId: Schema.optional(ProjectId),
-};
-
-/** Project membership and runtime binding carried on thread events for projection and cleanup. */
+/**
+ * Project membership (a standalone thread moved or promoted into a project) and
+ * runtime binding carried on thread events for projection and cleanup.
+ */
 export const HomelabThreadPlacementFields = {
-  ...HomelabThreadProjectMoveFields,
+  projectId: Schema.optional(ProjectId),
   ...HomelabThreadRuntimeFields,
 };
 

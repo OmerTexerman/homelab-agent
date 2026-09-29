@@ -8,6 +8,7 @@
  */
 import {
   CommandId,
+  HomelabThreadRuntimeFields,
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,
@@ -29,6 +30,7 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  ...HomelabThreadRuntimeFields,
   title: Schema.String,
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   modelSelection: ModelSelection,
