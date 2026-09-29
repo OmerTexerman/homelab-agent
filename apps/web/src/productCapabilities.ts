@@ -123,6 +123,11 @@ export const HOMELAB_PRODUCT_COPY = {
     ownershipDescription:
       "Each Project owns a Project Runtime. Threads in that Project use it unless an isolated runtime clone is selected.",
     ownershipValue: "Per Project",
+    // Labels for upstream's per-project "Workspace" (defaultThreadEnvMode) picker.
+    threadEnvModeLabels: {
+      local: "Project Runtime",
+      worktree: "Isolated runtime clone",
+    },
     archiveConfirmationTitle: "Archive this Project Runtime?",
     archiveConfirmationDescription:
       "This stops and hides the active runtime while preserving project memory and transcripts.",
@@ -328,4 +333,16 @@ export function shouldShowThreadRuntimeIsolationControls(): boolean {
 
 export function shouldShowMultiBackendConnectionsUi(): boolean {
   return HOMELAB_PRODUCT_CAPABILITIES.multiBackendConnectionsUi;
+}
+
+/**
+ * Upstream's `defaultThreadEnvMode` picker, relabeled: homelab threads run in
+ * the project's shared runtime ("local") or an isolated runtime clone
+ * ("worktree"). Falls back to upstream copy when source-control UI is on.
+ */
+export function resolveHomelabThreadEnvModeLabel(mode: "local" | "worktree"): string {
+  if (shouldShowPrimarySourceControlUi()) {
+    return mode === "worktree" ? "New worktree" : "Current checkout";
+  }
+  return HOMELAB_PRODUCT_COPY.projectRuntime.threadEnvModeLabels[mode];
 }

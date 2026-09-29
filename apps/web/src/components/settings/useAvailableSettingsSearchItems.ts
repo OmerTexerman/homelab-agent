@@ -15,6 +15,7 @@ import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
 } from "./settingsSearch";
+import { withHomelabSettingsSearchItems } from "./homelabSettingsCatalog";
 
 export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch = {}) {
   const { environments } = useEnvironments();
@@ -32,34 +33,37 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
 
   return useMemo(
     () =>
-      filterAvailableSettingsSearchItems({
-        localEnvironmentDisabled,
-        hasCloudPublicConfig: hasCloudPublicConfig(),
-        hasEnvironment: environments.some((environment) => environment.serverConfig !== null),
-        hasProviderSettingsEnvironment: environments.some((environment) =>
-          isProviderSettingsEnvironmentAvailable({
-            connectionPhase: environment.connection.phase,
-            hasServerConfig: environment.serverConfig !== null,
-          }),
-        ),
-        hasMacProviderSettingsEnvironment: environments.some(
-          (environment) =>
-            (scopeSearch.machine === undefined ||
-              environment.environmentId === scopeSearch.machine) &&
-            environment.serverConfig?.environment.platform.os === "darwin" &&
+      withHomelabSettingsSearchItems(
+        filterAvailableSettingsSearchItems({
+          localEnvironmentDisabled,
+          hasCloudPublicConfig: hasCloudPublicConfig(),
+          hasEnvironment: environments.some((environment) => environment.serverConfig !== null),
+          hasProviderSettingsEnvironment: environments.some((environment) =>
             isProviderSettingsEnvironmentAvailable({
               connectionPhase: environment.connection.phase,
-              hasServerConfig: true,
+              hasServerConfig: environment.serverConfig !== null,
             }),
-        ),
-        canManageLocalBackend,
-        isWslSettingsRowVisible: isWslSettingsRowVisible({
-          state: desktopWsl.data,
-          error: desktopWsl.error,
+          ),
+          hasMacProviderSettingsEnvironment: environments.some(
+            (environment) =>
+              (scopeSearch.machine === undefined ||
+                environment.environmentId === scopeSearch.machine) &&
+              environment.serverConfig?.environment.platform.os === "darwin" &&
+              isProviderSettingsEnvironmentAvailable({
+                connectionPhase: environment.connection.phase,
+                hasServerConfig: true,
+              }),
+          ),
+          canManageLocalBackend,
+          isWslSettingsRowVisible: isWslSettingsRowVisible({
+            state: desktopWsl.data,
+            error: desktopWsl.error,
+          }),
+          hasThreadAutoSettlement:
+            getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length >
+            0,
         }),
-        hasThreadAutoSettlement:
-          getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0,
-      }),
+      ),
     [
       canManageLocalBackend,
       desktopWsl.data,

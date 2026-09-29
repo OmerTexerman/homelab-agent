@@ -170,6 +170,11 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import {
+  shouldShowCompatibilityHostPathProjectUi,
+  shouldShowPrimarySourceControlUi,
+  shouldShowSidebarProjectGroupingControls,
+} from "../../productCapabilities";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 
@@ -2233,41 +2238,44 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title="Organization">
-        <SettingsRow
-          {...searchableSetting("project-grouping")}
-          description="Combine matching repositories across environments."
-          resetAction={
-            settings.sidebarProjectGroupingMode !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (
-              <SettingResetButton
-                label="project grouping"
-                onClick={() =>
+        {shouldShowSidebarProjectGroupingControls() ? (
+          <SettingsRow
+            {...searchableSetting("project-grouping")}
+            description="Combine matching repositories across environments."
+            resetAction={
+              settings.sidebarProjectGroupingMode !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (
+                <SettingResetButton
+                  label="project grouping"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarProjectGroupingMode:
+                        DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={isProjectGroupingEnabled(settings.sidebarProjectGroupingMode)}
+                onCheckedChange={(checked) => {
+                  if (!checked && settings.sidebarProjectGroupingMode !== "separate") {
+                    lastEnabledProjectGroupingMode.current = settings.sidebarProjectGroupingMode;
+                    rememberEnabledProjectGroupingMode(settings.sidebarProjectGroupingMode);
+                  }
                   updateSettings({
-                    sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
-                  })
-                }
+                    sidebarProjectGroupingMode: projectGroupingModeFromToggle(
+                      checked,
+                      lastEnabledProjectGroupingMode.current,
+                    ),
+                  });
+                }}
+                aria-label="Project grouping"
               />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={isProjectGroupingEnabled(settings.sidebarProjectGroupingMode)}
-              onCheckedChange={(checked) => {
-                if (!checked && settings.sidebarProjectGroupingMode !== "separate") {
-                  lastEnabledProjectGroupingMode.current = settings.sidebarProjectGroupingMode;
-                  rememberEnabledProjectGroupingMode(settings.sidebarProjectGroupingMode);
-                }
-                updateSettings({
-                  sidebarProjectGroupingMode: projectGroupingModeFromToggle(
-                    checked,
-                    lastEnabledProjectGroupingMode.current,
-                  ),
-                });
-              }}
-              aria-label="Project grouping"
-            />
-          }
-        />
+            }
+          />
+        ) : null}
 
         {supportsAutoSettlement ? (
           <>
@@ -2475,31 +2483,33 @@ export function GeneralSettingsPanel() {
             </>
           }
         />
-        <SettingsRow
-          {...searchableSetting("hide-whitespace-changes")}
-          description="Set whether the diff panel ignores whitespace-only edits by default."
-          resetAction={
-            settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
-              <SettingResetButton
-                label="diff whitespace changes"
-                onClick={() =>
-                  updateSettings({
-                    diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
-                  })
+        {shouldShowPrimarySourceControlUi() ? (
+          <SettingsRow
+            {...searchableSetting("hide-whitespace-changes")}
+            description="Set whether the diff panel ignores whitespace-only edits by default."
+            resetAction={
+              settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
+                <SettingResetButton
+                  label="diff whitespace changes"
+                  onClick={() =>
+                    updateSettings({
+                      diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.diffIgnoreWhitespace}
+                onCheckedChange={(checked) =>
+                  updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
                 }
+                aria-label="Hide whitespace changes by default"
               />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffIgnoreWhitespace}
-              onCheckedChange={(checked) =>
-                updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
-              }
-              aria-label="Hide whitespace changes by default"
-            />
-          }
-        />
+            }
+          />
+        ) : null}
         <SettingsRow
           {...searchableSetting("default-diff-file-state")}
           description="Start with files expanded or collapsed when opening diffs or a pull request's Code tab."
@@ -2934,68 +2944,74 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="projects-and-threads" title="Projects & threads">
-        <SettingsRow
-          serverScoped
-          settingKeys={["newWorktreesStartFromOrigin"]}
-          {...searchableSetting("start-from-origin")}
-          description="Creates the worktree from the latest matching branch on origin instead of your local branch."
-          resetAction={
-            settings.newWorktreesStartFromOrigin !==
-            DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin ? (
-              <SettingResetButton
-                label="new worktrees start from origin"
-                onClick={() =>
-                  updateSettings({
-                    newWorktreesStartFromOrigin:
-                      DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
+      {shouldShowPrimarySourceControlUi() || shouldShowCompatibilityHostPathProjectUi() ? (
+        <SettingsSection id="projects-and-threads" title="Projects & threads">
+          {shouldShowPrimarySourceControlUi() ? (
+            <SettingsRow
+              serverScoped
               settingKeys={["newWorktreesStartFromOrigin"]}
-              checked={settings.newWorktreesStartFromOrigin}
-              onCheckedChange={(checked) =>
-                updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
+              {...searchableSetting("start-from-origin")}
+              description="Creates the worktree from the latest matching branch on origin instead of your local branch."
+              resetAction={
+                settings.newWorktreesStartFromOrigin !==
+                DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin ? (
+                  <SettingResetButton
+                    label="new worktrees start from origin"
+                    onClick={() =>
+                      updateSettings({
+                        newWorktreesStartFromOrigin:
+                          DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+                      })
+                    }
+                  />
+                ) : null
               }
-              aria-label="Start new worktrees from origin by default"
+              control={
+                <ScopedSwitch
+                  settingKeys={["newWorktreesStartFromOrigin"]}
+                  checked={settings.newWorktreesStartFromOrigin}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
+                  }
+                  aria-label="Start new worktrees from origin by default"
+                />
+              }
             />
-          }
-        />
-        <SettingsRow
-          serverScoped
-          settingKeys={["addProjectBaseDirectory"]}
-          {...searchableSetting("add-project-starts-in")}
-          description='Leave empty to use "~/" when the Add Project browser opens.'
-          resetAction={
-            settings.addProjectBaseDirectory !==
-            DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
-              <SettingResetButton
-                label="add project base directory"
-                onClick={() =>
-                  updateSettings({
-                    addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <DraftInput
-              size="sm"
-              className="w-full sm:w-72"
-              value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
-              onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
-              placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
-              spellCheck={false}
-              aria-label="Add project base directory"
+          ) : null}
+          {shouldShowCompatibilityHostPathProjectUi() ? (
+            <SettingsRow
+              serverScoped
+              settingKeys={["addProjectBaseDirectory"]}
+              {...searchableSetting("add-project-starts-in")}
+              description='Leave empty to use "~/" when the Add Project browser opens.'
+              resetAction={
+                settings.addProjectBaseDirectory !==
+                DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
+                  <SettingResetButton
+                    label="add project base directory"
+                    onClick={() =>
+                      updateSettings({
+                        addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <DraftInput
+                  size="sm"
+                  className="w-full sm:w-72"
+                  value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
+                  onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
+                  placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
+                  spellCheck={false}
+                  aria-label="Add project base directory"
+                />
+              }
             />
-          }
-        />
-      </SettingsSection>
+          ) : null}
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection id="confirmations" title="Confirmations">
         <SettingsRow

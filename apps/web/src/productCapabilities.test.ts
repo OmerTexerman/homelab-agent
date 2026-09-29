@@ -92,13 +92,16 @@ describe("settings navigation", () => {
     expect(SETTINGS_NAV_ITEMS.map((item) => item.label)).toEqual([
       "General",
       "Appearance",
+      "Project",
       "Providers",
       "Secrets",
       "Devices & Sessions",
       "Project Runtime",
       "Memory & Knowledge",
+      "SnapShots",
       "Advanced",
     ]);
     expect(SETTINGS_NAV_ITEMS.map((item) => item.to)).not.toContain("/settings/source-control");
+    expect(SETTINGS_NAV_ITEMS.map((item) => item.to)).not.toContain("/settings/storage");
   });
 });

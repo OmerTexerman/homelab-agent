@@ -10,6 +10,10 @@ import {
   type ResolvedSettingsScope,
   type SettingsScopeSearch,
 } from "./settingsScope";
+import {
+  HOMELAB_SETTINGS_SECTION_LABELS,
+  type HomelabSettingsPath,
+} from "./homelabSettingsCatalog";
 
 export type SettingsPath =
   | "/settings/projects"
@@ -22,7 +26,8 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
-  | "/settings/archived";
+  | "/settings/archived"
+  | HomelabSettingsPath;
 
 /**
  * Where a setting can be edited. Device-local rows have no scope: they render
@@ -94,6 +99,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
   "/settings/archived": "Archive",
+  ...HOMELAB_SETTINGS_SECTION_LABELS,
 };
 
 /** Anchor id of the first row bound to `command` on the Keybindings page. */
@@ -845,6 +851,10 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
   "/settings/archived": "project-defaults",
+  "/settings/secrets": null,
+  "/settings/project-runtime": null,
+  "/settings/memory": null,
+  "/settings/advanced": null,
 };
 
 /** Search keeps the selected target. A missing row can explain its owning scope instead. */

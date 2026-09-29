@@ -7,7 +7,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { LoaderIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   AuthHomelabCurateScope,
   DEFAULT_MODEL,
@@ -16,7 +16,6 @@ import {
   ProviderInstanceId,
   type ModelSelection,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   createEnvironmentRpcCommand,
@@ -26,13 +25,11 @@ import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Equal from "effect/Equal";
 
-import { HOSTED_APP_CHANNEL } from "../../branding";
 import { connectionAtomRuntime } from "../../connection/runtime";
-import { isElectron } from "../../env";
 import { usePrimarySessionState } from "../../environments/primary/sessionState";
 import { describeHomelabError } from "../../homelab/homelabFetch";
 import { queryDisplayState } from "../../homelab/queryDisplayState";
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { usePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   homelabAllMemoryQueryOptions,
@@ -40,37 +37,29 @@ import {
   homelabCuratorOverviewQueryOptions,
   homelabSetupStatusQueryOptions,
 } from "../../lib/homelabReactQuery";
-import { newCommandId, newMessageId, newThreadId } from "../../lib/utils";
+import { newCommandId } from "../../homelab/commandIds";
+import { newMessageId, newThreadId } from "../../lib/utils";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import {
-  HOMELAB_PRODUCT_COPY,
-  shouldShowCompatibilityHostPathProjectUi,
-  shouldShowPrimarySourceControlUi,
-  shouldShowThreadRuntimeIsolationControls,
-} from "../../productCapabilities";
+import { HOMELAB_PRODUCT_COPY, shouldShowPrimarySourceControlUi } from "../../productCapabilities";
 import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
+import { primaryServerProvidersAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { Button } from "../ui/button";
-import { DraftInput } from "../ui/draft-input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
 import { KnowledgeEstateBrowser } from "./KnowledgeEstateBrowser";
 import { RuntimeCliUpdatesSection } from "./RuntimeCliUpdatesSection";
-import { AboutVersionSection, AboutVersionTitle, LegacyFeaturesSection } from "./SettingsPanels";
-import { formatDiagnosticsDescription } from "./SettingsPanels.logic";
 import {
-  SettingResetButton,
+  SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
@@ -92,71 +81,13 @@ export function SecretsSettingsPanel() {
 }
 
 export function ProjectRuntimeSettingsPanel() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const showThreadRuntimeIsolationControls = shouldShowThreadRuntimeIsolationControls();
-
-  useEffect(() => {
-    if (showThreadRuntimeIsolationControls || settings.defaultThreadEnvMode === "local") {
-      return;
-    }
-
-    updateSettings({ defaultThreadEnvMode: "local" });
-  }, [settings.defaultThreadEnvMode, showThreadRuntimeIsolationControls, updateSettings]);
-
+  // The default runtime for new threads is upstream's scoped "New threads ->
+  // Workspace" picker (General and per-project settings), relabeled through
+  // `resolveHomelabThreadEnvModeLabel`, so there is one control for it.
   return (
     <SettingsPageContainer>
       <RuntimeCliUpdatesSection />
       <SettingsSection title={HOMELAB_PRODUCT_COPY.projectRuntime.title}>
-        <SettingsRow
-          title={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
-          description={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeDescription}
-          resetAction={
-            showThreadRuntimeIsolationControls &&
-            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
-              <SettingResetButton
-                label={HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeTitle}
-                onClick={() =>
-                  updateSettings({
-                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            showThreadRuntimeIsolationControls ? (
-              <Select
-                value={settings.defaultThreadEnvMode}
-                onValueChange={(value) => {
-                  if (value === "local" || value === "worktree") {
-                    updateSettings({ defaultThreadEnvMode: value });
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-64" aria-label="Default Project Runtime">
-                  <SelectValue>
-                    {settings.defaultThreadEnvMode === "worktree"
-                      ? HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue
-                      : HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="local">
-                    {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="worktree">
-                    {HOMELAB_PRODUCT_COPY.projectRuntime.isolatedRuntimeValue}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            ) : (
-              <span className="inline-flex min-h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground">
-                {HOMELAB_PRODUCT_COPY.projectRuntime.defaultThreadRuntimeValue}
-              </span>
-            )
-          }
-        />
         <SettingsRow
           title={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipTitle}
           description={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipDescription}
@@ -382,8 +313,7 @@ export function MemoryKnowledgeSettingsPanel() {
                   lockedProvider={null}
                   instanceEntries={curatorInstanceEntries}
                   modelOptionsByInstance={curatorModelOptionsByInstance}
-                  triggerVariant="outline"
-                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                   onInstanceModelChange={(instanceId, model) => {
                     setPickedCuratorSelection(createModelSelection(instanceId, model));
                   }}
@@ -397,8 +327,7 @@ export function MemoryKnowledgeSettingsPanel() {
                   modelOptions={curatorModelSelection.options ?? []}
                   allowPromptInjectedEffort={false}
                   planModeEnabled={settings.planModeEnabled}
-                  triggerVariant="outline"
-                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                   onModelOptionsChange={(nextOptions) => {
                     setPickedCuratorSelection(
                       createModelSelection(
@@ -537,60 +466,11 @@ export function MemoryKnowledgeSettingsPanel() {
 }
 
 export function AdvancedSettingsPanel() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const observability = useAtomValue(primaryServerObservabilityAtom);
   const showSourceControlUi = shouldShowPrimarySourceControlUi();
-  const showCompatibilityHostPathProjectUi = shouldShowCompatibilityHostPathProjectUi();
-  const diagnosticsDescription = formatDiagnosticsDescription({
-    localTracingEnabled: observability?.localTracingEnabled ?? false,
-    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
-    otlpTracesUrl: observability?.otlpTracesUrl,
-    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
-    otlpMetricsUrl: observability?.otlpMetricsUrl,
-  });
 
   return (
     <SettingsPageContainer>
       <SettingsSection title={HOMELAB_PRODUCT_COPY.settings.advanced}>
-        {showCompatibilityHostPathProjectUi ? (
-          <SettingsRow
-            title="Compatibility bootstrap path"
-            description="Used only by advanced host-path project imports."
-            resetAction={
-              settings.addProjectBaseDirectory !==
-              DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
-                <SettingResetButton
-                  label="compatibility bootstrap path"
-                  onClick={() =>
-                    updateSettings({
-                      addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <DraftInput
-                className="w-full sm:w-72"
-                value={settings.addProjectBaseDirectory}
-                onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
-                placeholder="~/"
-                spellCheck={false}
-                aria-label="Compatibility bootstrap path"
-              />
-            }
-          />
-        ) : null}
-        <SettingsRow
-          title="Diagnostics"
-          description={diagnosticsDescription}
-          control={
-            <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
-              View diagnostics
-            </Button>
-          }
-        />
         <SettingsRow
           title="Archived threads"
           description="Review and restore archived project threads."
@@ -609,6 +489,15 @@ export function AdvancedSettingsPanel() {
             </Button>
           }
         />
+        <SettingsRow
+          title="Integrations"
+          description="Connected tools and agent browser access."
+          control={
+            <Button render={<Link to="/settings/integrations" />} size="xs" variant="outline">
+              Open
+            </Button>
+          }
+        />
         {showSourceControlUi ? (
           <SettingsRow
             title="Source control"
@@ -621,19 +510,6 @@ export function AdvancedSettingsPanel() {
           />
         ) : null}
       </SettingsSection>
-
-      <SettingsSection title="About">
-        {isElectron || HOSTED_APP_CHANNEL ? (
-          <AboutVersionSection />
-        ) : (
-          <SettingsRow
-            title={<AboutVersionTitle />}
-            description="Current version of the application."
-          />
-        )}
-      </SettingsSection>
-
-      <LegacyFeaturesSection />
     </SettingsPageContainer>
   );
 }

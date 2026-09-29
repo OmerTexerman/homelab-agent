@@ -18,6 +18,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
+import { HOMELAB_UNSCOPED_SETTINGS_PATHS } from "./homelabSettingsCatalog";
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 import {
   ALL_ENVIRONMENTS_VALUE,
@@ -34,6 +35,7 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
   "/settings/snap-shot",
   "/settings/connections",
+  ...HOMELAB_UNSCOPED_SETTINGS_PATHS,
 ]);
 
 interface SettingsScopeMenuProps {

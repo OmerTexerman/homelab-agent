@@ -13,15 +13,19 @@ import {
   ArchiveIcon,
   BlocksIcon,
   BotIcon,
+  BrainIcon,
   createLucideIcon,
   GitBranchIcon,
   HardDriveIcon,
   PanelsTopLeftIcon,
   KeyboardIcon,
+  KeyRoundIcon,
   Link2Icon,
   PaletteIcon,
   SearchIcon,
+  ServerIcon,
   Settings2Icon,
+  WrenchIcon,
   XIcon,
 } from "lucide-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -49,6 +53,7 @@ import {
 } from "./settingsSearch";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
 import { validateSettingsScopeSearch } from "./settingsScope";
+import { homelabSettingsNavItems } from "./homelabSettingsCatalog";
 
 const SnapShotIcon = createLucideIcon("snap-shot", [
   [
@@ -87,17 +92,23 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
   "/settings/archived": ArchiveIcon,
+  "/settings/secrets": KeyRoundIcon,
+  "/settings/project-runtime": ServerIcon,
+  "/settings/memory": BrainIcon,
+  "/settings/advanced": WrenchIcon,
 };
 
-const SETTINGS_NAV_ITEMS: ReadonlyArray<{
+export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsPath;
   icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
-  to,
-  label: SETTINGS_SECTION_LABELS[to],
-  icon: SETTINGS_SECTION_ICONS[to],
-}));
+}> = homelabSettingsNavItems(
+  (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
+    to,
+    label: SETTINGS_SECTION_LABELS[to],
+    icon: SETTINGS_SECTION_ICONS[to],
+  })),
+);
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
