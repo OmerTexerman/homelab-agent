@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { PendingApproval, PendingUserInput } from "./session-logic";
+import type { PendingApproval, PendingUserInput } from "@t3tools/client-runtime/pending-requests";
 import type { ProposedPlan } from "./types";
 import {
   deriveComposerDecisionState,
@@ -33,6 +33,7 @@ const userInput = (id: string, createdAt: string): PendingUserInput => ({
       multiSelect: false,
     },
   ],
+  dismissible: false,
 });
 
 const proposedPlan = (overrides: Partial<ProposedPlan> = {}): ProposedPlan => ({
