@@ -27,7 +27,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { TerminalManager, type TerminalManagerShape } from "../../terminal/Manager.ts";
+import { TerminalManager } from "../../terminal/Manager.ts";
 import { isolatedThreadRuntimeId } from "../ProjectRuntimePolicy.ts";
 import { makeProjectRuntimeQueue, ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
 import {
@@ -88,6 +88,7 @@ function makeThread(id: ThreadId): OrchestrationThread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    pullRequests: [],
     session: null,
   };
 }
@@ -219,8 +220,17 @@ function makeHarness(input: {
 
   const readModel = makeReadModel(input.hostWorkspacePath, input.threads, input.project);
   const projectionSnapshotQuery = {
+    getUserInputActivity: () => Effect.die("unused"),
+    listActivitiesByKind: () => Effect.succeed([]),
     getCommandReadModel: () => Effect.succeed(readModel),
     getSnapshot: () => Effect.succeed(readModel),
+    getDeletedWorktreeThreads: () => Effect.die("unused"),
+    listThreadsWithPullRequests: () => Effect.die("unused"),
+    getEventReplayStats: () => Effect.die("unused"),
+    getProjectShells: () => Effect.die("unused"),
+    getImportedAgentSessionSources: () => Effect.die("unused"),
+    getThreadRuntimeContext: () => Effect.die("unused"),
+    getTurnStartMessage: () => Effect.die("unused"),
     getShellSnapshot: () => Effect.die("unused"),
     getArchivedShellSnapshot: () => Effect.die("unused"),
     getSnapshotSequence: () => Effect.succeed({ snapshotSequence: readModel.snapshotSequence }),
@@ -237,15 +247,15 @@ function makeHarness(input: {
           ),
         ),
       ),
-    getProjectShellById: () => Effect.succeed(Option.none()),
-    getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.some(threadId)),
+    getProjectShellById: () => Effect.succeedNone,
+    getFirstActiveThreadIdByProjectId: () => Effect.succeedSome(threadId),
     getThreadCheckpointContext: () => Effect.die("unused"),
     getFullThreadDiffContext: () => Effect.die("unused"),
     searchThreads: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.succeed(Option.none()),
+    getThreadShellById: () => Effect.succeedNone,
     getThreadDetailById: (id) =>
       Effect.succeed(Option.fromNullishOr(readModel.threads.find((thread) => thread.id === id))),
-    getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+    getThreadDetailSnapshot: () => Effect.succeedNone,
   } satisfies ProjectionSnapshotQueryShape;
 
   const threadRuntime = {
@@ -344,9 +354,10 @@ function makeHarness(input: {
       Effect.sync(() => {
         closedTerminalThreadIds.push(closeInput.threadId);
       }),
+    closeIdle: () => Effect.void,
     subscribe: () => Effect.succeed(() => undefined),
     subscribeMetadata: () => Effect.succeed(() => undefined),
-  } satisfies TerminalManagerShape;
+  } satisfies TerminalManager["Service"];
 
   const memoryEntries = input.memoryEntries ?? [];
   const projectMemory = {
