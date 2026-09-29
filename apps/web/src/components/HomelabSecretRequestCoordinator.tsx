@@ -112,16 +112,16 @@ export function HomelabSecretRequestCoordinator() {
     >
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <KeyRoundIcon className="size-5" />
-            Secret requested
-          </DialogTitle>
+            <DialogTitle>Secret requested</DialogTitle>
+          </div>
           <DialogDescription>
             An agent asked for a secret value. The raw value stays in the secret registry and gets
             injected into runtimes as an environment variable, not pasted into chat.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-4">
+        <DialogPanel>
           <div className="space-y-1 rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
             <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Placeholder

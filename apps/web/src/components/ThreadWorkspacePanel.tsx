@@ -60,6 +60,7 @@ import { cn } from "~/lib/utils";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { Textarea } from "./ui/textarea";
 import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
 import { toastManager } from "./ui/toast";
@@ -457,10 +458,10 @@ function ProjectMemoryEntryRow(props: {
         <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 text-xs font-medium text-foreground">{props.row.title}</div>
-          <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+          <div className="mt-1 line-clamp-2 text-2xs leading-4 text-muted-foreground">
             {props.row.detail}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
             <span>{formatMemoryTimestamp(props.row.timestamp)}</span>
             <span className="rounded border border-border px-1 py-0.5">
               {props.row.statusLabel}
@@ -495,7 +496,7 @@ function ProjectMemorySearchRow(props: {
           <div className="line-clamp-1 text-xs font-medium text-foreground">
             {props.result.title}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
             <span>{props.result.source}</span>
             <span>{props.result.scope}</span>
             <span>{formatMemoryTimestamp(props.result.timestamp)}</span>
@@ -507,17 +508,17 @@ function ProjectMemorySearchRow(props: {
             {props.result.sourcePath ? (
               <button
                 type="button"
-                className="block min-w-0 truncate font-mono text-[11px] text-primary hover:underline"
+                className="block min-w-0 truncate font-mono text-2xs text-primary hover:underline"
                 onClick={() => props.onOpenSource(`/workspace/${props.result.sourcePath}`)}
               >
                 {props.result.sourcePath}
               </button>
             ) : (
-              <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+              <span className="min-w-0 truncate text-2xs text-muted-foreground">
                 Promoted graph entity
               </span>
             )}
-            <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-2xs text-muted-foreground">
               {props.result.actionLabel}
             </span>
           </div>
@@ -530,7 +531,7 @@ function ProjectMemorySearchRow(props: {
 function PromotionField(props: { readonly label: string; readonly children: ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-[11px] font-medium text-muted-foreground">{props.label}</span>
+      <span className="text-2xs font-medium text-muted-foreground">{props.label}</span>
       {props.children}
     </label>
   );
@@ -699,22 +700,24 @@ export function ThreadProjectMemoryPanel(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-border px-3 py-2">
-        <label className="relative block">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
-          <Input
+        <InputGroup>
+          <InputGroupAddon>
+            <SearchIcon />
+          </InputGroupAddon>
+          <InputGroupInput
+            size="compact"
             value={memoryQuery}
             onChange={(event) => setMemoryQuery(event.target.value)}
             placeholder={HOMELAB_PRODUCT_COPY.memoryKnowledge.searchPlaceholder}
-            className="pl-7 text-xs"
           />
-        </label>
+        </InputGroup>
         <div className="mt-2 grid grid-cols-3 rounded-md border border-border bg-muted/20 p-0.5">
           {MEMORY_SEARCH_SCOPES.map((scope) => (
             <button
               key={scope.value}
               type="button"
               className={cn(
-                "rounded px-1.5 py-1 text-[11px]",
+                "rounded px-1.5 py-1 text-2xs",
                 searchScope === scope.value
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -765,7 +768,7 @@ export function ThreadProjectMemoryPanel(props: {
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-between gap-2 text-2xs text-muted-foreground">
               <span>Recent project memory</span>
               <span>{model.projectMemory.entries.length} total</span>
             </div>
@@ -785,7 +788,7 @@ export function ThreadProjectMemoryPanel(props: {
           <div className="text-xs font-medium text-foreground">
             {HOMELAB_PRODUCT_COPY.memoryKnowledge.promotionReviewTitle}
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-2xs text-muted-foreground">
             {model.promotion.candidates.length} proposed
           </div>
         </div>
@@ -796,7 +799,7 @@ export function ThreadProjectMemoryPanel(props: {
                 key={candidate.id}
                 type="button"
                 className={cn(
-                  "block w-full rounded border px-2 py-1.5 text-left text-[11px]",
+                  "block w-full rounded border px-2 py-1.5 text-left text-2xs",
                   selectedEntry?.id === candidate.id
                     ? "border-primary/50 bg-primary/8 text-foreground"
                     : "border-border text-muted-foreground hover:bg-accent/40 hover:text-foreground",
@@ -813,7 +816,7 @@ export function ThreadProjectMemoryPanel(props: {
             <div className="line-clamp-2 text-xs text-muted-foreground">
               {selectedEntry.summary}
             </div>
-            <div className="space-y-1 rounded-md border border-border bg-muted/15 px-2 py-2 text-[11px] text-muted-foreground">
+            <div className="space-y-1 rounded-md border border-border bg-muted/15 px-2 py-2 text-2xs text-muted-foreground">
               <div>{model.promotion.localBoundary}</div>
               <div>{model.promotion.globalBoundary}</div>
             </div>
@@ -844,7 +847,7 @@ export function ThreadProjectMemoryPanel(props: {
                       key={mode}
                       type="button"
                       className={cn(
-                        "rounded px-1 py-1 text-[11px] capitalize",
+                        "rounded px-1 py-1 text-2xs capitalize",
                         guidedPromotionDraft.mode === mode
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground",
@@ -862,7 +865,8 @@ export function ThreadProjectMemoryPanel(props: {
                       onChange={(event) =>
                         updateGuidedPromotionDraft({ threadId: event.target.value })
                       }
-                      className="h-8 font-mono text-xs"
+                      size="compact"
+                      font="mono"
                     />
                   </PromotionField>
                   <PromotionField label="Source reference">
@@ -871,7 +875,8 @@ export function ThreadProjectMemoryPanel(props: {
                       onChange={(event) =>
                         updateGuidedPromotionDraft({ sourceRef: event.target.value })
                       }
-                      className="h-8 font-mono text-xs"
+                      size="compact"
+                      font="mono"
                     />
                   </PromotionField>
                 </div>
@@ -883,7 +888,8 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ relationId: event.target.value })
                         }
-                        className="h-8 font-mono text-xs"
+                        size="compact"
+                        font="mono"
                       />
                     </PromotionField>
                     <PromotionField label="Relation kind">
@@ -909,7 +915,8 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ fromEntityId: event.target.value })
                         }
-                        className="h-8 font-mono text-xs"
+                        size="compact"
+                        font="mono"
                       />
                     </PromotionField>
                     <PromotionField label="To entity id">
@@ -918,7 +925,8 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ toEntityId: event.target.value })
                         }
-                        className="h-8 font-mono text-xs"
+                        size="compact"
+                        font="mono"
                       />
                     </PromotionField>
                   </div>
@@ -930,7 +938,8 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ entityId: event.target.value })
                         }
-                        className="h-8 font-mono text-xs"
+                        size="compact"
+                        font="mono"
                       />
                     </PromotionField>
                     <PromotionField label="Entity name">
@@ -939,7 +948,7 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ entityName: event.target.value })
                         }
-                        className="h-8 text-xs"
+                        size="compact"
                       />
                     </PromotionField>
                     <PromotionField label="Entity title">
@@ -948,7 +957,7 @@ export function ThreadProjectMemoryPanel(props: {
                         onChange={(event) =>
                           updateGuidedPromotionDraft({ entityTitle: event.target.value })
                         }
-                        className="h-8 text-xs"
+                        size="compact"
                       />
                     </PromotionField>
                     <PromotionField label="Entity kind">
@@ -1002,17 +1011,19 @@ export function ThreadProjectMemoryPanel(props: {
                     onChange={(event) =>
                       updateGuidedPromotionDraft({ summary: event.target.value })
                     }
-                    className="h-20 resize-none text-xs leading-4"
+                    className="h-20 resize-none"
                   />
                 </PromotionField>
               </div>
             ) : (
-              <Textarea
-                value={rawPromotionDraft}
-                onChange={(event) => setRawPromotionDraft(event.target.value)}
-                placeholder='{"id":"promotion-...","threadId":"...","summary":"...","createdAt":"...","entries":[]}'
-                className="h-32 resize-none font-mono text-[11px] leading-4"
-              />
+              <div className="font-mono">
+                <Textarea
+                  value={rawPromotionDraft}
+                  onChange={(event) => setRawPromotionDraft(event.target.value)}
+                  placeholder='{"id":"promotion-...","threadId":"...","summary":"...","createdAt":"...","entries":[]}'
+                  className="h-32 resize-none"
+                />
+              </div>
             )}
             <Button
               type="button"
@@ -1030,7 +1041,7 @@ export function ThreadProjectMemoryPanel(props: {
         ) : (
           <div className="text-xs text-muted-foreground">{model.promotion.state.description}</div>
         )}
-        <div className="mt-3 border-t border-border/60 pt-2 text-[11px] leading-4 text-muted-foreground">
+        <div className="mt-3 border-t border-border/60 pt-2 text-2xs leading-4 text-muted-foreground">
           {HOMELAB_PRODUCT_COPY.memoryKnowledge.cliHint}
         </div>
       </div>
@@ -1503,7 +1514,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 <div className="text-sm font-medium text-foreground">
                   {HOMELAB_PRODUCT_COPY.runtimeWorkspace.title}
                 </div>
-                <div className="truncate text-[11px] text-muted-foreground">
+                <div className="truncate text-2xs text-muted-foreground">
                   {HOMELAB_PRODUCT_COPY.runtimeWorkspace.subtitle}
                 </div>
               </div>
@@ -1596,25 +1607,29 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                   value={pathDraft}
                   onChange={(event) => setPathDraft(event.target.value)}
                   placeholder="/workspace"
-                  className="h-8 min-w-0 flex-1 font-mono text-xs"
+                  size="compact"
+                  font="mono"
+                  className="min-w-0 flex-1"
                   aria-label={HOMELAB_PRODUCT_COPY.runtimeWorkspace.locationLabel}
                 />
                 <Button type="submit" variant="outline" size="xs">
                   Go
                 </Button>
               </form>
-              <div className="mt-2 text-[11px] text-muted-foreground">{currentPath}</div>
+              <div className="mt-2 text-2xs text-muted-foreground">{currentPath}</div>
             </div>
             <div className="border-b border-border px-3 py-2">
-              <label className="relative block">
-                <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
-                <Input
+              <InputGroup>
+                <InputGroupAddon>
+                  <SearchIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  size="compact"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder={HOMELAB_PRODUCT_COPY.runtimeWorkspace.filterPlaceholder}
-                  className="pl-7 text-xs"
                 />
-              </label>
+              </InputGroup>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
               {entriesQuery.isLoading ? (
@@ -1658,7 +1673,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                     />
                   ))}
                   {entriesQuery.data?.truncated ? (
-                    <div className="px-2 pt-2 text-[11px] text-muted-foreground">
+                    <div className="px-2 pt-2 text-2xs text-muted-foreground">
                       {HOMELAB_PRODUCT_COPY.runtimeWorkspace.truncated}
                     </div>
                   ) : null}
@@ -1702,7 +1717,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
                 <div className="truncate text-sm font-medium text-foreground">
                   {selectedFilePath}
                 </div>
-                <div className="text-[11px] text-muted-foreground">
+                <div className="text-2xs text-muted-foreground">
                   {typeof selectedFileSize === "number" ? formatFileSize(selectedFileSize) : "File"}
                 </div>
               </div>
@@ -1759,7 +1774,7 @@ export const ThreadWorkspacePanel = memo(function ThreadWorkspacePanel(props: {
               )}
             </div>
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-2xs text-muted-foreground">
                 {isDirty ? "Unsaved changes" : "Saved"}
               </div>
               <div className="flex items-center gap-2">

@@ -75,18 +75,11 @@ export function ThreadRuntimeModeBadge(props: {
 
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <Badge
-            variant="outline"
-            className="shrink-0 gap-1 border-info/35 bg-info/10 text-info-foreground"
-          />
-        }
-      >
-        <GitBranchPlusIcon className="size-3" />
+      <TooltipTrigger render={<Badge variant="info" />}>
+        <GitBranchPlusIcon />
         <span>{label}</span>
       </TooltipTrigger>
-      <TooltipPopup side="bottom" className="max-w-80 leading-tight">
+      <TooltipPopup side="bottom" className="max-w-80">
         {description}
       </TooltipPopup>
     </Tooltip>

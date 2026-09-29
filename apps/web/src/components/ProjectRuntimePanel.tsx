@@ -9,7 +9,7 @@ import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  GitMergeIcon,
+  MergeIcon,
   CameraIcon,
   EraserIcon,
   HistoryIcon,
@@ -389,7 +389,7 @@ export function ProjectRuntimePanel({
           </Button>
           {detail?.runtime.kind === "isolated" && !isStandaloneRuntime && !isCuratorRuntime ? (
             <Button size="xs" variant="outline" onClick={mergeIsolatedRuntime} disabled={busy}>
-              <GitMergeIcon className="size-3.5" />
+              <MergeIcon className="size-3.5" />
               Merge into Project Runtime
             </Button>
           ) : null}
@@ -411,7 +411,7 @@ export function ProjectRuntimePanel({
                     </span>
                   }
                 />
-                <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
+                <TooltipPopup side="top" className="max-w-64 whitespace-normal">
                   {snapshot.name}
                 </TooltipPopup>
               </Tooltip>

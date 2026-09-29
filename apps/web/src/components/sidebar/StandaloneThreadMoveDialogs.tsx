@@ -388,7 +388,7 @@ export function useStandaloneThreadMoveDialogs(): {
                 : HOMELAB_PRODUCT_COPY.standalone.moveDescription}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               <p>Chat transcript and thread identity move automatically.</p>
               <p className="mt-1">{standaloneThreadMoveRuntimeDescription()}</p>
@@ -577,7 +577,7 @@ export function useStandaloneThreadMoveDialogs(): {
                 : HOMELAB_PRODUCT_COPY.standalone.promoteDescription}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             <div className="grid gap-1.5">
               <span className="text-xs font-medium text-foreground">Project name</span>
               <Input
