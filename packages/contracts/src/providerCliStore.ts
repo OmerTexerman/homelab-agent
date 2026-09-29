@@ -31,7 +31,7 @@ export const ProviderCliStoreStatusView = Schema.Struct({
 });
 export type ProviderCliStoreStatusView = typeof ProviderCliStoreStatusView.Type;
 
-export class ProviderCliStoreError extends Schema.TaggedErrorClass<ProviderCliStoreError>()(
+export class ProviderCliStoreError extends Schema.TaggedError<ProviderCliStoreError>()(
   "ProviderCliStoreError",
   {
     message: Schema.String,

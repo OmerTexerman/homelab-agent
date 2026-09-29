@@ -48,7 +48,7 @@ export const HomelabSecretDeleteInput = Schema.Struct({
 });
 export type HomelabSecretDeleteInput = typeof HomelabSecretDeleteInput.Type;
 
-export class HomelabSecretError extends Schema.TaggedErrorClass<HomelabSecretError>()(
+export class HomelabSecretError extends Schema.TaggedError<HomelabSecretError>()(
   "HomelabSecretError",
   {
     message: TrimmedNonEmptyString,

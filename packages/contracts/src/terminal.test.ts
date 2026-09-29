@@ -264,8 +264,6 @@ describe("TerminalSessionSnapshot", () => {
         worktreePath: null,
         status: "running",
         pid: 1234,
-        cols: 120,
-        rows: 40,
         history: "hello\n",
         exitCode: null,
         exitSignal: null,

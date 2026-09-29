@@ -2,6 +2,10 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+/** Provider CLIs a thread runtime can bootstrap and run inside its container. */
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "opencode"]);
+export type ProviderKind = typeof ProviderKind.Type;
+
 export const RuntimeBootstrapMutationKind = Schema.Literals([
   "apt-package",
   "npm-package",
