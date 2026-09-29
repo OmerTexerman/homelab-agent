@@ -188,13 +188,14 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
 
   const loadRecords = (keys?: ReadonlyArray<string>) =>
     Effect.gen(function* () {
-      const rows = yield* sql<SecretRow>`
+      // The table is small (one row per secret), so filter in memory.
+      const allRows = yield* sql<SecretRow>`
         SELECT key, label, summary, value_updated_at AS "valueUpdatedAt",
           created_at AS "createdAt", updated_at AS "updatedAt"
         FROM homelab_secrets
-        ${keys === undefined ? sql`` : sql`WHERE ${sql.in("key", keys)}`}
         ORDER BY key
       `;
+      const rows = keys === undefined ? allRows : allRows.filter((row) => keys.includes(row.key));
       const scopes = yield* sql<{ readonly secretKey: string; readonly projectId: string }>`
         SELECT secret_key AS "secretKey", project_id AS "projectId"
         FROM homelab_secret_scopes ORDER BY project_id
