@@ -27,6 +27,8 @@ import * as Equal from "effect/Equal";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { describeHomelabError } from "../../homelab/homelabFetch";
+import { createSingleFlight } from "../../homelab/homelabMutationCore";
+import { ensureLocalApi } from "../../localApi";
 import { useScopeGate } from "../../homelab/useScopeGate";
 import { queryDisplayState } from "../../homelab/queryDisplayState";
 import { usePrimarySettings } from "../../hooks/useSettings";
@@ -122,6 +124,7 @@ export function MemoryKnowledgeSettingsPanel() {
   const allProjects = useProjects();
   const allSidebarThreads = useThreadShells();
   const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
+  const [curatorStartFlight] = useState(createSingleFlight);
   // The kickoff prompt auto-sends on launch, so the model/effort choice has to happen
   // here — there is no empty-composer moment to change it before the first turn.
   const curatorProject = useMemo(
@@ -165,10 +168,11 @@ export function MemoryKnowledgeSettingsPanel() {
     [allSidebarThreads],
   );
   const startCuratorSession = useCallback(() => {
-    if (primaryEnvironmentId === null || isStartingCuratorSession) {
+    if (primaryEnvironmentId === null) {
       return;
     }
-    void (async () => {
+    // The flight guard, not React state, stops a synchronous double click.
+    void curatorStartFlight.run(async () => {
       setIsStartingCuratorSession(true);
       try {
         const threadId = newThreadId();
@@ -246,12 +250,12 @@ export function MemoryKnowledgeSettingsPanel() {
       } finally {
         setIsStartingCuratorSession(false);
       }
-    })();
+    }, undefined);
   }, [
     curatorModelSelection,
     curatorProject,
+    curatorStartFlight,
     dispatchCuratorCommand,
-    isStartingCuratorSession,
     navigate,
     primaryEnvironmentId,
   ]);
@@ -387,8 +391,16 @@ export function MemoryKnowledgeSettingsPanel() {
                         onClick={() => {
                           // Deleting the session destroys its isolated runtime container and
                           // storage server-side; the sidebar hides curator threads, so this is
-                          // the cleanup surface.
-                          void deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+                          // the cleanup surface. It cannot be undone, so always confirm.
+                          void (async () => {
+                            const confirmed = await ensureLocalApi().dialogs.confirm(
+                              `Delete curator session "${thread.title}"? This permanently removes its conversation and its isolated runtime.`,
+                              { variant: "destructive" },
+                            );
+                            if (confirmed) {
+                              await deleteThread(scopeThreadRef(thread.environmentId, thread.id));
+                            }
+                          })();
                         }}
                       >
                         <Trash2Icon className="size-3.5" />

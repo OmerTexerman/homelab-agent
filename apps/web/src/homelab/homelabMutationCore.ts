@@ -86,3 +86,27 @@ export function createSubmitGuard() {
     },
   };
 }
+
+/**
+ * The awaitable form of `createSubmitGuard`, for multi-step flows that are
+ * not a single mutation (create a thread, then navigate). `run` resolves with
+ * the task's result, or with `skipped` without starting it while another run
+ * is in flight. Errors propagate to the caller.
+ */
+export function createSingleFlight() {
+  let inFlight = false;
+  return {
+    isInFlight: () => inFlight,
+    async run<T>(task: () => Promise<T>, skipped: T): Promise<T> {
+      if (inFlight) {
+        return skipped;
+      }
+      inFlight = true;
+      try {
+        return await task();
+      } finally {
+        inFlight = false;
+      }
+    },
+  };
+}
