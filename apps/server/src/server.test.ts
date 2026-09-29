@@ -111,6 +111,10 @@ import * as ServerConfig from "./config.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { HTTP_ROUTER_CONFIG, makeRoutesLayer } from "./server.ts";
 import {
+  type HomelabServerTestLayerOverrides,
+  makeHomelabServerTestLayers,
+} from "./homelab/testing/homelabServerTestLayers.ts";
+import {
   isThreadDetailEvent,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
@@ -570,6 +574,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    homelab?: HomelabServerTestLayerOverrides;
   };
 }) =>
   Effect.gen(function* () {
@@ -775,6 +780,7 @@ const buildAppUnderTest = (options?: {
         routerConfig: HTTP_ROUTER_CONFIG,
       },
     ).pipe(
+      Layer.provide(makeHomelabServerTestLayers(options?.layers?.homelab)),
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(Keybindings.Keybindings)({
