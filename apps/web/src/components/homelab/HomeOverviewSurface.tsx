@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, type ReactNode } from "react";
 
+import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { filterUserVisibleProjects } from "../../homelab/visibleProjects";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import {
@@ -41,8 +42,8 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 const HOME_RUNTIME_PROJECT_LIMIT = 8;
 
 /**
- * Homelab home overview. ChatView renders it in place of upstream's
- * `NoActiveThreadState` ("Pick a thread") empty state when no thread is open.
+ * Homelab home overview. Upstream's `NoActiveThreadState` ("Pick a thread")
+ * renders this page, so ChatView shows it whenever no thread is open.
  */
 export function HomeOverviewPage() {
   const navigate = useNavigate();
@@ -51,6 +52,7 @@ export function HomeOverviewPage() {
   const projects = useProjects();
   const threads = useThreadShells();
   const { defaultProjectRef, handleNewThread } = useHandleNewThread();
+  const createStandaloneThread = useCreateStandaloneThread();
 
   const runtimeProjects = useMemo(
     () => filterUserVisibleProjects(projects).slice(0, HOME_RUNTIME_PROJECT_LIMIT),
@@ -113,13 +115,17 @@ export function HomeOverviewPage() {
         <HomeOverviewSurface
           model={model}
           isRefreshing={isRefreshing}
-          canCreateThread={defaultProjectRef !== null}
+          canCreateThread={primaryEnvironmentId !== null}
           errorMessage={errorMessage ?? null}
           onNewThread={() => {
+            // No project yet: a scratch thread needs none. Otherwise new
+            // threads use the project's default runtime (shared unless the
+            // workspace default says isolated).
             if (!defaultProjectRef) {
+              void createStandaloneThread();
               return;
             }
-            void handleNewThread(defaultProjectRef, { runtimeSelectionMode: "shared" });
+            void handleNewThread(defaultProjectRef);
           }}
           onOpenThread={(ref) => {
             void navigate({
