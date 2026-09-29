@@ -137,14 +137,17 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
           runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
           status: binding.status ?? existingRuntime?.status ?? "running",
           lastSeenAt: now,
+          // A provider switch must not inherit the old provider's resume
+          // cursor or runtime payload (for example a Codex cwd or thread id).
           resumeCursor:
             binding.resumeCursor !== undefined
               ? binding.resumeCursor
-              : (existingRuntime?.resumeCursor ?? null),
-          runtimePayload: mergeRuntimePayload(
-            existingRuntime?.runtimePayload ?? null,
-            binding.runtimePayload,
-          ),
+              : providerChanged
+                ? null
+                : (existingRuntime?.resumeCursor ?? null),
+          runtimePayload: providerChanged
+            ? (binding.runtimePayload ?? null)
+            : mergeRuntimePayload(existingRuntime?.runtimePayload ?? null, binding.runtimePayload),
         },
         options,
       )

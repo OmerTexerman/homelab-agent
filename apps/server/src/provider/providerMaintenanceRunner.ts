@@ -187,6 +187,11 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
+    // Homelab (upstream candidate): npm's EACCES on a root-owned global
+    // prefix is the common headless-server failure; say how to fix it.
+    if (`${result.stderr}\n${result.stdout}`.includes("EACCES")) {
+      return `Update command exited with code ${result.exitCode} because the server user cannot write to the install location. Install the provider CLI under a user-writable npm prefix for the server user (for example \`npm config set prefix ~/.npm-global\`, reinstall the CLI, and put that bin directory on the service PATH).`;
+    }
     return `Update command exited with code ${result.exitCode}.`;
   }
   return "Update command failed.";
@@ -289,10 +294,12 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             concurrency: "unbounded",
           },
         ).pipe(
-          Effect.map((verifiedProviders): VerifiedProviderRefresh => ({
-            providers,
-            verifiedProviders,
-          })),
+          Effect.map(
+            (verifiedProviders): VerifiedProviderRefresh => ({
+              providers,
+              verifiedProviders,
+            }),
+          ),
           Effect.catchCause((cause) =>
             Effect.logWarning("Provider post-update version verification failed", {
               provider,
@@ -504,6 +511,25 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         run: runProviderUpdate(),
       })
       .pipe(
+        // Homelab (upstream candidate): the update runs in the RPC fiber, so a
+        // dropped websocket interrupts it after "queued"/"running" was
+        // published. Record a terminal state instead of spinning forever.
+        Effect.onInterrupt(() =>
+          nowIso.pipe(
+            Effect.flatMap((finishedAt) =>
+              setUpdateState(
+                makeUpdateState({
+                  status: "failed",
+                  startedAt: null,
+                  finishedAt,
+                  message:
+                    "Update was interrupted before it finished (for example by a dropped connection). Run the update again.",
+                }),
+              ),
+            ),
+            Effect.ignore,
+          ),
+        ),
         Effect.mapError((error) =>
           isServerProviderUpdateError(error)
             ? new ServerProviderUpdateError({
