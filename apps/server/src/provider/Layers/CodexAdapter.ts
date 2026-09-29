@@ -72,6 +72,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import { withCodexRuntimeLaunch } from "./runtimeLaunch.ts";
 import {
   type CodexRateLimitSnapshot,
   codexRateLimitsToUpdate,
@@ -2275,7 +2276,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const runtimeInput: CodexSessionRuntimeOptions = {
+        const runtimeInput = yield* withCodexRuntimeLaunch({
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
@@ -2310,7 +2311,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 mcpCapabilities: mcpSession.capabilities,
               }
             : {}),
-        };
+        } satisfies CodexSessionRuntimeOptions);
         const turnTokenUsage = makeCodexTurnTokenUsageState();
         // Codex reports a usage-limit stop as OpenAI's own sentence, which on a
         // Business workspace blames credits for a window that ran out. The

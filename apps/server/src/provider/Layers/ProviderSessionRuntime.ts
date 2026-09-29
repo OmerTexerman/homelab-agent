@@ -1,111 +1,57 @@
-// @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
-import {
+/**
+ * Homelab session placement hook for `ProviderServiceLive`.
+ *
+ * Provider sessions run inside the thread's Project Runtime container. Before
+ * ProviderService hands a start/resume to an adapter it calls the resolver
+ * built here once:
+ *
+ * - the runtime-aware selection policy rejects providers that cannot run in a
+ *   Project Runtime (host-only drivers, managed OpenCode without a published
+ *   port, ...), and
+ * - the ThreadRuntime is ensured, started and touched, and its in-container
+ *   cwd replaces the host cwd the adapter would otherwise receive.
+ *
+ * Without a `ThreadRuntime` service (upstream tests, non-homelab wiring) the
+ * resolver returns `undefined` and ProviderService behaves exactly like
+ * upstream.
+ *
+ * @module ProviderSessionRuntime
+ */
+import type {
   ModelSelection,
-  type ProviderDriverKind as ProviderDriverKindModel,
-  type ProviderKind as ProviderKindModel,
-  type ProviderSession,
-  type RuntimeSessionId as RuntimeSessionIdModel,
-  type RuntimeMode as RuntimeModeModel,
-  type ThreadId as ThreadIdModel,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RuntimeMode,
+  RuntimeSessionId,
+  ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import {
-  ThreadRuntimeError,
-  ThreadRuntimeNotFoundError,
-  type ThreadRuntimeShape,
+  ThreadRuntime,
+  type ThreadRuntimeError,
+  type ThreadRuntimeNotFoundError,
 } from "../../runtime/Services/ThreadRuntime.ts";
-import { ProviderAdapterProcessError } from "../Errors.ts";
-import type { ProviderRuntimeBinding } from "../Services/ProviderSessionDirectory.ts";
+import { ProviderAdapterProcessError, ProviderValidationError } from "../Errors.ts";
+import { resolveProviderSelection, runtimeProviderForDriver } from "../ProviderSelectionPolicy.ts";
+import { ProviderRegistry } from "../Services/ProviderRegistry.ts";
 
-const isModelSelection = Schema.is(ModelSelection);
-
-export function providerSessionRuntimeStatus(
-  session: ProviderSession,
-): "starting" | "running" | "stopped" | "error" {
-  switch (session.status) {
-    case "connecting":
-      return "starting";
-    case "error":
-      return "error";
-    case "closed":
-      return "stopped";
-    case "ready":
-    case "running":
-    default:
-      return "running";
-  }
+export interface HomelabSessionPlacementInput {
+  readonly operation: string;
+  readonly threadId: ThreadId;
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderDriverKind;
+  readonly runtimeId?: RuntimeSessionId | undefined;
+  readonly runtimeMode: RuntimeMode;
+  /** Host-side cwd ProviderService would otherwise pass to the adapter. */
+  readonly requestedCwd?: string | undefined;
+  readonly modelSelection?: ModelSelection | undefined;
 }
 
-export function providerSessionRuntimePayloadFromSession(
-  session: ProviderSession,
-  extra?: {
-    readonly modelSelection?: unknown;
-    readonly lastRuntimeEvent?: string;
-    readonly lastRuntimeEventAt?: string;
-    readonly lastTurnStartKey?: string;
-  },
-): Record<string, unknown> {
-  return {
-    cwd: session.cwd ?? null,
-    model: session.model ?? null,
-    activeTurnId: session.activeTurnId ?? null,
-    lastError: session.lastError ?? null,
-    ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
-    ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
-    ...(extra?.lastRuntimeEventAt !== undefined
-      ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
-      : {}),
-    ...(extra?.lastTurnStartKey !== undefined ? { lastTurnStartKey: extra.lastTurnStartKey } : {}),
-  };
-}
-
-export function readPersistedModelSelection(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ModelSelection | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  return isModelSelection(raw) ? raw : undefined;
-}
-
-export function readPersistedCwd(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
-  if (typeof rawCwd !== "string") return undefined;
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function readPersistedActiveTurnId(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawActiveTurnId =
-    "activeTurnId" in runtimePayload ? runtimePayload.activeTurnId : undefined;
-  if (typeof rawActiveTurnId !== "string") return undefined;
-  const trimmed = rawActiveTurnId.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function readPersistedLastTurnStartKey(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawLastTurnStartKey =
-    "lastTurnStartKey" in runtimePayload ? runtimePayload.lastTurnStartKey : undefined;
-  if (typeof rawLastTurnStartKey !== "string") return undefined;
-  const trimmed = rawLastTurnStartKey.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+/** Adapter start-input overrides; spread after upstream's own `cwd`. */
+export interface HomelabSessionPlacement {
+  readonly cwd: string;
 }
 
 function describeThreadRuntimeFailure(
@@ -120,33 +66,56 @@ function describeThreadRuntimeFailure(
   return "Thread runtime provisioning failed.";
 }
 
-export const ensureProviderExecutionContext = Effect.fn("provider.ensureProviderExecutionContext")(
-  function* (input: {
-    readonly threadRuntime: ThreadRuntimeShape;
-    readonly threadId: ThreadIdModel;
-    readonly runtimeId?: RuntimeSessionIdModel;
-    readonly provider: ProviderDriverKindModel;
-    readonly runtimeProvider: ProviderKindModel | null;
-    readonly runtimeMode: RuntimeModeModel;
-    readonly requestedCwd?: string;
-    readonly operation: string;
-  }) {
-    return yield* Effect.gen(function* () {
-      yield* input.threadRuntime.ensureRuntime({
+/**
+ * Captures the optional ThreadRuntime / ProviderRegistry services at layer
+ * construction and returns the per-call placement resolver.
+ */
+export const makeHomelabSessionPlacement = Effect.gen(function* () {
+  const threadRuntime = yield* Effect.serviceOption(ThreadRuntime);
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry);
+
+  return Effect.fn("provider.resolveHomelabSessionPlacement")(function* (
+    input: HomelabSessionPlacementInput,
+  ) {
+    if (Option.isNone(threadRuntime)) {
+      return undefined;
+    }
+    const runtime = threadRuntime.value;
+
+    let runtimeProvider = runtimeProviderForDriver(input.provider);
+    if (Option.isSome(providerRegistry)) {
+      const selection = resolveProviderSelection({
+        providers: yield* providerRegistry.value.getProviders,
+        requestedInstanceId: input.instanceId,
+        requestedProvider: input.provider,
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        allowFallback: false,
+      });
+      if (selection._tag === "unavailable") {
+        return yield* new ProviderValidationError({
+          operation: input.operation,
+          issue: selection.issue,
+        });
+      }
+      runtimeProvider = selection.target.runtimeProvider;
+    }
+
+    const executionContext = yield* Effect.gen(function* () {
+      yield* runtime.ensureRuntime({
         threadId: input.threadId,
         ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
-        provider: input.runtimeProvider,
+        provider: runtimeProvider,
         runtimeMode: input.runtimeMode,
         ...(input.requestedCwd ? { requestedCwd: input.requestedCwd } : {}),
       });
-      yield* input.threadRuntime.startRuntime(input.threadId);
-      yield* input.threadRuntime.touchRuntime(input.threadId).pipe(
+      yield* runtime.startRuntime(input.threadId);
+      yield* runtime.touchRuntime(input.threadId).pipe(
         Effect.catchTags({
           ThreadRuntimeError: () => Effect.void,
           ThreadRuntimeNotFoundError: () => Effect.void,
         }),
       );
-      return yield* input.threadRuntime.resolveExecutionContext(input.threadId);
+      return yield* runtime.resolveExecutionContext(input.threadId);
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -158,5 +127,7 @@ export const ensureProviderExecutionContext = Effect.fn("provider.ensureProvider
           }),
       ),
     );
-  },
-);
+
+    return { cwd: executionContext.cwd } satisfies HomelabSessionPlacement;
+  });
+});
