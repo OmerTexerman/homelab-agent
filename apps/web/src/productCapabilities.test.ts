@@ -50,8 +50,8 @@ describe("Homelab product copy", () => {
     expect(HOMELAB_PRODUCT_COPY.projectRuntime.waitingThreadDescription).not.toMatch(
       /shared runtime|shared Project Runtime/i,
     );
-    expect(HOMELAB_PRODUCT_COPY.homeOverview.title).toBe("Homelab operations");
-    expect(HOMELAB_PRODUCT_COPY.homeOverview.subtitle).toMatch(/Project Runtimes/);
+    expect(HOMELAB_PRODUCT_COPY.homeOverview.title).toBe("Home");
+    expect(HOMELAB_PRODUCT_COPY.homeOverview.navDescription).toMatch(/Project Runtimes/);
     expect(HOMELAB_PRODUCT_COPY.providers.runtimeReadinessDescription).toMatch(
       /wrappers and synced auth mounts/,
     );
