@@ -62,6 +62,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
 import { KnowledgeEstateBrowser } from "./KnowledgeEstateBrowser";
 import { RuntimeCliUpdatesSection } from "./RuntimeCliUpdatesSection";
+import { RuntimeToolsSection } from "./RuntimeToolsSection";
 import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingsPageContainer,
@@ -91,6 +92,7 @@ export function ProjectRuntimeSettingsPanel() {
   return (
     <SettingsPageContainer>
       <RuntimeCliUpdatesSection />
+      <RuntimeToolsSection />
       <SettingsSection title={HOMELAB_PRODUCT_COPY.projectRuntime.title}>
         <SettingsRow
           title={HOMELAB_PRODUCT_COPY.projectRuntime.ownershipTitle}

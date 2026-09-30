@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   isThreadWaitingOnProjectRuntime,
   projectRuntimeQueueSummary,
+  projectRuntimeRecreateNotice,
   projectRuntimeStatusLabel,
 } from "./ProjectRuntimePanel.logic";
 
@@ -77,5 +78,24 @@ describe("ProjectRuntimePanel logic", () => {
 
     expect(isThreadWaitingOnProjectRuntime(queue, ThreadId.make("thread-2"))).toBe(true);
     expect(isThreadWaitingOnProjectRuntime(queue, ThreadId.make("thread-1"))).toBe(false);
+  });
+
+  it("shows a pending rebuild before the last one", () => {
+    expect(
+      projectRuntimeRecreateNotice({
+        recreatePendingReason: "tools changed",
+        lastRecreateReason: "image updated",
+        lastRecreatedAt: "2026-09-29T00:00:00.000Z",
+      }),
+    ).toEqual({ kind: "pending", text: "Rebuild pending: tools changed" });
+    expect(
+      projectRuntimeRecreateNotice({
+        recreatePendingReason: null,
+        lastRecreateReason: "image updated",
+        lastRecreatedAt: "2026-09-29T00:00:00.000Z",
+      }),
+    ).toEqual({ kind: "rebuilt", text: "Container rebuilt: image updated" });
+    // Older servers don't send the fields.
+    expect(projectRuntimeRecreateNotice({})).toBeNull();
   });
 });

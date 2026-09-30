@@ -64,3 +64,22 @@ export function isThreadWaitingOnProjectRuntime(
 ): boolean {
   return queue.queued.some((item) => item.threadId === threadId);
 }
+
+/**
+ * What the runtime strip says about container rebuilds: a waiting rebuild
+ * (the runtime was busy) wins over the last one that happened.
+ */
+export function projectRuntimeRecreateNotice(
+  runtime: Pick<
+    ProjectRuntimeDetail["runtime"],
+    "recreatePendingReason" | "lastRecreateReason" | "lastRecreatedAt"
+  >,
+): { readonly kind: "pending" | "rebuilt"; readonly text: string } | null {
+  if (runtime.recreatePendingReason) {
+    return { kind: "pending", text: `Rebuild pending: ${runtime.recreatePendingReason}` };
+  }
+  if (runtime.lastRecreateReason) {
+    return { kind: "rebuilt", text: `Container rebuilt: ${runtime.lastRecreateReason}` };
+  }
+  return null;
+}

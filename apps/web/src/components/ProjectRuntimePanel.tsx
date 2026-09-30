@@ -38,8 +38,10 @@ import {
   isThreadWaitingOnProjectRuntime,
   projectRuntimeIsOperationBusy,
   projectRuntimeQueueSummary,
+  projectRuntimeRecreateNotice,
   projectRuntimeStatusLabel,
 } from "./ProjectRuntimePanel.logic";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 
 async function runProjectRuntimeCommand<W, A, E>(
   command: AtomCommand<W, A, E>,
@@ -224,6 +226,7 @@ export function ProjectRuntimePanel({
     ? isThreadWaitingOnProjectRuntime(detail.queue, threadId)
     : false;
   const queuedCount = detail?.queue.queued.length ?? 0;
+  const recreateNotice = detail ? projectRuntimeRecreateNotice(detail.runtime) : null;
 
   const runOperation = useCallback(
     (operation: ProjectRuntimePanelOperation) => {
@@ -347,6 +350,19 @@ export function ProjectRuntimePanel({
           ) : null}
           {queuedCount > 0 ? (
             <span className="text-xs text-muted-foreground">Queued: {queuedCount}</span>
+          ) : null}
+          {recreateNotice ? (
+            <span
+              className={cn(
+                "text-xs",
+                recreateNotice.kind === "pending" ? "text-warning" : "text-muted-foreground",
+              )}
+            >
+              {recreateNotice.text}
+              {recreateNotice.kind === "rebuilt" && detail?.runtime.lastRecreatedAt
+                ? ` (${formatRelativeTimeLabel(detail.runtime.lastRecreatedAt)})`
+                : null}
+            </span>
           ) : null}
           {detail?.warnings[0] ? (
             <span className="text-xs text-warning">{detail.warnings[0]}</span>
