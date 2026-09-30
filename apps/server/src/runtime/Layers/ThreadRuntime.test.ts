@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { AuthSessionId, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
+import { AuthSessionId, ProjectId, RuntimeSessionId, ThreadId } from "@t3tools/contracts";
 import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import {
   isolatedThreadRuntimeId,
@@ -24,7 +24,7 @@ import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
-import { RuntimeRegistry } from "../RuntimeRegistry.ts";
+import { markRuntimeToolsChanged, RuntimeRegistry } from "../RuntimeRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { wakeThreadWorkspaceRuntime } from "../wakeThreadWorkspaceRuntime.ts";
 import {
@@ -73,6 +73,8 @@ class FakeDockerRunner {
   readonly containers = new Map<string, FakeDockerContainer>();
   readonly images = new Set<string>();
   readonly imageLabels = new Map<string, Record<string, string>>();
+  /** Image ids by ref; defaults to `image-<ref>`. Changing one simulates a rebuilt base. */
+  readonly imageIds = new Map<string, string>();
   /** One-shot failures by docker command (e.g. "rm"), to simulate a crash mid-operation. */
   readonly failNext = new Map<string, string>();
   private nextId = 1;
@@ -134,7 +136,7 @@ class FakeDockerRunner {
         return okResult({
           stdout: JSON.stringify([
             {
-              Id: `image-${imageRef}`,
+              Id: this.imageIds.get(imageRef) ?? `image-${imageRef}`,
               RepoTags: [imageRef],
             },
           ]),
@@ -1644,6 +1646,7 @@ const fakeSessions = new Map<string, FakeSession>();
 let fakeSessionCounter = 0;
 let secretMaterializations = 0;
 let reapIdleRuntimes: (() => Effect.Effect<void, unknown>) | undefined;
+let awaitToolsImageBuilds: (() => Effect.Effect<void>) | undefined;
 
 const sharedRuntimeLayer = it.layer(
   makeThreadRuntimeLive({
@@ -1657,6 +1660,7 @@ const sharedRuntimeLayer = it.layer(
     idlePollIntervalMs: 24 * 60 * 60_000,
     exposeInternals: (internals) => {
       reapIdleRuntimes = internals.reapIdleRuntimes;
+      awaitToolsImageBuilds = internals.awaitToolsImageBuilds;
     },
   }).pipe(
     Layer.provideMerge(HomelabSqlMemory),
@@ -1742,8 +1746,49 @@ function resetDocker() {
   docker.containers.clear();
   docker.images.clear();
   docker.imageLabels.clear();
+  docker.imageIds.clear();
   docker.failNext.clear();
 }
+
+/** Two threads on a project's shared runtime (the runtime that uses the project's tools list). */
+const bindProjectRuntime = (label: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* ThreadRuntime;
+    const registry = yield* RuntimeRegistry;
+    const projectId = ProjectId.make(label);
+    const runtimeId = RuntimeSessionId.make(`project-runtime:${label}`);
+    const threadA = ThreadId.make(`${label}-thread-a`);
+    const threadB = ThreadId.make(`${label}-thread-b`);
+    for (const threadId of [threadA, threadB]) {
+      yield* runtime.ensureRuntime({
+        threadId,
+        runtimeId,
+        projectId,
+        runtimeKind: "project-shared",
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+    }
+    const addTool = (spec: string) =>
+      registry
+        .upsertTool({
+          projectId,
+          runtimeId: null,
+          spec,
+          reason: "test",
+          addedByThreadId: threadA,
+          createdAt: new Date().toISOString(),
+        })
+        .pipe(Effect.andThen(markRuntimeToolsChanged(registry, { projectId })));
+    const readRecord = registry
+      .getRuntime(runtimeId)
+      .pipe(
+        Effect.map((record) =>
+          record._tag === "Some" ? record.value : NodeAssert.fail("no record"),
+        ),
+      );
+    return { runtime, registry, projectId, runtimeId, threadA, threadB, addTool, readRecord };
+  });
 
 const threadTokenFile = (hostRuntimePath: string, threadId: ThreadId) =>
   NodePath.join(
@@ -2159,6 +2204,155 @@ sharedRuntimeLayer("ThreadRuntimeLive shared runtimes", (it) => {
       );
       const seeded = yield* registry.getRuntime(cloneRuntimeId);
       NodeAssert.ok(seeded._tag === "Some" && seeded.value.seededAt !== null);
+    }),
+  );
+
+  it.effect(
+    "bakes the tools list into a derived image and rebuilds it after a base-image change",
+    () =>
+      Effect.gen(function* () {
+        resetDocker();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { stateDir } = yield* ServerConfig;
+        const { runtime, threadA, addTool, readRecord } = yield* bindProjectRuntime("p4b-bake");
+        yield* addTool("apt:jq");
+
+        // No container yet: the start waits for the derived image and runs it.
+        const started = yield* runtime.startRuntime(threadA);
+        const baseRef = (yield* readRecord).imageRef;
+        const container = docker.containers.get(started.containerName);
+        NodeAssert.ok(container);
+        NodeAssert.match(container.image, /^homelab-agent-runtime:[0-9a-f]{12}-[0-9a-f]{12}$/);
+        NodeAssert.notEqual(container.image, baseRef);
+        const toolsHash = container.labels["homelab.runtime.tools"];
+        NodeAssert.match(toolsHash ?? "", /^[0-9a-f]{12}$/);
+        NodeAssert.ok(container.image.endsWith(`-${toolsHash}`));
+        const dockerfile = yield* fileSystem.readFileString(
+          NodePath.join(
+            stateDir,
+            "runtime-tool-images",
+            container.image.slice(container.image.indexOf(":") + 1),
+            "Dockerfile",
+          ),
+        );
+        NodeAssert.match(dockerfile, new RegExp(`^FROM ${baseRef}\n`));
+        NodeAssert.match(dockerfile, /apt-get install -y --no-install-recommends 'jq'/);
+        NodeAssert.equal((yield* readRecord).lastRecreateReason, null);
+
+        // The base image is rebuilt (a deploy). The old container keeps running
+        // until the new derived image exists, then the reaper recreates it.
+        docker.imageIds.set(baseRef, "image-rebuilt-base");
+        yield* runtime.startRuntime(threadA);
+        NodeAssert.equal(docker.containers.get(started.containerName)?.id, started.containerId);
+        NodeAssert.equal((yield* readRecord).recreatePendingReason, "image updated");
+        yield* awaitToolsImageBuilds!();
+        yield* reapIdleRuntimes!();
+
+        const rebuilt = docker.containers.get(started.containerName);
+        NodeAssert.ok(rebuilt);
+        NodeAssert.notEqual(rebuilt.id, started.containerId);
+        NodeAssert.notEqual(rebuilt.image, container.image);
+        // Same tools on the new base.
+        NodeAssert.equal(rebuilt.labels["homelab.runtime.tools"], toolsHash);
+        const record = yield* readRecord;
+        NodeAssert.equal(record.recreatePendingReason, null);
+        NodeAssert.equal(record.lastRecreateReason, "image updated");
+        NodeAssert.ok(record.lastRecreatedAt !== null);
+        NodeAssert.equal(record.containerId, rebuilt.id);
+      }),
+  );
+
+  it.effect(
+    "defers a tools recreate while a turn or terminal is active, then runs it when idle",
+    () =>
+      Effect.gen(function* () {
+        resetDocker();
+        const { runtime, threadA, threadB, addTool, readRecord } =
+          yield* bindProjectRuntime("p4b-defer");
+        const first = yield* runtime.startRuntime(threadA);
+        NodeAssert.equal(
+          docker.containers.get(first.containerName)?.labels["homelab.runtime.tools"],
+          "none",
+        );
+
+        yield* runtime.setTurnActive(threadB, true);
+        yield* addTool("apt:jq");
+        NodeAssert.equal((yield* readRecord).recreatePendingReason, "tools changed");
+        // First start kicks off the background build; the second finds the image ready
+        // but B's turn is in flight, so the container is kept.
+        yield* runtime.startRuntime(threadA);
+        yield* awaitToolsImageBuilds!();
+        docker.calls.length = 0;
+        yield* runtime.startRuntime(threadA);
+        yield* reapIdleRuntimes!();
+        NodeAssert.equal(
+          docker.calls.some((call) => call[0] === "rm"),
+          false,
+        );
+        NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+        NodeAssert.equal((yield* readRecord).recreatePendingReason, "tools changed");
+
+        // The turn ends but a terminal is attached: still deferred.
+        yield* runtime.setTurnActive(threadB, false);
+        const release = yield* runtime.retainTerminal(threadA);
+        yield* reapIdleRuntimes!();
+        NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+
+        // Idle: the reaper recreates it on the tools image and records why.
+        release();
+        yield* reapIdleRuntimes!();
+        const recreated = docker.containers.get(first.containerName);
+        NodeAssert.ok(recreated);
+        NodeAssert.notEqual(recreated.id, first.containerId);
+        NodeAssert.equal(recreated.running, true);
+        NodeAssert.match(recreated.labels["homelab.runtime.tools"] ?? "", /^[0-9a-f]{12}$/);
+        const record = yield* readRecord;
+        NodeAssert.equal(record.lastRecreateReason, "tools changed");
+        NodeAssert.equal(record.recreatePendingReason, null);
+        NodeAssert.equal(record.state, "running");
+        NodeAssert.equal(record.containerId, recreated.id);
+      }),
+  );
+
+  it.effect("records reset as the recreate reason of the next container", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, runtimeId, threadA, readRecord } = yield* bindProjectRuntime("p4b-reset");
+      yield* runtime.startRuntime(threadA);
+      yield* runtime.wipeRuntime(runtimeId, { reason: "reset" });
+      NodeAssert.equal((yield* readRecord).recreatePendingReason, "reset");
+      yield* runtime.startRuntime(threadA);
+      const record = yield* readRecord;
+      NodeAssert.equal(record.lastRecreateReason, "reset");
+      NodeAssert.equal(record.recreatePendingReason, null);
+    }),
+  );
+
+  it.effect("an isolated clone inherits the project's tools list at clone time", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, registry, projectId, runtimeId, addTool } =
+        yield* bindProjectRuntime("p4b-clone");
+      yield* addTool("apt:jq");
+      const cloneRuntimeId = RuntimeSessionId.make("isolated-runtime:p4b-clone");
+      yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("p4b-clone-thread"),
+        runtimeId: cloneRuntimeId,
+        projectId,
+        runtimeKind: "project-isolated",
+        seedFromRuntimeId: runtimeId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      const cloneList = () =>
+        registry
+          .listTools({ projectId, runtimeId: cloneRuntimeId })
+          .pipe(Effect.map((rows) => rows.map((row) => row.spec)));
+      NodeAssert.deepEqual(yield* cloneList(), ["apt:jq"]);
+
+      // Later project changes don't reach the clone's own list.
+      yield* addTool("apt:htop");
+      NodeAssert.deepEqual(yield* cloneList(), ["apt:jq"]);
     }),
   );
 });

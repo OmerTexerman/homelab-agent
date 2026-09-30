@@ -438,7 +438,11 @@ function makeHarness(input: {
               yield* options.refill(hostRuntimePath).pipe(Effect.orDie);
             }
             yield* registry
-              .patchRuntime(id, { state: "stopped", containerId: null })
+              .patchRuntime(id, {
+                state: "stopped",
+                containerId: null,
+                recreatePendingReason: options?.reason ?? null,
+              })
               .pipe(Effect.orDie);
           }),
         reconcile: () => Effect.void,
@@ -628,7 +632,7 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         const tempDir = yield* tempDirFor("project-runtime-reset-");
         const hostWorkspacePath = makeManagedHostWorkspacePath(tempDir);
         const harness = makeHarness({ baseDir: tempDir, hostWorkspacePath });
-        const { lifecycle } = yield* harness.start;
+        const { lifecycle, registry } = yield* harness.start;
         yield* lifecycle.wake({ projectId, threadId });
 
         const archived = yield* lifecycle.archive({ projectId, threadId });
@@ -652,6 +656,17 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.equal(reset.runtime.runtime.lastError, null);
         assert.deepStrictEqual(harness.wipedRuntimeIds, [runtimeId]);
         assert.equal(reset.runtime.snapshots.length, 1);
+        // The next container records the reset as its recreate reason, and the detail shows it.
+        assert.equal(reset.runtime.runtime.recreatePendingReason, "reset");
+        yield* registry.patchRuntime(runtimeId, {
+          recreatePendingReason: null,
+          lastRecreateReason: "reset",
+          lastRecreatedAt: "2026-09-29T00:00:00.000Z",
+        });
+        const detail = yield* lifecycle.get({ projectId });
+        assert.equal(detail.runtime.runtime.lastRecreateReason, "reset");
+        assert.equal(detail.runtime.runtime.lastRecreatedAt, "2026-09-29T00:00:00.000Z");
+        assert.equal(detail.runtime.runtime.recreatePendingReason, null);
       }),
     ),
   );
