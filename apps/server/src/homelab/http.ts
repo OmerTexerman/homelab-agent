@@ -46,6 +46,13 @@ import {
   HomelabSkillCreateInput,
   HomelabSkillListInput,
   HomelabSkillPromoteInput,
+  RuntimeToolAddInput,
+  RuntimeToolRemoveInput,
+  type RuntimeSessionId,
+  type RuntimeTool,
+  type RuntimeToolAddResult,
+  type RuntimeToolListResult,
+  type RuntimeToolRemoveResult,
   ThreadId,
 } from "@t3tools/contracts";
 import { Data, Effect, Layer, Option, Schema, SchemaIssue } from "effect";
@@ -73,6 +80,18 @@ import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRun
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  markRuntimeToolsChanged,
+  RuntimeRegistry,
+  runtimeToolsListKeyFor,
+  type RuntimeToolRow,
+  type RuntimeToolsListKey,
+} from "../runtime/RuntimeRegistry.ts";
+import {
+  installCommandsForTool,
+  parseRuntimeToolSpec,
+  runtimeToolKindOf,
+} from "../runtime/RuntimeTools.ts";
 
 class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
   readonly message: string;
@@ -1488,6 +1507,200 @@ export const homelabEntityVerifyRouteLayer = HttpRouter.add(
   ),
 );
 
+// ---------------------------------------------------------------------------
+// Runtime tools (`homelab tools`, Settings -> Project Runtime)
+// ---------------------------------------------------------------------------
+
+const runtimeToolsStoreError = (cause: unknown) =>
+  new HomelabHttpError({ message: "Failed to access the runtime tools list.", status: 500, cause });
+
+/**
+ * The tools list a request operates on. A runtime token always gets the list
+ * of the runtime its thread is bound to (its project's shared list, or an
+ * isolated clone's own) and can't name another project or runtime. Human
+ * callers name the project, and optionally one of its runtimes.
+ */
+const resolveRuntimeToolsKey = (
+  caller: HomelabCallerScope,
+  input: {
+    readonly projectId?: ProjectId | undefined;
+    readonly runtimeId?: RuntimeSessionId | undefined;
+  },
+) =>
+  Effect.gen(function* () {
+    const registry = yield* RuntimeRegistry;
+    if (caller.kind === "runtime") {
+      if (input.projectId !== undefined && input.projectId !== caller.projectId) {
+        return yield* forbiddenScope("Runtime tokens may only manage their own project's tools.");
+      }
+      const binding = yield* registry
+        .getBinding(caller.threadId)
+        .pipe(Effect.mapError(runtimeToolsStoreError));
+      if (Option.isNone(binding)) {
+        return yield* forbiddenScope("This thread is not bound to a runtime.");
+      }
+      if (input.runtimeId !== undefined && input.runtimeId !== binding.value.runtimeId) {
+        return yield* forbiddenScope("Runtime tokens may only manage their own runtime's tools.");
+      }
+      const record = yield* registry
+        .getRuntime(binding.value.runtimeId)
+        .pipe(Effect.mapError(runtimeToolsStoreError));
+      if (
+        Option.isNone(record) ||
+        (record.value.projectId !== null && record.value.projectId !== caller.projectId)
+      ) {
+        return yield* forbiddenScope("Runtime tokens may only manage their own project's tools.");
+      }
+      const key = runtimeToolsListKeyFor({ ...record.value, projectId: caller.projectId });
+      if (key === undefined) {
+        return yield* forbiddenScope("This runtime has no tools list.");
+      }
+      return key;
+    }
+    if (input.projectId === undefined) {
+      return yield* new HomelabHttpError({
+        message: "Runtime tools requests must include projectId.",
+        status: 400,
+      });
+    }
+    if (input.runtimeId === undefined) {
+      const key: RuntimeToolsListKey = { projectId: input.projectId, runtimeId: null };
+      return key;
+    }
+    const record = yield* registry
+      .getRuntime(input.runtimeId)
+      .pipe(Effect.mapError(runtimeToolsStoreError));
+    const key = Option.isSome(record) ? runtimeToolsListKeyFor(record.value) : undefined;
+    if (key === undefined || key.projectId !== input.projectId) {
+      return yield* new HomelabHttpError({
+        message: "That runtime does not belong to this project.",
+        status: 404,
+      });
+    }
+    return key;
+  });
+
+const toRuntimeToolView = (row: RuntimeToolRow): RuntimeTool | undefined => {
+  const kind = runtimeToolKindOf(row.spec);
+  return kind === undefined
+    ? undefined
+    : {
+        projectId: row.projectId,
+        runtimeId: row.runtimeId,
+        spec: row.spec,
+        kind,
+        reason: row.reason,
+        addedByThreadId: row.addedByThreadId,
+        createdAt: row.createdAt,
+      };
+};
+
+const invalidRuntimeToolPayload = (cause: unknown) =>
+  new HomelabHttpError({ message: "Invalid runtime tool payload.", status: 400, cause });
+
+export const homelabRuntimeToolsListRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/runtime-tools",
+  Effect.gen(function* () {
+    const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
+    const url = yield* getRequestUrl;
+    const projectId = url.searchParams.get("projectId") ?? undefined;
+    const runtimeId = url.searchParams.get("runtimeId") ?? undefined;
+    const registry = yield* RuntimeRegistry;
+    // A human caller without a project gets every list (the settings overview).
+    const rows =
+      caller.kind === "unrestricted" && projectId === undefined
+        ? yield* registry.listTools().pipe(Effect.mapError(runtimeToolsStoreError))
+        : yield* resolveRuntimeToolsKey(caller, {
+            projectId: projectId as ProjectId | undefined,
+            runtimeId: runtimeId as RuntimeSessionId | undefined,
+          }).pipe(
+            Effect.flatMap((key) =>
+              registry.listTools(key).pipe(Effect.mapError(runtimeToolsStoreError)),
+            ),
+          );
+    return HttpServerResponse.jsonUnsafe(
+      {
+        tools: rows.flatMap((row) => {
+          const view = toRuntimeToolView(row);
+          return view ? [view] : [];
+        }),
+      } satisfies RuntimeToolListResult,
+      { status: 200 },
+    );
+  }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
+);
+
+export const homelabRuntimeToolsAddRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/runtime-tools",
+  Effect.gen(function* () {
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
+    const input = yield* HttpServerRequest.schemaBodyJson(RuntimeToolAddInput).pipe(
+      Effect.mapError(invalidRuntimeToolPayload),
+    );
+    const parsed = parseRuntimeToolSpec(input.spec);
+    if (!parsed.ok) {
+      return yield* new HomelabHttpError({ message: parsed.error, status: 400 });
+    }
+    const key = yield* resolveRuntimeToolsKey(caller, input);
+    const registry = yield* RuntimeRegistry;
+    const row: RuntimeToolRow = {
+      projectId: key.projectId,
+      runtimeId: key.runtimeId ?? null,
+      spec: parsed.tool.spec,
+      reason: input.reason.trim(),
+      addedByThreadId: caller.kind === "runtime" ? caller.threadId : null,
+      createdAt: new Date().toISOString(),
+    };
+    const created = yield* registry.upsertTool(row).pipe(Effect.mapError(runtimeToolsStoreError));
+    if (created) {
+      yield* markRuntimeToolsChanged(registry, key).pipe(Effect.mapError(runtimeToolsStoreError));
+    }
+    const tool = toRuntimeToolView(row);
+    if (tool === undefined) {
+      return yield* new HomelabHttpError({ message: "Invalid runtime tool spec.", status: 400 });
+    }
+    return HttpServerResponse.jsonUnsafe(
+      {
+        tool,
+        created,
+        installCommands: installCommandsForTool(parsed.tool).map((command) => [...command]),
+      } satisfies RuntimeToolAddResult,
+      { status: created ? 201 : 200 },
+    );
+  }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
+);
+
+export const homelabRuntimeToolsRemoveRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/runtime-tools/remove",
+  Effect.gen(function* () {
+    const caller = yield* authenticateHomelabOperate.pipe(
+      Effect.flatMap(resolveHomelabCallerScope),
+    );
+    const input = yield* HttpServerRequest.schemaBodyJson(RuntimeToolRemoveInput).pipe(
+      Effect.mapError(invalidRuntimeToolPayload),
+    );
+    const key = yield* resolveRuntimeToolsKey(caller, input);
+    const parsed = parseRuntimeToolSpec(input.spec);
+    // Stored specs are canonical; an unparseable one is matched verbatim.
+    const spec = parsed.ok ? parsed.tool.spec : input.spec.trim();
+    const registry = yield* RuntimeRegistry;
+    const removed = yield* registry
+      .deleteTool(key, spec)
+      .pipe(Effect.mapError(runtimeToolsStoreError));
+    if (removed) {
+      yield* markRuntimeToolsChanged(registry, key).pipe(Effect.mapError(runtimeToolsStoreError));
+    }
+    return HttpServerResponse.jsonUnsafe({ removed } satisfies RuntimeToolRemoveResult, {
+      status: 200,
+    });
+  }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
+);
+
 /**
  * Fork-owned composite of every homelab HTTP route. Keeping the `Layer.mergeAll`
  * here (rather than re-listing all routes in the upstream `server.ts`) shrinks
@@ -1515,6 +1728,9 @@ export const homelabRoutesLayer = Layer.mergeAll(
   homelabPromotionsRouteLayer,
   homelabRelationsRouteLayer,
   homelabRuntimeBootstrapRouteLayer,
+  homelabRuntimeToolsAddRouteLayer,
+  homelabRuntimeToolsListRouteLayer,
+  homelabRuntimeToolsRemoveRouteLayer,
   homelabSearchRouteLayer,
   homelabSecretRequestsRouteLayer,
   homelabSecretDeclineRouteLayer,

@@ -27,6 +27,7 @@ import {
   RuntimeBootstrapRegistry,
   type RuntimeBootstrapRegistryShape,
 } from "../../runtime/Services/RuntimeBootstrapRegistry.ts";
+import { RuntimeRegistry, type RuntimeRegistryShape } from "../../runtime/RuntimeRegistry.ts";
 import {
   ThreadRuntime,
   type ThreadExecutionContext,
@@ -53,6 +54,7 @@ export interface HomelabServerTestLayerOverrides {
   readonly projectRuntimeLifecycle?: Partial<ProjectRuntimeLifecycleShape>;
   readonly homelabSecretRegistry?: Partial<HomelabSecretRegistryShape>;
   readonly runtimeBootstrapRegistry?: Partial<RuntimeBootstrapRegistryShape>;
+  readonly runtimeRegistry?: Partial<RuntimeRegistryShape>;
   readonly knowledgeGraph?: Partial<KnowledgeGraphShape>;
   readonly projectMemory?: Partial<ProjectMemoryShape>;
   readonly homelabSkills?: Partial<HomelabSkillsShape>;
@@ -156,6 +158,7 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
       ...overrides.threadWorkspace,
     }),
     Layer.mock(ProjectRuntimeLifecycle)({ ...overrides.projectRuntimeLifecycle }),
+    Layer.mock(RuntimeRegistry)({ ...overrides.runtimeRegistry }),
     Layer.mock(HomelabSecretRegistry)({
       listSecrets: () => Effect.succeed([]),
       upsertSecret: (input) =>

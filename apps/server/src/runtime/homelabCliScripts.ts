@@ -119,6 +119,8 @@ export function renderHomelabCliScript(): string {
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 import time
 import urllib.error
@@ -773,6 +775,58 @@ def cmd_skill_promote(args):
     print_json(request_json("POST", "/api/homelab/skills/promote", payload=payload))
 
 
+def cmd_tools_list(_args):
+    result = request_json("GET", "/api/homelab/runtime-tools")
+    tools = result.get("tools", [])
+    if not tools:
+        print("No tools recorded for this runtime. Add one with: homelab tools add apt:<pkg> --reason ...")
+        return
+    for tool in tools:
+        reason = tool.get("reason") or ""
+        print(f"{tool.get('spec')}\t{reason}")
+
+
+def cmd_tools_add(args):
+    result = request_json(
+        "POST",
+        "/api/homelab/runtime-tools",
+        payload={"spec": args.spec, "reason": args.reason},
+    )
+    tool = result.get("tool", {})
+    spec = tool.get("spec", args.spec)
+    if not args.no_install:
+        env = dict(os.environ)
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        for command in result.get("installCommands", []):
+            print("+ " + " ".join(shlex.quote(part) for part in command), file=sys.stderr)
+            try:
+                code = subprocess.run(command, env=env).returncode
+            except OSError as error:
+                code = 127
+                print(str(error), file=sys.stderr)
+            if code != 0:
+                if result.get("created"):
+                    request_json("POST", "/api/homelab/runtime-tools/remove", payload={"spec": spec})
+                fail(f"Installing '{spec}' failed (exit {code}); it was not added to the tools list.")
+    print_json(tool)
+    print(
+        "Recorded in the tools list. It is baked into this runtime's image, so it comes back "
+        "after container rebuilds.",
+        file=sys.stderr,
+    )
+
+
+def cmd_tools_remove(args):
+    result = request_json("POST", "/api/homelab/runtime-tools/remove", payload={"spec": args.spec})
+    if not result.get("removed"):
+        fail(f"'{args.spec}' is not on this runtime's tools list.")
+    print(
+        f"Removed '{args.spec}' from the tools list. The running container keeps it until "
+        "the next rebuild.",
+        file=sys.stderr,
+    )
+
+
 def cmd_promote(args):
     if args.example:
         print_json(promotion_example_payload())
@@ -1110,6 +1164,32 @@ def build_parser():
     )
     skill_promote_parser.add_argument("--project-id", help="Project id when running outside a thread scope.")
     skill_promote_parser.set_defaults(func=cmd_skill_promote)
+
+    tools_parser = subparsers.add_parser(
+        "tools",
+        help="System packages that survive container rebuilds (apt, pip, npm, or a downloaded binary).",
+    )
+    tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
+    tools_list_parser = tools_subparsers.add_parser("list", help="List this runtime's recorded tools.")
+    tools_list_parser.set_defaults(func=cmd_tools_list)
+    tools_add_parser = tools_subparsers.add_parser(
+        "add",
+        help="Install a tool now and record it so every rebuilt container has it.",
+    )
+    tools_add_parser.add_argument(
+        "spec",
+        help="apt:<pkg>, pip:<pkg>, npm:<pkg>, or 'url:<https url> <absolute dest>' (quote url specs).",
+    )
+    tools_add_parser.add_argument("--reason", required=True, help="Why this runtime needs the tool.")
+    tools_add_parser.add_argument(
+        "--no-install", action="store_true", help="Record only; install on the next rebuild."
+    )
+    tools_add_parser.set_defaults(func=cmd_tools_add)
+    tools_remove_parser = tools_subparsers.add_parser(
+        "remove", help="Drop a tool from the list (the running container keeps it until a rebuild)."
+    )
+    tools_remove_parser.add_argument("spec", help="The spec as shown by 'homelab tools list'.")
+    tools_remove_parser.set_defaults(func=cmd_tools_remove)
 
     promote_parser = subparsers.add_parser(
         "promote",

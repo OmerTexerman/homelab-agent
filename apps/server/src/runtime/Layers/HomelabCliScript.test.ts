@@ -24,6 +24,7 @@ let serverUrl = "";
 let tempDir = "";
 let cliPath = "";
 let requests: RecordedCliRequest[] = [];
+let toolInstallCommands: ReadonlyArray<ReadonlyArray<string>> = [];
 
 function respondJson(response: NodeHttp.ServerResponse, payload: unknown): void {
   response.writeHead(200, { "Content-Type": "application/json" });
@@ -91,6 +92,21 @@ async function handleCliTestRequest(
       return;
     case "/api/homelab/curate/memory":
       respondJson(response, { entries: [] });
+      return;
+    case "/api/homelab/runtime-tools":
+      respondJson(
+        response,
+        request.method === "POST"
+          ? {
+              tool: { spec: (bodyJson as { spec: string }).spec, reason: "" },
+              created: true,
+              installCommands: toolInstallCommands,
+            }
+          : { tools: [{ spec: "apt:jq", reason: "json" }] },
+      );
+      return;
+    case "/api/homelab/runtime-tools/remove":
+      respondJson(response, { removed: true });
       return;
     case "/api/homelab/curate/memory/delete":
       respondJson(response, { removed: true });
@@ -283,5 +299,29 @@ describe("generated homelab CLI", () => {
       }),
     ).rejects.toThrow(/curator session: there is no project to propose or promote into/);
     expect(requests).toEqual([]);
+  });
+
+  it("records a tool, runs its install commands, and rolls back when the install fails", async () => {
+    toolInstallCommands = [["true"]];
+    await runHomelabCli(["tools", "add", "apt:jq", "--reason", "parse json"]);
+    expect(requests.map((entry) => [entry.method, entry.path])).toEqual([
+      ["POST", "/api/homelab/runtime-tools"],
+    ]);
+    expect(requests[0]?.bodyJson).toEqual({ spec: "apt:jq", reason: "parse json" });
+
+    requests = [];
+    toolInstallCommands = [["false"]];
+    await expect(
+      runHomelabCli(["tools", "add", "apt:not-a-package", "--reason", "x"]),
+    ).rejects.toThrow(/was not added to the tools list/);
+    expect(requests.map((entry) => [entry.method, entry.path])).toEqual([
+      ["POST", "/api/homelab/runtime-tools"],
+      ["POST", "/api/homelab/runtime-tools/remove"],
+    ]);
+
+    requests = [];
+    expect(await runHomelabCli(["tools", "list"])).toMatch(/apt:jq\tjson/);
+    await runHomelabCli(["tools", "remove", "apt:jq"]);
+    expect(requests.at(-1)?.bodyJson).toEqual({ spec: "apt:jq" });
   });
 });
