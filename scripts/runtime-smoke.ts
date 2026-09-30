@@ -148,10 +148,19 @@ interface SimpleHttpRequestInit {
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const serverBinPath = NodePath.resolve(repoRoot, "apps/server/src/bin.ts");
 const webCwd = NodePath.resolve(repoRoot, "apps/web");
-const playwrightModulePath = NodePath.resolve(
-  repoRoot,
-  "apps/web/node_modules/playwright/index.mjs",
-);
+// The full `playwright` package when the web browser tests installed it, else
+// the `playwright-core` that vitest's browser provider pulls in.
+const playwrightModulePath = ((): string => {
+  const full = NodePath.resolve(repoRoot, "apps/web/node_modules/playwright/index.mjs");
+  if (NodeFS.existsSync(full)) return full;
+  const pnpmDir = NodePath.resolve(repoRoot, "node_modules/.pnpm");
+  const core = NodeFS.existsSync(pnpmDir)
+    ? NodeFS.readdirSync(pnpmDir).find((name) => name.startsWith("playwright-core@"))
+    : undefined;
+  return core
+    ? NodePath.join(pnpmDir, core, "node_modules/playwright-core/index.mjs")
+    : full;
+})();
 const clientRuntimeWsRpcClientModule = `/@fs/${NodePath.resolve(
   repoRoot,
   "packages/client-runtime/src/wsRpcClient.ts",

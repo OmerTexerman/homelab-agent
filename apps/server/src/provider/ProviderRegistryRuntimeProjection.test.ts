@@ -91,3 +91,33 @@ it.effect("projects every registry snapshot list for Project Runtime readiness",
     );
   }).pipe(Effect.provide(projectedLayer)),
 );
+
+it.effect("never probes a logical homelab:// workspace on the host", () =>
+  Effect.gen(function* () {
+    let probedCwds: Array<string> = [];
+    const probing = withProviderRegistryRuntimeProjection(
+      Layer.succeed(ProviderRegistry, {
+        ...innerRegistry,
+        refreshWorkspaceSnapshot: (input) =>
+          Effect.sync(() => {
+            probedCwds = [...probedCwds, input.cwd];
+            return providers;
+          }),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const registry = yield* ProviderRegistry;
+      assertProjected(
+        yield* registry.refreshWorkspaceSnapshot({
+          instanceId: ProviderInstanceId.make("codex"),
+          cwd: "homelab://project/lab",
+        }),
+      );
+      yield* registry.refreshWorkspaceSnapshot({
+        instanceId: ProviderInstanceId.make("codex"),
+        cwd: "/workspace",
+      });
+    }).pipe(Effect.provide(probing));
+    assert.deepStrictEqual(probedCwds, ["/workspace"]);
+  }),
+);

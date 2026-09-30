@@ -16,6 +16,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { isLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
+
 import { ProviderRegistryLive } from "./Layers/ProviderRegistry.ts";
 import { projectProviderSnapshotForRuntime } from "./ProviderSelectionPolicy.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
@@ -31,8 +33,14 @@ export const projectProviderRegistryForRuntime = (
   refresh: (provider) => registry.refresh(provider).pipe(Effect.map(projectList)),
   refreshInstance: (instanceId) =>
     registry.refreshInstance(instanceId).pipe(Effect.map(projectList)),
+  // Logical homelab:// roots aren't host directories: the per-workspace probe
+  // (e.g. Codex skills via `codex app-server` in that cwd) would fail, and
+  // runtime skills are materialized into the container by HomelabSkillsView.
   refreshWorkspaceSnapshot: (input) =>
-    registry.refreshWorkspaceSnapshot(input).pipe(Effect.map(projectList)),
+    (isLogicalProjectWorkspaceRoot(input.cwd)
+      ? registry.getProviders
+      : registry.refreshWorkspaceSnapshot(input)
+    ).pipe(Effect.map(projectList)),
   getProviderMaintenanceCapabilitiesForInstance:
     registry.getProviderMaintenanceCapabilitiesForInstance,
   setProviderMaintenanceActionState: (input) =>
