@@ -1,4 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
+/**
+ * End-to-end smoke for logical projects and their runtimes, against a
+ * disposable T3CODE_HOME.
+ *
+ *   node scripts/runtime-smoke.ts [--with-runtime] [--no-browser] [--ui-checks]
+ *                                 [--headed] [--keep] [--artifacts-dir <dir>]
+ *
+ * The server is driven from Node over HTTP and the WS RPC group. The browser
+ * only pairs (and runs the optional `--ui-checks`). `--with-runtime` wakes real
+ * Docker containers and checks their shape, the in-runtime `homelab` CLI,
+ * sleep/wake persistence, and isolated seeding. Every process and container
+ * the smoke starts is removed on exit, pass or fail, unless `--keep`.
+ */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
@@ -7,11 +20,22 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeNet from "node:net";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  ProjectId,
+  RuntimeSessionId,
+  ThreadId,
+  WS_METHODS,
+  WsRpcGroup,
+  type ProjectRuntimeOperationResult,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import * as Socket from "effect/unstable/socket/Socket";
 
 interface SmokeOptions {
   readonly keep: boolean;
@@ -54,7 +78,10 @@ interface PageLike {
 }
 
 interface ChromiumLike {
-  launch(options: { readonly headless: boolean }): Promise<BrowserLike>;
+  launch(options: {
+    readonly headless: boolean;
+    readonly executablePath?: string;
+  }): Promise<BrowserLike>;
 }
 
 interface OrchestrationProjectSnapshot {
@@ -79,61 +106,6 @@ interface OrchestrationSnapshot {
   readonly threads: readonly OrchestrationThreadSnapshot[];
 }
 
-interface RuntimeSmokeRpcResult {
-  readonly sharedRuntimeId: string;
-  readonly sharedQueueRuntimeId: string;
-  readonly sharedQueuedCount: number;
-  readonly isolatedRuntimeId: string;
-  readonly isolatedQueueRuntimeId: string;
-  readonly isolatedQueuedCount: number;
-  readonly wake?: {
-    readonly lifecycleState: string;
-    readonly terminalStatus: string;
-    readonly homelabEntryNames: readonly string[];
-    readonly homelabCliMarkers: readonly string[];
-  };
-}
-
-interface RuntimeSmokeTerminalEvent {
-  readonly type: string;
-  readonly data?: string;
-  readonly message?: string;
-  readonly snapshot?: {
-    readonly history: string;
-  };
-}
-
-interface RuntimeSmokeTerminalClient {
-  readonly terminal: {
-    readonly open: (input: {
-      readonly threadId: string;
-      readonly terminalId: string;
-      readonly cwd: string;
-      readonly cols: number;
-      readonly rows: number;
-    }) => Promise<{ readonly status: string; readonly history: string }>;
-    readonly attach: (
-      input: {
-        readonly threadId: string;
-        readonly terminalId: string;
-        readonly cwd: string;
-        readonly restartIfNotRunning: boolean;
-      },
-      listener: (event: RuntimeSmokeTerminalEvent) => void,
-    ) => () => void;
-    readonly write: (input: {
-      readonly threadId: string;
-      readonly terminalId: string;
-      readonly data: string;
-    }) => Promise<unknown>;
-    readonly close: (input: {
-      readonly threadId: string;
-      readonly terminalId: string;
-      readonly deleteHistory: boolean;
-    }) => Promise<unknown>;
-  };
-}
-
 interface SimpleHttpResponse {
   readonly status: number;
   readonly ok: boolean;
@@ -146,6 +118,60 @@ interface SimpleHttpRequestInit {
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string;
 }
+
+interface CommandResult {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** The fields of `docker inspect` the smoke asserts on. */
+interface DockerContainerInspect {
+  readonly Id: string;
+  readonly Name: string;
+  readonly State: { readonly Running: boolean; readonly Status: string };
+  readonly Config: {
+    readonly WorkingDir: string;
+    readonly Labels: Readonly<Record<string, string>> | null;
+  };
+  readonly HostConfig: {
+    readonly Init: boolean | null;
+    readonly SecurityOpt: readonly string[] | null;
+    readonly PidsLimit: number | null;
+  };
+  readonly Mounts: ReadonlyArray<{ readonly Source: string; readonly Destination: string }>;
+}
+
+interface RuntimeRpcResult {
+  readonly sharedRuntimeId: string;
+  readonly isolatedRuntimeId: string;
+  readonly sharedQueuedCount: number;
+  readonly isolatedQueuedCount: number;
+  readonly docker?: DockerRuntimeResult;
+}
+
+interface DockerRuntimeResult {
+  readonly sharedContainerId: string;
+  readonly isolatedContainerId: string;
+  readonly homelabEntries: readonly string[];
+  readonly cliChecks: readonly string[];
+  readonly sleepWake: {
+    readonly stoppedState: string;
+    readonly sameContainerId: boolean;
+    readonly workspaceFileSurvived: boolean;
+    readonly usrLocalBinSurvived: boolean;
+  };
+  readonly isolatedSeededFromProject: boolean;
+}
+
+const RUNTIME_ID_LABEL = "homelab.runtime.id";
+const RUNTIME_GENERATION_LABEL = "homelab.runtime.generation";
+const RUNTIME_PROFILE_LABEL = "homelab.runtime.profile";
+/** Labels the one-shot cleanup container, which is the only container the smoke itself runs. */
+const SMOKE_CLEANUP_LABEL = "homelab.runtime-smoke.cleanup";
+const RUNTIME_IMAGE =
+  process.env.HOMELAB_AGENT_RUNTIME_IMAGE?.trim() || "homelab-agent-runtime:local";
+const SMOKE_SECRET_KEY = "RUNTIME_SMOKE_SECRET";
 
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const serverBinPath = NodePath.resolve(repoRoot, "apps/server/src/bin.ts");
@@ -161,10 +187,6 @@ const playwrightModulePath = ((): string => {
     : undefined;
   return core ? NodePath.join(pnpmDir, core, "node_modules/playwright-core/index.mjs") : full;
 })();
-const clientRuntimeWsRpcClientModule = `/@fs/${NodePath.resolve(
-  repoRoot,
-  "packages/client-runtime/src/wsRpcClient.ts",
-)}`;
 
 function parseOptions(argv: readonly string[]): SmokeOptions {
   let artifactsDir: string | null = null;
@@ -262,6 +284,9 @@ function startManagedProcess(input: {
     cwd: input.cwd,
     env: input.env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Its own process group, so stopping it also stops what it spawned
+    // (`pnpm run dev` forks vite, which would otherwise outlive pnpm).
+    detached: true,
   });
   const managed: ManagedProcess = {
     name: input.name,
@@ -318,28 +343,79 @@ async function waitForHttp(input: {
   );
 }
 
-async function stopManagedProcess(processToStop: ManagedProcess): Promise<void> {
-  if (processToStop.exited) {
-    return;
-  }
-  processToStop.child.kill("SIGTERM");
-  const stopped = await Promise.race([
-    new Promise<boolean>((resolveStop) => {
-      processToStop.child.once("exit", () => resolveStop(true));
-    }),
-    delay(5_000).then(() => false),
-  ]);
-  if (!stopped && !processToStop.exited) {
-    processToStop.child.kill("SIGKILL");
+/** Signals the process group of a child this script spawned (never a pattern match). */
+function signalProcessGroup(processToStop: ManagedProcess, signal: NodeJS.Signals): void {
+  const pid = processToStop.child.pid;
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // The group is already gone.
   }
 }
 
-function extractStartupPairingToken(output: string): string {
-  const token = /^Token:\s*(\S+)\s*$/mu.exec(output)?.[1];
-  if (!token) {
-    throw new Error("Could not find the startup owner pairing token in server output.");
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
   }
-  return token;
+}
+
+/** Stops a spawned process and everything in its process group, by its captured pid. */
+async function stopManagedProcess(processToStop: ManagedProcess): Promise<void> {
+  const pid = processToStop.child.pid;
+  if (pid === undefined || !processGroupAlive(pid)) {
+    return;
+  }
+  signalProcessGroup(processToStop, "SIGTERM");
+  const deadline = Date.now() + 10_000;
+  while (processGroupAlive(pid) && Date.now() < deadline) {
+    await delay(100);
+  }
+  if (processGroupAlive(pid)) {
+    log(`${processToStop.name} (pgid ${pid}) ignored SIGTERM; sending SIGKILL`);
+    signalProcessGroup(processToStop, "SIGKILL");
+  }
+  // Drop our ends of its pipes so they cannot keep this script alive.
+  processToStop.child.stdout?.destroy();
+  processToStop.child.stderr?.destroy();
+}
+
+function runCommand(
+  command: string,
+  args: readonly string[],
+  options: { readonly cwd?: string; readonly timeoutMs?: number } = {},
+): CommandResult {
+  const result = NodeChildProcess.spawnSync(command, args, {
+    cwd: options.cwd,
+    encoding: "utf8",
+    timeout: options.timeoutMs ?? 60_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return {
+    code: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? (result.error ? String(result.error) : ""),
+  };
+}
+
+function docker(args: readonly string[], timeoutMs = 60_000): CommandResult {
+  return runCommand("docker", args, { timeoutMs });
+}
+
+/** The startup owner pairing token, which the server prints once it is ready. */
+async function waitForStartupPairingToken(server: ManagedProcess): Promise<string> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 30_000 && !server.exited) {
+    const token = /^Token:\s*(\S+)\s*$/mu.exec(server.output)?.[1];
+    if (token) {
+      return token;
+    }
+    await delay(100);
+  }
+  throw new Error("Could not find the startup owner pairing token in server output.");
 }
 
 async function apiJson<T>(input: {
@@ -410,7 +486,7 @@ async function createBrowserPairingLink(input: {
   readonly serverBaseUrl: string;
   readonly webBaseUrl: string;
   readonly bearerToken: string;
-}): Promise<{ readonly credential: string; readonly pairUrl: string }> {
+}): Promise<string> {
   const result = await apiJson<{ readonly credential: string }>({
     serverBaseUrl: input.serverBaseUrl,
     bearerToken: input.bearerToken,
@@ -422,19 +498,15 @@ async function createBrowserPairingLink(input: {
   });
   const pairUrl = new URL("/pair", input.webBaseUrl);
   pairUrl.hash = new URLSearchParams([["token", result.credential]]).toString();
-  return { credential: result.credential, pairUrl: pairUrl.toString() };
+  return pairUrl.toString();
 }
 
 async function dispatchCommand(input: {
   readonly serverBaseUrl: string;
   readonly bearerToken: string;
-  readonly command: unknown;
+  readonly command: { readonly type: string } & Record<string, unknown>;
 }): Promise<void> {
-  const commandType =
-    typeof input.command === "object" && input.command !== null && "type" in input.command
-      ? String(input.command.type)
-      : "unknown";
-  log(`Dispatching ${commandType}`);
+  log(`Dispatching ${input.command.type}`);
   await apiJson({
     serverBaseUrl: input.serverBaseUrl,
     bearerToken: input.bearerToken,
@@ -442,30 +514,6 @@ async function dispatchCommand(input: {
     method: "POST",
     body: input.command,
   });
-  log(`Dispatched ${commandType}`);
-}
-
-async function createProjectMemory(input: {
-  readonly serverBaseUrl: string;
-  readonly bearerToken: string;
-  readonly projectId: string;
-  readonly summary: string;
-  readonly body: string;
-}): Promise<string> {
-  const entry = await apiJson<{ readonly id: string }>({
-    serverBaseUrl: input.serverBaseUrl,
-    bearerToken: input.bearerToken,
-    path: "/api/homelab/project-memory",
-    method: "POST",
-    body: {
-      projectId: input.projectId,
-      summary: input.summary,
-      body: input.body,
-      tags: ["smoke"],
-    },
-  });
-  log(`Created project memory ${entry.id}`);
-  return entry.id;
 }
 
 async function getSnapshot(
@@ -525,7 +573,446 @@ function assertEqual(actual: unknown, expected: unknown, message: string): void 
   }
 }
 
-async function loadChromium(): Promise<ChromiumLike> {
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WS RPC client (the same RpcClient + WsRpcGroup setup the server tests use)
+// ---------------------------------------------------------------------------
+
+const makeWsRpcClient = RpcClient.make(WsRpcGroup);
+type WsRpcClient = Effect.Success<typeof makeWsRpcClient>;
+
+/** Runs RPC calls from Node while `f` is pending; the socket closes when it settles. */
+async function withWsRpcClient<A>(
+  wsUrl: string,
+  f: (call: <B, E>(effect: Effect.Effect<B, E>) => Promise<B>, client: WsRpcClient) => Promise<A>,
+): Promise<A> {
+  const protocolLayer = RpcClient.layerProtocolSocket({ retryTransientErrors: false }).pipe(
+    Layer.provide(
+      Socket.layerWebSocket(wsUrl).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
+    ),
+    Layer.provide(RpcSerialization.layerJson),
+  );
+  const call = <B, E>(effect: Effect.Effect<B, E>) => Effect.runPromise(effect);
+  return Effect.runPromise(
+    makeWsRpcClient.pipe(
+      Effect.flatMap((client) => Effect.promise(() => f(call, client))),
+      Effect.provide(protocolLayer),
+      Effect.scoped,
+    ),
+  );
+}
+
+async function issueWebSocketUrl(serverBaseUrl: string, bearerToken: string): Promise<string> {
+  const { ticket } = await apiJson<{ readonly ticket: string }>({
+    serverBaseUrl,
+    bearerToken,
+    path: "/api/auth/websocket-ticket",
+    method: "POST",
+  });
+  const url = new URL("/ws", serverBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("wsTicket", ticket);
+  return url.toString();
+}
+
+// ---------------------------------------------------------------------------
+// Docker helpers (read-only against containers the smoke's server created)
+// ---------------------------------------------------------------------------
+
+function inspectContainer(containerId: string): DockerContainerInspect {
+  const result = docker(["container", "inspect", containerId]);
+  if (result.code !== 0) {
+    throw new Error(`docker inspect ${containerId} failed: ${result.stderr.trim()}`);
+  }
+  const [inspected] = JSON.parse(result.stdout) as DockerContainerInspect[];
+  if (!inspected) {
+    throw new Error(`docker inspect ${containerId} returned nothing.`);
+  }
+  return inspected;
+}
+
+function assertRuntimeContainerShape(inspected: DockerContainerInspect, runtimeId: string): void {
+  const where = `container ${inspected.Name} (${runtimeId})`;
+  const labels = inspected.Config.Labels ?? {};
+  assertEqual(inspected.Config.WorkingDir, "/workspace", `${where} working dir`);
+  assertEqual(labels[RUNTIME_ID_LABEL], runtimeId, `${where} ${RUNTIME_ID_LABEL} label`);
+  assert(
+    /^\d+$/u.test(labels[RUNTIME_GENERATION_LABEL] ?? ""),
+    `${where} is missing a numeric ${RUNTIME_GENERATION_LABEL} label: ${JSON.stringify(labels)}`,
+  );
+  assert(
+    (labels[RUNTIME_PROFILE_LABEL] ?? "").length > 0,
+    `${where} is missing the ${RUNTIME_PROFILE_LABEL} label: ${JSON.stringify(labels)}`,
+  );
+  assertEqual(inspected.HostConfig.Init, true, `${where} runs without --init`);
+  assert(
+    (inspected.HostConfig.SecurityOpt ?? []).includes("no-new-privileges"),
+    `${where} is missing no-new-privileges: ${JSON.stringify(inspected.HostConfig.SecurityOpt)}`,
+  );
+  assert(
+    (inspected.HostConfig.PidsLimit ?? 0) > 0,
+    `${where} has no pids limit: ${JSON.stringify(inspected.HostConfig.PidsLimit)}`,
+  );
+  const dockerSocketMounts = inspected.Mounts.filter(
+    (mount) => mount.Source.includes("docker.sock") || mount.Destination.includes("docker.sock"),
+  );
+  assert(
+    dockerSocketMounts.length === 0,
+    `${where} mounts the Docker socket: ${JSON.stringify(dockerSocketMounts)}`,
+  );
+  assert(
+    inspected.Mounts.some((mount) => mount.Destination === "/workspace"),
+    `${where} has no /workspace mount: ${JSON.stringify(inspected.Mounts)}`,
+  );
+}
+
+/** Ids of every container stamped with one of the smoke's runtime ids. */
+function listSmokeContainers(runtimeIds: readonly string[]): string[] {
+  const ids = new Set<string>();
+  for (const runtimeId of runtimeIds) {
+    const result = docker(["ps", "-aq", "--filter", `label=${RUNTIME_ID_LABEL}=${runtimeId}`]);
+    for (const id of result.stdout.split(/\s+/u)) {
+      if (id.length > 0) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+function encodePathSegment(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+/**
+ * The per-thread `runtime-shell` wrapper the server writes for a thread's
+ * binding (`<runtime root>/threads/<thread>/bin/runtime-shell`). Providers run
+ * through these wrappers, so they carry the thread's cwd, identity env, and
+ * its own runtime token.
+ */
+function findThreadShellWrapper(baseDir: string, threadId: string): string {
+  const suffix = NodePath.join("threads", encodePathSegment(threadId), "bin", "runtime-shell");
+  const stack = [baseDir];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries: NodeFS.Dirent[];
+    try {
+      entries = NodeFS.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = NodePath.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Runtime workspaces and homes hold container content, not wrappers.
+        if (entry.name !== "workspace" && entry.name !== "home" && entry.name !== "provider-clis") {
+          stack.push(full);
+        }
+      } else if (full.endsWith(suffix)) {
+        return full;
+      }
+    }
+  }
+  throw new Error(`No per-thread runtime-shell wrapper for ${threadId} under ${baseDir}.`);
+}
+
+function runInRuntime(wrapperPath: string, script: string): CommandResult {
+  return runCommand(wrapperPath, ["-lc", script], {
+    cwd: NodePath.dirname(wrapperPath),
+    timeoutMs: 90_000,
+  });
+}
+
+function expectRuntimeCommand(
+  wrapperPath: string,
+  label: string,
+  script: string,
+  check?: (stdout: string) => boolean,
+): string {
+  const result = runInRuntime(wrapperPath, script);
+  if (result.code !== 0 || (check && !check(result.stdout))) {
+    throw new Error(
+      `Runtime check "${label}" failed (exit ${result.code}).\n$ ${script}\nstdout:\n${result.stdout.slice(
+        -2_000,
+      )}\nstderr:\n${result.stderr.slice(-2_000)}`,
+    );
+  }
+  log(`Runtime check ok: ${label}`);
+  return result.stdout;
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime checks
+// ---------------------------------------------------------------------------
+
+async function verifyRuntimes(input: {
+  readonly serverBaseUrl: string;
+  readonly bearerToken: string;
+  readonly baseDir: string;
+  readonly projectId: string;
+  readonly projectMemoryId: string;
+  readonly sharedThreadId: string;
+  readonly sharedRuntimeId: string;
+  readonly isolatedThreadId: string;
+  readonly isolatedRuntimeId: string;
+  readonly withRuntime: boolean;
+}): Promise<RuntimeRpcResult> {
+  const projectId = ProjectId.make(input.projectId);
+  const shared = {
+    projectId,
+    threadId: ThreadId.make(input.sharedThreadId),
+    runtimeId: RuntimeSessionId.make(input.sharedRuntimeId),
+  };
+  const isolated = {
+    projectId,
+    threadId: ThreadId.make(input.isolatedThreadId),
+    runtimeId: RuntimeSessionId.make(input.isolatedRuntimeId),
+  };
+  const secretValue = `smoke-secret-${Date.now().toString(36)}`;
+
+  if (input.withRuntime) {
+    // Scoped to the project, so its runtimes receive it at materialization.
+    await apiJson({
+      serverBaseUrl: input.serverBaseUrl,
+      bearerToken: input.bearerToken,
+      path: "/api/homelab/secrets",
+      method: "POST",
+      body: { key: SMOKE_SECRET_KEY, value: secretValue, projectIds: [input.projectId] },
+    });
+    log(`Created project secret ${SMOKE_SECRET_KEY}`);
+  }
+
+  const wsUrl = await issueWebSocketUrl(input.serverBaseUrl, input.bearerToken);
+  return withWsRpcClient(wsUrl, async (call, client) => {
+    const getRuntime = (operand: typeof shared) =>
+      call(client[WS_METHODS.projectRuntimeGet](operand));
+    const sharedDetail = await getRuntime(shared);
+    const isolatedDetail = await getRuntime(isolated);
+    assertEqual(sharedDetail.runtime.runtime.id, input.sharedRuntimeId, "Project Runtime RPC id");
+    assertEqual(
+      sharedDetail.runtime.queue.runtimeId,
+      input.sharedRuntimeId,
+      "Project Runtime queue id",
+    );
+    assertEqual(
+      isolatedDetail.runtime.runtime.id,
+      input.isolatedRuntimeId,
+      "Isolated runtime RPC id",
+    );
+    assertEqual(
+      isolatedDetail.runtime.queue.runtimeId,
+      input.isolatedRuntimeId,
+      "Isolated runtime queue id",
+    );
+    assertEqual(sharedDetail.runtime.queue.queued.length, 0, "Project Runtime queue count");
+    assertEqual(isolatedDetail.runtime.queue.queued.length, 0, "Isolated runtime queue count");
+    log("Runtime RPC read models ok");
+
+    const result: RuntimeRpcResult = {
+      sharedRuntimeId: sharedDetail.runtime.runtime.id,
+      isolatedRuntimeId: isolatedDetail.runtime.runtime.id,
+      sharedQueuedCount: sharedDetail.runtime.queue.queued.length,
+      isolatedQueuedCount: isolatedDetail.runtime.queue.queued.length,
+    };
+    if (!input.withRuntime) {
+      return result;
+    }
+
+    const requireRunningContainer = (
+      detail: ProjectRuntimeOperationResult,
+      runtimeId: string,
+    ): string => {
+      const status = detail.runtime.runtime;
+      assertEqual(status.lifecycleState, "running", `${runtimeId} lifecycle state after wake`);
+      assert(status.containerId, `${runtimeId} has no container id after wake`);
+      return status.containerId;
+    };
+
+    // Wake the shared Project Runtime: a real container with the hardened shape.
+    log("Waking the Project Runtime");
+    const woken = await call(client[WS_METHODS.projectRuntimeWake](shared));
+    const sharedContainerId = requireRunningContainer(woken, input.sharedRuntimeId);
+    const sharedInspect = inspectContainer(sharedContainerId);
+    assert(sharedInspect.State.Running, `${sharedInspect.Name} is not running after wake`);
+    assertRuntimeContainerShape(sharedInspect, input.sharedRuntimeId);
+    log(`Project Runtime container ${sharedInspect.Name} has the expected shape`);
+
+    // Generated `.homelab` view, including the seeded project memory.
+    const entries = await call(
+      client[WS_METHODS.threadWorkspaceListEntries]({
+        threadId: shared.threadId,
+        runtimeId: shared.runtimeId,
+        query: "",
+        limit: 100,
+        basePath: ".homelab",
+      }),
+    );
+    const homelabEntries = entries.entries.map((entry) => entry.name);
+    const missingEntries = ["README.md", "memory", "threads", "index", "tools"].filter(
+      (name) => !homelabEntries.includes(name),
+    );
+    assert(
+      missingEntries.length === 0,
+      `.homelab is missing ${missingEntries.join(", ")}. Entries: ${JSON.stringify(homelabEntries)}`,
+    );
+    const memoryIndex = await call(
+      client[WS_METHODS.threadWorkspaceReadFile]({
+        threadId: shared.threadId,
+        runtimeId: shared.runtimeId,
+        path: ".homelab/memory/index.jsonl",
+      }),
+    );
+    assert(
+      memoryIndex.contents?.includes(input.projectMemoryId),
+      `.homelab/memory/index.jsonl does not list ${input.projectMemoryId}: ${memoryIndex.contents}`,
+    );
+    log(".homelab view ok");
+
+    // The in-runtime `homelab` CLI, run the way a provider runs it.
+    const sharedWrapper = findThreadShellWrapper(input.baseDir, input.sharedThreadId);
+    const cliChecks: string[] = [];
+    const cli = (label: string, script: string, check?: (stdout: string) => boolean) => {
+      const stdout = expectRuntimeCommand(sharedWrapper, label, script, check);
+      cliChecks.push(label);
+      return stdout;
+    };
+    cli(
+      "thread identity",
+      'printf "%s|%s|%s" "$HOMELAB_AGENT_THREAD_ID" "$PWD" "${HOMELAB_AGENT_RUNTIME_TOKEN:+token}"',
+      (stdout) => stdout === `${input.sharedThreadId}|/workspace|token`,
+    );
+    cli("homelab snapshot", "homelab snapshot", isJson);
+    cli("homelab memory list", "homelab memory list", (stdout) => stdout.includes("nas01"));
+    cli("homelab memory search", "homelab memory search nas01", (stdout) =>
+      stdout.includes("nas01"),
+    );
+    cli(
+      "homelab secret get",
+      `homelab secret get ${SMOKE_SECRET_KEY}`,
+      (stdout) => stdout === secretValue,
+    );
+    cli("homelab tools list", "homelab tools list", (stdout) =>
+      stdout.includes("No tools recorded"),
+    );
+
+    // Sleep then wake keeps the container, its /workspace, and its writable layer.
+    const persistToken = `persist-${Date.now().toString(36)}`;
+    cli(
+      "write persistence probes",
+      [
+        `printf %s ${persistToken} > /workspace/runtime-smoke-persist.txt`,
+        `printf '#!/bin/sh\\necho ${persistToken}\\n' > /usr/local/bin/runtime-smoke-persist`,
+        "chmod +x /usr/local/bin/runtime-smoke-persist",
+      ].join(" && "),
+    );
+    log("Sleeping the Project Runtime");
+    const slept = await call(client[WS_METHODS.projectRuntimeSleep](shared));
+    assertEqual(slept.runtime.runtime.lifecycleState, "stopped", "Lifecycle state after sleep");
+    const sleptInspect = inspectContainer(sharedContainerId);
+    assert(!sleptInspect.State.Running, `${sleptInspect.Name} is still running after sleep`);
+    log("Waking the Project Runtime again");
+    const rewoken = await call(client[WS_METHODS.projectRuntimeWake](shared));
+    const rewokenContainerId = requireRunningContainer(rewoken, input.sharedRuntimeId);
+    assertEqual(rewokenContainerId, sharedContainerId, "Container id after sleep and wake");
+    assertEqual(
+      inspectContainer(sharedContainerId).Id,
+      sharedInspect.Id,
+      "Docker container id after sleep and wake",
+    );
+    cli(
+      "/workspace file survives sleep",
+      "cat /workspace/runtime-smoke-persist.txt",
+      (stdout) => stdout === persistToken,
+    );
+    cli(
+      "/usr/local/bin file survives sleep",
+      "runtime-smoke-persist",
+      (stdout) => stdout.trim() === persistToken,
+    );
+
+    // The isolated thread gets its own container, seeded from the Project Runtime.
+    log("Waking the isolated runtime");
+    const isolatedWoken = await call(client[WS_METHODS.projectRuntimeWake](isolated));
+    const isolatedContainerId = requireRunningContainer(isolatedWoken, input.isolatedRuntimeId);
+    assert(
+      isolatedContainerId !== sharedContainerId,
+      "The isolated thread reused the Project Runtime container",
+    );
+    assertEqual(
+      isolatedWoken.runtime.runtime.parentRuntimeId,
+      input.sharedRuntimeId,
+      "Isolated runtime parent",
+    );
+    assertRuntimeContainerShape(inspectContainer(isolatedContainerId), input.isolatedRuntimeId);
+    const isolatedWrapper = findThreadShellWrapper(input.baseDir, input.isolatedThreadId);
+    expectRuntimeCommand(
+      isolatedWrapper,
+      "isolated thread identity",
+      'printf %s "$HOMELAB_AGENT_THREAD_ID"',
+      (stdout) => stdout === input.isolatedThreadId,
+    );
+    expectRuntimeCommand(
+      isolatedWrapper,
+      "isolated runtime seeded from the Project Runtime",
+      "cat /workspace/runtime-smoke-persist.txt",
+      (stdout) => stdout === persistToken,
+    );
+
+    return {
+      ...result,
+      docker: {
+        sharedContainerId,
+        isolatedContainerId,
+        homelabEntries,
+        cliChecks,
+        sleepWake: {
+          stoppedState: sleptInspect.State.Status,
+          sameContainerId: true,
+          workspaceFileSurvived: true,
+          usrLocalBinSurvived: true,
+        },
+        isolatedSeededFromProject: true,
+      },
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Browser (pairing plus optional UI checks)
+// ---------------------------------------------------------------------------
+
+/** Newest installed Playwright browser build, for when the bundled revision is absent. */
+function findInstalledChromium(headless: boolean): string | undefined {
+  const root =
+    process.env.PLAYWRIGHT_BROWSERS_PATH?.trim() ||
+    NodePath.join(NodeOS.homedir(), ".cache", "ms-playwright");
+  const [prefix, relativeBinary] = headless
+    ? ["chromium_headless_shell-", "chrome-headless-shell-linux64/chrome-headless-shell"]
+    : ["chromium-", "chrome-linux64/chrome"];
+  const candidates = NodeFS.existsSync(root)
+    ? NodeFS.readdirSync(root)
+        .filter((name) => name.startsWith(prefix) && /^\d+$/u.test(name.slice(prefix.length)))
+        .toSorted(
+          (left, right) => Number(right.slice(prefix.length)) - Number(left.slice(prefix.length)),
+        )
+        .map((name) => NodePath.join(root, name, relativeBinary))
+    : [];
+  return candidates.find((candidate) => NodeFS.existsSync(candidate));
+}
+
+async function launchChromium(headless: boolean): Promise<BrowserLike> {
   if (!NodeFS.existsSync(playwrightModulePath)) {
     throw new Error(
       `Playwright is not installed at ${playwrightModulePath}. Run the web browser test install first.`,
@@ -537,338 +1024,234 @@ async function loadChromium(): Promise<ChromiumLike> {
   if (!module.chromium) {
     throw new Error("Playwright chromium export was not available.");
   }
-  return module.chromium;
-}
-
-async function verifyRuntimeRpc(input: {
-  readonly page: PageLike;
-  readonly wsUrl: string;
-  readonly projectId: string;
-  readonly sharedThreadId: string;
-  readonly sharedRuntimeId: string;
-  readonly isolatedThreadId: string;
-  readonly isolatedRuntimeId: string;
-  readonly wsRpcClientModule: string;
-  readonly withRuntime: boolean;
-}): Promise<RuntimeSmokeRpcResult> {
-  const { page, ...rpcInput } = input;
-  return page.evaluate(async (args) => {
-    const wsTransportModule = "/src/rpc/wsTransport.ts";
-    const [{ WsTransport }, { createWsRpcClient }] = await Promise.all([
-      import(wsTransportModule),
-      import(args.wsRpcClientModule),
-    ]);
-    const client = createWsRpcClient(new WsTransport(args.wsUrl));
-    try {
-      const shared = await client.projectRuntime.get({
-        projectId: args.projectId,
-        threadId: args.sharedThreadId,
-        runtimeId: args.sharedRuntimeId,
-      });
-      const isolated = await client.projectRuntime.get({
-        projectId: args.projectId,
-        threadId: args.isolatedThreadId,
-        runtimeId: args.isolatedRuntimeId,
-      });
-      let result: RuntimeSmokeRpcResult = {
-        sharedRuntimeId: shared.runtime.runtime.id,
-        sharedQueueRuntimeId: shared.runtime.queue.runtimeId,
-        sharedQueuedCount: shared.runtime.queue.queued.length,
-        isolatedRuntimeId: isolated.runtime.runtime.id,
-        isolatedQueueRuntimeId: isolated.runtime.queue.runtimeId,
-        isolatedQueuedCount: isolated.runtime.queue.queued.length,
-      };
-
-      if (args.withRuntime) {
-        const wait = (ms: number) =>
-          new Promise<void>((resolveWait) => {
-            globalThis.setTimeout(resolveWait, ms);
-          });
-        const runRuntimeCliProbe = async (
-          runtimeClient: RuntimeSmokeTerminalClient,
-        ): Promise<{
-          readonly terminalStatus: string;
-          readonly markers: readonly string[];
-        }> => {
-          const terminalId = "runtime-smoke-cli";
-          const cwd = `homelab://project/${args.projectId}`;
-          const expectedMarkers = [
-            "HOMELAB_SMOKE_SNAPSHOT_OK",
-            "HOMELAB_SMOKE_MEMORY_LIST_OK",
-            "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
-            "HOMELAB_SMOKE_MEMORY_CONTENT_OK",
-            "HOMELAB_SMOKE_SECRETS_OK",
-            "HOMELAB_SMOKE_BOOTSTRAP_OK",
-            "HOMELAB_SMOKE_DONE",
-          ];
-          let output = "";
-          const appendEvent = (event: RuntimeSmokeTerminalEvent) => {
-            if (event.type === "snapshot" && typeof event.snapshot?.history === "string") {
-              output += event.snapshot.history;
-            }
-            if (event.type === "output" && typeof event.data === "string") {
-              output += event.data;
-            }
-            if (event.type === "error" && typeof event.message === "string") {
-              output += event.message;
-            }
-          };
-          const terminal = await runtimeClient.terminal.open({
-            threadId: args.sharedThreadId,
-            terminalId,
-            cwd,
-            cols: 100,
-            rows: 30,
-          });
-          output += terminal.history;
-          const unsubscribe = runtimeClient.terminal.attach(
-            {
-              threadId: args.sharedThreadId,
-              terminalId,
-              cwd,
-              restartIfNotRunning: true,
-            },
-            appendEvent,
-          );
-          try {
-            await runtimeClient.terminal.write({
-              threadId: args.sharedThreadId,
-              terminalId,
-              data: [
-                "homelab snapshot >/tmp/homelab-smoke-snapshot.json && echo HOMELAB_SMOKE_SNAPSHOT_OK || echo HOMELAB_SMOKE_SNAPSHOT_FAIL:$?",
-                "homelab memory list >/tmp/homelab-smoke-memory-list.json && echo HOMELAB_SMOKE_MEMORY_LIST_OK || echo HOMELAB_SMOKE_MEMORY_LIST_FAIL:$?",
-                "homelab memory search smoke >/tmp/homelab-smoke-memory-search.json && echo HOMELAB_SMOKE_MEMORY_SEARCH_OK || echo HOMELAB_SMOKE_MEMORY_SEARCH_FAIL:$?",
-                "grep -q nas01 /tmp/homelab-smoke-memory-list.json && echo HOMELAB_SMOKE_MEMORY_CONTENT_OK || echo HOMELAB_SMOKE_MEMORY_CONTENT_FAIL",
-                "homelab secrets >/tmp/homelab-smoke-secrets.json && echo HOMELAB_SMOKE_SECRETS_OK || echo HOMELAB_SMOKE_SECRETS_FAIL:$?",
-                "homelab bootstrap >/tmp/homelab-smoke-bootstrap.json && echo HOMELAB_SMOKE_BOOTSTRAP_OK || echo HOMELAB_SMOKE_BOOTSTRAP_FAIL:$?",
-                "echo HOMELAB_SMOKE_DONE",
-                "",
-              ].join("\n"),
-            });
-
-            const startedAt = Date.now();
-            while (Date.now() - startedAt < 45_000 && !output.includes("HOMELAB_SMOKE_DONE")) {
-              await wait(250);
-            }
-            const missingMarkers = expectedMarkers.filter((marker) => !output.includes(marker));
-            if (missingMarkers.length > 0) {
-              throw new Error(
-                `Runtime homelab CLI probe missed markers ${missingMarkers.join(", ")}. Output tail:\n${output.slice(
-                  -4_000,
-                )}`,
-              );
-            }
-            return {
-              terminalStatus: terminal.status,
-              markers: expectedMarkers,
-            };
-          } finally {
-            unsubscribe();
-            await runtimeClient.terminal.close({
-              threadId: args.sharedThreadId,
-              terminalId,
-              deleteHistory: true,
-            });
-          }
-        };
-        const woken = await client.projectRuntime.wake({
-          projectId: args.projectId,
-          threadId: args.sharedThreadId,
-          runtimeId: args.sharedRuntimeId,
-        });
-        const entries = await client.threadWorkspace.listEntries({
-          threadId: args.sharedThreadId,
-          runtimeId: args.sharedRuntimeId,
-          query: "",
-          limit: 100,
-          basePath: ".homelab",
-        });
-        const cliProbe = await runRuntimeCliProbe(client);
-        result = {
-          ...result,
-          wake: {
-            lifecycleState: woken.runtime.runtime.lifecycleState,
-            terminalStatus: cliProbe.terminalStatus,
-            homelabEntryNames: entries.entries.map(
-              (entry: { readonly name: string }) => entry.name,
-            ),
-            homelabCliMarkers: cliProbe.markers,
-          },
-        };
-      }
-
-      return result;
-    } finally {
-      client.dispose();
+  try {
+    return await module.chromium.launch({ headless });
+  } catch (error) {
+    const fallback = findInstalledChromium(headless);
+    if (!fallback || !String(error).includes("Executable doesn't exist")) {
+      throw error;
     }
-  }, rpcInput);
+    log(`Playwright's bundled Chromium is not installed; using ${fallback}`);
+    return await module.chromium.launch({ headless, executablePath: fallback });
+  }
 }
 
 async function runBrowserSmoke(input: {
   readonly options: SmokeOptions;
   readonly pairUrl: string;
   readonly webBaseUrl: string;
-  readonly wsUrl: string;
-  readonly projectId: string;
-  readonly sharedThreadId: string;
-  readonly sharedRuntimeId: string;
-  readonly isolatedThreadId: string;
-  readonly isolatedRuntimeId: string;
-}): Promise<RuntimeSmokeRpcResult | null> {
-  if (input.options.noBrowser) {
-    log("Skipping browser pairing because --no-browser was passed.");
-    return null;
-  }
-
-  const chromium = await loadChromium();
-  const browser = await chromium.launch({ headless: !input.options.headed });
+}): Promise<void> {
+  const browser = await launchChromium(!input.options.headed);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   try {
     const page = await context.newPage();
     await page.goto(input.pairUrl, { waitUntil: "domcontentloaded" });
     // Pairing redirects away from /pair once the bearer session is stored.
     await page.waitForURL((url) => !url.pathname.startsWith("/pair"), { timeout: 30_000 });
+    log("Browser paired");
 
     // Legacy UI assertions (home overview landing, old sidebar test ids) predate
-    // the 2026-09 upstream UI; kept behind --ui-checks until rewritten. The
-    // runtime RPC and Docker checks below are the point of this smoke.
-    if (input.options.uiChecks) {
-      await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
-      await page.waitForSelector('[data-testid="new-thread-button"]', { timeout: 30_000 });
+    // the 2026-09 upstream UI; kept behind --ui-checks until rewritten.
+    if (!input.options.uiChecks) {
+      return;
+    }
+    await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
+    await page.waitForSelector('[data-testid="new-thread-button"]', { timeout: 30_000 });
 
-      const newThreadLabels = await page.evaluate(() => {
-        const browserGlobal = globalThis as unknown as {
-          readonly document: {
-            querySelectorAll(selector: string): ArrayLike<{
-              getAttribute(name: string): string | null;
-            }>;
-          };
+    const newThreadLabels = await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        readonly document: {
+          querySelectorAll(selector: string): ArrayLike<{
+            getAttribute(name: string): string | null;
+          }>;
         };
-        return Array.from(
-          browserGlobal.document.querySelectorAll('[data-testid="new-thread-button"]'),
-        ).map((element) => element.getAttribute("aria-label") ?? "");
-      }, undefined);
-      if (!newThreadLabels.some((label) => label.includes("New thread in Project Runtime"))) {
-        throw new Error(
-          "Sidebar is missing the shared Project Runtime thread creation affordance.",
-        );
-      }
-
-      if (input.options.artifactsDir) {
-        NodeFS.mkdirSync(input.options.artifactsDir, { recursive: true });
-        await page.screenshot({
-          path: NodePath.resolve(input.options.artifactsDir, "home-desktop.png"),
-          fullPage: true,
-        });
-      }
-
-      await page.evaluate(() => {
-        const browserGlobal = globalThis as unknown as {
-          dispatchEvent(event: Event): boolean;
-          KeyboardEvent: new (
-            type: string,
-            init: {
-              readonly key?: string;
-              readonly code?: string;
-              readonly ctrlKey?: boolean;
-              readonly bubbles?: boolean;
-              readonly cancelable?: boolean;
-            },
-          ) => Event;
-        };
-        browserGlobal.dispatchEvent(
-          new browserGlobal.KeyboardEvent("keydown", {
-            key: "k",
-            code: "KeyK",
-            ctrlKey: true,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      }, undefined);
-      await page.waitForSelector('[data-slot="command-dialog-popup"]', { timeout: 10_000 });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolvePromise) => {
-            setTimeout(resolvePromise, 250);
-          }),
-        undefined,
-      );
-      const commandPaletteText = await page.evaluate(() => {
-        const browserGlobal = globalThis as unknown as {
-          readonly document: {
-            querySelector(selector: string): { readonly textContent: string | null } | null;
-          };
-        };
-        return (
-          browserGlobal.document.querySelector('[data-slot="command-dialog-popup"]')?.textContent ??
-          ""
-        );
-      }, undefined);
-      for (const requiredAction of [
-        "New project",
-        "New standalone thread",
-        "New isolated standalone thread",
-      ]) {
-        if (!commandPaletteText.includes(requiredAction)) {
-          throw new Error(`Command palette is missing "${requiredAction}".`);
-        }
-      }
-      if (input.options.artifactsDir) {
-        await page.screenshot({
-          path: NodePath.resolve(input.options.artifactsDir, "command-palette-desktop.png"),
-          fullPage: true,
-        });
-      }
-
-      await page.setViewportSize({ width: 390, height: 820 });
-      await page.goto(input.webBaseUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
-      const narrowOverflow = await page.evaluate(() => {
-        const browserGlobal = globalThis as unknown as {
-          readonly document: { readonly documentElement: { readonly scrollWidth: number } };
-          readonly innerWidth: number;
-        };
-        return browserGlobal.document.documentElement.scrollWidth - browserGlobal.innerWidth;
-      }, undefined);
-      if (narrowOverflow > 1) {
-        throw new Error(`Home overview overflows the narrow viewport by ${narrowOverflow}px.`);
-      }
-
-      if (input.options.artifactsDir) {
-        await page.screenshot({
-          path: NodePath.resolve(input.options.artifactsDir, "home-narrow.png"),
-          fullPage: true,
-        });
-      }
+      };
+      return Array.from(
+        browserGlobal.document.querySelectorAll('[data-testid="new-thread-button"]'),
+      ).map((element) => element.getAttribute("aria-label") ?? "");
+    }, undefined);
+    if (!newThreadLabels.some((label) => label.includes("New thread in Project Runtime"))) {
+      throw new Error("Sidebar is missing the shared Project Runtime thread creation affordance.");
     }
 
-    return await verifyRuntimeRpc({
-      page,
-      wsUrl: input.wsUrl,
-      projectId: input.projectId,
-      sharedThreadId: input.sharedThreadId,
-      sharedRuntimeId: input.sharedRuntimeId,
-      isolatedThreadId: input.isolatedThreadId,
-      isolatedRuntimeId: input.isolatedRuntimeId,
-      wsRpcClientModule: clientRuntimeWsRpcClientModule,
-      withRuntime: input.options.withRuntime,
-    });
+    if (input.options.artifactsDir) {
+      NodeFS.mkdirSync(input.options.artifactsDir, { recursive: true });
+      await page.screenshot({
+        path: NodePath.resolve(input.options.artifactsDir, "home-desktop.png"),
+        fullPage: true,
+      });
+    }
+
+    await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        dispatchEvent(event: Event): boolean;
+        KeyboardEvent: new (
+          type: string,
+          init: {
+            readonly key?: string;
+            readonly code?: string;
+            readonly ctrlKey?: boolean;
+            readonly bubbles?: boolean;
+            readonly cancelable?: boolean;
+          },
+        ) => Event;
+      };
+      browserGlobal.dispatchEvent(
+        new browserGlobal.KeyboardEvent("keydown", {
+          key: "k",
+          code: "KeyK",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, undefined);
+    await page.waitForSelector('[data-slot="command-dialog-popup"]', { timeout: 10_000 });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolvePromise) => {
+          setTimeout(resolvePromise, 250);
+        }),
+      undefined,
+    );
+    const commandPaletteText = await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        readonly document: {
+          querySelector(selector: string): { readonly textContent: string | null } | null;
+        };
+      };
+      return (
+        browserGlobal.document.querySelector('[data-slot="command-dialog-popup"]')?.textContent ??
+        ""
+      );
+    }, undefined);
+    for (const requiredAction of [
+      "New project",
+      "New standalone thread",
+      "New isolated standalone thread",
+    ]) {
+      if (!commandPaletteText.includes(requiredAction)) {
+        throw new Error(`Command palette is missing "${requiredAction}".`);
+      }
+    }
+    if (input.options.artifactsDir) {
+      await page.screenshot({
+        path: NodePath.resolve(input.options.artifactsDir, "command-palette-desktop.png"),
+        fullPage: true,
+      });
+    }
+
+    await page.setViewportSize({ width: 390, height: 820 });
+    await page.goto(input.webBaseUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
+    const narrowOverflow = await page.evaluate(() => {
+      const browserGlobal = globalThis as unknown as {
+        readonly document: { readonly documentElement: { readonly scrollWidth: number } };
+        readonly innerWidth: number;
+      };
+      return browserGlobal.document.documentElement.scrollWidth - browserGlobal.innerWidth;
+    }, undefined);
+    if (narrowOverflow > 1) {
+      throw new Error(`Home overview overflows the narrow viewport by ${narrowOverflow}px.`);
+    }
+
+    if (input.options.artifactsDir) {
+      await page.screenshot({
+        path: NodePath.resolve(input.options.artifactsDir, "home-narrow.png"),
+        fullPage: true,
+      });
+    }
   } finally {
     await context.close();
     await browser.close();
   }
 }
 
+// ---------------------------------------------------------------------------
+// Cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Removes the disposable home. Runtime containers write root-owned files into
+ * their bind mounts, so what the host user cannot delete is removed from a
+ * one-shot, labelled container, the same way the server deletes runtime data.
+ */
+function removeBaseDir(baseDir: string): void {
+  try {
+    NodeFS.rmSync(baseDir, { recursive: true, force: true });
+    return;
+  } catch (error) {
+    log(`Removing ${baseDir} as the host user failed (${String(error)}); retrying as root`);
+  }
+  const result = docker(
+    [
+      "run",
+      "--rm",
+      "--label",
+      `${SMOKE_CLEANUP_LABEL}=${NodePath.basename(baseDir)}`,
+      "--user",
+      "0:0",
+      "-v",
+      `${NodePath.dirname(baseDir)}:/parent`,
+      "--entrypoint",
+      "rm",
+      RUNTIME_IMAGE,
+      "-rf",
+      `/parent/${NodePath.basename(baseDir)}`,
+    ],
+    120_000,
+  );
+  if (result.code !== 0 || NodeFS.existsSync(baseDir)) {
+    log(`Could not remove ${baseDir}: ${result.stderr.trim()}`);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
+  const startedAt = Date.now();
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "homelab-runtime-smoke-"));
   const serverPort = await findOpenPort();
   const webPort = await findOpenPort();
   const serverBaseUrl = `http://127.0.0.1:${serverPort}`;
   const webBaseUrl = `http://127.0.0.1:${webPort}`;
-  const wsUrl = `ws://127.0.0.1:${serverPort}`;
   const startedProcesses: ManagedProcess[] = [];
+  const suffix = Date.now().toString(36);
+  const projectId = `runtime-smoke-project-${suffix}`;
+  const sharedThreadId = `runtime-smoke-shared-${suffix}`;
+  const isolatedThreadId = `runtime-smoke-isolated-${suffix}`;
+  const standaloneThreadId = `runtime-smoke-standalone-${suffix}`;
+  const sharedRuntimeId = `project-runtime:${projectId}`;
+  const isolatedRuntimeId = `isolated-runtime:${isolatedThreadId}`;
+  // Scratch threads always run in their own isolated runtime.
+  const standaloneRuntimeId = `isolated-runtime:${standaloneThreadId}`;
+  const smokeRuntimeIds = [sharedRuntimeId, isolatedRuntimeId, standaloneRuntimeId];
+
+  let cleanedUp = false;
+  const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    await Promise.all(startedProcesses.toReversed().map(stopManagedProcess));
+    const containers = options.withRuntime ? listSmokeContainers(smokeRuntimeIds) : [];
+    if (options.keep) {
+      log(`Kept disposable T3CODE_HOME ${baseDir} and containers ${JSON.stringify(containers)}`);
+      return;
+    }
+    if (containers.length > 0) {
+      const removed = docker(["rm", "-f", ...containers]);
+      log(
+        removed.code === 0
+          ? `Removed smoke containers ${containers.join(", ")}`
+          : `Failed to remove smoke containers: ${removed.stderr.trim()}`,
+      );
+    }
+    removeBaseDir(baseDir);
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    log(`Received ${signal}; cleaning up`);
+    void cleanup().finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   try {
     log(`Using disposable T3CODE_HOME ${baseDir}`);
@@ -881,12 +1264,13 @@ async function main(): Promise<void> {
         "serve",
         "--base-dir",
         baseDir,
+        // Runtime containers reach the server through the Docker host gateway,
+        // which a loopback-only bind does not answer on.
         "--host",
-        "127.0.0.1",
+        options.withRuntime ? "0.0.0.0" : "127.0.0.1",
         "--port",
         String(serverPort),
-        "--dev-url",
-        webBaseUrl,
+        ...(options.noBrowser ? [] : ["--dev-url", webBaseUrl]),
       ],
       cwd: repoRoot,
       env: {
@@ -894,61 +1278,46 @@ async function main(): Promise<void> {
         T3CODE_HOME: baseDir,
         T3CODE_MODE: "web",
         T3CODE_NO_BROWSER: "true",
-        VITE_DEV_SERVER_URL: webBaseUrl,
+        ...(options.noBrowser ? {} : { VITE_DEV_SERVER_URL: webBaseUrl }),
       },
     });
     startedProcesses.push(serverProcess);
-    const webProcess = startManagedProcess({
-      name: "web",
-      command: "pnpm",
-      args: ["run", "dev"],
-      cwd: webCwd,
-      env: {
-        ...process.env,
-        HOST: "127.0.0.1",
-        PORT: String(webPort),
-        VITE_DEV_SERVER_URL: webBaseUrl,
-        VITE_HTTP_URL: serverBaseUrl,
-        VITE_WS_URL: wsUrl,
-        T3CODE_HOME: baseDir,
-        T3CODE_MODE: "web",
-      },
-    });
-    startedProcesses.push(webProcess);
+
+    // The web dev server is only for browser pairing. It runs single-origin,
+    // proxying /api, /ws, and /oauth to the smoke's server.
+    const webProcess = options.noBrowser
+      ? null
+      : startManagedProcess({
+          name: "web",
+          command: "pnpm",
+          args: ["run", "dev"],
+          cwd: webCwd,
+          env: {
+            ...process.env,
+            HOST: "127.0.0.1",
+            PORT: String(webPort),
+            T3CODE_PORT: String(serverPort),
+            T3CODE_SINGLE_ORIGIN_DEV: "1",
+            VITE_DEV_SERVER_URL: webBaseUrl,
+            T3CODE_HOME: baseDir,
+            T3CODE_MODE: "web",
+          },
+        });
+    if (webProcess) startedProcesses.push(webProcess);
 
     await waitForHttp({
       url: `${serverBaseUrl}/api/auth/session`,
       name: "server",
       process: serverProcess,
-      timeoutMs: 30_000,
-    });
-    await waitForHttp({
-      url: webBaseUrl,
-      name: "web",
-      process: webProcess,
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
 
-    const startupCredential = extractStartupPairingToken(serverProcess.output);
+    const startupCredential = await waitForStartupPairingToken(serverProcess);
     const bearerToken = await bootstrapBearerSession({
       serverBaseUrl,
       startupCredential,
     });
-    const pairing = await createBrowserPairingLink({
-      serverBaseUrl,
-      webBaseUrl,
-      bearerToken,
-    });
 
-    const suffix = Date.now().toString(36);
-    const projectId = `runtime-smoke-project-${suffix}`;
-    const sharedThreadId = `runtime-smoke-shared-${suffix}`;
-    const isolatedThreadId = `runtime-smoke-isolated-${suffix}`;
-    const standaloneThreadId = `runtime-smoke-standalone-${suffix}`;
-    const sharedRuntimeId = `project-runtime:${projectId}`;
-    const isolatedRuntimeId = `isolated-runtime:${isolatedThreadId}`;
-    // Scratch threads always run in their own isolated runtime.
-    const standaloneRuntimeId = `isolated-runtime:${standaloneThreadId}`;
     const createdAt = new Date().toISOString();
     const modelSelection = { instanceId: "codex", model: "gpt-5" };
 
@@ -1040,16 +1409,21 @@ async function main(): Promise<void> {
       "Scratch thread runtime id mismatch",
     );
 
-    // Seed a durable project-memory entry so the generated `.homelab/memory` view and the
-    // `homelab memory list`/`search` CLI calls in the runtime probe exercise real content
-    // rather than empty indexes.
-    const projectMemoryId = await createProjectMemory({
+    // Seed a durable project-memory entry so the generated `.homelab/memory`
+    // view and the `homelab memory list`/`search` CLI calls see real content.
+    const projectMemory = await apiJson<{ readonly id: string }>({
       serverBaseUrl,
       bearerToken,
-      projectId,
-      summary: "Smoke memory: backups run nightly from nas01",
-      body: "Seeded by runtime-smoke to validate .homelab/memory generation and CLI memory search.",
+      path: "/api/homelab/project-memory",
+      method: "POST",
+      body: {
+        projectId,
+        summary: "Smoke memory: backups run nightly from nas01",
+        body: "Seeded by runtime-smoke to validate .homelab/memory generation and CLI memory search.",
+        tags: ["smoke"],
+      },
     });
+    log(`Created project memory ${projectMemory.id}`);
 
     await dispatchCommand({
       serverBaseUrl,
@@ -1073,100 +1447,47 @@ async function main(): Promise<void> {
       );
     });
     const movedStandaloneThread = requireThread(movedSnapshot, standaloneThreadId);
-    assertEqual(
-      movedStandaloneThread.projectId,
-      projectId,
-      "Moved standalone thread project id mismatch",
-    );
-    assertEqual(
-      movedStandaloneThread.runtimeId,
-      sharedRuntimeId,
-      "Moved standalone thread runtime id mismatch",
-    );
-    assertEqual(
-      movedStandaloneThread.runtimeSelectionMode,
-      "shared",
-      "Moved standalone thread mode mismatch",
-    );
 
-    const runtimeRpcResult = await runBrowserSmoke({
-      options,
-      pairUrl: pairing.pairUrl,
-      webBaseUrl,
-      wsUrl,
+    if (webProcess) {
+      await waitForHttp({
+        url: webBaseUrl,
+        name: "web",
+        process: webProcess,
+        timeoutMs: 60_000,
+      });
+      await runBrowserSmoke({
+        options,
+        pairUrl: await createBrowserPairingLink({ serverBaseUrl, webBaseUrl, bearerToken }),
+        webBaseUrl,
+      });
+    } else {
+      log("Skipping browser pairing because --no-browser was passed.");
+    }
+
+    const runtime = await verifyRuntimes({
+      serverBaseUrl,
+      bearerToken,
+      baseDir,
       projectId,
+      projectMemoryId: projectMemory.id,
       sharedThreadId,
       sharedRuntimeId,
       isolatedThreadId,
       isolatedRuntimeId,
+      withRuntime: options.withRuntime,
     });
-    if (runtimeRpcResult) {
-      assertEqual(
-        runtimeRpcResult.sharedRuntimeId,
-        sharedRuntimeId,
-        "Project Runtime RPC id mismatch",
-      );
-      assertEqual(
-        runtimeRpcResult.sharedQueueRuntimeId,
-        sharedRuntimeId,
-        "Project Runtime queue id mismatch",
-      );
-      assertEqual(
-        runtimeRpcResult.isolatedRuntimeId,
-        isolatedRuntimeId,
-        "Isolated runtime RPC id mismatch",
-      );
-      assertEqual(
-        runtimeRpcResult.isolatedQueueRuntimeId,
-        isolatedRuntimeId,
-        "Isolated runtime queue id mismatch",
-      );
-      assertEqual(runtimeRpcResult.sharedQueuedCount, 0, "Project Runtime queue count mismatch");
-      assertEqual(runtimeRpcResult.isolatedQueuedCount, 0, "Isolated runtime queue count mismatch");
-      if (options.withRuntime) {
-        const requiredHomelabEntries = ["README.md", "memory", "threads"];
-        const missingHomelabEntries = requiredHomelabEntries.filter(
-          (entryName) => !runtimeRpcResult.wake?.homelabEntryNames.includes(entryName),
-        );
-        if (missingHomelabEntries.length > 0) {
-          throw new Error(
-            `Woken runtime did not expose required .homelab entries ${missingHomelabEntries.join(
-              ", ",
-            )}. Entries: ${JSON.stringify(runtimeRpcResult.wake?.homelabEntryNames ?? [])}`,
-          );
-        }
-        const requiredCliMarkers = [
-          "HOMELAB_SMOKE_SNAPSHOT_OK",
-          "HOMELAB_SMOKE_MEMORY_LIST_OK",
-          "HOMELAB_SMOKE_MEMORY_SEARCH_OK",
-          "HOMELAB_SMOKE_MEMORY_CONTENT_OK",
-          "HOMELAB_SMOKE_SECRETS_OK",
-          "HOMELAB_SMOKE_BOOTSTRAP_OK",
-          "HOMELAB_SMOKE_DONE",
-        ];
-        const missingCliMarkers = requiredCliMarkers.filter(
-          (marker) => !runtimeRpcResult.wake?.homelabCliMarkers.includes(marker),
-        );
-        if (missingCliMarkers.length > 0) {
-          throw new Error(
-            `Runtime homelab CLI probe missed markers: ${missingCliMarkers.join(", ")}`,
-          );
-        }
-      }
-    }
 
     log(
       JSON.stringify(
         {
           ok: true,
+          durationSeconds: Math.round((Date.now() - startedAt) / 1000),
           baseDir,
-          serverBaseUrl,
-          webBaseUrl,
           projectId,
           sharedThreadId,
           isolatedThreadId,
           standaloneThreadId,
-          projectMemoryId,
+          projectMemoryId: projectMemory.id,
           verified: {
             projectDefaultRuntimeId: project.defaultRuntimeId,
             sharedThreadRuntimeId: sharedThread.runtimeId,
@@ -1175,7 +1496,8 @@ async function main(): Promise<void> {
             standaloneThreadMovedProjectId: movedStandaloneThread.projectId,
             standaloneThreadRuntimeId: movedStandaloneThread.runtimeId,
             browserPaired: !options.noBrowser,
-            runtimeRpc: runtimeRpcResult,
+            uiChecks: !options.noBrowser && options.uiChecks,
+            runtime,
           },
           artifactsDir: options.artifactsDir,
         },
@@ -1184,14 +1506,9 @@ async function main(): Promise<void> {
       ),
     );
   } finally {
-    await Promise.all(
-      startedProcesses.toReversed().map((processToStop) => stopManagedProcess(processToStop)),
-    );
-    if (options.keep) {
-      log(`Kept disposable T3CODE_HOME ${baseDir}`);
-    } else {
-      NodeFS.rmSync(baseDir, { recursive: true, force: true });
-    }
+    await cleanup();
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
   }
 }
 

@@ -89,30 +89,60 @@ Candidate slices:
 
 ## Full Server And Web Runtime Smoke
 
-Goal: cover the complete browser flow once the test harness can pair a headless browser with a disposable dev server reliably.
+`scripts/runtime-smoke.ts` (`pnpm run smoke:runtime`) is the only automated
+check that runs real Docker runtime containers. CI does not run it.
 
-Completed coverage:
+```bash
+pnpm run smoke:runtime -- --with-runtime   # full run, about 30 seconds
+pnpm run smoke:runtime -- --no-browser     # server only, no Docker
+```
 
-- `bun run smoke:runtime` starts server and web with a disposable
-  `T3CODE_HOME`, pairs a browser session, creates a logical project, creates
-  shared and isolated runtime threads, creates a standalone Scratch thread, and
-  moves the standalone thread into the project.
-- The smoke verifies projected runtime ids:
-  `project-runtime:<project-id>` for shared Project Runtime work,
-  `isolated-runtime:<thread-id>` for isolated work, and
-  `project-runtime:system:standalone` for Scratch before move-to-project.
-- The browser portion verifies queue read models, runtime panel RPC routing,
-  sidebar new-thread affordances, and
-  command palette actions for new project and standalone thread creation.
-- With `--with-runtime`, the smoke wakes a runtime, opens a runtime terminal,
-  verifies generated `.homelab` entries, and probes the in-runtime `homelab`
-  CLI for `snapshot`, `memory list`, `memory search`, `secrets`, and
-  `bootstrap`.
-- With `--artifacts-dir <dir>`, the smoke captures desktop home, narrow home,
-  and command palette screenshots.
+Flags: `--with-runtime` (Docker checks), `--no-browser` (skip pairing),
+`--ui-checks` (legacy UI assertions, stale since the 2026-09 upstream UI),
+`--headed`, `--artifacts-dir <dir>` (screenshots from `--ui-checks`), and
+`--keep` (keep the disposable home and containers).
+
+How it runs:
+
+- It starts the server against a disposable `T3CODE_HOME` under the OS temp
+  dir. With `--with-runtime` the server binds `0.0.0.0`, because containers
+  reach it through the Docker host gateway.
+- The server is driven from Node: HTTP for dispatch, project memory, and
+  secrets, and the WS RPC group (`RpcClient` + `WsRpcGroup`, as in the server
+  tests) for `projectRuntime.*` and `threadWorkspace.*`.
+- The browser only pairs, against a single-origin web dev server. When
+  Playwright's bundled Chromium revision is not installed, it falls back to
+  the newest build under `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
+- On exit, pass or fail (and on Ctrl-C), it stops the process groups it
+  spawned, removes the containers labelled with its runtime ids, and deletes
+  the disposable home. It never touches other containers or images, and it
+  uses the existing runtime image.
+
+What it verifies:
+
+- Projected runtime ids: `project-runtime:<project-id>` for shared work,
+  `isolated-runtime:<thread-id>` for isolated and Scratch threads, and a
+  Scratch thread moved into the project switching to the project runtime.
+- `projectRuntime.get` read models and empty queues for both runtimes.
+- With `--with-runtime`:
+  - Waking the Project Runtime creates a running container with
+    `WorkingDir=/workspace`, the `homelab.runtime.id`,
+    `homelab.runtime.generation`, and `homelab.runtime.profile` labels,
+    `--init`, `no-new-privileges`, a pids limit, and no Docker socket mount.
+  - The generated `.homelab` view exists and lists the seeded project memory.
+  - Through the thread's own `runtime-shell` wrapper (thread id, cwd, and
+    runtime token, as a provider runs): `homelab snapshot`, `memory list`,
+    `memory search`, `secret get` of a project secret created through the
+    API, and `tools list`.
+  - Sleep then wake keeps the same container, and files in `/workspace` and
+    `/usr/local/bin` survive.
+  - The isolated thread gets its own container, labelled with its runtime id
+    and seeded from the Project Runtime's workspace.
 
 Remaining follow-ups:
 
+- Rewrite the `--ui-checks` assertions against the current sidebar and command
+  palette, then make them the default.
 - Add deeper visual regression coverage for project/thread sidebar states,
   settings panels, and Runtime Workspace.
 - Add end-to-end provider prompt coverage once Codex/Claude auth fixtures are
@@ -132,7 +162,7 @@ Completed after the upstream sync:
 - Runtime networking tests that preserve
   `HOMELAB_AGENT_RUNTIME_SERVER_URL` and cover Docker network planning.
 - In-runtime `homelab` CLI smoke coverage for snapshot, memory, secrets, and
-  bootstrap paths.
+  tools (`scripts/runtime-smoke.ts --with-runtime`).
 - First-run pairing, reverse-proxy-style browser session, CORS, and cookie
   behavior tests.
 - Homelab-aligned home overview copy that avoids repo/Git-first
