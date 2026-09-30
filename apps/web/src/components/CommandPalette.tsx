@@ -104,6 +104,7 @@ import {
   requestHomelabNewProject,
 } from "./homelab/HomelabNewProjectDialog";
 import { useHomelabPaletteItems } from "./homelab/useHomelabPaletteItems";
+import { PairDeviceDialog } from "./homelab/PairDeviceDialog";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -646,6 +647,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         />
       </CommandDialog>
       <HomelabNewProjectDialog />
+      <PairDeviceDialog />
     </ComposerHandleContext>
   );
 }

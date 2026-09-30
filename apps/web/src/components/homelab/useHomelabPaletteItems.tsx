@@ -2,6 +2,7 @@
  * Homelab command palette entries, spread into upstream's root action list by
  * `CommandPalette.tsx` with one line:
  * - New scratch thread (no project needed)
+ * - Pair a device (admin sessions): the quick pairing-link QR dialog
  * - Move the active scratch thread to a project
  * - New parallel thread (isolated runtime clone) in the current project, and
  *   a picker for any project
@@ -13,7 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ProjectId, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
-import { CopyPlusIcon, FolderInputIcon, SquarePenIcon } from "lucide-react";
+import { CopyPlusIcon, FolderInputIcon, QrCodeIcon, SquarePenIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { newCommandId } from "../../homelab/commandIds";
@@ -33,6 +34,7 @@ import {
   type CommandPaletteSubmenuItem,
 } from "../CommandPalette.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { openPairDeviceDialog, useCanPairDevices } from "./PairDeviceDialog";
 
 interface PaletteProject {
   readonly id: ProjectId;
@@ -66,6 +68,7 @@ export function useHomelabPaletteItems(input: {
   const { projects, activeThread, activeDraftThread, defaultProjectRef, handleNewThread, setOpen } =
     input;
   const createStandaloneThread = useCreateStandaloneThread();
+  const canPairDevices = useCanPairDevices();
   const moveStandaloneThread = useAtomCommand(standaloneThreadEnvironment.moveToProject, {
     reportFailure: false,
   });
@@ -90,6 +93,20 @@ export function useHomelabPaletteItems(input: {
         },
       },
     ];
+    if (canPairDevices) {
+      items.push({
+        kind: "action",
+        value: "action:pair-device",
+        searchTerms: ["pair", "device", "qr", "phone", "link", "connect", "sign in"],
+        title: "Pair a device",
+        description: "Show a one-time QR code and link for another device",
+        icon: <QrCodeIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          setOpen(false);
+          openPairDeviceDialog();
+        },
+      });
+    }
 
     const moveTargets = standaloneMoveTargets(projects, activeThread);
     if (activeThread && moveTargets.length > 0) {
@@ -209,6 +226,7 @@ export function useHomelabPaletteItems(input: {
   }, [
     activeDraftThread,
     activeThread,
+    canPairDevices,
     createStandaloneThread,
     defaultProjectRef,
     handleNewThread,

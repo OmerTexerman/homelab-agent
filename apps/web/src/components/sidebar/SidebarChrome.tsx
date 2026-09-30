@@ -8,6 +8,7 @@ import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { APP_BASE_NAME } from "../../branding";
 import { HomelabAgentMark } from "./HomelabBrandMark";
+import { HomelabPairDeviceSidebarItem } from "./HomelabPairDeviceSidebarItem";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -197,6 +198,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <HomelabPairDeviceSidebarItem />
         </>
       )}
       <SidebarUpdatePill />
