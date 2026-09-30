@@ -11,7 +11,8 @@ User=t3code
 Group=t3code
 WorkingDirectory=/home/t3code/homelab-agent-releases/current
 Environment=HOME=/home/t3code
-Environment=PATH=/home/t3code/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=BUN_INSTALL=/home/t3code/.bun
+Environment=PATH=/home/t3code/.npm-global/bin:/home/t3code/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=T3CODE_HOME=/home/t3code/.t3
 Environment=T3CODE_HOST=0.0.0.0
 Environment=T3CODE_PORT=3000
