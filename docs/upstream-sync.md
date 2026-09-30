@@ -22,7 +22,9 @@ node scripts/upstream-sync.ts --verify  # fork invariants + typecheck
 ```
 
 The merge branch goes through CI like any change. `main` only reaches prod after
-CI passes (see `deploy/proxmox/README.md`).
+CI passes (see `deploy/proxmox/README.md`). For changes near runtimes, also run
+`node scripts/runtime-smoke.ts --with-runtime` on a machine with Docker; it
+checks real containers end to end in under a minute.
 
 ## Resolution rules
 
@@ -42,9 +44,11 @@ CI passes (see `deploy/proxmox/README.md`).
    means it never runs in prod. Never renumber an existing migration.
 5. **Fork tests live in sibling files** (`*.homelab.test.ts`), so upstream test
    files can be taken as-is.
-6. **CI runners:** `--merge` rewrites upstream's Blacksmith runners to
-   GitHub-hosted ones. Upstream-only workflows stay disabled with
-   `gh workflow disable`, not deleted.
+6. **CI runners and workflows:** `--merge` rewrites upstream's Blacksmith
+   runners in `ci.yml` to GitHub-hosted ones. Upstream-only workflows stay
+   disabled with `gh workflow disable` (never deleted). New upstream workflows
+   arrive enabled, so the report lists every active workflow besides `ci.yml`
+   and `promote-prod.yml` with the command to disable it.
 7. Keep the fork's `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and
    `docs/README.md`.
 
