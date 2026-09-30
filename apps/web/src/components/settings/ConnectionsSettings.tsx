@@ -186,6 +186,7 @@ import {
   HOMELAB_PAIRING_SCOPE_OPTIONS,
   shouldShowMultiEnvironmentConnections,
 } from "./homelabConnections";
+import { HomelabPasskeysSection } from "./HomelabPasskeysSection";
 import { shouldShowPrimarySourceControlUi } from "../../productCapabilities";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
@@ -3701,6 +3702,7 @@ export function ConnectionsSettings() {
   return (
     <SettingsPageContainer width="wide">
       {primarySettings}
+      <HomelabPasskeysSection />
       {shouldShowMultiEnvironmentConnections() ? (
         <SettingsSection
           {...searchableSetting("remote-environments")}

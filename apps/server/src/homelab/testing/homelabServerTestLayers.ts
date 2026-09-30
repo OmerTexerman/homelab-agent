@@ -43,6 +43,7 @@ import {
   HomelabSecretRegistry,
   type HomelabSecretRegistryShape,
 } from "../Services/HomelabSecretRegistry.ts";
+import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { HomelabSkills, type HomelabSkillsShape } from "../Services/HomelabSkills.ts";
 import { KnowledgeGraph, type KnowledgeGraphShape } from "../Services/KnowledgeGraph.ts";
 import { ProjectMemory, type ProjectMemoryShape } from "../Services/ProjectMemory.ts";
@@ -123,9 +124,14 @@ export function makeMockThreadRuntimeLaunchContext(
   };
 }
 
-/** One merged layer of homelab service doubles, with per-service overrides. */
+/**
+ * One merged layer of homelab service doubles, with per-service overrides,
+ * plus an in-memory homelab.sqlite for fork stores the routes read directly
+ * (passkeys).
+ */
 export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOverrides = {}) =>
   Layer.mergeAll(
+    HomelabSqlMemory,
     Layer.mock(OrchestrationCommandReadModel)({
       getReadModel: () => Effect.succeed(createEmptyReadModel(EPOCH)),
       ...overrides.commandReadModel,

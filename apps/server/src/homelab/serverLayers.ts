@@ -20,6 +20,7 @@
  */
 import * as Layer from "effect/Layer";
 
+import { homelabPasskeyRoutesLayer } from "../auth/homelabPasskeyHttp.ts";
 import { homelabSessionRenewalLayer } from "../auth/homelabSessionRenewal.ts";
 import { ThreadRuntimeReactorLive } from "../orchestration/Layers/ThreadRuntimeReactor.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -91,11 +92,12 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
 );
 
 /**
- * Fork HTTP routes (homelab API and thread workspace downloads) and the fork's
- * global HTTP middleware (sliding browser sessions).
+ * Fork HTTP routes (homelab API, thread workspace downloads, passkey sign-in)
+ * and the fork's global HTTP middleware (sliding browser sessions).
  */
 export const HomelabRoutesLive = Layer.mergeAll(
   homelabRoutesLayer,
   threadWorkspaceFileRouteLayer,
+  homelabPasskeyRoutesLayer,
   homelabSessionRenewalLayer,
 );

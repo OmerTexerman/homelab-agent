@@ -14,6 +14,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { HomelabPasskeySignIn } from "./HomelabPasskeySignIn";
 
 export function PairingPendingSurface() {
   return (
@@ -132,6 +133,7 @@ export function PairingRouteSurface({
           </Button>
         </div>
       </form>
+      <HomelabPasskeySignIn />
 
       <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
         {describeSupportedMethods(auth.bootstrapMethods)}
