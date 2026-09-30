@@ -224,6 +224,9 @@ cmd_prune() {
     fi
   done < <(find "$releases_dir" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
   git -C "$source_dir" worktree prune
+  # Every release installs into the shared pnpm store; drop what no release uses
+  # anymore so the store doesn't grow until the disk fills. Best effort.
+  (cd "$HOME" && "$pnpm_bin" store prune >/dev/null 2>&1) || log "pnpm store prune failed (ignored)"
 }
 
 cmd_status() {
