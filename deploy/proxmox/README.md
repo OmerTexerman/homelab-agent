@@ -42,6 +42,31 @@ minutes.
 | Retry a failed commit   | `pct exec 201 -- rm /home/t3code/homelab-agent-releases/<sha>.attempts`                                                                                                                                                                                |
 | Ship while CI is broken | `gh workflow run promote-prod.yml -f sha=<main sha>`                                                                                                                                                                                                   |
 
+### Break-glass pairing
+
+When no signed-in browser or passkey is at hand, mint a one-time admin
+pairing link from the Proxmox host:
+
+```bash
+homelab-agent-pair                 # admin link, valid 15 minutes
+homelab-agent-pair --ttl 5m        # shorter
+homelab-agent-pair --standard      # a normal device link (no device/secret management)
+```
+
+It runs `bin.mjs auth pairing create --admin --ttl 15m --base-url https://ai.texerman.com --base-dir /home/t3code/.t3 --json`
+inside LXC 201 as `t3code` against the live state (the running server keeps
+serving), then prints the `https://ai.texerman.com/pair#token=...` link and,
+when `qrencode` is installed on the host (`apt install qrencode`), a terminal
+QR code. The link shows up in Settings -> Devices & Sessions and can be revoked
+there. Override the container or URL with `HOMELAB_AGENT_CTID` and
+`HOMELAB_AGENT_PUBLIC_URL`.
+
+Install or update it with:
+
+```bash
+install -m 0755 deploy/proxmox/homelab-agent-pair.sh /usr/local/sbin/homelab-agent-pair
+```
+
 Rolling back past a release that ran a `state.sqlite` migration needs a
 database restore from the backup taken just before it. `homelab.sqlite`
 migrations are additive and leave their JSON sources intact, so they don't
@@ -51,7 +76,7 @@ the backup over the live file, deleting the live `-wal` and `-shm` siblings.
 
 ## Installing or updating
 
-Both files are copies of what's installed; keep them in sync.
+The files here are copies of what's installed; keep them in sync.
 
 1. Make sure `prod` exists and contains `scripts/deploy/release.sh` (CI green
    on `main` after this change, or a manual `promote-prod.yml` run).
