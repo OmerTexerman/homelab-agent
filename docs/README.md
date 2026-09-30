@@ -82,11 +82,17 @@ pnpm run smoke:prod
 pnpm run smoke:runtime
 ```
 
-Run Docker-backed runtime coverage when Docker socket access is available:
+Run Docker-backed runtime coverage when Docker socket access is available
+(about 30 seconds once the `homelab-agent-runtime:local` image is built):
 
 ```bash
-pnpm run smoke:runtime -- --with-runtime --artifacts-dir .t3/runtime-smoke-artifacts
+pnpm run smoke:runtime -- --with-runtime
 ```
+
+`--no-browser` skips browser pairing, `--ui-checks` adds the legacy UI
+assertions, `--keep` keeps the disposable home and containers for debugging.
+See [runtime-follow-ups.md](./runtime-follow-ups.md#full-server-and-web-runtime-smoke)
+for what the smoke verifies.
 
 For the first persistent local deployment, follow
 [deployment.md](./deployment.md): set an explicit `T3CODE_HOME`, run
