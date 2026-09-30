@@ -12,6 +12,7 @@ fork tables in `state.sqlite` here, one owner at a time:
 | P4b   | runtime    | 101      | nothing; adds `runtime_tools` and the recreate columns on `runtimes`  |
 | P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)          |
 | P6    | secrets    | 300–399  | `homelab-secrets.json` metadata                                       |
+| auth  | auth       | 400–499  | nothing; adds `auth_passkeys` (migration 400)                         |
 
 A separate file keeps the two migration histories apart. Upstream's Effect
 migrator skips every id at or below the latest applied one, and upstream syncs
@@ -224,6 +225,21 @@ with a warning). After that:
   refuses writes, so a later successful import never has to merge.
 
 The JSON file is never written, moved, or deleted.
+
+## Auth (400)
+
+Migration 400 adds `auth_passkeys`, the passkeys that can sign in to this
+server (see [homelab-auth.md](./homelab-auth.md)). Sessions themselves stay in
+upstream's `auth_sessions` in `state.sqlite`; nothing here is a secret.
+
+- `credential_id` (primary key, base64url), `name`, `public_key` (COSE,
+  base64url), `counter` (signature counter as of the last sign-in),
+  `transports` (JSON array), `device_type`, `backed_up`, `user_handle`.
+- `rp_id`: the host name the passkey is bound to; indexed, since sign-in and
+  `available` look passkeys up by it.
+- `scopes`: JSON array of the scopes a sign-in grants, copied from the
+  registering session. `created_by_session_id` records that session.
+- `created_at`, `last_used_at`.
 
 ## Backups and smoke
 
