@@ -119,9 +119,15 @@ export function unexpectedActiveWorkflows(
 }
 
 function reportUnexpectedWorkflows(): void {
+  // gh defaults to the upstream repo in a fork checkout; ask about origin explicitly.
+  const origin = git("remote", "get-url", "origin").match(/github\.com[:/](.+?)(?:\.git)?$/u)?.[1];
+  if (!origin) {
+    console.log("\n(Skipped the workflow check: origin is not a GitHub remote.)");
+    return;
+  }
   const result = NodeChildProcess.spawnSync(
     "gh",
-    ["workflow", "list", "--all", "--json", "path,state"],
+    ["workflow", "list", "--all", "--json", "path,state", "-R", origin],
     { cwd: repoRoot, encoding: "utf8" },
   );
   if (result.status !== 0) {
@@ -134,7 +140,7 @@ function reportUnexpectedWorkflows(): void {
   if (unexpected.length > 0) {
     console.log("\nActive upstream-only workflows (disable them; don't delete the files):");
     for (const path of unexpected) {
-      console.log(`  gh workflow disable ${NodePath.basename(path)}`);
+      console.log(`  gh workflow disable ${NodePath.basename(path)} -R ${origin}`);
     }
   }
 }
