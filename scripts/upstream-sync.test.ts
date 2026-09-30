@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   forecastConflicts,
   maxMigrationId,
+  unexpectedActiveWorkflows,
   proposeMigrationIds,
   rewriteBlacksmithRunners,
 } from "./upstream-sync.ts";
@@ -66,5 +67,17 @@ describe("upstream-sync", () => {
       "] as const;",
     ].join("\n");
     expect(maxMigrationId(source)).toBe(50);
+  });
+
+  it("flags active workflows outside the fork's allowlist", () => {
+    expect(
+      unexpectedActiveWorkflows([
+        { path: ".github/workflows/ci.yml", state: "active" },
+        { path: ".github/workflows/promote-prod.yml", state: "active" },
+        { path: ".github/workflows/windows-tests.yml", state: "active" },
+        { path: ".github/workflows/release.yml", state: "disabled_manually" },
+        { path: "dynamic/dependabot/dependabot-updates", state: "active" },
+      ]),
+    ).toEqual([".github/workflows/windows-tests.yml"]);
   });
 });

@@ -96,6 +96,49 @@ function lines(output: string): string[] {
   return output.split("\n").filter((line) => line.length > 0);
 }
 
+/** Workflows the fork runs; any other active workflow came from upstream. */
+const FORK_ACTIVE_WORKFLOWS = new Set([
+  ".github/workflows/ci.yml",
+  ".github/workflows/promote-prod.yml",
+]);
+
+/** Active workflows outside the fork's allowlist (upstream-only ones should be disabled). */
+export function unexpectedActiveWorkflows(
+  workflows: ReadonlyArray<{ readonly path: string; readonly state: string }>,
+): ReadonlyArray<string> {
+  return workflows
+    .filter(
+      (workflow) =>
+        workflow.state === "active" &&
+        // GitHub's own dynamic workflows (Copilot, Dependabot, graph) aren't repo files.
+        workflow.path.startsWith(".github/workflows/") &&
+        !FORK_ACTIVE_WORKFLOWS.has(workflow.path),
+    )
+    .map((workflow) => workflow.path)
+    .toSorted();
+}
+
+function reportUnexpectedWorkflows(): void {
+  const result = NodeChildProcess.spawnSync(
+    "gh",
+    ["workflow", "list", "--all", "--json", "path,state"],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    console.log("\n(Skipped the workflow check: `gh workflow list` failed.)");
+    return;
+  }
+  const unexpected = unexpectedActiveWorkflows(
+    JSON.parse(result.stdout) as Array<{ path: string; state: string }>,
+  );
+  if (unexpected.length > 0) {
+    console.log("\nActive upstream-only workflows (disable them; don't delete the files):");
+    for (const path of unexpected) {
+      console.log(`  gh workflow disable ${NodePath.basename(path)}`);
+    }
+  }
+}
+
 function report(): { mergeBase: string } {
   git("fetch", "--quiet", "upstream");
   const mergeBase = git("merge-base", "HEAD", "upstream/main");
@@ -145,6 +188,7 @@ function report(): { mergeBase: string } {
       console.log(`  ${proposal.proposedId}  ${proposal.upstreamFile}`);
     }
   }
+  reportUnexpectedWorkflows();
   return { mergeBase };
 }
 
