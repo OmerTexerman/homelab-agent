@@ -1,6 +1,7 @@
 /**
  * Homelab command palette entries, spread into upstream's root action list by
  * `CommandPalette.tsx` with one line:
+ * - Go to the home page
  * - New scratch thread (no project needed)
  * - Move the active scratch thread to a project
  * - New parallel thread (isolated runtime clone) in the current project, and
@@ -13,7 +14,8 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ProjectId, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
-import { CopyPlusIcon, FolderInputIcon, SquarePenIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { CopyPlusIcon, FolderInputIcon, HouseIcon, SquarePenIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { newCommandId } from "../../homelab/commandIds";
@@ -65,6 +67,7 @@ export function useHomelabPaletteItems(input: {
 }): Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> {
   const { projects, activeThread, activeDraftThread, defaultProjectRef, handleNewThread, setOpen } =
     input;
+  const navigate = useNavigate();
   const createStandaloneThread = useCreateStandaloneThread();
   const moveStandaloneThread = useAtomCommand(standaloneThreadEnvironment.moveToProject, {
     reportFailure: false,
@@ -78,6 +81,17 @@ export function useHomelabPaletteItems(input: {
       handleNewThread,
     };
     const items: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
+      {
+        kind: "action",
+        value: "action:go-home",
+        searchTerms: ["home", "overview", "dashboard", "needs you", "running", "runtimes"],
+        title: HOMELAB_PRODUCT_COPY.homeOverview.navLabel,
+        description: HOMELAB_PRODUCT_COPY.homeOverview.navDescription,
+        icon: <HouseIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/" });
+        },
+      },
       {
         kind: "action",
         value: "action:new-standalone-thread",
@@ -213,6 +227,7 @@ export function useHomelabPaletteItems(input: {
     defaultProjectRef,
     handleNewThread,
     moveStandaloneThread,
+    navigate,
     projects,
     setOpen,
   ]);
