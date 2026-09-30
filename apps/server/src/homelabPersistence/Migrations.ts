@@ -20,6 +20,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import Migration0001 from "./Migrations/001_Foundation.ts";
 import Migration0100 from "./Migrations/100_RuntimeRegistry.ts";
+import Migration0101 from "./Migrations/101_RuntimeTools.ts";
 import Migration0200 from "./Migrations/200_KnowledgeStore.ts";
 import Migration0300 from "./Migrations/300_HomelabSecrets.ts";
 
@@ -45,6 +46,7 @@ const homelabMigrationEntries: ReadonlyArray<
 > = [
   [1, "Foundation", Migration0001],
   [100, "RuntimeRegistry", Migration0100],
+  [101, "RuntimeTools", Migration0101],
   [200, "KnowledgeStore", Migration0200],
   [300, "HomelabSecrets", Migration0300],
 ];

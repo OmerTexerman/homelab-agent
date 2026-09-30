@@ -10,6 +10,7 @@ export * from "./projectMemory.ts";
 export * from "./providerCliStore.ts";
 export * from "./rpcHomelab.ts";
 export * from "./runtimeBootstrap.ts";
+export * from "./runtimeTools.ts";
 export * from "./runtimeWorkspace.ts";
 export * from "./threadRuntimeMode.ts";
 export * from "./threadWorkspace.ts";

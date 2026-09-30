@@ -243,6 +243,9 @@ function makeRecord(input: {
     lastStoppedAt: null,
     retiredAt: null,
     deletingAt: null,
+    recreatePendingReason: null,
+    lastRecreateReason: null,
+    lastRecreatedAt: null,
   };
 }
 

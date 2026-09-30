@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import {
   Cause,
+  Deferred,
   Effect,
   Exit,
   FileSystem,
@@ -69,8 +70,18 @@ import {
 } from "../image.ts";
 import { SHELL_RUNTIME_WRAPPER } from "../launchers.ts";
 import {
+  NO_RUNTIME_TOOLS,
+  normalizeRuntimeTools,
+  renderToolsDockerfile,
+  RUNTIME_TOOLS_LABEL,
+  runtimeBaseImageFingerprint,
+  runtimeToolsHash,
+  runtimeToolsImageTag,
+} from "../RuntimeTools.ts";
+import {
   layer as RuntimeRegistryLayer,
   RuntimeRegistry,
+  runtimeToolsListKeyFor,
   type RuntimeRecord,
   type RuntimeRecordPatch,
   type RuntimeThreadBinding,
@@ -150,6 +161,8 @@ export interface ThreadRuntimeLiveOptions {
   /** Test hook: receives the idle reaper so a test can run one pass on demand. */
   readonly exposeInternals?: (internals: {
     readonly reapIdleRuntimes: () => Effect.Effect<void, ThreadRuntimeError>;
+    /** Waits for every in-flight background tools-image build. */
+    readonly awaitToolsImageBuilds: () => Effect.Effect<void>;
   }) => void;
   readonly dockerRunner?: (
     args: ReadonlyArray<string>,
@@ -478,31 +491,44 @@ function parseDockerInspectResult(
   }
 }
 
+/** The image (and tools list) a runtime's container should run. */
+interface RuntimeImageTarget {
+  readonly imageRef: string;
+  readonly toolsHash: string;
+  /** False while the derived tools image is still building; the old container is kept. */
+  readonly ready: boolean;
+}
+
 /**
- * Whether an existing container can be reused for this runtime. The working
- * directory is not compared: containers run in `/workspace` and every exec
- * sets its own thread's cwd, so threads with different cwds share one
- * container. Runtime-id and generation labels are not compared either, so
- * containers created before those labels existed are kept.
+ * Why an existing container can't be reused for this runtime, or undefined
+ * when it can. The working directory is not compared: containers run in
+ * `/workspace` and every exec sets its own thread's cwd, so threads with
+ * different cwds share one container. Runtime-id and generation labels are
+ * not compared either, so containers created before those labels existed are
+ * kept. A container without a tools label counts as having no tools.
  */
-function isContainerCompatible(
+function containerIncompatibility(
   inspect: DockerContainerInspectResult,
-  record: RuntimeRecord,
+  target: RuntimeImageTarget,
   mounts: ReadonlyArray<DockerMountSpec>,
   expectedProfile: string,
   expectedImageFingerprint?: string,
-): boolean {
-  if (inspect.Config?.Image !== record.imageRef) {
-    return false;
+): string | undefined {
+  const labels = inspect.Config?.Labels ?? {};
+  if ((labels[RUNTIME_TOOLS_LABEL] || NO_RUNTIME_TOOLS) !== target.toolsHash) {
+    return "tools changed";
   }
-  if (inspect.Config?.Labels?.[RUNTIME_CONTAINER_PROFILE_LABEL] !== expectedProfile) {
-    return false;
+  if (inspect.Config?.Image !== target.imageRef) {
+    return "image updated";
   }
   if (
     expectedImageFingerprint &&
-    inspect.Config?.Labels?.[RUNTIME_IMAGE_FINGERPRINT_LABEL] !== expectedImageFingerprint
+    labels[RUNTIME_IMAGE_FINGERPRINT_LABEL] !== expectedImageFingerprint
   ) {
-    return false;
+    return "image updated";
+  }
+  if (labels[RUNTIME_CONTAINER_PROFILE_LABEL] !== expectedProfile) {
+    return "security profile changed";
   }
 
   const actualMounts = new Set(
@@ -514,14 +540,16 @@ function isContainerCompatible(
       )
       .filter((value): value is string => value !== undefined),
   );
-
-  return (
-    mounts.every((mount) =>
+  if (
+    !mounts.every((mount) =>
       actualMounts.has(
         `${mount.source}\u0000${mount.target}\u0000${mount.readOnly === true ? "ro" : "rw"}`,
       ),
-    ) && isManagedOpenCodeServerPortConfigured(inspect)
-  );
+    )
+  ) {
+    return "mounts changed";
+  }
+  return isManagedOpenCodeServerPortConfigured(inspect) ? undefined : "port mapping changed";
 }
 
 // Compatibility must be decided from the container's *configuration*, not its
@@ -1773,6 +1801,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     readonly record: RuntimeRecord;
     readonly mounts: ReadonlyArray<DockerMountSpec>;
     readonly profile: string;
+    readonly target: RuntimeImageTarget;
   }) {
     const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
     const args = [
@@ -1786,6 +1815,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       `${RUNTIME_ID_LABEL}=${input.record.runtimeId}`,
       "--label",
       `${RUNTIME_GENERATION_LABEL}=${input.record.generation}`,
+      "--label",
+      `${RUNTIME_TOOLS_LABEL}=${input.target.toolsHash}`,
       ...RUNTIME_CONTAINER_HARDENING_ARGS,
       ...(runtimeNetworkPlan.addHostGatewayAlias
         ? ["--add-host", `${RUNTIME_SERVER_HOST_ALIAS}:host-gateway`]
@@ -1798,7 +1829,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       "-w",
       CONTAINER_WORKSPACE_PATH,
       ...input.mounts.flatMap((mount) => ["-v", toDockerMountFlag(mount)]),
-      input.record.imageRef,
+      input.target.imageRef,
       "/bin/sh",
       "-lc",
       KEEPALIVE_COMMAND,
@@ -1905,11 +1936,210 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
   });
 
-  /** Reuses a compatible container, recreating (and bumping the generation) otherwise. */
+  // -------------------------------------------------------------------------
+  // Runtime tools image (issue #13)
+  // -------------------------------------------------------------------------
+
+  const TOOLS_IMAGE_BUILD_RETRY_MS = 30 * 60_000;
+  const layerScope = yield* Effect.scope;
+  /** In-flight tools-image builds by tag; each resolves true when the image exists. */
+  const toolsImageBuilds = new Map<string, Deferred.Deferred<boolean>>();
+  /** When a tag last failed to build, so a bad package isn't retried on every start. */
+  const toolsImageBuildFailures = new Map<string, number>();
+
+  const imageIdOf = Effect.fn("threadRuntime.imageIdOf")(function* (imageRef: string) {
+    const result = yield* dockerRunner(["image", "inspect", imageRef], {
+      timeoutMs: 10_000,
+      maxBufferBytes: 512 * 1024,
+    });
+    if (result.code !== 0) {
+      return undefined;
+    }
+    return yield* Effect.try(() => {
+      const parsed = JSON.parse(result.stdout) as unknown;
+      const first = Array.isArray(parsed) ? (parsed[0] as { readonly Id?: unknown }) : undefined;
+      return typeof first?.Id === "string" && first.Id.length > 0 ? first.Id : undefined;
+    }).pipe(Effect.orElseSucceed(() => undefined));
+  });
+
+  interface ToolsImageBuild {
+    readonly tag: string;
+    readonly baseImageRef: string;
+    readonly tools: ReturnType<typeof normalizeRuntimeTools>;
+    readonly toolsHash: string;
+    readonly baseFingerprint: string | undefined;
+  }
+
+  const buildToolsImage = (build: ToolsImageBuild) =>
+    runtimeImageBuildSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        if (yield* inspectImageByRef(build.tag)) {
+          return;
+        }
+        const contextDir = NodePath.join(
+          stateDir,
+          "runtime-tool-images",
+          build.tag.slice(build.tag.indexOf(":") + 1),
+        );
+        const dockerfilePath = NodePath.join(contextDir, "Dockerfile");
+        yield* writeFile(
+          dockerfilePath,
+          renderToolsDockerfile(build.baseImageRef, build.tools),
+          undefined,
+          "runtime tools Dockerfile",
+        );
+        const result = yield* dockerRunner(
+          [
+            "build",
+            "--tag",
+            build.tag,
+            "--label",
+            `${RUNTIME_TOOLS_LABEL}=${build.toolsHash}`,
+            // Also inherited from the base; stamped so the fingerprint check holds on any builder.
+            ...(build.baseFingerprint !== undefined
+              ? ["--label", `${RUNTIME_IMAGE_FINGERPRINT_LABEL}=${build.baseFingerprint}`]
+              : []),
+            "--file",
+            dockerfilePath,
+            contextDir,
+          ],
+          { timeoutMs: 30 * 60_000, maxBufferBytes: 8 * 1024 * 1024 },
+        );
+        if (result.code !== 0) {
+          return yield* dockerResultToError(
+            `Failed to build runtime tools image '${build.tag}'.`,
+            result,
+          );
+        }
+        yield* Effect.logInfo("Built runtime tools image").pipe(
+          Effect.annotateLogs({
+            imageRef: build.tag,
+            tools: build.tools.map((tool) => tool.spec),
+          }),
+        );
+      }),
+    );
+
+  /** Starts the background build of a tools image, or joins the one in flight. */
+  const startToolsImageBuild = (build: ToolsImageBuild) =>
+    Effect.suspend(() => {
+      const inFlight = toolsImageBuilds.get(build.tag);
+      if (inFlight) {
+        return Effect.succeed(inFlight);
+      }
+      const done = Deferred.makeUnsafe<boolean>();
+      toolsImageBuilds.set(build.tag, done);
+      return buildToolsImage(build).pipe(
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Failed to build runtime tools image", {
+            imageRef: build.tag,
+            cause: Cause.pretty(cause),
+          }).pipe(
+            Effect.andThen(Effect.sync(() => toolsImageBuildFailures.set(build.tag, Date.now()))),
+            Effect.as(false),
+          ),
+        ),
+        Effect.flatMap((ok) => {
+          if (ok) toolsImageBuildFailures.delete(build.tag);
+          return Deferred.succeed(done, ok);
+        }),
+        Effect.ensuring(
+          Effect.suspend(() => {
+            if (toolsImageBuilds.get(build.tag) === done) toolsImageBuilds.delete(build.tag);
+            return Deferred.succeed(done, false);
+          }),
+        ),
+        Effect.forkIn(layerScope),
+        Effect.as(done),
+      );
+    });
+
+  const awaitToolsImageBuilds = () =>
+    Effect.suspend(() =>
+      Effect.forEach([...toolsImageBuilds.values()], (done) => Deferred.await(done), {
+        discard: true,
+      }),
+    );
+
+  /**
+   * The image a runtime's container should run: the base image, or with a
+   * non-empty tools list the derived `<baseFingerprint>-<toolsHash>` image.
+   * A missing derived image is built: awaited in `wait` mode (no container to
+   * keep), in the background otherwise (`ready: false` until it exists). A
+   * failed build falls back to the base image and is retried later.
+   */
+  const resolveRuntimeImageTarget = Effect.fn("threadRuntime.resolveRuntimeImageTarget")(function* (
+    record: RuntimeRecord,
+    baseFingerprint: string | undefined,
+    mode: "wait" | "background",
+  ) {
+    const base: RuntimeImageTarget = {
+      imageRef: record.imageRef,
+      toolsHash: NO_RUNTIME_TOOLS,
+      ready: true,
+    };
+    const key = runtimeToolsListKeyFor(record);
+    if (key === undefined) {
+      return base;
+    }
+    const rows = yield* registry
+      .listTools(key)
+      .pipe(fromRegistry(`Failed to read the tools list of runtime '${record.runtimeId}'.`));
+    const tools = normalizeRuntimeTools(rows.map((row) => row.spec));
+    if (tools.length === 0) {
+      return base;
+    }
+    const baseImageId = yield* imageIdOf(record.imageRef);
+    if (baseImageId === undefined) {
+      // Let the container create fail with the base image's own error.
+      return base;
+    }
+    const toolsHash = runtimeToolsHash(tools);
+    const target: RuntimeImageTarget = {
+      imageRef: runtimeToolsImageTag(runtimeBaseImageFingerprint(baseImageId), toolsHash),
+      toolsHash,
+      ready: true,
+    };
+    if (yield* inspectImageByRef(target.imageRef)) {
+      return target;
+    }
+    const failedAt = toolsImageBuildFailures.get(target.imageRef);
+    const mayBuild = failedAt === undefined || Date.now() - failedAt > TOOLS_IMAGE_BUILD_RETRY_MS;
+    const build: ToolsImageBuild = {
+      tag: target.imageRef,
+      baseImageRef: record.imageRef,
+      tools,
+      toolsHash,
+      baseFingerprint,
+    };
+    if (mode === "background") {
+      if (mayBuild) yield* startToolsImageBuild(build);
+      return { ...target, ready: false };
+    }
+    if (mayBuild && (yield* Deferred.await(yield* startToolsImageBuild(build)))) {
+      return target;
+    }
+    yield* Effect.logWarning("Starting runtime without its tools image; it is rebuilt later", {
+      runtimeId: record.runtimeId,
+      imageRef: target.imageRef,
+    });
+    return base;
+  });
+
+  /**
+   * Reuses a compatible container and recreates (bumping the generation) an
+   * incompatible one. A running incompatible container is kept while the
+   * runtime is `busy` (a turn in flight or a terminal attached) or while its
+   * new tools image is still building: the reason goes in
+   * `recreatePendingReason`, and the idle reaper or the next idle start does
+   * the recreate. Each recreate records its reason and time and is logged.
+   */
   const ensureRunningContainer = Effect.fn("threadRuntime.ensureRunningContainer")(function* (
     initial: RuntimeRecord,
     hostBindings: RuntimeHostBindings,
     currentFingerprint: string | undefined,
+    busy: string | undefined,
   ) {
     let record = initial;
     const mounts = buildMountSpecs(record, hostBindings);
@@ -1918,18 +2148,70 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       record.imageRef === localRuntimeImageBuildSpec.imageRef ? currentFingerprint : undefined;
 
     let inspect = yield* inspectContainerByName(record.containerName);
-    if (
-      inspect &&
-      !isContainerCompatible(inspect, record, mounts, profile, expectedImageFingerprint)
-    ) {
-      yield* removeContainerIfPresent(record.containerName);
-      inspect = undefined;
+    const target = yield* resolveRuntimeImageTarget(
+      record,
+      expectedImageFingerprint,
+      inspect ? "background" : "wait",
+    );
+    let recreateReason: string | undefined;
+    if (inspect) {
+      const reason = containerIncompatibility(
+        inspect,
+        target,
+        mounts,
+        profile,
+        expectedImageFingerprint,
+      );
+      const waitingFor =
+        reason === undefined
+          ? undefined
+          : !target.ready
+            ? "tools image build"
+            : inspect.State?.Running === true
+              ? busy
+              : undefined;
+      if (reason === undefined) {
+        if (record.recreatePendingReason !== null) {
+          yield* patchRecord(record.runtimeId, { recreatePendingReason: null });
+        }
+      } else if (waitingFor !== undefined) {
+        if (record.recreatePendingReason !== reason) {
+          yield* patchRecord(record.runtimeId, { recreatePendingReason: reason });
+          yield* Effect.logInfo("Deferring runtime container recreate").pipe(
+            Effect.annotateLogs({ runtimeId: record.runtimeId, reason, waitingFor }),
+          );
+        }
+      } else {
+        yield* removeContainerIfPresent(record.containerName);
+        inspect = undefined;
+        recreateReason = reason;
+      }
+    } else if (record.generation > 0) {
+      recreateReason = record.recreatePendingReason ?? "container was missing";
     }
 
     if (!inspect) {
       record = { ...record, generation: record.generation + 1 };
-      yield* patchRecord(record.runtimeId, { generation: record.generation, containerId: null });
-      yield* runDetachedContainer({ record, mounts, profile });
+      const now = new Date().toISOString();
+      yield* patchRecord(record.runtimeId, {
+        generation: record.generation,
+        containerId: null,
+        recreatePendingReason: null,
+        ...(recreateReason !== undefined
+          ? { lastRecreateReason: recreateReason, lastRecreatedAt: now }
+          : {}),
+      });
+      if (recreateReason !== undefined) {
+        yield* Effect.logInfo("Recreating runtime container").pipe(
+          Effect.annotateLogs({
+            runtimeId: record.runtimeId,
+            reason: recreateReason,
+            imageRef: target.imageRef,
+            generation: record.generation,
+          }),
+        );
+      }
+      yield* runDetachedContainer({ record, mounts, profile, target });
       inspect = yield* inspectContainerByName(record.containerName);
       if (!inspect) {
         return yield* new ThreadRuntimeError({
@@ -1950,6 +2232,22 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 
     return inspect;
   });
+
+  /** In-memory reasons a running container must not be recreated right now. */
+  const recreateBusyReason = (
+    runtimeId: RuntimeSessionIdModel,
+    bindings: ReadonlyArray<RuntimeThreadBinding>,
+    orchestrationActive: ReadonlySet<string> = new Set(),
+  ): string | undefined => {
+    if (bindings.some((binding) => activeTurnThreadIds.has(String(binding.threadId)))) {
+      return "turn in flight";
+    }
+    if (bindings.some((binding) => orchestrationActive.has(String(binding.threadId)))) {
+      return "session running";
+    }
+    if ((terminalHoldsByRuntime.get(String(runtimeId)) ?? 0) > 0) return "terminal attached";
+    return undefined;
+  };
 
   // -------------------------------------------------------------------------
   // Lifecycle operations (callers hold the runtime lock)
@@ -1992,7 +2290,12 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         fingerprintBuildContext(localRuntimeImageBuildSpec.contextPath),
       );
       yield* ensureRuntimeImageReady(record, currentImageFingerprint);
-      const inspect = yield* ensureRunningContainer(record, hostBindings, currentImageFingerprint);
+      const inspect = yield* ensureRunningContainer(
+        record,
+        hostBindings,
+        currentImageFingerprint,
+        recreateBusyReason(runtimeId, bindings),
+      );
       const managedOpenCodeServer = readManagedOpenCodeServerEndpoint(inspect);
       if (!managedOpenCodeServer) {
         return yield* new ThreadRuntimeError({
@@ -2168,8 +2471,27 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
                 lastStoppedAt: null,
                 retiredAt: null,
                 deletingAt: null,
+                recreatePendingReason: null,
+                lastRecreateReason: null,
+                lastRecreatedAt: null,
               })
               .pipe(fromRegistry(`Failed to create runtime '${runtimeId}'.`));
+            // An isolated clone starts with a copy of its parent's tools list.
+            const cloneToolsKey = runtimeToolsListKeyFor(record);
+            if (
+              seedFrom !== null &&
+              cloneToolsKey !== undefined &&
+              cloneToolsKey.runtimeId !== null
+            ) {
+              const parent = yield* readRecord(seedFrom);
+              const parentToolsKey = (parent ? runtimeToolsListKeyFor(parent) : undefined) ?? {
+                projectId: cloneToolsKey.projectId,
+                runtimeId: null,
+              };
+              yield* registry
+                .copyTools(parentToolsKey, cloneToolsKey)
+                .pipe(fromRegistry(`Failed to copy the tools list into '${runtimeId}'.`));
+            }
           } else {
             yield* patchRecord(runtimeId, {
               imageRef,
@@ -2427,6 +2749,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           health: "unknown",
           containerId: null,
           managedOpenCodeServer: null,
+          // The next start creates the container; this is the reason it records.
+          recreatePendingReason: wipeOptions?.reason ?? "runtime wiped",
           generation: record.generation + 1,
           lastStoppedAt: new Date().toISOString(),
           ...(wipeOptions?.reseed === true && record.seedSourceRuntimeId !== null
@@ -2588,20 +2912,91 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     now: number,
   ): string | undefined => {
     if (record.state !== "running" || record.deletingAt !== null) return "not running";
-    if (bindings.some((binding) => activeTurnThreadIds.has(String(binding.threadId)))) {
-      return "turn in flight";
-    }
-    if (bindings.some((binding) => orchestrationActive.has(String(binding.threadId)))) {
-      return "session running";
-    }
-    if ((terminalHoldsByRuntime.get(String(record.runtimeId)) ?? 0) > 0) return "terminal attached";
+    const busy = recreateBusyReason(record.runtimeId, bindings, orchestrationActive);
+    if (busy !== undefined) return busy;
     const lastActiveAt = Date.parse(record.lastActiveAt);
     if (!Number.isFinite(lastActiveAt) || now - lastActiveAt < runtimeIdleTimeoutMs)
       return "recently active";
     return undefined;
   };
 
+  /**
+   * Runs the recreates that were deferred (`recreatePendingReason`) on running
+   * runtimes that are no longer busy. Stopped runtimes wait for their next start.
+   */
+  const runPendingRecreates = Effect.fn("threadRuntime.runPendingRecreates")(function* () {
+    const records = yield* registry.listRuntimes().pipe(fromRegistry("Failed to list runtimes."));
+    const candidates = records.filter(
+      (record) =>
+        record.recreatePendingReason !== null &&
+        record.state === "running" &&
+        record.deletingAt === null,
+    );
+    if (candidates.length === 0) {
+      return;
+    }
+    const orchestrationActive = yield* orchestrationActiveThreadIds;
+    yield* Effect.forEach(
+      candidates,
+      (candidate) =>
+        withRuntimeLock(candidate.runtimeId)(
+          Effect.gen(function* () {
+            const record = yield* readRecord(candidate.runtimeId);
+            if (
+              !record ||
+              record.recreatePendingReason === null ||
+              record.state !== "running" ||
+              record.deletingAt !== null
+            ) {
+              return;
+            }
+            const bindings = yield* listBindings(record.runtimeId);
+            if (recreateBusyReason(record.runtimeId, bindings, orchestrationActive) !== undefined) {
+              return;
+            }
+            const hostBindings = yield* resolveAuthBindings();
+            const fingerprint = yield* Effect.sync(() =>
+              fingerprintBuildContext(localRuntimeImageBuildSpec.contextPath),
+            );
+            yield* ensureRuntimeImageReady(record, fingerprint);
+            const inspect = yield* ensureRunningContainer(
+              record,
+              hostBindings,
+              fingerprint,
+              undefined,
+            );
+            const containerId = inspect.Id?.trim() || null;
+            if (containerId === record.containerId) {
+              return;
+            }
+            yield* patchRecord(record.runtimeId, {
+              containerId,
+              health: "healthy",
+              managedOpenCodeServer: readManagedOpenCodeServerEndpoint(inspect) ?? null,
+              lastStartedAt: new Date().toISOString(),
+            });
+            const recreated = yield* readRecordOrFail(record.runtimeId);
+            yield* publishEvent(
+              "runtime.started",
+              recreated,
+              bindings[0]?.threadId,
+              runtimeView(recreated),
+            );
+          }),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to run a deferred runtime recreate", {
+              runtimeId: candidate.runtimeId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      { discard: true },
+    );
+  });
+
   const reapIdleRuntimes = Effect.fn("threadRuntime.reapIdleRuntimes")(function* () {
+    yield* runPendingRecreates();
     if (runtimeIdleTimeoutMs <= 0) {
       return;
     }
@@ -2655,9 +3050,9 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
   });
 
-  options?.exposeInternals?.({ reapIdleRuntimes });
+  options?.exposeInternals?.({ reapIdleRuntimes, awaitToolsImageBuilds });
 
-  if (runtimeIdleTimeoutMs > 0) {
+  if (runtimeIdlePollIntervalMs > 0) {
     yield* Effect.forever(
       reapIdleRuntimes().pipe(
         Effect.catchCause((cause) =>

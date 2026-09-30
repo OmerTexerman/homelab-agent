@@ -264,6 +264,8 @@ export interface ThreadRuntimeShape {
     runtimeId: RuntimeSessionId,
     options?: {
       readonly reseed?: boolean;
+      /** Recorded as the recreate reason when the next start creates the container. */
+      readonly reason?: string;
       readonly refill?: (hostRuntimePath: string) => Effect.Effect<void, unknown>;
     },
   ) => Effect.Effect<void, ThreadRuntimeError>;

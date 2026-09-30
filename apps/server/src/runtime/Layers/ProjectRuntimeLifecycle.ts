@@ -652,6 +652,9 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
         lastStartedAt: record?.lastStartedAt ?? null,
         lastStoppedAt: record?.lastStoppedAt ?? null,
         lastError: record?.lastError ?? null,
+        recreatePendingReason: record?.recreatePendingReason ?? null,
+        lastRecreateReason: record?.lastRecreateReason ?? null,
+        lastRecreatedAt: record?.lastRecreatedAt ?? null,
       };
       const detail: ProjectRuntimeDetail = {
         runtime: statusView,
@@ -826,16 +829,18 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
             { runtimeId: resolved.runtimeId, during: "resetting", onSuccess: "stopped" },
             Effect.gen(function* () {
               yield* closeRuntimeTerminals(resolved.runtimeThreads.map((thread) => thread.id));
-              yield* threadRuntime.wipeRuntime(resolved.runtimeId, { reseed: true }).pipe(
-                Effect.mapError((cause) =>
-                  toProjectRuntimeError({
-                    message: "Failed to reset project runtime.",
-                    projectId: resolved.project.id,
-                    runtimeId: resolved.runtimeId,
-                    cause,
-                  }),
-                ),
-              );
+              yield* threadRuntime
+                .wipeRuntime(resolved.runtimeId, { reseed: true, reason: "reset" })
+                .pipe(
+                  Effect.mapError((cause) =>
+                    toProjectRuntimeError({
+                      message: "Failed to reset project runtime.",
+                      projectId: resolved.project.id,
+                      runtimeId: resolved.runtimeId,
+                      cause,
+                    }),
+                  ),
+                );
             }),
           ),
         );
@@ -1030,6 +1035,7 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
             yield* threadRuntime
               .wipeRuntime(resolved.runtimeId, {
                 reseed: false,
+                reason: "snapshot restored",
                 refill: (runtimeRootPath) =>
                   Effect.tryPromise(() =>
                     replaceRuntimeStateFromArchive({

@@ -77,6 +77,11 @@ export const ProjectRuntimeStatusView = Schema.Struct({
   lastStartedAt: Schema.NullOr(IsoDateTime),
   lastStoppedAt: Schema.NullOr(IsoDateTime),
   lastError: Schema.NullOr(Schema.String),
+  /** Why the container will be rebuilt at the next idle moment, when a rebuild is waiting. */
+  recreatePendingReason: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Why the container was last rebuilt (image updated, tools changed, reset, ...). */
+  lastRecreateReason: Schema.optional(Schema.NullOr(Schema.String)),
+  lastRecreatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type ProjectRuntimeStatusView = typeof ProjectRuntimeStatusView.Type;
 
