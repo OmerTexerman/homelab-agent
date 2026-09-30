@@ -9,13 +9,19 @@ How the server keeps runtime containers (`project-runtime:<project>` and
 ## One record per runtime
 
 A runtime is one container. Its record lives in `homelab.sqlite` (see
-[homelab-storage.md](./homelab-storage.md), migration 100):
+[homelab-storage.md](./homelab-storage.md), migrations 100 and 101):
 
 | Table               | Holds                                                                                                                                                                                              |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `runtimes`          | One row per container: name, id, image, `generation`, the lifecycle `state` and `last_error`, activity times, the seed status of an isolated clone, `retired_at`, and the `deleting_at` tombstone. |
 | `runtime_threads`   | One row per bound thread: its runtime, provider, runtime mode, in-container cwd, and env.                                                                                                          |
 | `runtime_snapshots` | Snapshot metadata. The archives stay under `project-runtime-snapshots/`.                                                                                                                           |
+| `runtime_tools`     | Runtime tools: one row per spec, for a project's list (`runtime_id` '') or an isolated clone's own copy. See [Runtime tools](#runtime-tools).                                                      |
+
+`runtimes` also carries `recreate_pending_reason` (a recreate waiting for the
+runtime to go idle), `last_recreate_reason`, and `last_recreated_at`. The
+runtime detail returns all three, and the runtime strip shows "Rebuild
+pending: <reason>" or "Container rebuilt: <reason>".
 
 `state` is the one lifecycle state machine the UI shows
 (`ProjectRuntimeLifecycleState`): container states (`provisioning`,
@@ -108,6 +114,11 @@ container when all of these hold:
 
 It re-checks these under the runtime lock before it stops anything.
 
+Every tick also runs the deferred recreates: a running runtime with a
+`recreate_pending_reason` and no turn in flight and no attached terminal is
+recreated right away, without waiting for the idle timeout. A stopped runtime
+waits for its next start.
+
 ## Transitions and failures
 
 `ProjectRuntimeLifecycle` runs every mutating operation through
@@ -132,7 +143,8 @@ under each runtime's lock:
 
 The reconciler never creates or recreates a container. Containers carry the
 labels `homelab.runtime.id`, `homelab.runtime.generation` (bumped on every
-recreate and wipe), `homelab.runtime.profile`, and the image fingerprint.
+recreate and wipe), `homelab.runtime.profile`, `homelab.runtime.tools` (the
+tools hash, or `none`), and the image fingerprint.
 Containers from before these labels are adopted by name. A launch profile
 change still recreates the container.
 
@@ -165,18 +177,58 @@ after a pause restarts the same container with everything in it. Materialize
 only writes managed files (instructions, CLI, wrappers, secrets, `.homelab/`,
 skills); it never deletes other content.
 
-| Content                                                    | Idle stop and restart | Recreate | Reset |
-| ---------------------------------------------------------- | --------------------- | -------- | ----- |
-| Files in `/workspace` and the home directory               | kept                  | kept     | wiped |
-| npm/pipx/uv user installs (under `/runtime/home`, on PATH) | kept                  | kept     | wiped |
-| apt installs and anything under `/usr`, `/opt`, `/etc`     | kept                  | **lost** | wiped |
+| Content                                                      | Idle stop and restart | Recreate                            | Reset                        |
+| ------------------------------------------------------------ | --------------------- | ----------------------------------- | ---------------------------- |
+| Files in `/workspace` and the home directory                 | kept                  | kept                                | wiped                        |
+| npm/pipx/uv user installs (under `/runtime/home`, on PATH)   | kept                  | kept                                | wiped                        |
+| Tools added with `homelab tools add`                         | kept                  | kept (baked into the derived image) | kept (the list is not wiped) |
+| Other apt installs and anything under `/usr`, `/opt`, `/etc` | kept                  | **lost**                            | wiped                        |
 
-A **recreate** (`docker rm` + `run`) happens when the runtime image fingerprint or
-the security profile (`homelab.runtime.profile`) changes, or on restore. Image
-and profile changes arrive with deploys, so batch them and call them out.
-Issue #13 tracks a per-project tools list rebuilt into a derived image, with
-recreates deferred until idle and their reason shown in the UI, so system
-packages survive recreates too.
+A **recreate** (`docker rm` + `run`) happens when the runtime image (base
+fingerprint or derived tools image), the tools list, the security profile
+(`homelab.runtime.profile`), or the mounts change, and after a reset or
+restore. Image and profile changes arrive silently with deploys, so a recreate
+never interrupts work: while a turn is in flight or a terminal is attached, the
+old container keeps running, `recreate_pending_reason` is set, and the reaper
+or the next idle start recreates it. Reset and restore are user actions and
+remove the container immediately; the next start records `reset` or `snapshot
+restored` as the reason. Every recreate is logged at info level with its
+reason.
+
+## Runtime tools
+
+An agent records a system package with `homelab tools add <spec> --reason
+"..."`. Specs are `apt:<pkg>`, `pip:<pkg>`, `npm:<pkg>` (each with an optional
+version pin), or `url:<https url> <absolute dest>`. They become Dockerfile
+lines, so `RuntimeTools.ts` validates them against narrow allowlists (no
+whitespace, quotes, `$`, backticks, or relative paths; https only; no
+destinations under `/workspace` or `/runtime`).
+
+- `POST /api/homelab/runtime-tools` validates and stores the spec and returns
+  the argv install commands; the CLI runs them in the live container (no
+  shell) and removes the record again when the install fails. `GET` lists and
+  `POST /api/homelab/runtime-tools/remove` removes. A runtime token always
+  gets the list of the runtime its thread is bound to and can't name another
+  project or runtime.
+- The shared project runtime uses the project's list. Every other runtime
+  (isolated clone, scratch, curator) has its own list; an isolated clone copies
+  its parent's list when its record is created, and merging does not merge
+  tools.
+- With a non-empty list the container runs
+  `homelab-agent-runtime:<baseFingerprint>-<toolsHash>`: `FROM` the base image
+  plus one `RUN` line per kind (apt, pip, npm, url), specs sorted, so the same
+  list renders the same Dockerfile and Docker's layer cache is reused. The base
+  fingerprint is a hash of the base image id, so a rebuilt base image gets a new
+  derived image with the same tools. An empty list uses the base image.
+- A missing derived image is built in the background while a container exists
+  (the old one keeps running until the build finishes), and awaited when there
+  is no container to keep. A failed build falls back to the base image and is
+  retried after 30 minutes. The generated Dockerfiles live under
+  `<stateDir>/runtime-tool-images/`.
+- Adding or removing a tool marks the list's runtimes `tools changed`. Removing
+  a tool does not uninstall it from the running container; the next rebuild
+  leaves it out.
+- Settings -> Project Runtime lists each project's tools with Remove.
 
 ## User-space installs
 
@@ -185,7 +237,8 @@ shells set `NPM_CONFIG_PREFIX=/runtime/home/.npm-global`, `PIPX_HOME`,
 `PIPX_BIN_DIR`, and `UV_TOOL_BIN_DIR`, and put
 `/runtime/home/.local/bin:/runtime/home/.npm-global/bin` on `PATH`. Tools
 installed with `npm -g`, `pipx`, `uv tool`, or into `~/.local/bin` therefore
-survive a recreate. `apt` installs don't.
+survive a recreate. `apt` installs survive only when added with `homelab tools
+add`.
 
 ## Secret delivery call sites
 

@@ -9,6 +9,7 @@ fork tables in `state.sqlite` here, one owner at a time:
 | ----- | ---------- | -------- | --------------------------------------------------------------------- |
 | P3    | foundation | 1–99     | nothing; adds `homelab_migrations`, `homelab_imports`, `homelab_meta` |
 | P4    | runtime    | 100–199  | `thread-runtimes.json`, `project-runtime-lifecycle.json`              |
+| P4b   | runtime    | 101      | nothing; adds `runtime_tools` and the recreate columns on `runtimes`  |
 | P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)          |
 | P6    | secrets    | 300–399  | `homelab-secrets.json` metadata                                       |
 
