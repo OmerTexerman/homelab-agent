@@ -407,6 +407,11 @@ curl -s https://api.github.com/rate_limit | jq .
   everything out in your head.
 - Clean up or overwrite scratch artifacts freely. This container is disposable; only promoted
   knowledge survives.
+- Install system packages with \`homelab tools add apt:<pkg> --reason "..."\` (also
+  \`pip:<pkg>\`, \`npm:<pkg>\`, or \`'url:<https url> <dest path>'\`). It installs the tool now
+  and bakes it into this runtime's image, so it comes back when the container is rebuilt.
+  A plain \`apt-get install\` vanishes on the next rebuild. See \`homelab tools list\` and
+  \`homelab tools remove <spec>\`.
 - The workspace may be sparse. Seeing only runtime helper files such as \`AGENTS.md\` and
   \`CLAUDE.md\` is normal.
 
