@@ -4,8 +4,9 @@ import {
   type OrchestrationEvent,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.ts";
 import { ThreadRuntime } from "../../runtime/Services/ThreadRuntime.ts";
 import {
   defaultProjectRuntimeId,
@@ -56,6 +57,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const threadRuntime = yield* ThreadRuntime;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const runtimeRegistry = yield* Effect.serviceOption(RuntimeRegistry);
 
   const readActiveThreadBindings = projectionSnapshotQuery.getSnapshot().pipe(
     Effect.map((snapshot) => snapshot.threads),
@@ -84,6 +86,17 @@ const make = Effect.gen(function* () {
   const processProjectDeleted = Effect.fn("threadRuntimeReactor.processProjectDeleted")(function* (
     event: ProjectDeletedEvent,
   ) {
+    // The project's tools lists (its own and its clones') go with it.
+    if (Option.isSome(runtimeRegistry)) {
+      yield* runtimeRegistry.value.deleteProjectTools(event.payload.projectId).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to delete the tools lists of a deleted project", {
+            projectId: event.payload.projectId,
+            detail: cause.message,
+          }),
+        ),
+      );
+    }
     const runtimeId = event.payload.defaultRuntimeId;
     if (runtimeId === undefined || runtimeId === null) {
       return;

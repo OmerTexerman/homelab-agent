@@ -3,9 +3,9 @@
  * the upstream OrchestrationEngine through two hooks:
  *
  * - `inTransaction` runs inside the dispatch transaction after the events are
- *   saved. It adopts the scratch thread's skills into the target project
- *   (warn-only) and migrates its durable memory; a memory failure rolls the
- *   command back.
+ *   saved. It adopts the scratch thread's skills and runtime tools into the
+ *   target project (warn-only) and migrates its durable memory; a memory
+ *   failure rolls the command back.
  * - `afterCommit` refreshes the generated `.homelab` context views of the
  *   standalone and target projects.
  *
@@ -19,7 +19,8 @@ import * as Option from "effect/Option";
 import { refreshActiveProjectContextViews } from "../homelab/ProjectMemoryContextViews.ts";
 import { HomelabSkills } from "../homelab/Services/HomelabSkills.ts";
 import { ProjectMemory } from "../homelab/Services/ProjectMemory.ts";
-import { standaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
+import { isolatedThreadRuntimeId, standaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
+import { RuntimeRegistry } from "../runtime/RuntimeRegistry.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
 type StandaloneMoveCommand = Extract<
@@ -34,6 +35,30 @@ const isStandaloneMoveCommand = (command: OrchestrationCommand): command is Stan
 export const makeHomelabCommandEffects = Effect.gen(function* () {
   const projectMemory = yield* Effect.serviceOption(ProjectMemory);
   const homelabSkills = yield* Effect.serviceOption(HomelabSkills);
+  const runtimeRegistry = yield* Effect.serviceOption(RuntimeRegistry);
+
+  // Tools the scratch runtime recorded join the project's list (deduped by spec).
+  const adoptScratchThreadTools = (command: StandaloneMoveCommand) =>
+    Option.isNone(runtimeRegistry)
+      ? Effect.void
+      : runtimeRegistry.value
+          .adoptTools(
+            {
+              projectId: standaloneProjectId(),
+              runtimeId: isolatedThreadRuntimeId(command.threadId),
+            },
+            { projectId: command.projectId, runtimeId: null },
+          )
+          .pipe(
+            Effect.asVoid,
+            Effect.catch((cause) =>
+              Effect.logWarning("failed to adopt scratch thread runtime tools into project", {
+                threadId: command.threadId,
+                projectId: command.projectId,
+                detail: cause.message,
+              }),
+            ),
+          );
 
   const adoptScratchThreadSkills = (command: StandaloneMoveCommand) =>
     Option.isNone(homelabSkills)
@@ -101,6 +126,7 @@ export const makeHomelabCommandEffects = Effect.gen(function* () {
       return Effect.void;
     }
     return adoptScratchThreadSkills(command).pipe(
+      Effect.andThen(adoptScratchThreadTools(command)),
       Effect.andThen(migrateStandaloneMemory(command, input.committedEvents)),
     );
   };

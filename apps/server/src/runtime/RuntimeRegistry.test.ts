@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { RuntimeSessionId } from "@t3tools/contracts";
+import { ProjectId, RuntimeSessionId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -196,4 +196,44 @@ it.effect("reports missing when neither legacy store exists", () =>
       assert.deepEqual(yield* importLegacyRuntimeStores(stateDir), { status: "missing" });
     }),
   ).pipe(Effect.provide(TestLayer)),
+);
+
+const toolRow = (projectId: string, runtimeId: string | null, spec: string, reason = "") => ({
+  projectId: ProjectId.make(projectId),
+  runtimeId: runtimeId === null ? null : RuntimeSessionId.make(runtimeId),
+  spec,
+  reason,
+  addedByThreadId: null,
+  createdAt: now,
+});
+
+it.effect("adopts one tools list into another (deduped) and deletes a project's lists", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRuntimeRegistry;
+    const scratch = {
+      projectId: ProjectId.make("system:standalone"),
+      runtimeId: RuntimeSessionId.make(isolatedRuntimeId),
+    };
+    const project = { projectId: ProjectId.make("project-1"), runtimeId: null };
+    yield* registry.upsertTool(
+      toolRow("system:standalone", isolatedRuntimeId, "apt:jq", "scratch"),
+    );
+    yield* registry.upsertTool(toolRow("system:standalone", isolatedRuntimeId, "apt:htop"));
+    yield* registry.upsertTool(toolRow("project-1", null, "apt:jq", "project"));
+    yield* registry.upsertTool(toolRow("project-1", "isolated-runtime:clone", "apt:jq"));
+
+    assert.equal(yield* registry.adoptTools(scratch, project), 2);
+    const adopted = yield* registry.listTools(project);
+    assert.deepEqual(
+      adopted.map((row) => [row.spec, row.reason]),
+      [
+        ["apt:htop", ""],
+        ["apt:jq", "project"],
+      ],
+    );
+    assert.equal((yield* registry.listTools(scratch)).length, 0);
+
+    yield* registry.deleteProjectTools(ProjectId.make("project-1"));
+    assert.equal((yield* registry.listTools()).length, 0);
+  }).pipe(Effect.provide(HomelabSqlMemory)),
 );

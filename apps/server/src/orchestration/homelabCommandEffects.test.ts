@@ -1,6 +1,7 @@
 import {
   CommandId,
   ProjectId,
+  RuntimeSessionId,
   ThreadId,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -15,6 +16,9 @@ import {
   ProjectMemoryError,
   type ProjectMemoryShape,
 } from "../homelab/Services/ProjectMemory.ts";
+import { HomelabSqlMemory } from "../homelabPersistence/HomelabSql.ts";
+import { isolatedThreadRuntimeId, standaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
+import { make as makeRuntimeRegistry, RuntimeRegistry } from "../runtime/RuntimeRegistry.ts";
 import { makeHomelabCommandEffects } from "./homelabCommandEffects.ts";
 
 const moveCommand = (
@@ -81,4 +85,45 @@ it.effect("rejects a requested memory migration without a project memory service
       .pipe(Effect.flip);
     expect(error._tag).toBe("OrchestrationCommandInvariantError");
   }),
+);
+
+it.effect("carries a promoted scratch thread's runtime tools into the project's list", () =>
+  Effect.gen(function* () {
+    const registry = yield* RuntimeRegistry;
+    const threadId = ThreadId.make("thread-scratch");
+    const scratch = {
+      projectId: standaloneProjectId(),
+      runtimeId: isolatedThreadRuntimeId(threadId),
+    };
+    const project = { projectId: ProjectId.make("project-target"), runtimeId: null };
+    const row = (key: { projectId: ProjectId; runtimeId: RuntimeSessionId | null }, spec: string) =>
+      registry.upsertTool({
+        ...key,
+        spec,
+        reason: "",
+        addedByThreadId: threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+    yield* row(scratch, "apt:jq");
+    yield* row(scratch, "npm:prettier");
+    yield* row(project, "apt:jq");
+
+    const effects = yield* makeHomelabCommandEffects;
+    yield* effects.inTransaction({ command: moveCommand(), committedEvents: noEvents });
+
+    expect((yield* registry.listTools(project)).map((tool) => tool.spec)).toEqual([
+      "apt:jq",
+      "npm:prettier",
+    ]);
+    expect(yield* registry.listTools(scratch)).toEqual([]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        projectMemoryLayer(() => Effect.die("must not migrate")),
+        Layer.effect(RuntimeRegistry, makeRuntimeRegistry).pipe(
+          Layer.provideMerge(HomelabSqlMemory),
+        ),
+      ),
+    ),
+  ),
 );
