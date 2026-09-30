@@ -1,0 +1,85 @@
+# Weekly upstream drift report. Runs scripts/upstream-sync.ts plus a trial merge
+# of pingdotgg/t3code main and posts the result to the open `upstream-sync`
+# issue. It never pushes or merges: the merge itself is done by hand (see
+# docs/upstream-sync.md), because resolving conflicts carries product decisions.
+name: Upstream sync report
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: upstream-sync-report
+  cancel-in-progress: true
+
+jobs:
+  report:
+    if: github.repository == 'OmerTexerman/homelab-agent'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Build report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --quiet upstream main
+          behind="$(git rev-list --count HEAD..upstream/main)"
+          echo "behind=$behind" >>"$GITHUB_ENV"
+          node scripts/upstream-sync.ts >report.txt 2>&1
+
+          git -c user.name=ci -c user.email=ci@localhost merge --no-commit --no-ff upstream/main >/dev/null 2>&1 || true
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          git merge --abort 2>/dev/null || git reset --hard --quiet HEAD
+
+          {
+            echo "## Upstream sync report ($(date -u +%Y-%m-%d))"
+            echo
+            echo "\`main\` is **$behind** commits behind \`pingdotgg/t3code@main\`."
+            echo
+            if [[ -n "$conflicts" ]]; then
+              echo "A trial merge conflicts in **$(printf '%s\n' "$conflicts" | wc -l)** files:"
+              echo
+              printf '%s\n' "$conflicts" | sed 's/^/- `/; s/$/`/'
+            else
+              echo "A trial merge applies with no conflicts."
+            fi
+            echo
+            echo "<details><summary>scripts/upstream-sync.ts report</summary>"
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+            echo "</details>"
+            echo
+            echo "To merge: \`node scripts/upstream-sync.ts --merge\`, resolve, then \`--verify\`. See docs/upstream-sync.md."
+          } >comment.md
+          cat comment.md >>"$GITHUB_STEP_SUMMARY"
+      - name: Post to the upstream-sync issue
+        if: env.behind != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create upstream-sync -R "$REPO" --color 0E8A16 \
+            --description "Weekly upstream drift report" 2>/dev/null || true
+          issue="$(gh issue list -R "$REPO" --label upstream-sync --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$issue" ]]; then
+            gh issue create -R "$REPO" --label upstream-sync --title "Weekly upstream sync" \
+              --body "Weekly drift reports from the upstream-sync-report workflow. Close this after a sync; the next report opens a new one."
+            issue="$(gh issue list -R "$REPO" --label upstream-sync --state open --json number --jq '.[0].number')"
+          fi
+          gh issue comment "$issue" -R "$REPO" --body-file comment.md

@@ -14,6 +14,11 @@ upstream  https://github.com/pingdotgg/t3code.git
 
 ## Weekly flow
 
+Every Monday the `Upstream sync report` workflow runs the report plus a trial
+merge and comments the result on the open `upstream-sync` issue (it opens one
+if none is open). It never pushes or merges. Close the issue after a sync; run
+the workflow by hand from the Actions tab for a fresh report.
+
 ```bash
 node scripts/upstream-sync.ts           # drift, conflict forecast, new migrations
 node scripts/upstream-sync.ts --merge   # sync/upstream-<date> + checkpoint branch, merge started
