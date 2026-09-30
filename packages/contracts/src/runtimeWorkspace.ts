@@ -82,6 +82,8 @@ export const ProjectRuntimeStatusView = Schema.Struct({
   /** Why the container was last rebuilt (image updated, tools changed, reset, ...). */
   lastRecreateReason: Schema.optional(Schema.NullOr(Schema.String)),
   lastRecreatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** The tools list differs from the running container's; it is applied on the next rebuild. */
+  toolsPendingRebuild: Schema.optional(Schema.Boolean),
 });
 export type ProjectRuntimeStatusView = typeof ProjectRuntimeStatusView.Type;
 

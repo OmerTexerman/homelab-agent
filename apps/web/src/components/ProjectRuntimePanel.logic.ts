@@ -67,16 +67,20 @@ export function isThreadWaitingOnProjectRuntime(
 
 /**
  * What the runtime strip says about container rebuilds: a waiting rebuild
- * (the runtime was busy) wins over the last one that happened.
+ * (the runtime was busy) first, then a tools-list change that the next
+ * rebuild applies, then the last rebuild that happened.
  */
 export function projectRuntimeRecreateNotice(
   runtime: Pick<
     ProjectRuntimeDetail["runtime"],
-    "recreatePendingReason" | "lastRecreateReason" | "lastRecreatedAt"
+    "recreatePendingReason" | "lastRecreateReason" | "lastRecreatedAt" | "toolsPendingRebuild"
   >,
-): { readonly kind: "pending" | "rebuilt"; readonly text: string } | null {
+): { readonly kind: "pending" | "tools" | "rebuilt"; readonly text: string } | null {
   if (runtime.recreatePendingReason) {
     return { kind: "pending", text: `Rebuild pending: ${runtime.recreatePendingReason}` };
+  }
+  if (runtime.toolsPendingRebuild) {
+    return { kind: "tools", text: "Tools list changed; applied on next rebuild" };
   }
   if (runtime.lastRecreateReason) {
     return { kind: "rebuilt", text: `Container rebuilt: ${runtime.lastRecreateReason}` };

@@ -19,9 +19,11 @@ A runtime is one container. Its record lives in `homelab.sqlite` (see
 | `runtime_tools`     | Runtime tools: one row per spec, for a project's list (`runtime_id` '') or an isolated clone's own copy. See [Runtime tools](#runtime-tools).                                                      |
 
 `runtimes` also carries `recreate_pending_reason` (a recreate waiting for the
-runtime to go idle), `last_recreate_reason`, and `last_recreated_at`. The
-runtime detail returns all three, and the runtime strip shows "Rebuild
-pending: <reason>" or "Container rebuilt: <reason>".
+runtime to go idle), `last_recreate_reason`, `last_recreated_at`, and
+`container_tools_hash` (the tools list the current container was created
+with). The runtime detail returns the reasons and `toolsPendingRebuild`, and the
+runtime strip shows "Rebuild pending: <reason>", "Tools list changed; applied
+on next rebuild", or "Container rebuilt: <reason>".
 
 `state` is the one lifecycle state machine the UI shows
 (`ProjectRuntimeLifecycleState`): container states (`provisioning`,
@@ -184,10 +186,12 @@ skills); it never deletes other content.
 | Tools added with `homelab tools add`                         | kept                  | kept (baked into the derived image) | kept (the list is not wiped) |
 | Other apt installs and anything under `/usr`, `/opt`, `/etc` | kept                  | **lost**                            | wiped                        |
 
-A **recreate** (`docker rm` + `run`) happens when the runtime image (base
-fingerprint or derived tools image), the tools list, the security profile
-(`homelab.runtime.profile`), or the mounts change, and after a reset or
-restore. Image and profile changes arrive silently with deploys, so a recreate
+A **recreate** (`docker rm` + `run`) happens when the base image (its
+fingerprint or id), the security profile (`homelab.runtime.profile`), or the
+mounts change, and after a reset or restore. A tools-list change alone never
+recreates a container: the CLI already installed the tool live, and a recreate
+would drop other unrecorded installs. The new list rides along with the next
+recreate that happens anyway. Image and profile changes arrive silently with deploys, so a recreate
 never interrupts work: while a turn is in flight or a terminal is attached, the
 old container keeps running, `recreate_pending_reason` is set, and the reaper
 or the next idle start recreates it. Reset and restore are user actions and
@@ -213,7 +217,10 @@ destinations under `/workspace` or `/runtime`).
 - The shared project runtime uses the project's list. Every other runtime
   (isolated clone, scratch, curator) has its own list; an isolated clone copies
   its parent's list when its record is created, and merging does not merge
-  tools.
+  tools. Moving or promoting a scratch thread into a project moves its tools
+  into the project's list (deduped by spec; the project's row wins), in the
+  command's `inTransaction` hook next to the skills adoption. Deleting a
+  project deletes all of its lists.
 - With a non-empty list the container runs
   `homelab-agent-runtime:<baseFingerprint>-<toolsHash>`: `FROM` the base image
   plus one `RUN` line per kind (apt, pip, npm, url), specs sorted, so the same
@@ -225,9 +232,9 @@ destinations under `/workspace` or `/runtime`).
   is no container to keep. A failed build falls back to the base image and is
   retried after 30 minutes. The generated Dockerfiles live under
   `<stateDir>/runtime-tool-images/`.
-- Adding or removing a tool marks the list's runtimes `tools changed`. Removing
-  a tool does not uninstall it from the running container; the next rebuild
-  leaves it out.
+- Adding or removing a tool only changes the desired image. Removing a tool
+  does not uninstall it from the running container; the next rebuild leaves it
+  out. While the list and the container differ, the runtime strip says so.
 - Settings -> Project Runtime lists each project's tools with Remove.
 
 ## User-space installs

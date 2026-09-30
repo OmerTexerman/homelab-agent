@@ -25,4 +25,5 @@ export default Effect.gen(function* () {
   yield* sql`ALTER TABLE runtimes ADD COLUMN recreate_pending_reason TEXT`;
   yield* sql`ALTER TABLE runtimes ADD COLUMN last_recreate_reason TEXT`;
   yield* sql`ALTER TABLE runtimes ADD COLUMN last_recreated_at TEXT`;
+  yield* sql`ALTER TABLE runtimes ADD COLUMN container_tools_hash TEXT`;
 });

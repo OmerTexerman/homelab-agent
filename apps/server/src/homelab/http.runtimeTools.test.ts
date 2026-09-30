@@ -98,6 +98,7 @@ const seedRuntime = Effect.gen(function* () {
     recreatePendingReason: null,
     lastRecreateReason: null,
     lastRecreatedAt: null,
+    containerToolsHash: null,
   });
   yield* registry.upsertBinding({
     threadId: threadA,
@@ -173,9 +174,9 @@ it.layer(TestLayer)("runtime tools routes", (it) => {
         (yield* registry.listTools({ projectId: projectB })).map((row) => row.spec),
         [],
       );
-      // The project runtime is marked for a rebuild at its next idle moment.
+      // A tools change alone never schedules a rebuild.
       const record = yield* registry.getRuntime(runtimeA);
-      assert.equal(Option.getOrThrow(record).recreatePendingReason, "tools changed");
+      assert.equal(Option.getOrThrow(record).recreatePendingReason, null);
 
       // Human sessions see every list without naming a project.
       const client = yield* HttpClient.HttpClient;

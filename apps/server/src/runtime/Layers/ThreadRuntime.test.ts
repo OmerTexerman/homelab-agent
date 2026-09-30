@@ -24,7 +24,7 @@ import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
-import { markRuntimeToolsChanged, RuntimeRegistry } from "../RuntimeRegistry.ts";
+import { RuntimeRegistry } from "../RuntimeRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { wakeThreadWorkspaceRuntime } from "../wakeThreadWorkspaceRuntime.ts";
 import {
@@ -1770,16 +1770,14 @@ const bindProjectRuntime = (label: string) =>
       });
     }
     const addTool = (spec: string) =>
-      registry
-        .upsertTool({
-          projectId,
-          runtimeId: null,
-          spec,
-          reason: "test",
-          addedByThreadId: threadA,
-          createdAt: new Date().toISOString(),
-        })
-        .pipe(Effect.andThen(markRuntimeToolsChanged(registry, { projectId })));
+      registry.upsertTool({
+        projectId,
+        runtimeId: null,
+        spec,
+        reason: "test",
+        addedByThreadId: threadA,
+        createdAt: new Date().toISOString(),
+      });
     const readRecord = registry
       .getRuntime(runtimeId)
       .pipe(
@@ -2262,56 +2260,63 @@ sharedRuntimeLayer("ThreadRuntimeLive shared runtimes", (it) => {
       }),
   );
 
-  it.effect(
-    "defers a tools recreate while a turn or terminal is active, then runs it when idle",
-    () =>
-      Effect.gen(function* () {
-        resetDocker();
-        const { runtime, threadA, threadB, addTool, readRecord } =
-          yield* bindProjectRuntime("p4b-defer");
-        const first = yield* runtime.startRuntime(threadA);
-        NodeAssert.equal(
-          docker.containers.get(first.containerName)?.labels["homelab.runtime.tools"],
-          "none",
-        );
+  it.effect("a tools-only change never recreates; the next real recreate picks the tools up", () =>
+    Effect.gen(function* () {
+      resetDocker();
+      const { runtime, threadA, threadB, addTool, readRecord } =
+        yield* bindProjectRuntime("p4b-defer");
+      const first = yield* runtime.startRuntime(threadA);
+      NodeAssert.equal(
+        docker.containers.get(first.containerName)?.labels["homelab.runtime.tools"],
+        "none",
+      );
 
-        yield* runtime.setTurnActive(threadB, true);
-        yield* addTool("apt:jq");
-        NodeAssert.equal((yield* readRecord).recreatePendingReason, "tools changed");
-        // First start kicks off the background build; the second finds the image ready
-        // but B's turn is in flight, so the container is kept.
-        yield* runtime.startRuntime(threadA);
-        yield* awaitToolsImageBuilds!();
-        docker.calls.length = 0;
-        yield* runtime.startRuntime(threadA);
-        yield* reapIdleRuntimes!();
-        NodeAssert.equal(
-          docker.calls.some((call) => call[0] === "rm"),
-          false,
-        );
-        NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
-        NodeAssert.equal((yield* readRecord).recreatePendingReason, "tools changed");
+      // Adding a tool (already installed live by the CLI) keeps the container.
+      yield* addTool("apt:jq");
+      yield* runtime.startRuntime(threadA);
+      yield* awaitToolsImageBuilds!();
+      docker.calls.length = 0;
+      yield* runtime.stopRuntime(threadA);
+      yield* runtime.startRuntime(threadA);
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(
+        docker.calls.some((call) => call[0] === "rm" || call[0] === "run"),
+        false,
+      );
+      NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+      NodeAssert.equal((yield* readRecord).recreatePendingReason, null);
 
-        // The turn ends but a terminal is attached: still deferred.
-        yield* runtime.setTurnActive(threadB, false);
-        const release = yield* runtime.retainTerminal(threadA);
-        yield* reapIdleRuntimes!();
-        NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+      // A profile change while B's turn is in flight is deferred...
+      yield* runtime.setTurnActive(threadB, true);
+      const container = docker.containers.get(first.containerName);
+      NodeAssert.ok(container);
+      container.labels["homelab.runtime.profile"] = "v0;stale";
+      yield* runtime.startRuntime(threadA);
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+      NodeAssert.equal((yield* readRecord).recreatePendingReason, "security profile changed");
 
-        // Idle: the reaper recreates it on the tools image and records why.
-        release();
-        yield* reapIdleRuntimes!();
-        const recreated = docker.containers.get(first.containerName);
-        NodeAssert.ok(recreated);
-        NodeAssert.notEqual(recreated.id, first.containerId);
-        NodeAssert.equal(recreated.running, true);
-        NodeAssert.match(recreated.labels["homelab.runtime.tools"] ?? "", /^[0-9a-f]{12}$/);
-        const record = yield* readRecord;
-        NodeAssert.equal(record.lastRecreateReason, "tools changed");
-        NodeAssert.equal(record.recreatePendingReason, null);
-        NodeAssert.equal(record.state, "running");
-        NodeAssert.equal(record.containerId, recreated.id);
-      }),
+      // ...and still while a terminal is attached.
+      yield* runtime.setTurnActive(threadB, false);
+      const release = yield* runtime.retainTerminal(threadA);
+      yield* reapIdleRuntimes!();
+      NodeAssert.equal(docker.containers.get(first.containerName)?.id, first.containerId);
+
+      // Idle: the reaper recreates it, on the tools image, and records why.
+      release();
+      yield* reapIdleRuntimes!();
+      const recreated = docker.containers.get(first.containerName);
+      NodeAssert.ok(recreated);
+      NodeAssert.notEqual(recreated.id, first.containerId);
+      NodeAssert.equal(recreated.running, true);
+      NodeAssert.match(recreated.labels["homelab.runtime.tools"] ?? "", /^[0-9a-f]{12}$/);
+      const record = yield* readRecord;
+      NodeAssert.equal(record.lastRecreateReason, "security profile changed");
+      NodeAssert.equal(record.recreatePendingReason, null);
+      NodeAssert.equal(record.containerToolsHash, recreated.labels["homelab.runtime.tools"]);
+      NodeAssert.equal(record.state, "running");
+      NodeAssert.equal(record.containerId, recreated.id);
+    }),
   );
 
   it.effect("records reset as the recreate reason of the next container", () =>

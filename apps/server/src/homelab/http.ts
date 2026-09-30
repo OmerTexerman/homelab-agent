@@ -81,7 +81,6 @@ import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRe
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
-  markRuntimeToolsChanged,
   RuntimeRegistry,
   runtimeToolsListKeyFor,
   type RuntimeToolRow,
@@ -1655,10 +1654,8 @@ export const homelabRuntimeToolsAddRouteLayer = HttpRouter.add(
       addedByThreadId: caller.kind === "runtime" ? caller.threadId : null,
       createdAt: new Date().toISOString(),
     };
+    // The list only shapes the next image; it never triggers a recreate by itself.
     const created = yield* registry.upsertTool(row).pipe(Effect.mapError(runtimeToolsStoreError));
-    if (created) {
-      yield* markRuntimeToolsChanged(registry, key).pipe(Effect.mapError(runtimeToolsStoreError));
-    }
     const tool = toRuntimeToolView(row);
     if (tool === undefined) {
       return yield* new HomelabHttpError({ message: "Invalid runtime tool spec.", status: 400 });
@@ -1692,9 +1689,6 @@ export const homelabRuntimeToolsRemoveRouteLayer = HttpRouter.add(
     const removed = yield* registry
       .deleteTool(key, spec)
       .pipe(Effect.mapError(runtimeToolsStoreError));
-    if (removed) {
-      yield* markRuntimeToolsChanged(registry, key).pipe(Effect.mapError(runtimeToolsStoreError));
-    }
     return HttpServerResponse.jsonUnsafe({ removed } satisfies RuntimeToolRemoveResult, {
       status: 200,
     });

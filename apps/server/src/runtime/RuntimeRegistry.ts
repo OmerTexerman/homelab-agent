@@ -91,6 +91,8 @@ export interface RuntimeRecord {
   readonly recreatePendingReason: string | null;
   readonly lastRecreateReason: string | null;
   readonly lastRecreatedAt: string | null;
+  /** Tools hash the current container was created with (null: before tools existed, i.e. none). */
+  readonly containerToolsHash: string | null;
 }
 
 export type RuntimeRecordPatch = Partial<Omit<RuntimeRecord, "runtimeId" | "createdAt">>;
@@ -181,6 +183,13 @@ export interface RuntimeRegistryShape {
     key: RuntimeToolsListKey,
     spec: string,
   ) => Effect.Effect<boolean, PersistenceSqlError>;
+  /** Moves `from`'s tools into `to`'s list, keeping `to`'s row for a spec both have. */
+  readonly adoptTools: (
+    from: RuntimeToolsListKey,
+    to: RuntimeToolsListKey,
+  ) => Effect.Effect<number, PersistenceSqlError>;
+  /** Deletes every tools list of a project (its own and its clones'). */
+  readonly deleteProjectTools: (projectId: ProjectId) => Effect.Effect<void, PersistenceSqlError>;
   /** Replaces `to`'s list with a copy of `from`'s (an isolated clone inheriting its parent's). */
   readonly copyTools: (
     from: RuntimeToolsListKey,
@@ -204,33 +213,6 @@ export function runtimeToolsListKeyFor(
         runtimeId: owner.kind === "runtime" ? record.runtimeId : null,
       };
 }
-
-/**
- * Marks every runtime that uses this tools list (and has had a container) as
- * needing a rebuild. The container is recreated at its next idle moment.
- */
-export const markRuntimeToolsChanged = Effect.fn("RuntimeRegistry.markRuntimeToolsChanged")(
-  function* (registry: RuntimeRegistryShape, key: RuntimeToolsListKey) {
-    const records = yield* registry.listRuntimes();
-    const affected = records.filter((record) => {
-      const recordKey = runtimeToolsListKeyFor(record);
-      return (
-        record.deletingAt === null &&
-        record.generation > 0 &&
-        recordKey !== undefined &&
-        recordKey.projectId === key.projectId &&
-        recordKey.runtimeId === (key.runtimeId ?? null)
-      );
-    });
-    yield* Effect.forEach(
-      affected,
-      (record) =>
-        registry.patchRuntime(record.runtimeId, { recreatePendingReason: "tools changed" }),
-      { discard: true },
-    );
-    return affected.length;
-  },
-);
 
 // ---------------------------------------------------------------------------
 // Row mapping
@@ -264,6 +246,7 @@ interface RuntimeRow {
   readonly recreatePendingReason: string | null;
   readonly lastRecreateReason: string | null;
   readonly lastRecreatedAt: string | null;
+  readonly containerToolsHash: string | null;
 }
 
 const RUNTIME_KINDS: ReadonlyArray<RuntimeKind> = [
@@ -335,6 +318,7 @@ function toRecord(row: RuntimeRow): RuntimeRecord {
     recreatePendingReason: row.recreatePendingReason ?? null,
     lastRecreateReason: row.lastRecreateReason ?? null,
     lastRecreatedAt: row.lastRecreatedAt ?? null,
+    containerToolsHash: row.containerToolsHash ?? null,
   };
 }
 
@@ -386,6 +370,7 @@ function recordColumns(patch: RuntimeRecordPatch & { readonly runtimeId?: string
   set("recreate_pending_reason", patch.recreatePendingReason);
   set("last_recreate_reason", patch.lastRecreateReason);
   set("last_recreated_at", patch.lastRecreatedAt);
+  set("container_tools_hash", patch.containerToolsHash);
   return columns;
 }
 
@@ -423,7 +408,8 @@ export const make = Effect.gen(function* () {
         deleting_at AS "deletingAt",
         recreate_pending_reason AS "recreatePendingReason",
         last_recreate_reason AS "lastRecreateReason",
-        last_recreated_at AS "lastRecreatedAt"
+        last_recreated_at AS "lastRecreatedAt",
+        container_tools_hash AS "containerToolsHash"
       FROM runtimes
       ${where ?? sql.literal("")}
       ORDER BY created_at, runtime_id
@@ -673,6 +659,35 @@ export const make = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("RuntimeRegistry.copyTools")),
     );
 
+  const adoptTools: RuntimeRegistryShape["adoptTools"] = (from, to) =>
+    Effect.gen(function* () {
+      const moving = yield* sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS "n" FROM runtime_tools
+        WHERE project_id = ${from.projectId} AND runtime_id = ${toolRuntimeKey(from)}
+      `;
+      yield* sql`
+        INSERT OR IGNORE INTO runtime_tools
+          (project_id, runtime_id, spec, reason, added_by_thread_id, created_at)
+        SELECT ${to.projectId}, ${toolRuntimeKey(to)}, spec, reason, added_by_thread_id, created_at
+        FROM runtime_tools
+        WHERE project_id = ${from.projectId} AND runtime_id = ${toolRuntimeKey(from)}
+      `;
+      yield* sql`
+        DELETE FROM runtime_tools
+        WHERE project_id = ${from.projectId} AND runtime_id = ${toolRuntimeKey(from)}
+      `;
+      return Number(moving[0]?.n ?? 0);
+    }).pipe(
+      sql.withTransaction,
+      Effect.mapError(toPersistenceSqlError("RuntimeRegistry.adoptTools")),
+    );
+
+  const deleteProjectTools: RuntimeRegistryShape["deleteProjectTools"] = (projectId) =>
+    sql`DELETE FROM runtime_tools WHERE project_id = ${projectId}`.pipe(
+      Effect.asVoid,
+      Effect.mapError(toPersistenceSqlError("RuntimeRegistry.deleteProjectTools")),
+    );
+
   return RuntimeRegistry.of({
     getRuntime,
     listRuntimes,
@@ -690,6 +705,8 @@ export const make = Effect.gen(function* () {
     upsertTool,
     deleteTool,
     copyTools,
+    adoptTools,
+    deleteProjectTools,
   });
 });
 
@@ -881,6 +898,7 @@ function buildLegacyRuntimeImport(input: {
       recreatePendingReason: null,
       lastRecreateReason: null,
       lastRecreatedAt: null,
+      containerToolsHash: null,
     });
     for (const descriptor of descriptors) {
       bindings.push({

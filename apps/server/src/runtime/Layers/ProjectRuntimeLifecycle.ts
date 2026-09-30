@@ -50,7 +50,8 @@ import {
   resolveProjectRuntimeAssignment,
 } from "../ProjectRuntimePolicy.ts";
 import { ProjectRuntimeQueue } from "../ProjectRuntimeQueue.ts";
-import { RuntimeRegistry, type RuntimeRecord } from "../RuntimeRegistry.ts";
+import { RuntimeRegistry, runtimeToolsListKeyFor, type RuntimeRecord } from "../RuntimeRegistry.ts";
+import { NO_RUNTIME_TOOLS, normalizeRuntimeTools, runtimeToolsHash } from "../RuntimeTools.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { CONTAINER_HOME_PATH, encodeRuntimeSegment } from "./RuntimeExecutionContext.ts";
@@ -599,6 +600,23 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
         ),
         queue.getState(resolved.runtimeId),
       ]);
+      // Tools recorded since the container was created ride along with the next rebuild.
+      const toolsKey = record && record.generation > 0 ? runtimeToolsListKeyFor(record) : undefined;
+      const desiredToolsHash =
+        toolsKey === undefined
+          ? NO_RUNTIME_TOOLS
+          : runtimeToolsHash(
+              normalizeRuntimeTools(
+                (yield* registry.listTools(toolsKey).pipe(
+                  fromRegistry("Failed to read the runtime tools list.", {
+                    runtimeId: resolved.runtimeId,
+                  }),
+                )).map((row) => row.spec),
+              ),
+            );
+      const toolsPendingRebuild =
+        toolsKey !== undefined &&
+        (record?.containerToolsHash ?? NO_RUNTIME_TOOLS) !== desiredToolsHash;
       const lifecycleState: ProjectRuntimeLifecycleState =
         record === undefined
           ? "unprovisioned"
@@ -655,6 +673,7 @@ export const makeProjectRuntimeLifecycleWith = (options?: ProjectRuntimeLifecycl
         recreatePendingReason: record?.recreatePendingReason ?? null,
         lastRecreateReason: record?.lastRecreateReason ?? null,
         lastRecreatedAt: record?.lastRecreatedAt ?? null,
+        toolsPendingRebuild,
       };
       const detail: ProjectRuntimeDetail = {
         runtime: statusView,

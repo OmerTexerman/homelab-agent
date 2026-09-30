@@ -95,6 +95,13 @@ describe("ProjectRuntimePanel logic", () => {
         lastRecreatedAt: "2026-09-29T00:00:00.000Z",
       }),
     ).toEqual({ kind: "rebuilt", text: "Container rebuilt: image updated" });
+    expect(
+      projectRuntimeRecreateNotice({
+        recreatePendingReason: null,
+        toolsPendingRebuild: true,
+        lastRecreateReason: "image updated",
+      }),
+    ).toEqual({ kind: "tools", text: "Tools list changed; applied on next rebuild" });
     // Older servers don't send the fields.
     expect(projectRuntimeRecreateNotice({})).toBeNull();
   });

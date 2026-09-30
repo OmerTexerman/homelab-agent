@@ -246,6 +246,7 @@ function makeRecord(input: {
     recreatePendingReason: null,
     lastRecreateReason: null,
     lastRecreatedAt: null,
+    containerToolsHash: null,
   };
 }
 
@@ -667,6 +668,21 @@ it.layer(NodeServices.layer)("ProjectRuntimeLifecycle", (it) => {
         assert.equal(detail.runtime.runtime.lastRecreateReason, "reset");
         assert.equal(detail.runtime.runtime.lastRecreatedAt, "2026-09-29T00:00:00.000Z");
         assert.equal(detail.runtime.runtime.recreatePendingReason, null);
+        assert.equal(detail.runtime.runtime.toolsPendingRebuild, false);
+        // A recorded tool the container doesn't have yet shows as applied on the next rebuild.
+        yield* registry.patchRuntime(runtimeId, { generation: 1, containerToolsHash: null });
+        yield* registry.upsertTool({
+          projectId,
+          runtimeId: null,
+          spec: "apt:jq",
+          reason: "",
+          addedByThreadId: null,
+          createdAt: "2026-09-29T00:00:00.000Z",
+        });
+        assert.equal(
+          (yield* lifecycle.get({ projectId })).runtime.runtime.toolsPendingRebuild,
+          true,
+        );
       }),
     ),
   );

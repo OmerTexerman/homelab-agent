@@ -501,24 +501,24 @@ interface RuntimeImageTarget {
 
 /**
  * Why an existing container can't be reused for this runtime, or undefined
- * when it can. The working directory is not compared: containers run in
- * `/workspace` and every exec sets its own thread's cwd, so threads with
- * different cwds share one container. Runtime-id and generation labels are
- * not compared either, so containers created before those labels existed are
- * kept. A container without a tools label counts as having no tools.
+ * when it can. `expectedImageRef` is the image the container should run for
+ * the tools it was created with: a tools-list change alone never makes a
+ * container incompatible (the live install already applied the tool, and a
+ * recreate would drop other unrecorded installs); the new list is picked up
+ * by the next recreate that happens anyway. The working directory is not
+ * compared: containers run in `/workspace` and every exec sets its own
+ * thread's cwd. Runtime-id and generation labels are not compared either, so
+ * containers created before those labels existed are kept.
  */
 function containerIncompatibility(
   inspect: DockerContainerInspectResult,
-  target: RuntimeImageTarget,
+  expectedImageRef: string,
   mounts: ReadonlyArray<DockerMountSpec>,
   expectedProfile: string,
   expectedImageFingerprint?: string,
 ): string | undefined {
   const labels = inspect.Config?.Labels ?? {};
-  if ((labels[RUNTIME_TOOLS_LABEL] || NO_RUNTIME_TOOLS) !== target.toolsHash) {
-    return "tools changed";
-  }
-  if (inspect.Config?.Image !== target.imageRef) {
+  if (inspect.Config?.Image !== expectedImageRef) {
     return "image updated";
   }
   if (
@@ -2113,11 +2113,17 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       toolsHash,
       baseFingerprint,
     };
-    if (mode === "background") {
-      if (mayBuild) yield* startToolsImageBuild(build);
+    if (mode === "background" && mayBuild) {
+      yield* startToolsImageBuild(build);
       return { ...target, ready: false };
     }
-    if (mayBuild && (yield* Deferred.await(yield* startToolsImageBuild(build)))) {
+    // A list whose image keeps failing to build must not hold back image or
+    // profile recreates: those fall back to the base image until a retry works.
+    if (
+      mode === "wait" &&
+      mayBuild &&
+      (yield* Deferred.await(yield* startToolsImageBuild(build)))
+    ) {
       return target;
     }
     yield* Effect.logWarning("Starting runtime without its tools image; it is rebuilt later", {
@@ -2125,6 +2131,24 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       imageRef: target.imageRef,
     });
     return base;
+  });
+
+  /**
+   * The image a container should be running for the tools it was created
+   * with (its `homelab.runtime.tools` label) on the current base image.
+   */
+  const imageForContainerTools = Effect.fn("threadRuntime.imageForContainerTools")(function* (
+    record: RuntimeRecord,
+    inspect: DockerContainerInspectResult,
+    target: RuntimeImageTarget,
+  ) {
+    const containerTools = inspect.Config?.Labels?.[RUNTIME_TOOLS_LABEL] || NO_RUNTIME_TOOLS;
+    if (containerTools === target.toolsHash) return target.imageRef;
+    if (containerTools === NO_RUNTIME_TOOLS) return record.imageRef;
+    const baseImageId = yield* imageIdOf(record.imageRef);
+    return baseImageId === undefined
+      ? (inspect.Config?.Image ?? record.imageRef)
+      : runtimeToolsImageTag(runtimeBaseImageFingerprint(baseImageId), containerTools);
   });
 
   /**
@@ -2157,7 +2181,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     if (inspect) {
       const reason = containerIncompatibility(
         inspect,
-        target,
+        yield* imageForContainerTools(record, inspect, target),
         mounts,
         profile,
         expectedImageFingerprint,
@@ -2196,6 +2220,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       yield* patchRecord(record.runtimeId, {
         generation: record.generation,
         containerId: null,
+        containerToolsHash: target.toolsHash,
         recreatePendingReason: null,
         ...(recreateReason !== undefined
           ? { lastRecreateReason: recreateReason, lastRecreatedAt: now }
@@ -2474,6 +2499,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
                 recreatePendingReason: null,
                 lastRecreateReason: null,
                 lastRecreatedAt: null,
+                containerToolsHash: null,
               })
               .pipe(fromRegistry(`Failed to create runtime '${runtimeId}'.`));
             // An isolated clone starts with a copy of its parent's tools list.
