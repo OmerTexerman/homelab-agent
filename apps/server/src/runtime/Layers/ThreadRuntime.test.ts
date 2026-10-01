@@ -21,12 +21,20 @@ import {
 } from "../../auth/SessionStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
-import { HomelabSecretRegistry } from "../../homelab/Services/HomelabSecretRegistry.ts";
+import { EgressCertificateAuthority, generateEgressCa } from "../../homelab/egress/EgressCa.ts";
+import { computeSurrogate } from "../../homelab/egress/surrogates.ts";
+import { HomelabEgressGateway } from "../../homelab/Services/HomelabEgressGateway.ts";
+import {
+  DEFAULT_BROKER_POLICY,
+  HomelabSecretRegistry,
+  type MaterializedHomelabSecret,
+} from "../../homelab/Services/HomelabSecretRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { RuntimeBootstrapRegistry } from "../Services/RuntimeBootstrapRegistry.ts";
 import { RuntimeRegistry } from "../RuntimeRegistry.ts";
 import { ThreadRuntime } from "../Services/ThreadRuntime.ts";
 import { wakeThreadWorkspaceRuntime } from "../wakeThreadWorkspaceRuntime.ts";
+import { buildRuntimeControlEnvironment, renderSecretEnvFile } from "./RuntimeExecutionContext.ts";
 import {
   makeThreadRuntimeLive,
   RUNTIME_GENERATION_LABEL,
@@ -419,6 +427,7 @@ const runtimeLayerWithSecrets = it.layer(
         requestSecret: () => Effect.die("unused"),
         declineRequest: () => Effect.die("unused"),
         setScope: () => Effect.die("unused"),
+        setBrokerPolicy: () => Effect.die("unused"),
         deleteSecret: () => Effect.void,
         materializeSecrets: () =>
           Effect.succeed(
@@ -426,6 +435,7 @@ const runtimeLayerWithSecrets = it.layer(
               key,
               value,
               valueUpdatedAt: "2026-01-01T00:00:00.000Z",
+              ...DEFAULT_BROKER_POLICY,
             })),
           ),
         changes: Stream.empty,
@@ -1681,12 +1691,18 @@ const sharedRuntimeLayer = it.layer(
         requestSecret: () => Effect.die("unused"),
         declineRequest: () => Effect.die("unused"),
         setScope: () => Effect.die("unused"),
+        setBrokerPolicy: () => Effect.die("unused"),
         deleteSecret: () => Effect.void,
         materializeSecrets: () =>
           Effect.sync(() => {
             secretMaterializations += 1;
             return [
-              { key: "SHARED_SECRET", value: "value", valueUpdatedAt: "2026-09-01T00:00:00.000Z" },
+              {
+                key: "SHARED_SECRET",
+                value: "value",
+                valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+                ...DEFAULT_BROKER_POLICY,
+              },
             ];
           }),
         changes: Stream.empty,
@@ -2358,6 +2374,203 @@ sharedRuntimeLayer("ThreadRuntimeLive shared runtimes", (it) => {
       // Later project changes don't reach the clone's own list.
       yield* addTool("apt:htop");
       NodeAssert.deepEqual(yield* cloneList(), ["apt:jq"]);
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Egress broker delivery: surrogates, proxy env, CA trust.
+// ---------------------------------------------------------------------------
+
+const EGRESS_SURROGATE_KEY = new Uint8Array(32).fill(7);
+let brokeredTestSecrets: ReadonlyArray<MaterializedHomelabSecret> = [];
+const egressExecCalls: Array<{ readonly args: ReadonlyArray<string>; readonly stdin?: string }> =
+  [];
+
+const runtimeLayerWithEgressGateway = it.layer(
+  makeThreadRuntimeLive({
+    dockerBinaryPath: "docker",
+    dockerNetwork: "homelab-agent-test",
+    containerShellPath: "/bin/zsh",
+    dockerRunner: (args, options) => {
+      if (args[0] === "exec") {
+        egressExecCalls.push({
+          args: [...args],
+          ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+        });
+        return Effect.succeed(okResult());
+      }
+      return docker.run(args);
+    },
+    reconcileOnStart: false,
+    reconcileIntervalMs: 0,
+  }).pipe(
+    Layer.provideMerge(HomelabSqlMemory),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "thread-runtime-egress-test-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providers: { codex: { homePath: makeCodexAuthDirPath() } },
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(HomelabSecretRegistry, {
+        listSecrets: () => Effect.succeed([]),
+        upsertSecret: () => Effect.die("unused"),
+        requestSecret: () => Effect.die("unused"),
+        declineRequest: () => Effect.die("unused"),
+        setScope: () => Effect.die("unused"),
+        setBrokerPolicy: () => Effect.die("unused"),
+        deleteSecret: () => Effect.void,
+        materializeSecrets: () => Effect.sync(() => brokeredTestSecrets),
+        changes: Stream.empty,
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.effect(
+        HomelabEgressGateway,
+        Effect.promise(() => generateEgressCa()).pipe(
+          Effect.map((material) =>
+            HomelabEgressGateway.of({
+              proxyPort: 4567,
+              ca: new EgressCertificateAuthority(material),
+              surrogateFor: ({ runtimeId, secretKey, valueUpdatedAt }) =>
+                computeSurrogate({
+                  key: EGRESS_SURROGATE_KEY,
+                  runtimeId,
+                  secretKey,
+                  valueUpdatedAt,
+                }),
+              attach: () => Effect.void,
+            }),
+          ),
+        ),
+      ),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+runtimeLayerWithEgressGateway("ThreadRuntimeLive egress broker delivery", (it) => {
+  it.effect("delivers surrogates, proxy env, and the CA only for brokered secrets", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      egressExecCalls.length = 0;
+      brokeredTestSecrets = [
+        {
+          key: "PLAIN_TOKEN",
+          value: "plain-real-value",
+          valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+          ...DEFAULT_BROKER_POLICY,
+        },
+        {
+          key: "PVE_TOKEN",
+          value: "pve-real-value",
+          valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+          delivery: "brokered",
+          allowedHosts: ["pve.lan:8006"],
+          approveWrites: false,
+          upstreamTls: "insecure",
+        },
+      ];
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+      const gateway = yield* HomelabEgressGateway;
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-egress"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const home = launchContext.hostHomePath;
+      const surrogate = gateway.surrogateFor({
+        runtimeId: String(descriptor.runtimeId),
+        secretKey: "PVE_TOKEN",
+        valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+      });
+      NodeAssert.match(surrogate, /^hlsur_[a-z2-7]{32}$/);
+
+      const secretsDir = NodePath.join(home, ".homelab", "secrets");
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(secretsDir, "PVE_TOKEN")),
+        surrogate,
+      );
+      NodeAssert.equal(
+        yield* fileSystem.readFileString(NodePath.join(secretsDir, "PLAIN_TOKEN")),
+        "plain-real-value",
+      );
+      const shim = yield* fileSystem.readFileString(NodePath.join(home, ".homelab-runtime.env"));
+      NodeAssert.doesNotMatch(shim, /pve-real-value/);
+      NodeAssert.match(shim, new RegExp(`export PVE_TOKEN='${surrogate}'`));
+      NodeAssert.match(shim, /export PLAIN_TOKEN='plain-real-value'/);
+      NodeAssert.match(
+        shim,
+        /export NODE_EXTRA_CA_CERTS='\/etc\/ssl\/certs\/ca-certificates\.crt'/,
+      );
+      NodeAssert.match(shim, /export NO_PROXY='localhost,127\.0\.0\.1,::1,[^']+'/);
+      NodeAssert.match(
+        shim,
+        /HTTP_PROXY="http:\/\/runtime:\$\{HOMELAB_AGENT_RUNTIME_TOKEN\}@[^"]+:4567"/,
+      );
+
+      // The CA went into the container's trust store, as root, once.
+      NodeAssert.equal(egressExecCalls.length, 1);
+      const [install] = egressExecCalls;
+      NodeAssert.deepEqual(install?.args.slice(0, 4), ["exec", "-i", "-u", "0"]);
+      NodeAssert.match(install?.args.at(-1) ?? "", /update-ca-certificates/);
+      NodeAssert.equal(install?.stdin, gateway.ca.certPem);
+      yield* runtime.refreshRuntimeEnvironment(descriptor.threadId);
+      NodeAssert.equal(egressExecCalls.length, 1);
+    }),
+  );
+
+  it.effect("leaves runtimes without brokered secrets untouched", () =>
+    Effect.gen(function* () {
+      docker.calls.length = 0;
+      docker.containers.clear();
+      docker.images.clear();
+      egressExecCalls.length = 0;
+      brokeredTestSecrets = [
+        {
+          key: "PLAIN_TOKEN",
+          value: "plain-real-value",
+          valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+          ...DEFAULT_BROKER_POLICY,
+        },
+      ];
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runtime = yield* ThreadRuntime;
+      const descriptor = yield* runtime.ensureRuntime({
+        threadId: ThreadId.make("thread-runtime-no-egress"),
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      yield* runtime.startRuntime(descriptor.threadId);
+      const launchContext = yield* runtime.resolveLaunchContext(descriptor.threadId);
+      const shim = yield* fileSystem.readFileString(
+        NodePath.join(launchContext.hostHomePath, ".homelab-runtime.env"),
+      );
+      NodeAssert.doesNotMatch(shim, /PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|egress/i);
+      // Byte for byte what delivery wrote before the broker existed.
+      NodeAssert.equal(
+        shim,
+        renderSecretEnvFile(
+          buildRuntimeControlEnvironment({
+            secretEnv: { PLAIN_TOKEN: "plain-real-value" },
+            serverUrl: /HOMELAB_AGENT_SERVER_URL='([^']+)'/.exec(shim)?.[1] ?? "",
+            scope: "project",
+          }),
+        ),
+      );
+      NodeAssert.equal(egressExecCalls.length, 0);
     }),
   );
 });
