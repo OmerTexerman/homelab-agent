@@ -5,6 +5,7 @@
  * - New scratch thread (no project needed)
  * - Pair a device (admin sessions): the quick pairing-link QR dialog
  * - Move the active scratch thread to a project
+ * - Export the active thread as Markdown or JSON
  * - New parallel thread (isolated runtime clone) in the current project, and
  *   a picker for any project
  */
@@ -16,10 +17,19 @@ import {
 import type { EnvironmentId, ProjectId, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useNavigate } from "@tanstack/react-router";
-import { CopyPlusIcon, FolderInputIcon, HouseIcon, QrCodeIcon, SquarePenIcon } from "lucide-react";
+import {
+  CopyPlusIcon,
+  DownloadIcon,
+  FolderInputIcon,
+  HouseIcon,
+  QrCodeIcon,
+  SquarePenIcon,
+} from "lucide-react";
 import { useMemo } from "react";
 
+import type { ChatExportFormat } from "../../homelab/chatExport";
 import { newCommandId } from "../../homelab/commandIds";
+import { exportChat } from "../../homelab/exportChat";
 import type { ChatThreadActionContext } from "../../lib/chatThreadActions";
 import {
   startNewIsolatedThreadFromContext,
@@ -53,6 +63,33 @@ export function standaloneMoveTargets<T extends PaletteProject>(
   return projects
     .filter((project) => project.environmentId === activeThread.environmentId)
     .toSorted((left, right) => left.title.localeCompare(right.title));
+}
+
+const CHAT_EXPORT_OPTIONS: ReadonlyArray<{ format: ChatExportFormat; label: string }> = [
+  { format: "markdown", label: "Markdown" },
+  { format: "json", label: "JSON" },
+];
+
+function exportActiveChat(
+  thread: { readonly id: ThreadId; readonly environmentId: EnvironmentId },
+  format: ChatExportFormat,
+): void {
+  const result = exportChat({ environmentId: thread.environmentId, threadId: thread.id }, format);
+  if (result.status === "not-loaded") {
+    toastManager.add({
+      type: "error",
+      title: "Chat not loaded yet",
+      description: "Open the thread and wait for it to load, then export again.",
+    });
+    return;
+  }
+  toastManager.add({
+    type: result.historyComplete ? "success" : "warning",
+    title: result.historyComplete ? "Chat exported" : "Chat exported without earlier turns",
+    description: result.historyComplete
+      ? result.filename
+      : "Load earlier turns in the thread and export again for the full history.",
+  });
 }
 
 export function useHomelabPaletteItems(input: {
@@ -120,6 +157,23 @@ export function useHomelabPaletteItems(input: {
           openPairDeviceDialog();
         },
       });
+    }
+
+    if (activeThread) {
+      for (const option of CHAT_EXPORT_OPTIONS) {
+        items.push({
+          kind: "action",
+          value: `action:export-chat-${option.format}`,
+          searchTerms: ["export", "download", "save", "transcript", "chat", option.label],
+          title: `Export chat as ${option.label}`,
+          description: "Download this thread's conversation",
+          icon: <DownloadIcon className={ITEM_ICON_CLASS} />,
+          run: async () => {
+            setOpen(false);
+            exportActiveChat(activeThread, option.format);
+          },
+        });
+      }
     }
 
     const moveTargets = standaloneMoveTargets(projects, activeThread);
