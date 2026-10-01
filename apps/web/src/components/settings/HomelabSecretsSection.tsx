@@ -2,7 +2,7 @@ import { AuthHomelabSecretsAdminScope, type ProjectId } from "@t3tools/contracts
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useQuery } from "@tanstack/react-query";
-import { FolderIcon, KeyRoundIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { FolderIcon, KeyRoundIcon, PencilIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { formatRelativeTime } from "~/timestampFormat";
@@ -13,6 +13,11 @@ import {
   setHomelabSecretScopeRequest,
   upsertHomelabSecretRequest,
 } from "~/lib/homelabSecretsReactQuery";
+import {
+  DEFAULT_BROKER_POLICY_DRAFT,
+  validateBrokerPolicyDraft,
+  type BrokerPolicyDraft,
+} from "~/homelab/egressBroker";
 import { describeHomelabError } from "~/homelab/homelabFetch";
 import { queryDisplayState } from "~/homelab/queryDisplayState";
 import { useHomelabMutation } from "~/homelab/useHomelabMutation";
@@ -22,9 +27,16 @@ import { usePrimarySessionState } from "../../environments/primary/sessionState"
 import { useProjects } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { ScopeRequiredNotice } from "../homelab/ScopeRequiredNotice";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuCheckboxItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { HomelabEgressActivity } from "./HomelabEgressActivity";
+import {
+  BrokerPolicyFields,
+  BrokerPolicyFormErrors,
+  SecretBrokerPolicyEditor,
+} from "./HomelabSecretBrokerPolicy";
 import { SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 
 function normalizeOptionalValue(value: string): string | undefined {
@@ -48,6 +60,26 @@ function describeScope(
     (projectId) => projects.find((project) => project.id === projectId)?.title ?? "Removed project",
   );
   return titles.length <= 2 ? titles.join(", ") : `${titles.length} projects`;
+}
+
+/** One line under a brokered secret: where it may go and how. */
+function describeBrokerPolicy(secret: {
+  readonly allowedHosts?: ReadonlyArray<string> | undefined;
+  readonly approveWrites?: boolean | undefined;
+  readonly upstreamTls?: string | undefined;
+}): string {
+  const hosts = secret.allowedHosts ?? [];
+  const shownHosts =
+    hosts.length <= 3
+      ? hosts.join(", ")
+      : `${hosts.slice(0, 3).join(", ")} and ${hosts.length - 3} more`;
+  return [
+    hosts.length === 0 ? "No allowed hosts" : `Only to ${shownHosts}`,
+    secret.approveWrites ? "asks before writes" : null,
+    secret.upstreamTls === "insecure" ? "TLS not verified" : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
 }
 
 /**
@@ -114,6 +146,9 @@ export function HomelabSecretsSection() {
   const [summary, setSummary] = useState("");
   const [value, setValue] = useState("");
   const [projectIds, setProjectIds] = useState<ReadonlyArray<ProjectId>>([]);
+  const [brokerDraft, setBrokerDraft] = useState<BrokerPolicyDraft>(DEFAULT_BROKER_POLICY_DRAFT);
+  const [policyEditingKey, setPolicyEditingKey] = useState<string | null>(null);
+  const brokerValidation = useMemo(() => validateBrokerPolicyDraft(brokerDraft), [brokerDraft]);
   const allProjects = useProjects();
   const scopeProjects = useMemo(
     () =>
@@ -142,6 +177,7 @@ export function HomelabSecretsSection() {
     setSummary("");
     setValue("");
     setProjectIds([]);
+    setBrokerDraft(DEFAULT_BROKER_POLICY_DRAFT);
   }, []);
 
   const upsertSecretMutation = useHomelabMutation({
@@ -151,6 +187,10 @@ export function HomelabSecretsSection() {
       summary?: string;
       value: string;
       projectIds?: ReadonlyArray<ProjectId>;
+      delivery?: BrokerPolicyDraft["delivery"];
+      allowedHosts?: ReadonlyArray<string>;
+      approveWrites?: boolean;
+      upstreamTls?: BrokerPolicyDraft["upstreamTls"];
     }) => {
       if (!primaryEnvironmentId) {
         throw new Error("No environment is available to store secrets.");
@@ -208,8 +248,13 @@ export function HomelabSecretsSection() {
   const deletingKey = deleteSecretMutation.variables ?? null;
 
   const canSubmit = useMemo(
-    () => key.trim().length > 0 && value.length > 0 && !isSaving,
-    [isSaving, key, value],
+    () =>
+      key.trim().length > 0 &&
+      value.length > 0 &&
+      !isSaving &&
+      // A new secret's delivery is part of the form; an edit keeps the stored policy.
+      (editingKey !== null || brokerValidation.ok),
+    [brokerValidation.ok, editingKey, isSaving, key, value],
   );
 
   const handleSubmit = useCallback(() => {
@@ -226,13 +271,19 @@ export function HomelabSecretsSection() {
       label?: string;
       summary?: string;
       projectIds?: ReadonlyArray<ProjectId>;
+      delivery?: BrokerPolicyDraft["delivery"];
+      allowedHosts?: ReadonlyArray<string>;
+      approveWrites?: boolean;
+      upstreamTls?: BrokerPolicyDraft["upstreamTls"];
     } = {
       key: normalizedKey,
       value,
     };
-    // Editing an existing secret changes its scope from the row's picker instead.
+    // Editing an existing secret changes its scope and delivery from the row instead.
     if (editingKey === null) {
+      if (!brokerValidation.ok) return;
       nextSecret.projectIds = projectIds;
+      Object.assign(nextSecret, brokerValidation.policy);
     }
     if (normalizedLabel !== undefined) {
       nextSecret.label = normalizedLabel;
@@ -242,7 +293,7 @@ export function HomelabSecretsSection() {
     }
 
     upsertSecretMutation.submit(nextSecret);
-  }, [editingKey, key, label, projectIds, summary, upsertSecretMutation, value]);
+  }, [brokerValidation, editingKey, key, label, projectIds, summary, upsertSecretMutation, value]);
 
   const handleEdit = useCallback((secret: (typeof secrets)[number]) => {
     setEditingKey(secret.key);
@@ -331,14 +382,25 @@ export function HomelabSecretsSection() {
             />
           </label>
           {editingKey ? null : (
-            <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-              <span className="text-xs font-medium text-foreground">Available to</span>
-              <SecretScopePicker
-                projectIds={projectIds}
-                projects={scopeProjects}
-                onChange={setProjectIds}
-              />
-            </div>
+            <>
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+                <span className="text-xs font-medium text-foreground">Available to</span>
+                <SecretScopePicker
+                  projectIds={projectIds}
+                  projects={scopeProjects}
+                  onChange={setProjectIds}
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <BrokerPolicyFields
+                  idPrefix="new-secret"
+                  draft={brokerDraft}
+                  disabled={isSaving}
+                  onChange={setBrokerDraft}
+                />
+                <BrokerPolicyFormErrors validation={brokerValidation} />
+              </div>
+            </>
           )}
           <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
             <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
@@ -391,7 +453,15 @@ export function HomelabSecretsSection() {
                             ? "Stored"
                             : "Missing"}
                     </span>
+                    {secret.delivery === "brokered" ? (
+                      <Badge variant="info" size="sm">
+                        Brokered
+                      </Badge>
+                    ) : null}
                   </div>
+                  {secret.delivery === "brokered" ? (
+                    <p className="text-2xs text-muted-foreground">{describeBrokerPolicy(secret)}</p>
+                  ) : null}
                   {canManageSecrets ? null : (
                     <p className="text-2xs text-muted-foreground">
                       {describeScope(secret.projectIds ?? [], scopeProjects)}
@@ -421,6 +491,19 @@ export function HomelabSecretsSection() {
                         scopeSecretMutation.submit({ key: secret.key, projectIds: nextProjectIds })
                       }
                     />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-expanded={policyEditingKey === secret.key}
+                      onClick={() =>
+                        setPolicyEditingKey((current) =>
+                          current === secret.key ? null : secret.key,
+                        )
+                      }
+                    >
+                      <ShieldCheckIcon className="size-3.5" />
+                      Delivery
+                    </Button>
                     <Button size="sm" variant="ghost" onClick={() => handleEdit(secret)}>
                       <PencilIcon className="size-3.5" />
                       Edit
@@ -439,10 +522,19 @@ export function HomelabSecretsSection() {
                   </div>
                 ) : null}
               </div>
+              {canManageSecrets && policyEditingKey === secret.key ? (
+                <SecretBrokerPolicyEditor
+                  key={`${secret.key}:${secret.updatedAt}`}
+                  secret={secret}
+                  environmentId={primaryEnvironmentId}
+                  onDone={() => setPolicyEditingKey(null)}
+                />
+              ) : null}
             </div>
           );
         })
       )}
+      <HomelabEgressActivity />
     </SettingsSection>
   );
 }

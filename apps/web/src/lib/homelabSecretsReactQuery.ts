@@ -1,7 +1,9 @@
 import { queryOptions } from "@tanstack/react-query";
 import type {
   EnvironmentId,
+  HomelabSecretDelivery,
   HomelabSecretDescriptor,
+  HomelabSecretUpstreamTls,
   ProjectId,
   HomelabSecretsListResult,
 } from "@t3tools/contracts";
@@ -48,6 +50,11 @@ export function upsertHomelabSecretRequest(input: {
     readonly value: string;
     /** Omitted keeps the current scope; empty makes the secret global. */
     readonly projectIds?: ReadonlyArray<ProjectId>;
+    /** Broker policy; each omitted field keeps its current value. */
+    readonly delivery?: HomelabSecretDelivery;
+    readonly allowedHosts?: ReadonlyArray<string>;
+    readonly approveWrites?: boolean;
+    readonly upstreamTls?: HomelabSecretUpstreamTls;
   };
 }): Promise<HomelabSecretDescriptor> {
   return homelabFetch<HomelabSecretDescriptor>({
@@ -90,5 +97,25 @@ export function setHomelabSecretScopeRequest(input: {
     environmentId: input.environmentId,
     pathname: "/api/homelab/secrets/scope",
     body: { key: input.key, projectIds: input.projectIds },
+  });
+}
+
+/**
+ * Changes a secret's egress broker policy without resupplying its value. The
+ * server rejects (400) brokered delivery without allowed hosts, or an invalid host.
+ */
+export function setHomelabSecretBrokerPolicyRequest(input: {
+  readonly environmentId: EnvironmentId;
+  readonly key: string;
+  readonly delivery: HomelabSecretDelivery;
+  readonly allowedHosts: ReadonlyArray<string>;
+  readonly approveWrites: boolean;
+  readonly upstreamTls: HomelabSecretUpstreamTls;
+}): Promise<HomelabSecretDescriptor> {
+  const { environmentId, ...body } = input;
+  return homelabFetch<HomelabSecretDescriptor>({
+    environmentId,
+    pathname: "/api/homelab/secrets/broker-policy",
+    body,
   });
 }

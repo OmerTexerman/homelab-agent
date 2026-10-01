@@ -121,7 +121,9 @@ export const HOMELAB_SETTINGS_SEARCH_ITEMS: ReadonlyArray<SettingsSearchItem> = 
     id: "secrets",
     title: "Secrets",
     to: "/settings/secrets",
-    searchTerms: ["secret references credentials tokens passwords broker"],
+    searchTerms: [
+      "secret references credentials tokens passwords broker brokered delivery allowed hosts egress activity write approvals",
+    ],
   },
   {
     id: "project-runtime",
