@@ -124,14 +124,11 @@ export function SidebarThreadHeader({
           hover states, and a background well reads far louder on themed
           palettes than on the base light and dark ones. */}
       <div className="flex shrink-0 items-center">
-        {hasProjects ? (
-          <>
-            {projectScope}
-            <SidebarHeaderIconButton label="New project" onClick={onNewProject}>
-              <FolderPlusIcon />
-            </SidebarHeaderIconButton>
-          </>
-        ) : null}
+        {hasProjects ? projectScope : null}
+        {/* Fork: always offered, so the first project is one click away. */}
+        <SidebarHeaderIconButton label="New project" onClick={onNewProject}>
+          <FolderPlusIcon />
+        </SidebarHeaderIconButton>
         <SidebarHeaderIconButton
           label="New thread"
           tooltip={

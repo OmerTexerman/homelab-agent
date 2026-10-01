@@ -61,16 +61,17 @@ checks real containers end to end in under a minute.
 
 Where fork behavior plugs into upstream code:
 
-| Upstream area                            | Fork seam                                                                            |
-| ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| WS RPC methods and scopes                | `apps/server/src/wsHomelabRpc.ts`, `apps/server/src/auth/homelabRpcScopes.ts`        |
-| HTTP routes                              | `apps/server/src/homelab/http.ts`                                                    |
-| Runtime execution (providers, terminals) | `apps/server/src/runtime/**` via `RuntimeExecutionContext`, `RuntimeTerminalContext` |
-| Settings UI                              | `apps/web/src/components/settings/HomelabSettingsPanels.tsx`                         |
-| Home screen (`/` and no-thread state)    | `apps/web/src/components/homelab/HomelabHomeOverview.tsx`, `homelab/homeOverview.ts` |
-| Project pickers and counts               | `apps/web/src/homelab/visibleProjects.ts`                                            |
-| Upstream UI that is wrong for homelab    | server capabilities (`pullRequests: false`), `apps/web/src/productCapabilities.ts`   |
-| Contract additions                       | fork-owned files re-exported through `packages/contracts/src/homelabIndex.ts`        |
+| Upstream area                            | Fork seam                                                                                                                                                |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS RPC methods and scopes                | `apps/server/src/wsHomelabRpc.ts`, `apps/server/src/auth/homelabRpcScopes.ts`                                                                            |
+| HTTP routes                              | `apps/server/src/homelab/http.ts`                                                                                                                        |
+| Runtime execution (providers, terminals) | `apps/server/src/runtime/**` via `RuntimeExecutionContext`, `RuntimeTerminalContext`                                                                     |
+| Settings UI                              | `apps/web/src/components/settings/HomelabSettingsPanels.tsx`                                                                                             |
+| Home screen (`/` and no-thread state)    | `apps/web/src/components/homelab/HomelabHomeOverview.tsx`, `homelab/homeOverview.ts`                                                                     |
+| Project pickers and counts               | `apps/web/src/homelab/visibleProjects.ts`                                                                                                                |
+| Sidebar project groups (v2 sidebar)      | `apps/web/src/components/sidebar/useHomelabSidebarProjectGroups.tsx`, `homelab/sidebarProjectGroups.ts` ([notes](./internals/sidebar-project-groups.md)) |
+| Upstream UI that is wrong for homelab    | server capabilities (`pullRequests: false`), `apps/web/src/productCapabilities.ts`                                                                       |
+| Contract additions                       | fork-owned files re-exported through `packages/contracts/src/homelabIndex.ts`                                                                            |
 
 When upstream restructures an area, add or move the seam rather than spreading
 fork logic back into upstream files.

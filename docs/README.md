@@ -30,6 +30,10 @@ upstream t3code documentation tree.
   and egress activity.
 - [user/chat-export.md](./user/chat-export.md)
   Exporting a thread as a Markdown transcript or JSON.
+- [user/project-sidebar.md](./user/project-sidebar.md)
+  Threads grouped by project in the sidebar, runtime dots, and collapsing groups.
+- [internals/sidebar-project-groups.md](./internals/sidebar-project-groups.md)
+  Where the sidebar's project grouping hooks into upstream's sidebar.
 - [internals/homelab-storage.md](./internals/homelab-storage.md)
 - [internals/homelab-auth.md](./internals/homelab-auth.md)
   Sliding browser sessions, passkey sign-in, and quick pairing.
