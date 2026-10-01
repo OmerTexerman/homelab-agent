@@ -1,10 +1,4 @@
-import type {
-  EnvironmentId,
-  ProjectId,
-  RuntimeTool,
-  RuntimeToolListResult,
-  RuntimeToolRemoveResult,
-} from "@t3tools/contracts";
+import type { ProjectId, RuntimeTool, RuntimeToolRemoveResult } from "@t3tools/contracts";
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,14 +7,15 @@ import { useMemo } from "react";
 
 import { describeHomelabError, homelabFetch } from "~/homelab/homelabFetch";
 import { queryDisplayState } from "~/homelab/queryDisplayState";
+import {
+  homelabRuntimeToolsQueryKey,
+  homelabRuntimeToolsQueryOptions,
+} from "~/lib/homelabRuntimeToolsReactQuery";
 import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-
-const runtimeToolsQueryKey = (environmentId: EnvironmentId | null) =>
-  ["homelab", "runtimeTools", environmentId] as const;
 
 /**
  * Settings -> Project Runtime: each project's runtime tools (recorded by agents
@@ -32,22 +27,7 @@ export function RuntimeToolsSection() {
   const queryClient = useQueryClient();
   const allProjects = useProjects();
 
-  const toolsQuery = useQuery({
-    queryKey: runtimeToolsQueryKey(environmentId),
-    queryFn: ({ signal }) => {
-      if (environmentId === null) {
-        throw new Error("No primary environment is connected.");
-      }
-      return homelabFetch<RuntimeToolListResult>({
-        environmentId,
-        pathname: "/api/homelab/runtime-tools",
-        signal,
-      });
-    },
-    enabled: environmentId !== null,
-    staleTime: 10_000,
-    refetchOnWindowFocus: true,
-  });
+  const toolsQuery = useQuery(homelabRuntimeToolsQueryOptions({ environmentId }));
 
   const removeMutation = useMutation({
     mutationFn: (tool: RuntimeTool) => {
@@ -75,7 +55,7 @@ export function RuntimeToolsSection() {
       });
     },
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: runtimeToolsQueryKey(environmentId) }),
+      queryClient.invalidateQueries({ queryKey: homelabRuntimeToolsQueryKey(environmentId) }),
   });
 
   // Project lists only (isolated clones keep a private copy), for visible projects.

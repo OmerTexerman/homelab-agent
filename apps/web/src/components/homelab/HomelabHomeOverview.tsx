@@ -25,6 +25,8 @@ import { requestDraftAutoSend } from "../../homelab/draftAutoSend";
 import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../../homelab/visibleProjects";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { homeLogicalProjectKeys } from "../../homelab/projectPage";
+import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
 import { homelabEgressApprovalsQueryOptions } from "../../lib/homelabEgressReactQuery";
 import { homelabSecretsQueryOptions } from "../../lib/homelabSecretsReactQuery";
 import { projectRuntimeDetailQueryOptions } from "../../lib/projectRuntimeReactQuery";
@@ -67,6 +69,8 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [expanded, setExpanded] = useState<ReadonlySet<ExpandableSection>>(() => new Set());
   const startThreadIn = useStartThreadIn();
+  const projectGroups = useSettingsProjectGroups();
+  const logicalProjectKeys = useMemo(() => homeLogicalProjectKeys(projectGroups), [projectGroups]);
 
   const orderedProjects = useMemo(
     () => homeProjectsInDisplayOrder(projects, threads),
@@ -232,7 +236,12 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
                     onToggle={() => toggle("projects")}
                   >
                     {model.projects.items.map((row) => (
-                      <ProjectRow key={row.id} row={row} startThreadIn={startThreadIn} />
+                      <ProjectRow
+                        key={row.id}
+                        row={row}
+                        projectKey={logicalProjectKeys.get(row.id) ?? null}
+                        startThreadIn={startThreadIn}
+                      />
                     ))}
                   </HomeSectionFrame>
                 ) : null}
@@ -265,16 +274,19 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
  * sends the typed text as its first message. With no text it opens an empty
  * draft.
  */
-function HomeStartPrompt({
+export function HomeStartPrompt({
   projects,
   startThreadIn,
+  defaultProjectKey = null,
 }: {
   readonly projects: ReadonlyArray<HomeProjectOption>;
   readonly startThreadIn: StartThreadIn;
+  /** `homeProjectKey` of the project to preselect; defaults to the most recently active. */
+  readonly defaultProjectKey?: string | null;
 }) {
   const createStandaloneThread = useCreateStandaloneThread();
   const [prompt, setPrompt] = useState("");
-  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  const [pickedKey, setPickedKey] = useState<string | null>(defaultProjectKey);
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -400,12 +412,12 @@ function HomeStartPrompt({
   );
 }
 
-type HomeProjectOption = ReturnType<typeof homeProjectsInDisplayOrder>[number];
+export type HomeProjectOption = ReturnType<typeof homeProjectsInDisplayOrder>[number];
 
-type StartThreadIn = ReturnType<typeof useStartThreadIn>;
+export type StartThreadIn = ReturnType<typeof useStartThreadIn>;
 
 /** Opens a new draft in a project (the shared new-thread flow); failures toast. */
-function useStartThreadIn() {
+export function useStartThreadIn() {
   const handleNewThread = useNewThreadHandler();
   return useCallback(
     (ref: ScopedProjectRef) =>
@@ -425,7 +437,7 @@ function useStartThreadIn() {
  * Module-level so TanStack keeps the combined array referentially stable
  * until a runtime read actually changes.
  */
-function combineRuntimeStates(
+export function combineRuntimeStates(
   results: ReadonlyArray<{
     readonly status: "pending" | "error" | "success";
     readonly data: ProjectRuntimeDetail | undefined;
@@ -440,16 +452,20 @@ function combineRuntimeStates(
   );
 }
 
-function HomeSectionFrame(props: {
+export function HomeSectionFrame(props: {
   readonly testId: string;
   readonly title: string;
   readonly total: number;
   readonly shown: number;
-  readonly expanded: boolean;
-  readonly onToggle: () => void;
+  /** Sections without a toggle show every row they are given. */
+  readonly expanded?: boolean;
+  readonly onToggle?: () => void;
+  /** Rendered at the end of the heading line, e.g. a link to the full list. */
+  readonly action?: ReactNode;
   readonly children: ReactNode;
 }) {
-  const canToggle = props.expanded || props.shown < props.total;
+  const expanded = props.expanded ?? false;
+  const canToggle = props.onToggle !== undefined && (expanded || props.shown < props.total);
   return (
     <section data-testid={props.testId} className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-3">
@@ -462,9 +478,10 @@ function HomeSectionFrame(props: {
           </span>
         ) : null}
         <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border/60" />
+        {props.action}
         {canToggle ? (
           <Button variant="ghost" size="compact" onClick={props.onToggle}>
-            {props.expanded ? copy.showFewer : `${copy.showAll} (${props.total})`}
+            {expanded ? copy.showFewer : `${copy.showAll} (${props.total})`}
           </Button>
         ) : null}
       </div>
@@ -476,7 +493,7 @@ function HomeSectionFrame(props: {
 const ROW_CLASS =
   "group -mx-2 flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring";
 
-function AttentionRow({
+export function AttentionRow({
   item,
   startThreadIn,
 }: {
@@ -549,7 +566,7 @@ function EgressApprovalAttentionRow({
   );
 }
 
-function ThreadRow({ row }: { readonly row: HomeThreadRow }) {
+export function ThreadRow({ row }: { readonly row: HomeThreadRow }) {
   return (
     <Link
       to="/$environmentId/$threadId"
@@ -560,7 +577,7 @@ function ThreadRow({ row }: { readonly row: HomeThreadRow }) {
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-foreground">{row.title}</span>
         <span className="mt-0.5 flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
-          <span className="shrink-0 truncate">{row.context}</span>
+          {row.context ? <span className="shrink-0 truncate">{row.context}</span> : null}
           {row.isIsolated ? <span className="shrink-0">{copy.isolatedLabel}</span> : null}
           {row.statusLabel ? (
             <span className={cn("truncate", THREAD_TEXT[row.status])}>{row.statusLabel}</span>
@@ -574,9 +591,12 @@ function ThreadRow({ row }: { readonly row: HomeThreadRow }) {
 
 function ProjectRow({
   row,
+  projectKey,
   startThreadIn,
 }: {
   readonly row: HomeProjectRow;
+  /** The project page's key; null falls back to opening the latest thread. */
+  readonly projectKey: string | null;
   readonly startThreadIn: StartThreadIn;
 }) {
   const summary = [
@@ -587,36 +607,51 @@ function ProjectRow({
   ]
     .filter((part) => part !== null)
     .join(" · ");
+  const body = (
+    <>
+      <StatusDot className={RUNTIME_DOT[row.runtimeTone]} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{row.title}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">{summary}</span>
+      </span>
+      <span className="shrink-0 text-right">
+        {row.runtimeStatus === "loading" ? (
+          <Placeholder className="ml-auto h-3 w-14" />
+        ) : row.runtimeStatus === "ready" ? (
+          <span
+            className={cn(
+              "block font-mono text-3xs uppercase tracking-wider",
+              row.runtimeTone === "failed" ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {row.runtimeLabel}
+          </span>
+        ) : null}
+        <span className="block text-xs tabular-nums text-muted-foreground">
+          {formatRelativeTimeLabel(row.lastActivityAt)}
+        </span>
+      </span>
+    </>
+  );
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <TargetLink
-        target={{ kind: "project", ref: row.ref, latestThreadRef: row.latestThreadRef }}
-        startThreadIn={startThreadIn}
-        className="flex-1"
-      >
-        <StatusDot className={RUNTIME_DOT[row.runtimeTone]} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-foreground">{row.title}</span>
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{summary}</span>
-        </span>
-        <span className="shrink-0 text-right">
-          {row.runtimeStatus === "loading" ? (
-            <Placeholder className="ml-auto h-3 w-14" />
-          ) : row.runtimeStatus === "ready" ? (
-            <span
-              className={cn(
-                "block font-mono text-3xs uppercase tracking-wider",
-                row.runtimeTone === "failed" ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {row.runtimeLabel}
-            </span>
-          ) : null}
-          <span className="block text-xs tabular-nums text-muted-foreground">
-            {formatRelativeTimeLabel(row.lastActivityAt)}
-          </span>
-        </span>
-      </TargetLink>
+      {projectKey !== null ? (
+        <Link
+          to="/projects/$projectKey"
+          params={{ projectKey }}
+          className={cn(ROW_CLASS, "flex-1")}
+        >
+          {body}
+        </Link>
+      ) : (
+        <TargetLink
+          target={{ kind: "project", ref: row.ref, latestThreadRef: row.latestThreadRef }}
+          startThreadIn={startThreadIn}
+          className="flex-1"
+        >
+          {body}
+        </TargetLink>
+      )}
       <Button
         variant="ghost"
         size="icon-sm"
@@ -681,7 +716,7 @@ function RowTime({ iso }: { readonly iso: string }) {
   );
 }
 
-function StatusDot({ className }: { readonly className: string }) {
+export function StatusDot({ className }: { readonly className: string }) {
   return <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", className)} />;
 }
 
@@ -689,13 +724,13 @@ function StatusDot({ className }: { readonly className: string }) {
  * Static loading blocks. Not `Skeleton`: its shimmer runs until data arrives,
  * and a disconnected server can keep this page loading indefinitely.
  */
-function Placeholder({ className }: { readonly className: string }) {
+export function Placeholder({ className }: { readonly className: string }) {
   return (
     <span aria-hidden="true" className={cn("block rounded-sm bg-muted-foreground/15", className)} />
   );
 }
 
-function HomeLoadingRows() {
+export function HomeLoadingRows() {
   return (
     <div data-testid="home-loading" className="flex flex-col gap-3" aria-busy="true">
       <span className="sr-only">Loading</span>
@@ -756,7 +791,7 @@ const THREAD_TEXT: Record<SidebarThreadStatus, string> = {
   ready: "",
 };
 
-const RUNTIME_DOT: Record<HomeRuntimeTone, string> = {
+export const RUNTIME_DOT: Record<HomeRuntimeTone, string> = {
   active: "bg-emerald-500 dark:bg-emerald-300/90",
   idle: "bg-emerald-500/50 dark:bg-emerald-300/50",
   asleep: "bg-muted-foreground/40",

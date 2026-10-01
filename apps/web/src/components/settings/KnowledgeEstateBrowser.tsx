@@ -40,6 +40,8 @@ export interface KnowledgeEstateBrowserProps {
   readonly staleEntityIds?: ReadonlyArray<string> | undefined;
   readonly projectNameById: ReadonlyMap<string, string>;
   readonly loading?: boolean;
+  /** Opens on the Memory tab filtered to this project (a project page's "All memory" link). */
+  readonly initialMemoryProjectId?: string | null;
 }
 
 function formatLabel(value: string): string {
@@ -169,11 +171,16 @@ function ExpandableRow(props: {
 
 export function KnowledgeEstateBrowser(props: KnowledgeEstateBrowserProps) {
   const { snapshot, memoryEntries, skills, projectNameById } = props;
-  const [tab, setTab] = useState<KnowledgeEstateTab>("graph");
+  const initialMemoryProjectId = props.initialMemoryProjectId ?? null;
+  const [tab, setTab] = useState<KnowledgeEstateTab>(
+    initialMemoryProjectId === null ? "graph" : "memory",
+  );
   const [searchInput, setSearchInput] = useState("");
   const [kindFilter, setKindFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [memoryProjectFilter, setMemoryProjectFilter] = useState<string | null>(null);
+  const [memoryProjectFilter, setMemoryProjectFilter] = useState<string | null>(
+    initialMemoryProjectId,
+  );
   const [memoryPromotionFilter, setMemoryPromotionFilter] = useState<string | null>(null);
   const [skillScopeFilter, setSkillScopeFilter] = useState<string | null>(null);
   const [observationSourceFilter, setObservationSourceFilter] = useState<string | null>(null);

@@ -63,6 +63,7 @@ import { HomelabSecretsSection } from "./HomelabSecretsSection";
 import { KnowledgeEstateBrowser } from "./KnowledgeEstateBrowser";
 import { RuntimeCliUpdatesSection } from "./RuntimeCliUpdatesSection";
 import { RuntimeToolsSection } from "./RuntimeToolsSection";
+import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingsPageContainer,
@@ -125,6 +126,12 @@ export function MemoryKnowledgeSettingsPanel() {
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const allProjects = useProjects();
   const allSidebarThreads = useThreadShells();
+  // A project-scoped visit (a project page's "All memory") opens its memory.
+  const scope = useOptionalSettingsScope()?.scope;
+  const scopedMemoryProjectId =
+    scope?.kind === "project" || scope?.kind === "checkout"
+      ? (scope.members.find((member) => member.environmentId === primaryEnvironmentId)?.id ?? null)
+      : null;
   const [isStartingCuratorSession, setIsStartingCuratorSession] = useState(false);
   const [curatorStartFlight] = useState(createSingleFlight);
   // The kickoff prompt auto-sends on launch, so the model/effort choice has to happen
@@ -470,6 +477,7 @@ export function MemoryKnowledgeSettingsPanel() {
                 staleEntityIds={homelabCuratorOverviewQuery.data?.staleEntityIds.map(String)}
                 projectNameById={projectNameById}
                 loading={estateLoading || curateGate === "loading"}
+                initialMemoryProjectId={scopedMemoryProjectId}
               />
             )}
           </div>

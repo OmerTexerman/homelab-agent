@@ -2,6 +2,7 @@
  * Homelab command palette entries, spread into upstream's root action list by
  * `CommandPalette.tsx` with one line:
  * - Go to the home page
+ * - Open a project's page
  * - New scratch thread (no project needed)
  * - Pair a device (admin sessions): the quick pairing-link QR dialog
  * - Move the active scratch thread to a project
@@ -21,6 +22,7 @@ import {
   CopyPlusIcon,
   DownloadIcon,
   FolderInputIcon,
+  FolderOpenIcon,
   HouseIcon,
   QrCodeIcon,
   SquarePenIcon,
@@ -35,6 +37,7 @@ import {
   startNewIsolatedThreadFromContext,
   startNewIsolatedThreadInProjectFromContext,
 } from "../../lib/homelabThreadActions";
+import { homelabProjectDisplayTitle } from "../../homelab/projectDisplayTitle";
 import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { HOMELAB_PRODUCT_COPY } from "../../productCapabilities";
 import { standaloneThreadEnvironment } from "../../state/homelabOrchestration";
@@ -45,6 +48,7 @@ import {
   type CommandPaletteActionItem,
   type CommandPaletteSubmenuItem,
 } from "../CommandPalette.logic";
+import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { openPairDeviceDialog, useCanPairDevices } from "./PairDeviceDialog";
 
@@ -109,6 +113,8 @@ export function useHomelabPaletteItems(input: {
   const navigate = useNavigate();
   const createStandaloneThread = useCreateStandaloneThread();
   const canPairDevices = useCanPairDevices();
+  // Logical projects (hidden namespaces excluded), keyed like the project page route.
+  const projectGroups = useSettingsProjectGroups();
   const moveStandaloneThread = useAtomCommand(standaloneThreadEnvironment.moveToProject, {
     reportFailure: false,
   });
@@ -156,6 +162,41 @@ export function useHomelabPaletteItems(input: {
           setOpen(false);
           openPairDeviceDialog();
         },
+      });
+    }
+
+    if (projectGroups.length > 0) {
+      items.push({
+        kind: "submenu",
+        value: "action:open-project",
+        searchTerms: ["open", "project", "page", "runtime", "memory", "secrets", "tools"],
+        title: `${HOMELAB_PRODUCT_COPY.projectPage.openProjectAction}...`,
+        description: HOMELAB_PRODUCT_COPY.projectPage.openProjectDescription,
+        icon: <FolderOpenIcon className={ITEM_ICON_CLASS} />,
+        addonIcon: <FolderOpenIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "projects",
+            label: "Projects",
+            items: projectGroups.map((group) => {
+              const title = homelabProjectDisplayTitle(group, group.displayName);
+              return {
+                kind: "action" as const,
+                value: `open-project:${group.projectKey}`,
+                searchTerms: [title, "open", "project"],
+                title,
+                description: HOMELAB_PRODUCT_COPY.projectPage.openProjectDescription,
+                icon: <FolderOpenIcon className={ITEM_ICON_CLASS} />,
+                run: async () => {
+                  await navigate({
+                    to: "/projects/$projectKey",
+                    params: { projectKey: group.projectKey },
+                  });
+                },
+              };
+            }),
+          },
+        ],
       });
     }
 
@@ -300,6 +341,7 @@ export function useHomelabPaletteItems(input: {
     handleNewThread,
     moveStandaloneThread,
     navigate,
+    projectGroups,
     projects,
     setOpen,
   ]);

@@ -180,7 +180,7 @@ function threadKey(thread: SidebarThreadSummary): string {
   return `${thread.environmentId}\u0000${thread.id}`;
 }
 
-function threadActivityAt(thread: SidebarThreadSummary): string {
+export function threadActivityAt(thread: SidebarThreadSummary): string {
   return thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt;
 }
 
@@ -202,6 +202,25 @@ const THREAD_STATUS_LABEL: Record<SidebarThreadStatus, string | null> = {
   failed: "Failed",
   ready: null,
 };
+
+/** A thread's row in a thread list (Running, Recent, a project page's Threads). */
+export function homeThreadRow(
+  thread: SidebarThreadSummary,
+  status: SidebarThreadStatus,
+  context: string,
+): HomeThreadRow {
+  return {
+    id: threadKey(thread),
+    ref: scopeThreadRef(thread.environmentId, thread.id),
+    title: thread.title,
+    context,
+    isScratch: isStandaloneProjectId(thread.projectId),
+    isIsolated: (thread.runtimeSelectionMode ?? "shared") === "isolated",
+    status,
+    statusLabel: THREAD_STATUS_LABEL[status],
+    timestamp: threadActivityAt(thread),
+  };
+}
 
 function threadAttention(
   thread: SidebarThreadSummary,
@@ -330,17 +349,7 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
       });
       continue;
     }
-    const row: HomeThreadRow = {
-      id: threadKey(thread),
-      ref,
-      title: thread.title,
-      context: contextFor(thread),
-      isScratch: isStandaloneProjectId(thread.projectId),
-      isIsolated: (thread.runtimeSelectionMode ?? "shared") === "isolated",
-      status,
-      statusLabel: THREAD_STATUS_LABEL[status],
-      timestamp: threadActivityAt(thread),
-    };
+    const row = homeThreadRow(thread, status, contextFor(thread));
     if (status === "working" || status === "monitoring") {
       runningByProject.set(projectKey, (runningByProject.get(projectKey) ?? 0) + 1);
       running.push(row);

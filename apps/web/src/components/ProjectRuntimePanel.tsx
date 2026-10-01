@@ -66,8 +66,10 @@ type ProjectRuntimePanelOperation =
 interface ProjectRuntimePanelProps {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  threadId: ThreadId;
+  /** The thread the panel sits in; null on the project page (no thread context). */
+  threadId: ThreadId | null;
   runtimeId?: RuntimeSessionId | null;
+  className?: string;
 }
 
 async function confirmProjectRuntimeAction(message: string): Promise<boolean> {
@@ -117,6 +119,7 @@ export function ProjectRuntimePanel({
   projectId,
   threadId,
   runtimeId,
+  className,
 }: ProjectRuntimePanelProps) {
   const isStandaloneRuntime = isStandaloneProjectId(projectId);
   const isCuratorRuntime = isCuratorProjectId(projectId);
@@ -129,7 +132,7 @@ export function ProjectRuntimePanel({
   const operationInput = useMemo(
     () => ({
       projectId,
-      threadId,
+      ...(threadId ? { threadId } : {}),
       ...(runtimeId ? { runtimeId } : {}),
     }),
     [projectId, runtimeId, threadId],
@@ -222,9 +225,8 @@ export function ProjectRuntimePanel({
   const busy = operationMutation.isPending || projectRuntimeIsOperationBusy(detail);
   const lifecycleState = detail?.runtime.lifecycleState;
   const queueSummary = detail ? projectRuntimeQueueSummary(detail.queue) : "Loading";
-  const waitingForRuntime = detail
-    ? isThreadWaitingOnProjectRuntime(detail.queue, threadId)
-    : false;
+  const waitingForRuntime =
+    detail && threadId ? isThreadWaitingOnProjectRuntime(detail.queue, threadId) : false;
   const queuedCount = detail?.queue.queued.length ?? 0;
   const recreateNotice = detail ? projectRuntimeRecreateNotice(detail.runtime) : null;
 
@@ -320,7 +322,7 @@ export function ProjectRuntimePanel({
   return (
     <section
       aria-label={runtimeTitle}
-      className="border-b border-border/80 bg-muted/20 px-3 py-2 sm:px-5"
+      className={cn("border-b border-border/80 bg-muted/20 px-3 py-2 sm:px-5", className)}
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -403,7 +405,10 @@ export function ProjectRuntimePanel({
             <CameraIcon className="size-3.5" />
             Snapshot
           </Button>
-          {detail?.runtime.kind === "isolated" && !isStandaloneRuntime && !isCuratorRuntime ? (
+          {detail?.runtime.kind === "isolated" &&
+          threadId &&
+          !isStandaloneRuntime &&
+          !isCuratorRuntime ? (
             <Button size="xs" variant="outline" onClick={mergeIsolatedRuntime} disabled={busy}>
               <MergeIcon className="size-3.5" />
               Merge into Project Runtime
