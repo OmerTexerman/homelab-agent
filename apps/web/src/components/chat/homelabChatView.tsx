@@ -12,6 +12,7 @@ import { type ReactNode, useCallback, useMemo } from "react";
 import { isPreviewSupportedInRuntime } from "../../previewStateStore";
 import { shouldShowDiffSurface } from "../../productCapabilities";
 import { type RightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
+import { ThreadEgressApprovalBanner } from "../homelab/ThreadEgressApprovalBanner";
 import type { HomelabRightPanelSurfaceProps } from "../homelabRightPanelSurfaces";
 import { ProjectRuntimePanel } from "../ProjectRuntimePanel";
 import { ThreadProjectMemoryPanel, ThreadWorkspacePanel } from "../ThreadWorkspacePanel";
@@ -41,7 +42,7 @@ export interface HomelabChatView {
    * to let upstream render the surface.
    */
   readonly rightPanelContent: ReactNode;
-  /** Project Runtime strip shown under the chat header for server threads. */
+  /** Project Runtime strip and pending egress write approvals, under the chat header for server threads. */
   readonly runtimePanel: ReactNode;
 }
 
@@ -106,12 +107,18 @@ export function useHomelabChatView(input: HomelabChatViewInput): HomelabChatView
 
   const runtimePanel =
     isServerThread && activeThread && activeProject ? (
-      <ProjectRuntimePanel
-        environmentId={activeThread.environmentId}
-        projectId={activeProject.id}
-        threadId={activeThread.id}
-        runtimeId={activeThread.runtimeId ?? activeProject.defaultRuntimeId ?? null}
-      />
+      <>
+        <ProjectRuntimePanel
+          environmentId={activeThread.environmentId}
+          projectId={activeProject.id}
+          threadId={activeThread.id}
+          runtimeId={activeThread.runtimeId ?? activeProject.defaultRuntimeId ?? null}
+        />
+        <ThreadEgressApprovalBanner
+          environmentId={activeThread.environmentId}
+          threadId={activeThread.id}
+        />
+      </>
     ) : null;
 
   return { rightPanelSurfaces, rightPanelContent, runtimePanel };

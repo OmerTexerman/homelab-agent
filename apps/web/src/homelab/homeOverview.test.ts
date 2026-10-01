@@ -1,4 +1,5 @@
 import type {
+  HomelabEgressApproval,
   HomelabSecretDescriptor,
   ProjectRuntimeDetail,
   RuntimeSessionId,
@@ -378,5 +379,110 @@ describe("deriveHomeOverview", () => {
       input({ secrets: { state: "error", secrets: [], environmentId: ENVIRONMENT_ID } }),
     );
     expect(model.attention.complete).toBe(true);
+  });
+
+  describe("egress write approvals", () => {
+    function approval(
+      id: string,
+      overrides: Partial<HomelabEgressApproval> = {},
+    ): HomelabEgressApproval {
+      return {
+        id,
+        runtimeId: "project-runtime:media" as HomelabEgressApproval["runtimeId"],
+        secretKey: "PVE_TOKEN",
+        method: "POST",
+        host: "pve.lan:8006",
+        path: "/api2/json/nodes/pve/qemu",
+        createdAt: minutesAgo(1),
+        expiresAt: new Date(Date.parse(NOW) + 4 * 60_000).toISOString(),
+        ...overrides,
+      };
+    }
+
+    it("ranks approvals above every other kind, the one timing out first on top", () => {
+      const model = deriveHomeOverview(
+        input({
+          threads: [
+            thread("asking", "media", { hasPendingApprovals: true, latestUserMessageAt: NOW }),
+            thread("agent", "media", { session: session("running") }),
+          ],
+          secrets: {
+            state: "ready",
+            secrets: [secret("GRAFANA_TOKEN")],
+            environmentId: ENVIRONMENT_ID,
+          },
+          egressApprovals: {
+            state: "ready",
+            environmentId: ENVIRONMENT_ID,
+            approvals: [
+              approval("later", { expiresAt: new Date(Date.parse(NOW) + 240_000).toISOString() }),
+              approval("sooner", {
+                threadId: "agent" as HomelabEgressApproval["threadId"],
+                method: "DELETE",
+                expiresAt: new Date(Date.parse(NOW) + 30_000).toISOString(),
+              }),
+            ],
+          },
+        }),
+      );
+      expect(model.attention.items.map((item) => item.kind)).toEqual([
+        "egress-approval",
+        "egress-approval",
+        "approval",
+        "secret-request",
+      ]);
+      expect(model.attention.items[0]).toMatchObject({
+        id: "egress:sooner",
+        title: "DELETE pve.lan:8006/api2/json/nodes/pve/qemu",
+        reason: "Write with $PVE_TOKEN from agent",
+        context: "media",
+        target: { kind: "thread" },
+      });
+      expect(model.attention.items[0]?.egressApproval?.id).toBe("sooner");
+      // Without a known thread it still shows, pointing at Settings → Secrets.
+      expect(model.attention.items[1]).toMatchObject({
+        reason: "Write with $PVE_TOKEN",
+        context: null,
+        target: { kind: "secrets" },
+      });
+      // The held request belongs to a running thread, which stays under Running too.
+      expect(model.running.items.map((row) => row.title)).toEqual(["agent"]);
+      expect(model.projects.items[0]?.attentionCount).toBe(2);
+    });
+
+    it("does not name a hidden requester", () => {
+      const model = deriveHomeOverview(
+        input({
+          threads: [thread("curator-session", CURATOR_PROJECT_ID)],
+          egressApprovals: {
+            state: "ready",
+            environmentId: ENVIRONMENT_ID,
+            approvals: [
+              approval("a", { threadId: "curator-session" as HomelabEgressApproval["threadId"] }),
+            ],
+          },
+        }),
+      );
+      expect(model.attention.items[0]).toMatchObject({
+        kind: "egress-approval",
+        reason: "Write with $PVE_TOKEN",
+        context: null,
+      });
+    });
+
+    it("keeps attention incomplete while approvals are loading", () => {
+      const loading = deriveHomeOverview(
+        input({
+          egressApprovals: { state: "loading", approvals: [], environmentId: ENVIRONMENT_ID },
+        }),
+      );
+      expect(loading.attention.complete).toBe(false);
+      const failed = deriveHomeOverview(
+        input({
+          egressApprovals: { state: "error", approvals: [], environmentId: ENVIRONMENT_ID },
+        }),
+      );
+      expect(failed.attention.complete).toBe(true);
+    });
   });
 });

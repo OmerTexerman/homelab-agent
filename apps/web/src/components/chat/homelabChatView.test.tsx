@@ -11,6 +11,11 @@ vi.mock("../ProjectRuntimePanel", () => ({
     <div data-testid="project-runtime-panel">{props.runtimeId}</div>
   ),
 }));
+vi.mock("../homelab/ThreadEgressApprovalBanner", () => ({
+  ThreadEgressApprovalBanner: (props: { threadId: string }) => (
+    <div data-testid="thread-egress-approvals">{props.threadId}</div>
+  ),
+}));
 vi.mock("../ThreadWorkspacePanel", () => ({
   ThreadWorkspacePanel: () => <div data-testid="thread-workspace-panel" />,
   ThreadProjectMemoryPanel: () => <div data-testid="thread-memory-panel" />,
@@ -84,5 +89,10 @@ describe("useHomelabChatView", () => {
 
   it("shows the Project Runtime strip bound to the project's default runtime", () => {
     expect(render({})).toContain("project-runtime:router");
+  });
+
+  it("shows the thread's egress write approvals under the runtime strip", () => {
+    expect(render({})).toContain('data-testid="thread-egress-approvals">thread-1<');
+    expect(render({ isServerThread: false })).not.toContain("thread-egress-approvals");
   });
 });

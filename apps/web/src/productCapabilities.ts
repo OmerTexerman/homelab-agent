@@ -224,7 +224,7 @@ export const HOMELAB_PRODUCT_COPY = {
     newThreadInAction: "New thread in",
     attentionTitle: "Needs you",
     attentionEmpty: "Nothing is waiting on you.",
-    attentionChecking: "Checking runtimes and secret requests…",
+    attentionChecking: "Checking runtimes, write approvals, and secret requests…",
     runningTitle: "Running",
     projectsTitle: "Projects",
     recentTitle: "Recent threads",

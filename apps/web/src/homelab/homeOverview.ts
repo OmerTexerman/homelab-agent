@@ -1,6 +1,7 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   EnvironmentId,
+  HomelabEgressApproval,
   HomelabSecretDescriptor,
   ProjectRuntimeDetail,
   ProjectRuntimeLifecycleState,
@@ -12,6 +13,7 @@ import {
   isStandaloneProjectId,
 } from "@t3tools/shared/standaloneProject";
 
+import { describeEgressTarget } from "./egressBroker";
 import { projectRuntimeRecreateNotice } from "../components/ProjectRuntimePanel.logic";
 import {
   resolveSidebarThreadStatus,
@@ -24,15 +26,17 @@ import { filterUserVisibleProjects, filterUserVisibleThreads } from "./visiblePr
 
 /**
  * Read model for the home page (the `/` landing). Pure: the page feeds it the
- * shell atoms plus the runtime-detail and secrets queries it already reads, and
- * renders what comes back. Sections, in page order:
+ * shell atoms plus the runtime-detail, secrets, and egress-approval queries it
+ * already reads, and renders what comes back. Sections, in page order:
  *
  * - `attention`: what is blocked on the user, most urgent kind first.
  * - `running`: threads with live work.
  * - `projects`: every project with its runtime state and last activity.
  * - `recent`: the remaining recent threads.
  *
- * A thread appears in at most one of attention / running / recent.
+ * A thread's own row appears in at most one of attention / running / recent.
+ * Egress write approvals are separate attention items, so a running thread
+ * whose request is held also shows under Running.
  */
 
 /** Rows shown per section before "Show all". */
@@ -51,6 +55,14 @@ export interface HomeSecretsInput {
   readonly environmentId: EnvironmentId | null;
 }
 
+export interface HomeEgressApprovalsInput {
+  /** `queryDisplayState` of the approvals list; "empty" means nothing pending. */
+  readonly state: QueryDisplayState;
+  readonly approvals: readonly HomelabEgressApproval[];
+  /** The environment the approvals belong to (the primary one). */
+  readonly environmentId: EnvironmentId | null;
+}
+
 export interface HomeOverviewInput {
   /** False until every environment's shell snapshot has arrived. */
   readonly bootstrapped: boolean;
@@ -60,10 +72,13 @@ export interface HomeOverviewInput {
   readonly runtimeDetails: ReadonlyMap<string, HomeRuntimeDetailState>;
   /** Null when this client cannot read secrets (no primary environment). */
   readonly secrets: HomeSecretsInput | null;
+  /** Null (or absent) when this client cannot read egress approvals. */
+  readonly egressApprovals?: HomeEgressApprovalsInput | null;
   readonly limits?: Partial<Record<"attention" | "running" | "projects" | "recent", number>>;
 }
 
 export type HomeAttentionKind =
+  | "egress-approval"
   | "approval"
   | "user-input"
   | "secret-request"
@@ -74,13 +89,15 @@ export type HomeAttentionKind =
 
 /** Lower sorts first. Blocking decisions outrank failures, which outrank FYIs. */
 export const HOME_ATTENTION_RANK: Record<HomeAttentionKind, number> = {
-  approval: 0,
-  "user-input": 1,
-  "secret-request": 2,
-  "runtime-failed": 3,
-  "thread-failed": 4,
-  "plan-ready": 5,
-  "runtime-rebuild-pending": 6,
+  // A held egress write blocks a running agent and is denied on a timer.
+  "egress-approval": 0,
+  approval: 1,
+  "user-input": 2,
+  "secret-request": 3,
+  "runtime-failed": 4,
+  "thread-failed": 5,
+  "plan-ready": 6,
+  "runtime-rebuild-pending": 7,
 };
 
 export type HomeTarget =
@@ -101,6 +118,8 @@ export interface HomeAttentionItem {
   readonly context: string | null;
   readonly timestamp: string | null;
   readonly target: HomeTarget;
+  /** Set for "egress-approval": the held request, for inline decisions and its countdown. */
+  readonly egressApproval?: HomelabEgressApproval;
 }
 
 export interface HomeThreadRow {
@@ -354,6 +373,41 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
     }
   }
 
+  if (input.egressApprovals) {
+    const environmentId = input.egressApprovals.environmentId;
+    const threadById = new Map(
+      threads
+        .filter((thread) => thread.environmentId === environmentId)
+        .map((thread) => [thread.id, thread]),
+    );
+    for (const approval of input.egressApprovals.approvals) {
+      // Hidden (curator) and archived threads aren't named, but the request
+      // still needs answering.
+      const requester = approval.threadId ? threadById.get(approval.threadId) : undefined;
+      if (requester) {
+        const projectKey = homeProjectKey({
+          environmentId: requester.environmentId,
+          projectId: requester.projectId,
+        });
+        attentionByProject.set(projectKey, (attentionByProject.get(projectKey) ?? 0) + 1);
+      }
+      attentionItems.push({
+        id: `egress:${approval.id}`,
+        kind: "egress-approval",
+        title: `${approval.method} ${describeEgressTarget(approval)}`,
+        reason: requester
+          ? `Write with $${approval.secretKey} from ${requester.title}`
+          : `Write with $${approval.secretKey}`,
+        context: requester ? contextFor(requester) : null,
+        timestamp: approval.createdAt,
+        target: requester
+          ? { kind: "thread", ref: scopeThreadRef(requester.environmentId, requester.id) }
+          : { kind: "secrets" },
+        egressApproval: approval,
+      });
+    }
+  }
+
   const orderedProjects = homeProjectsInDisplayOrder(projects, threads);
   let runtimeLoading = false;
   const projectRows = orderedProjects.map((project): HomeProjectRow => {
@@ -415,7 +469,10 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
   const sortedAttention = attentionItems.toSorted(
     (left, right) =>
       HOME_ATTENTION_RANK[left.kind] - HOME_ATTENTION_RANK[right.kind] ||
-      byNewest(left.timestamp, right.timestamp) ||
+      // Approvals: the one denied soonest first. Everything else: newest first.
+      (left.egressApproval && right.egressApproval
+        ? left.egressApproval.expiresAt.localeCompare(right.egressApproval.expiresAt)
+        : byNewest(left.timestamp, right.timestamp)) ||
       left.id.localeCompare(right.id),
   );
   const sortRows = (rows: HomeThreadRow[]) =>
@@ -434,7 +491,11 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
     status,
     attention: {
       ...bound(sortedAttention, limits.attention),
-      complete: input.bootstrapped && !runtimeLoading && input.secrets?.state !== "loading",
+      complete:
+        input.bootstrapped &&
+        !runtimeLoading &&
+        input.secrets?.state !== "loading" &&
+        input.egressApprovals?.state !== "loading",
     },
     running: bound(sortRows(running), limits.running),
     projects: bound(projectRows, limits.projects),

@@ -25,6 +25,7 @@ import { requestDraftAutoSend } from "../../homelab/draftAutoSend";
 import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../../homelab/visibleProjects";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { homelabEgressApprovalsQueryOptions } from "../../lib/homelabEgressReactQuery";
 import { homelabSecretsQueryOptions } from "../../lib/homelabSecretsReactQuery";
 import { projectRuntimeDetailQueryOptions } from "../../lib/projectRuntimeReactQuery";
 import { cn } from "../../lib/utils";
@@ -41,6 +42,11 @@ import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import {
+  EgressApprovalActions,
+  EgressApprovalTimeLeft,
+  useEgressApprovalDecision,
+} from "./EgressApprovalActions";
 
 type ExpandableSection = "attention" | "running" | "projects" | "recent";
 
@@ -89,6 +95,11 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
     homelabSecretsQueryOptions({ environmentId: primaryEnvironmentId }),
   );
 
+  // Shares the cache entry (and polling) of the global egress approval prompt.
+  const egressApprovalsQuery = useQuery(
+    homelabEgressApprovalsQueryOptions({ environmentId: primaryEnvironmentId }),
+  );
+
   const runtimeDetails = useMemo(() => {
     const details = new Map<string, HomeRuntimeDetailState>();
     trackedProjects.forEach((project, index) => {
@@ -113,6 +124,20 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
     };
   }, [primaryEnvironmentId, secretsData, secretsStatus]);
 
+  const egressData = egressApprovalsQuery.data;
+  const egressStatus = egressApprovalsQuery.status;
+  const egressApprovals = useMemo(() => {
+    if (primaryEnvironmentId === null) return null;
+    return {
+      environmentId: primaryEnvironmentId,
+      state: queryDisplayState(
+        { status: egressStatus, data: egressData },
+        (data) => data.approvals.length === 0,
+      ),
+      approvals: egressData?.approvals ?? [],
+    };
+  }, [egressData, egressStatus, primaryEnvironmentId]);
+
   const model = useMemo(
     () =>
       deriveHomeOverview({
@@ -121,6 +146,7 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
         threads,
         runtimeDetails,
         secrets,
+        egressApprovals,
         limits: {
           attention: expanded.has("attention") ? Infinity : HOME_SECTION_LIMIT,
           running: expanded.has("running") ? Infinity : HOME_SECTION_LIMIT,
@@ -128,7 +154,7 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
           recent: expanded.has("recent") ? Infinity : HOME_SECTION_LIMIT,
         },
       }),
-    [bootstrapped, expanded, projects, runtimeDetails, secrets, threads],
+    [bootstrapped, egressApprovals, expanded, projects, runtimeDetails, secrets, threads],
   );
 
   const toggle = useCallback((section: ExpandableSection) => {
@@ -457,6 +483,15 @@ function AttentionRow({
   readonly item: HomeAttentionItem;
   readonly startThreadIn: StartThreadIn;
 }) {
+  if (item.egressApproval) {
+    return (
+      <EgressApprovalAttentionRow
+        item={item}
+        approval={item.egressApproval}
+        startThreadIn={startThreadIn}
+      />
+    );
+  }
   const body = (
     <>
       <StatusDot className={ATTENTION_DOT[item.kind]} />
@@ -474,6 +509,43 @@ function AttentionRow({
     <TargetLink target={item.target} startThreadIn={startThreadIn}>
       {body}
     </TargetLink>
+  );
+}
+
+/**
+ * A held egress write: what and where, which secret and thread, the time left,
+ * and inline decisions (the row link itself opens the thread).
+ */
+function EgressApprovalAttentionRow({
+  item,
+  approval,
+  startThreadIn,
+}: {
+  readonly item: HomeAttentionItem;
+  readonly approval: NonNullable<HomeAttentionItem["egressApproval"]>;
+  readonly startThreadIn: StartThreadIn;
+}) {
+  const decision = useEgressApprovalDecision();
+  return (
+    <div data-testid="home-egress-approval" className="flex min-w-0 flex-col gap-1 py-1">
+      <TargetLink target={item.target} startThreadIn={startThreadIn}>
+        <StatusDot className={ATTENTION_DOT[item.kind]} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-mono text-sm font-medium text-foreground">
+            {item.title}
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
+            <span className={cn("truncate", ATTENTION_TEXT[item.kind])}>{item.reason}</span>
+            {item.context ? <span className="shrink-0 truncate">{item.context}</span> : null}
+          </span>
+        </span>
+        <EgressApprovalTimeLeft
+          expiresAt={approval.expiresAt}
+          className={cn("text-xs", ATTENTION_TEXT[item.kind])}
+        />
+      </TargetLink>
+      <EgressApprovalActions approval={approval} decision={decision} className="pl-5" />
+    </div>
   );
 }
 
@@ -644,6 +716,7 @@ const AMBER_TEXT = "text-amber-600 dark:text-amber-300/90";
 const SKY_DOT = "bg-sky-500 dark:bg-sky-300/80";
 
 const ATTENTION_DOT: Record<HomeAttentionKind, string> = {
+  "egress-approval": AMBER_DOT,
   approval: AMBER_DOT,
   "user-input": "bg-indigo-500 dark:bg-indigo-300/90",
   "secret-request": AMBER_DOT,
@@ -654,6 +727,7 @@ const ATTENTION_DOT: Record<HomeAttentionKind, string> = {
 };
 
 const ATTENTION_TEXT: Record<HomeAttentionKind, string> = {
+  "egress-approval": AMBER_TEXT,
   approval: AMBER_TEXT,
   "user-input": "text-indigo-600 dark:text-indigo-300/90",
   "secret-request": AMBER_TEXT,
