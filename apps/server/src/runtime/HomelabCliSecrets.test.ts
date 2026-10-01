@@ -12,6 +12,7 @@ import * as NodePath from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { DEFAULT_BROKER_POLICY } from "../homelab/Services/HomelabSecretRegistry.ts";
 import { renderHomelabCliScript } from "./homelabCliScripts.ts";
 import { runtimeSecretEnv, writeRuntimeSecretsSync } from "./RuntimeSecretDelivery.ts";
 
@@ -110,8 +111,8 @@ function runCli(args: ReadonlyArray<string>) {
 const deliver = (entries: ReadonlyArray<{ key: string; value: string; valueUpdatedAt: string }>) =>
   writeRuntimeSecretsSync({
     runtimeHomePath: home,
-    secrets: entries,
-    env: runtimeSecretEnv(entries),
+    secrets: entries.map((entry) => ({ ...entry, ...DEFAULT_BROKER_POLICY })),
+    env: runtimeSecretEnv(entries.map((entry) => ({ ...entry, ...DEFAULT_BROKER_POLICY }))),
   });
 
 describe("homelab CLI secrets", () => {

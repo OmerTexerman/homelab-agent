@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,6 +25,7 @@ import {
 } from "./HomelabSql.ts";
 import {
   HOMELAB_MIGRATION_RANGES,
+  homelabMigrationEntries,
   homelabMigrationManifest,
   runHomelabMigrations,
 } from "./Migrations.ts";
@@ -142,6 +144,43 @@ describe("HomelabSql", () => {
       // Ids recorded by newer code are tolerated after a rollback.
       assert.deepEqual(yield* runHomelabMigrations(sql, foundation), []);
     }).pipe(Effect.provide(HomelabSqlMemory)),
+  );
+
+  it.effect("adds the egress broker columns and audit table to an existing database", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const before = homelabMigrationEntries.filter(([id]) => id !== 301);
+      yield* runHomelabMigrations(sql, before);
+      yield* sql`
+        INSERT INTO homelab_secrets (key, label, summary, value_updated_at, created_at, updated_at)
+        VALUES ('OLD_TOKEN', NULL, NULL, '2026-01-01T00:00:00.000Z',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+      `;
+      assert.notInclude(yield* tableNames(sql), "egress_audit");
+
+      assert.deepEqual(yield* runHomelabMigrations(sql), [[301, "EgressBroker"]]);
+      const [row] = yield* sql<{
+        readonly delivery: string;
+        readonly allowedHosts: string;
+        readonly approveWrites: number;
+        readonly upstreamTls: string;
+      }>`
+        SELECT delivery, allowed_hosts AS "allowedHosts", approve_writes AS "approveWrites",
+          upstream_tls AS "upstreamTls"
+        FROM homelab_secrets WHERE key = 'OLD_TOKEN'
+      `;
+      assert.deepEqual(row, {
+        delivery: "file",
+        allowedHosts: "[]",
+        approveWrites: 0,
+        upstreamTls: "verify",
+      });
+      assert.include(yield* tableNames(sql), "egress_audit");
+      const badDelivery = yield* sql`
+        UPDATE homelab_secrets SET delivery = 'smuggled' WHERE key = 'OLD_TOKEN'
+      `.pipe(Effect.flip);
+      assert.isDefined(badDelivery);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("has FTS5", () =>

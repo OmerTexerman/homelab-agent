@@ -160,6 +160,82 @@ it.layer(
       assert.isTrue(Option.isNone(yield* secretStore.get("homelab-secret-PATH")));
     }),
   );
+
+  it.effect("defaults to file delivery and keeps broker policy across value rotations", () =>
+    Effect.gen(function* () {
+      const registry = yield* HomelabSecretRegistry;
+      const plain = yield* registry.upsertSecret({ key: "PLAIN_POLICY", value: "x" });
+      assert.deepInclude(plain, {
+        delivery: "file",
+        allowedHosts: [],
+        approveWrites: false,
+        upstreamTls: "verify",
+      });
+
+      yield* registry.upsertSecret({
+        key: "BROKERED_POLICY",
+        value: "v1",
+        delivery: "brokered",
+        allowedHosts: ["pve.lan:8006", "PVE.lan:8006", "*.nas.lan"],
+        approveWrites: true,
+        upstreamTls: "insecure",
+      });
+      // A rotation that says nothing about policy keeps it.
+      const rotated = yield* registry.upsertSecret({ key: "BROKERED_POLICY", value: "v2" });
+      assert.deepInclude(rotated, {
+        delivery: "brokered",
+        allowedHosts: ["pve.lan:8006", "*.nas.lan"],
+        approveWrites: true,
+        upstreamTls: "insecure",
+      });
+      const [materialized] = (yield* registry.materializeSecrets({ projectId: null })).filter(
+        (secret) => secret.key === "BROKERED_POLICY",
+      );
+      assert.deepInclude(materialized, {
+        value: "v2",
+        delivery: "brokered",
+        allowedHosts: ["pve.lan:8006", "*.nas.lan"],
+      });
+    }),
+  );
+
+  it.effect("changes broker policy without the value and validates it", () =>
+    Effect.gen(function* () {
+      const registry = yield* HomelabSecretRegistry;
+      const noHosts = yield* registry
+        .upsertSecret({ key: "NO_HOSTS", value: "x", delivery: "brokered" })
+        .pipe(Effect.flip);
+      assert.strictEqual(noHosts.reason, "invalid-input");
+      assert.include(noHosts.message, "allowed host");
+
+      yield* registry.upsertSecret({ key: "POLICY_LATER", value: "keep-me" });
+      const brokered = yield* registry.setBrokerPolicy({
+        key: "POLICY_LATER",
+        delivery: "brokered",
+        allowedHosts: ["api.example.com"],
+      });
+      assert.strictEqual(brokered.delivery, "brokered");
+      assert.strictEqual(brokered.hasValue, true);
+      const badHost = yield* registry
+        .setBrokerPolicy({ key: "POLICY_LATER", allowedHosts: ["https://x.example.com/"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(badHost.reason, "invalid-input");
+      const emptied = yield* registry
+        .setBrokerPolicy({ key: "POLICY_LATER", allowedHosts: [] })
+        .pipe(Effect.flip);
+      assert.strictEqual(emptied.reason, "invalid-input");
+      const back = yield* registry.setBrokerPolicy({ key: "POLICY_LATER", delivery: "file" });
+      assert.strictEqual(back.delivery, "file");
+      const [value] = (yield* registry.materializeSecrets({ projectId: null })).filter(
+        (secret) => secret.key === "POLICY_LATER",
+      );
+      assert.strictEqual(value?.value, "keep-me");
+      const missing = yield* registry
+        .setBrokerPolicy({ key: "NOT_THERE", delivery: "file" })
+        .pipe(Effect.flip);
+      assert.strictEqual(missing.reason, "not-found");
+    }),
+  );
 });
 
 const legacyJson = JSON.stringify({
