@@ -278,11 +278,14 @@ export function HomeStartPrompt({
   projects,
   startThreadIn,
   defaultProjectKey = null,
+  showScratchAction = true,
 }: {
   readonly projects: ReadonlyArray<HomeProjectOption>;
   readonly startThreadIn: StartThreadIn;
   /** `homeProjectKey` of the project to preselect; defaults to the most recently active. */
   readonly defaultProjectKey?: string | null;
+  /** The "New scratch thread" button; off on a project's own page. */
+  readonly showScratchAction?: boolean;
 }) {
   const createStandaloneThread = useCreateStandaloneThread();
   const [prompt, setPrompt] = useState("");
@@ -393,15 +396,17 @@ export function HomeStartPrompt({
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => void createStandaloneThread()}
-          >
-            <SquarePenIcon className="size-4" />
-            {HOMELAB_PRODUCT_COPY.standalone.newThreadAction}
-          </Button>
+          {showScratchAction ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void createStandaloneThread()}
+            >
+              <SquarePenIcon className="size-4" />
+              {HOMELAB_PRODUCT_COPY.standalone.newThreadAction}
+            </Button>
+          ) : null}
           <Button type="submit" size="sm" disabled={selected === null || starting}>
             <ArrowUpIcon className="size-4" />
             {copy.startAction}

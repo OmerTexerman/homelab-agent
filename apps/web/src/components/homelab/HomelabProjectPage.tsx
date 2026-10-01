@@ -334,6 +334,7 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
       <HomeStartPrompt
         projects={startOptions}
         startThreadIn={startThreadIn}
+        showScratchAction={false}
         defaultProjectKey={homeProjectKey({
           environmentId: primary.environmentId,
           projectId: primary.id,
