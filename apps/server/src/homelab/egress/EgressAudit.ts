@@ -54,18 +54,16 @@ export const listEgressAudit = Effect.fn("EgressAudit.list")(function* (limit: n
       method, host, path, decision, upstream_status AS "upstreamStatus"
     FROM egress_audit ORDER BY id DESC LIMIT ${limit}
   `;
-  return rows.map(
-    (row): HomelabEgressAuditEntry => ({
-      id: row.id,
-      at: row.at,
-      runtimeId: RuntimeSessionId.make(row.runtimeId),
-      ...(row.threadId !== null ? { threadId: ThreadId.make(row.threadId) } : {}),
-      secretKey: row.secretKey,
-      method: row.method,
-      host: row.host,
-      path: row.path,
-      decision: row.decision,
-      ...(row.upstreamStatus !== null ? { upstreamStatus: row.upstreamStatus } : {}),
-    }),
-  );
+  return rows.map((row): HomelabEgressAuditEntry => ({
+    id: row.id,
+    at: row.at,
+    runtimeId: RuntimeSessionId.make(row.runtimeId),
+    ...(row.threadId !== null ? { threadId: ThreadId.make(row.threadId) } : {}),
+    secretKey: row.secretKey,
+    method: row.method,
+    host: row.host,
+    path: row.path,
+    decision: row.decision,
+    ...(row.upstreamStatus !== null ? { upstreamStatus: row.upstreamStatus } : {}),
+  }));
 });
