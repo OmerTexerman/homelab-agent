@@ -14,7 +14,9 @@
  * - `HomelabRuntimeConsumersLive` holds fork services and reactors that depend
  *   on upstream orchestration, terminals, and provider services. It sits at
  *   the front of the chain, next to upstream's reactors.
- * - `HomelabRoutesLive` is the fork's HTTP routes and global HTTP middleware.
+ * - `HomelabRoutesLive` is the fork's HTTP routes, global HTTP middleware, and
+ *   the homelab MCP toolkit (registered on upstream's `/mcp` endpoint, whose
+ *   `McpServer` it shares because both sit in the same routes layer).
  *
  * @module serverLayers
  */
@@ -22,6 +24,7 @@ import * as Layer from "effect/Layer";
 
 import { homelabPasskeyRoutesLayer } from "../auth/homelabPasskeyHttp.ts";
 import { homelabSessionRenewalLayer } from "../auth/homelabSessionRenewal.ts";
+import { HomelabToolkitRegistrationLive } from "../mcp/toolkits/homelab/handlers.ts";
 import { ThreadRuntimeReactorLive } from "../orchestration/Layers/ThreadRuntimeReactor.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { HomelabSqlLive } from "../homelabPersistence/HomelabSql.ts";
@@ -99,11 +102,13 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
 );
 
 /**
- * Fork HTTP routes (homelab API, thread workspace downloads, passkey sign-in)
- * and the fork's global HTTP middleware (sliding browser sessions).
+ * Fork HTTP routes (homelab API, thread workspace downloads, passkey sign-in),
+ * the fork's global HTTP middleware (sliding browser sessions), and the
+ * homelab MCP toolkit.
  */
 export const HomelabRoutesLive = Layer.mergeAll(
   homelabRoutesLayer,
+  HomelabToolkitRegistrationLive,
   threadWorkspaceFileRouteLayer,
   homelabPasskeyRoutesLayer,
   homelabSessionRenewalLayer,

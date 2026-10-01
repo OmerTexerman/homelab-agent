@@ -120,6 +120,9 @@ export type HomelabCallerScope =
       readonly threadScoped: boolean;
     };
 
+/** A caller acting for one thread: a runtime token or an MCP provider session. */
+export type ThreadCallerScope = Extract<HomelabCallerScope, { readonly kind: "runtime" }>;
+
 const UNRESTRICTED_CALLER: HomelabCallerScope = { kind: "unrestricted" };
 
 /** Caller scope of an agent acting for `threadId` (runtime token or MCP session). */
@@ -132,7 +135,7 @@ export const resolveThreadCallerScope = (threadId: ThreadId) =>
         status: 403,
       });
     }
-    const caller: HomelabCallerScope = {
+    const caller: ThreadCallerScope = {
       kind: "runtime",
       threadId,
       projectId: projectId.value,
