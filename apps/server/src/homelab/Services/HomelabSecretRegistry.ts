@@ -1,5 +1,8 @@
 // @effect-diagnostics importFromBarrel:off nodeBuiltinImport:off globalDate:off globalDateInEffect:off preferSchemaOverJson:off globalRandom:off globalTimers:off anyUnknownInErrorContext:off
 import type {
+  HomelabSecretBrokerPolicyInput,
+  HomelabSecretDelivery,
+  HomelabSecretUpstreamTls,
   HomelabSecretDeclineInput,
   HomelabSecretDeleteInput,
   HomelabSecretDescriptor,
@@ -31,11 +34,28 @@ export class HomelabSecretRegistryError extends Data.TaggedError("HomelabSecretR
  */
 export interface HomelabSecretChangeEvent {
   readonly key: string;
-  readonly change: "upserted" | "deleted" | "scoped";
+  readonly change: "upserted" | "deleted" | "scoped" | "policy";
 }
 
-/** One secret value a runtime should receive. */
-export interface MaterializedHomelabSecret {
+/** A secret's egress broker policy. `file` delivery ignores the other fields. */
+export interface HomelabSecretBrokerPolicy {
+  readonly delivery: HomelabSecretDelivery;
+  /** Normalized (lowercase, deduplicated) host patterns. */
+  readonly allowedHosts: ReadonlyArray<string>;
+  readonly approveWrites: boolean;
+  readonly upstreamTls: HomelabSecretUpstreamTls;
+}
+
+/** What a secret has until its policy is changed: plain file delivery. */
+export const DEFAULT_BROKER_POLICY: HomelabSecretBrokerPolicy = {
+  delivery: "file",
+  allowedHosts: [],
+  approveWrites: false,
+  upstreamTls: "verify",
+};
+
+/** One secret value a runtime should receive, with its broker policy. */
+export interface MaterializedHomelabSecret extends HomelabSecretBrokerPolicy {
   readonly key: string;
   readonly value: string;
   /** When the value last changed; written next to the delivered file. */
@@ -63,6 +83,10 @@ export interface HomelabSecretRegistryShape {
   ) => Effect.Effect<HomelabSecretDescriptor, HomelabSecretRegistryError>;
   readonly setScope: (
     input: HomelabSecretScopeInput,
+  ) => Effect.Effect<HomelabSecretDescriptor, HomelabSecretRegistryError>;
+  /** Changes a secret's broker policy without touching its value. */
+  readonly setBrokerPolicy: (
+    input: HomelabSecretBrokerPolicyInput,
   ) => Effect.Effect<HomelabSecretDescriptor, HomelabSecretRegistryError>;
   readonly deleteSecret: (
     input: HomelabSecretDeleteInput,

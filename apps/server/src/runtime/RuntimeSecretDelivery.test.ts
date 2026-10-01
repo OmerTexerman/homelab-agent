@@ -13,7 +13,11 @@ import * as Option from "effect/Option";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { HomelabSecretRegistryLive } from "../homelab/Layers/HomelabSecretRegistry.ts";
-import { HomelabSecretRegistry } from "../homelab/Services/HomelabSecretRegistry.ts";
+import {
+  DEFAULT_BROKER_POLICY,
+  HomelabSecretRegistry,
+  type MaterializedHomelabSecret,
+} from "../homelab/Services/HomelabSecretRegistry.ts";
 import { HomelabSqlMemory } from "../homelabPersistence/HomelabSql.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -34,10 +38,15 @@ const withHome = <A, E, R>(use: (home: string) => Effect.Effect<A, E, R>) =>
     (home) => Effect.sync(() => NodeFS.rmSync(home, { recursive: true, force: true })),
   );
 
-const secret = (key: string, value: string, valueUpdatedAt = "2026-01-01T00:00:00.000Z") => ({
+const secret = (
+  key: string,
+  value: string,
+  valueUpdatedAt = "2026-01-01T00:00:00.000Z",
+): MaterializedHomelabSecret => ({
   key,
   value,
   valueUpdatedAt,
+  ...DEFAULT_BROKER_POLICY,
 });
 
 describe("writeRuntimeSecrets", () => {

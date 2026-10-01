@@ -2,6 +2,7 @@
 // with a single line so upstream syncs touch one line of the public barrel.
 export * from "./homelab.ts";
 export * from "./homelabCurator.ts";
+export * from "./homelabEgress.ts";
 export * from "./homelabHttp.ts";
 export * from "./homelabPasskeys.ts";
 export * from "./homelabSecrets.ts";

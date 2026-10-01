@@ -20,7 +20,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
-import { HomelabSecretRegistry } from "../homelab/Services/HomelabSecretRegistry.ts";
+import {
+  DEFAULT_BROKER_POLICY,
+  HomelabSecretRegistry,
+} from "../homelab/Services/HomelabSecretRegistry.ts";
 import {
   HOMELAB_VIEW_GENERATION_FILE,
   readHomelabViewGeneration,
@@ -172,8 +175,14 @@ it.effect("replaces known secret values with $KEY placeholders in rendered views
                 key: "API_TOKEN",
                 value: "s3cr3t-token-value",
                 valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+                ...DEFAULT_BROKER_POLICY,
               },
-              { key: "SHORT", value: "abc", valueUpdatedAt: "2026-09-01T00:00:00.000Z" },
+              {
+                key: "SHORT",
+                value: "abc",
+                valueUpdatedAt: "2026-09-01T00:00:00.000Z",
+                ...DEFAULT_BROKER_POLICY,
+              },
             ]),
           changes: Stream.empty,
         }),

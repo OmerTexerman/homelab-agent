@@ -13,6 +13,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  type HomelabSecretBrokerPolicyInput,
   type HomelabSecretDeclineInput,
   type HomelabSecretDeleteInput,
   type HomelabSecretDescriptor,
@@ -20,6 +21,7 @@ import {
   type HomelabSecretScopeInput,
   type HomelabSecretUpsertInput,
   HomelabEntityId,
+  homelabEgressAllowedHostReason,
   IsoDateTime,
   ProjectId,
   reservedHomelabSecretKeyReason,
@@ -49,6 +51,8 @@ import { KnowledgeGraph } from "../Services/KnowledgeGraph.ts";
 import {
   HomelabSecretRegistry,
   HomelabSecretRegistryError,
+  DEFAULT_BROKER_POLICY,
+  type HomelabSecretBrokerPolicy,
   type HomelabSecretChangeEvent,
   type HomelabSecretRegistryShape,
   type MaterializedHomelabSecret,
@@ -71,13 +75,86 @@ const LegacySecretState = Schema.Struct({
   secrets: Schema.Array(LegacySecretMetadata),
 });
 
-interface SecretRow {
+interface SecretRow extends HomelabSecretBrokerPolicy {
   readonly key: string;
   readonly label: string | null;
   readonly summary: string | null;
   readonly valueUpdatedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** `homelab_secrets` as stored: allowed hosts as JSON, approveWrites as 0/1. */
+interface SecretSqlRow {
+  readonly key: string;
+  readonly label: string | null;
+  readonly summary: string | null;
+  readonly valueUpdatedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly delivery: string;
+  readonly allowedHosts: string;
+  readonly approveWrites: number;
+  readonly upstreamTls: string;
+}
+
+const decodeAllowedHostsJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+
+function fromSqlRow(row: SecretSqlRow): SecretRow {
+  return {
+    key: row.key,
+    label: row.label,
+    summary: row.summary,
+    valueUpdatedAt: row.valueUpdatedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    delivery: row.delivery === "brokered" ? "brokered" : "file",
+    allowedHosts: Option.getOrElse(decodeAllowedHostsJson(row.allowedHosts), () => []),
+    approveWrites: row.approveWrites === 1,
+    upstreamTls: row.upstreamTls === "insecure" ? "insecure" : "verify",
+  };
+}
+
+/**
+ * Merges `input` over `current` and validates the result: hosts are
+ * lowercased and deduplicated, and `brokered` needs at least one host.
+ */
+function resolveBrokerPolicy(
+  current: HomelabSecretBrokerPolicy,
+  input: Partial<Pick<HomelabSecretBrokerPolicyInput, keyof HomelabSecretBrokerPolicy>>,
+): HomelabSecretBrokerPolicy | HomelabSecretRegistryError {
+  const allowedHosts = [
+    ...new Set((input.allowedHosts ?? current.allowedHosts).map((host) => host.toLowerCase())),
+  ];
+  for (const host of allowedHosts) {
+    const reason = homelabEgressAllowedHostReason(host);
+    if (reason !== undefined) {
+      return registryError(reason, { reason: "invalid-input" });
+    }
+  }
+  const policy: HomelabSecretBrokerPolicy = {
+    delivery: input.delivery ?? current.delivery,
+    allowedHosts,
+    approveWrites: input.approveWrites ?? current.approveWrites,
+    upstreamTls: input.upstreamTls ?? current.upstreamTls,
+  };
+  if (policy.delivery === "brokered" && policy.allowedHosts.length === 0) {
+    return registryError("A brokered secret needs at least one allowed host.", {
+      reason: "invalid-input",
+    });
+  }
+  return policy;
+}
+
+function brokerPolicyOf(row: HomelabSecretBrokerPolicy): HomelabSecretBrokerPolicy {
+  return {
+    delivery: row.delivery,
+    allowedHosts: row.allowedHosts,
+    approveWrites: row.approveWrites,
+    upstreamTls: row.upstreamTls,
+  };
 }
 
 interface RequestRow {
@@ -144,6 +221,10 @@ function toDescriptor(record: SecretRecord, hasValue: boolean): HomelabSecretDes
     hasValue,
     pending: request?.status === "pending",
     projectIds: record.projectIds.map((projectId) => ProjectId.make(projectId)),
+    delivery: record.delivery,
+    allowedHosts: [...record.allowedHosts],
+    approveWrites: record.approveWrites,
+    upstreamTls: record.upstreamTls,
     ...(hasValue && record.valueUpdatedAt !== null
       ? { valueUpdatedAt: record.valueUpdatedAt }
       : {}),
@@ -189,13 +270,17 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
   const loadRecords = (keys?: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       // The table is small (one row per secret), so filter in memory.
-      const allRows = yield* sql<SecretRow>`
+      const allRows = yield* sql<SecretSqlRow>`
         SELECT key, label, summary, value_updated_at AS "valueUpdatedAt",
-          created_at AS "createdAt", updated_at AS "updatedAt"
+          created_at AS "createdAt", updated_at AS "updatedAt", delivery,
+          allowed_hosts AS "allowedHosts", approve_writes AS "approveWrites",
+          upstream_tls AS "upstreamTls"
         FROM homelab_secrets
         ORDER BY key
       `;
-      const rows = keys === undefined ? allRows : allRows.filter((row) => keys.includes(row.key));
+      const rows = (
+        keys === undefined ? allRows : allRows.filter((row) => keys.includes(row.key))
+      ).map(fromSqlRow);
       const scopes = yield* sql<{ readonly secretKey: string; readonly projectId: string }>`
         SELECT secret_key AS "secretKey", project_id AS "projectId"
         FROM homelab_secret_scopes ORDER BY project_id
@@ -233,14 +318,20 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
 
   const upsertRow = (row: SecretRow) =>
     sql`
-      INSERT INTO homelab_secrets (key, label, summary, value_updated_at, created_at, updated_at)
+      INSERT INTO homelab_secrets (key, label, summary, value_updated_at, created_at, updated_at,
+        delivery, allowed_hosts, approve_writes, upstream_tls)
       VALUES (${row.key}, ${row.label}, ${row.summary}, ${row.valueUpdatedAt},
-        ${row.createdAt}, ${row.updatedAt})
+        ${row.createdAt}, ${row.updatedAt}, ${row.delivery}, ${JSON.stringify(row.allowedHosts)},
+        ${row.approveWrites ? 1 : 0}, ${row.upstreamTls})
       ON CONFLICT (key) DO UPDATE SET
         label = excluded.label,
         summary = excluded.summary,
         value_updated_at = excluded.value_updated_at,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        delivery = excluded.delivery,
+        allowed_hosts = excluded.allowed_hosts,
+        approve_writes = excluded.approve_writes,
+        upstream_tls = excluded.upstream_tls
     `;
 
   const replaceScopes = (key: string, projectIds: ReadonlyArray<string>) =>
@@ -304,6 +395,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
             valueUpdatedAt: stored ? secret.updatedAt : null,
             createdAt: secret.createdAt,
             updatedAt: secret.updatedAt,
+            ...DEFAULT_BROKER_POLICY,
           });
           if (secret.requestedAt !== undefined) {
             yield* upsertRequest({
@@ -433,6 +525,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
                   key: record.key,
                   value,
                   valueUpdatedAt: record.valueUpdatedAt ?? record.updatedAt,
+                  ...brokerPolicyOf(record),
                 })),
               ),
             ),
@@ -451,6 +544,13 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
         // Refuse before storing the value so a read-only registry stores nothing.
         yield* ensureWritable;
         const existing = yield* loadRecord(input.key);
+        const policy = resolveBrokerPolicy(
+          Option.match(existing, { onNone: () => DEFAULT_BROKER_POLICY, onSome: brokerPolicyOf }),
+          input,
+        );
+        if (policy instanceof HomelabSecretRegistryError) {
+          return yield* policy;
+        }
         const now = yield* nowIso;
         const row: SecretRow = {
           key: input.key,
@@ -459,6 +559,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
           valueUpdatedAt: now,
           createdAt: Option.getOrUndefined(existing)?.createdAt ?? now,
           updatedAt: now,
+          ...policy,
         };
 
         yield* secretStore
@@ -501,6 +602,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
           valueUpdatedAt: existing?.valueUpdatedAt ?? null,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
+          ...(existing !== undefined ? brokerPolicyOf(existing) : DEFAULT_BROKER_POLICY),
         };
         yield* inTransaction(
           Effect.gen(function* () {
@@ -572,6 +674,26 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
       }),
     );
 
+  const setBrokerPolicy: HomelabSecretRegistryShape["setBrokerPolicy"] = (
+    input: HomelabSecretBrokerPolicyInput,
+  ) =>
+    withWriteLock(
+      Effect.gen(function* () {
+        yield* ensureWritable;
+        const record = yield* requireRecord(input.key);
+        const policy = resolveBrokerPolicy(brokerPolicyOf(record), input);
+        if (policy instanceof HomelabSecretRegistryError) {
+          return yield* policy;
+        }
+        const now = yield* nowIso;
+        yield* upsertRow({ ...record, ...policy, updatedAt: now }).pipe(
+          Effect.mapError(sqlFailure("persist")),
+        );
+        yield* publishChange({ key: input.key, change: "policy" });
+        return yield* describeKey(input.key);
+      }),
+    );
+
   const deleteSecret: HomelabSecretRegistryShape["deleteSecret"] = (
     input: HomelabSecretDeleteInput,
   ) =>
@@ -606,6 +728,7 @@ const makeHomelabSecretRegistry = Effect.gen(function* () {
     requestSecret,
     declineRequest,
     setScope,
+    setBrokerPolicy,
     deleteSecret,
     materializeSecrets,
     changes: Stream.fromPubSub(changesPubSub),

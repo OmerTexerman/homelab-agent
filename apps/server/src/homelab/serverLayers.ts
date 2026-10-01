@@ -37,6 +37,8 @@ import { ProviderCliStoreLive, ProviderCliStoreSyncLive } from "../runtime/Provi
 import * as HomelabStartup from "./HomelabStartup.ts";
 import { homelabRoutesLayer } from "./http.ts";
 import { CuratorSessionReaperLive } from "./Layers/CuratorSessionReaper.ts";
+import { HomelabEgressBrokerLive } from "./Layers/HomelabEgressBroker.ts";
+import { HomelabEgressGatewayLive } from "./Layers/HomelabEgressGateway.ts";
 import { HomelabSecretRegistryLive } from "./Layers/HomelabSecretRegistry.ts";
 import { HomelabSecretRuntimeReactorLive } from "./Layers/HomelabSecretRuntimeReactor.ts";
 import { HomelabSkillsLive } from "./Layers/HomelabSkills.ts";
@@ -60,6 +62,9 @@ export const HomelabRuntimeServicesLive = Layer.mergeAll(
   HomelabSkillsLive,
   RuntimeProviderVersionManifestLive,
 ).pipe(
+  // Egress proxy socket, surrogate key, and install CA; ThreadRuntime delivers
+  // surrogates and proxy env with it.
+  Layer.provideMerge(HomelabEgressGatewayLive),
   // Opened and migrated before any fork service is built; failing to open it
   // (or a missing FTS5) fails server startup.
   Layer.provideMerge(HomelabSqlLive),
@@ -79,6 +84,8 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
   RuntimeProviderVersionReconcilerLive,
   // Keeps a runtime from idling out while a provider turn is in flight.
   RuntimeTurnKeepaliveLive,
+  // Egress proxy policy: caller resolution, substitution, approvals, audit.
+  HomelabEgressBrokerLive,
   // Started by serverRuntimeStartup in its reactor scope.
   HomelabStartup.layer.pipe(
     Layer.provide(

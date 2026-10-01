@@ -17,8 +17,11 @@ import {
   EventId,
   HomelabEntity,
   HomelabPromotionEnvelope,
+  RuntimeSessionId,
   ThreadId,
   type AuthEnvironmentScope,
+  type HomelabEgressApproval,
+  type HomelabEgressApprovalDecideInput,
   type HomelabSecretDescriptor,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
@@ -108,6 +111,19 @@ const bearerHeaders = (scopes: ReadonlyArray<AuthEnvironmentScope>, subject = "o
   });
 
 const ownerHeaders = bearerHeaders(AuthAdministrativeScopes);
+
+const egressApproval: HomelabEgressApproval = {
+  id: "approval-1",
+  runtimeId: RuntimeSessionId.make("runtime-egress"),
+  threadId: ThreadId.make("thread-egress"),
+  secretKey: "PVE_TOKEN",
+  method: "POST",
+  host: "pve.lan:8006",
+  path: "/api2/json/nodes/pve/qemu",
+  createdAt: "2026-10-01T00:00:00.000Z",
+  expiresAt: "2026-10-01T00:05:00.000Z",
+};
+const decisions: Array<HomelabEgressApprovalDecideInput> = [];
 
 describe("homelab CORS", () => {
   it("recognizes WebSocket upgrade requests so they bypass CORS", () => {
@@ -272,6 +288,75 @@ describe("homelab HTTP routes", () => {
         assert.include(body.error, "reserved");
       }
     }).pipe(Effect.provide(makeHomelabApp())),
+  );
+
+  it.effect("serves egress approvals and audit to humans, never to runtime tokens", () =>
+    Effect.gen(function* () {
+      const runtimeHeaders = yield* bearerHeaders(
+        [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+        "thread-runtime:thread-egress",
+      );
+      for (const path of ["/api/homelab/egress/approvals", "/api/homelab/egress/audit"]) {
+        const asRuntime = yield* HttpClient.get(path, { headers: runtimeHeaders });
+        assert.equal(asRuntime.status, 403);
+      }
+
+      const approvals = yield* HttpClient.get("/api/homelab/egress/approvals", {
+        headers: yield* ownerHeaders,
+      });
+      assert.equal(approvals.status, 200);
+      assert.deepEqual((yield* approvals.json) as unknown, { approvals: [egressApproval] });
+
+      const audit = yield* HttpClient.get("/api/homelab/egress/audit?limit=5", {
+        headers: yield* ownerHeaders,
+      });
+      assert.equal(audit.status, 200);
+      assert.deepEqual(yield* audit.json, { entries: [] });
+
+      const decided = yield* HttpClient.post("/api/homelab/egress/approvals/decide", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json({ id: egressApproval.id, decision: "approve-15m" }),
+      });
+      assert.equal(decided.status, 200);
+      assert.deepEqual(yield* decided.json, { id: egressApproval.id, decision: "approve-15m" });
+      const gone = yield* HttpClient.post("/api/homelab/egress/approvals/decide", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json({ id: "unknown", decision: "deny" }),
+      });
+      assert.equal(gone.status, 404);
+      const invalid = yield* HttpClient.post("/api/homelab/egress/approvals/decide", {
+        headers: yield* ownerHeaders,
+        body: yield* HttpBody.json({ id: egressApproval.id, decision: "maybe" }),
+      });
+      assert.equal(invalid.status, 400);
+      // Deciding needs the secrets-admin scope, which runtime tokens never hold.
+      const runtimeDecide = yield* HttpClient.post("/api/homelab/egress/approvals/decide", {
+        headers: runtimeHeaders,
+        body: yield* HttpBody.json({ id: egressApproval.id, decision: "approve-once" }),
+      });
+      assert.equal(runtimeDecide.status, 403);
+      assert.deepEqual(decisions, [{ id: egressApproval.id, decision: "approve-15m" }]);
+    }).pipe(
+      Effect.provide(
+        makeHomelabApp({
+          homelab: {
+            homelabEgressBroker: {
+              listApprovals: () => Effect.succeed([egressApproval]),
+              listAudit: (limit) => {
+                assert.equal(limit, 5);
+                return Effect.succeed([]);
+              },
+              decideApproval: (input) =>
+                Effect.sync(() => {
+                  if (input.id !== egressApproval.id) return false;
+                  decisions.push(input);
+                  return true;
+                }),
+            },
+          },
+        }),
+      ),
+    ),
   );
 
   it.effect("serves homelab snapshots to authenticated owner sessions only", () =>

@@ -21,6 +21,11 @@ import {
   HomelabEntityVerifyInput,
   HomelabGraphSearchInput,
   HomelabPromotionEnvelope,
+  HomelabEgressApprovalDecideInput,
+  type HomelabEgressApprovalDecideResult,
+  type HomelabEgressApprovalsListResult,
+  type HomelabEgressAuditListResult,
+  HomelabSecretBrokerPolicyInput,
   HomelabSecretDeclineInput,
   HomelabSecretDeleteInput,
   HomelabSecretRequestInput,
@@ -64,6 +69,10 @@ import {
   isServerAuthCredentialError,
   isServerAuthInternalError,
 } from "../auth/EnvironmentAuth.ts";
+import {
+  HomelabEgressBroker,
+  type HomelabEgressBrokerError,
+} from "./Services/HomelabEgressBroker.ts";
 import {
   HomelabSecretRegistry,
   type HomelabSecretRegistryError,
@@ -530,6 +539,115 @@ export const homelabSecretDeleteRouteLayer = HttpRouter.add(
       );
       yield* registry.deleteSecret(input);
       return HttpServerResponse.jsonUnsafe({ ok: true }, { status: 200 });
+    }),
+  ),
+);
+
+export const homelabSecretBrokerPolicyRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/secrets/broker-policy",
+  withSecretErrors(
+    Effect.gen(function* () {
+      yield* authenticateHomelabSecretsAdmin;
+      const registry = yield* HomelabSecretRegistry;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretBrokerPolicyInput).pipe(
+        secretBodyError("broker policy"),
+      );
+      const secret = yield* registry.setBrokerPolicy(input);
+      return HttpServerResponse.jsonUnsafe(secret, { status: 200 });
+    }),
+  ),
+);
+
+// --- Egress broker ----------------------------------------------------------
+
+/**
+ * Egress approvals and audit are for human clients. Runtime tokens also hold
+ * the read scope, but must not see (let alone decide) other runtimes' egress.
+ */
+const authenticateEgressRead = Effect.gen(function* () {
+  const session = yield* authenticateHomelabRead;
+  if (session.subject.startsWith(RUNTIME_TOKEN_SUBJECT_PREFIX)) {
+    return yield* forbiddenScope("Runtime tokens can't read egress approvals or audit.");
+  }
+  return session;
+});
+
+const withEgressErrors = <A, R>(
+  effect: Effect.Effect<A, HomelabHttpError | HomelabEgressBrokerError, R>,
+) =>
+  effect.pipe(
+    Effect.catchTags({
+      HomelabEgressBrokerError: (error) =>
+        respondToHomelabHttpError(
+          new HomelabHttpError({ message: error.message, status: 500, cause: error.cause }),
+        ),
+      HomelabHttpError: respondToHomelabHttpError,
+    }),
+  );
+
+export const homelabEgressApprovalsRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/egress/approvals",
+  withEgressErrors(
+    Effect.gen(function* () {
+      yield* authenticateEgressRead;
+      const broker = yield* HomelabEgressBroker;
+      const approvals = yield* broker.listApprovals();
+      return HttpServerResponse.jsonUnsafe(
+        { approvals } satisfies HomelabEgressApprovalsListResult,
+        { status: 200 },
+      );
+    }),
+  ),
+);
+
+export const homelabEgressApprovalDecideRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/egress/approvals/decide",
+  withEgressErrors(
+    Effect.gen(function* () {
+      yield* authenticateHomelabSecretsAdmin;
+      const broker = yield* HomelabEgressBroker;
+      const input = yield* HttpServerRequest.schemaBodyJson(HomelabEgressApprovalDecideInput).pipe(
+        Effect.mapError(
+          (cause) =>
+            new HomelabHttpError({
+              message: `Invalid egress approval decision: ${cause.message}`,
+              status: 400,
+              cause,
+            }),
+        ),
+      );
+      const decided = yield* broker.decideApproval(input);
+      if (!decided) {
+        return yield* new HomelabHttpError({
+          message: "That egress approval is no longer pending (decided, timed out, or unknown).",
+          status: 404,
+        });
+      }
+      return HttpServerResponse.jsonUnsafe(
+        { id: input.id, decision: input.decision } satisfies HomelabEgressApprovalDecideResult,
+        { status: 200 },
+      );
+    }),
+  ),
+);
+
+export const homelabEgressAuditRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/egress/audit",
+  withEgressErrors(
+    Effect.gen(function* () {
+      yield* authenticateEgressRead;
+      const url = yield* getRequestUrl;
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? Number.NaN : Number(rawLimit);
+      const broker = yield* HomelabEgressBroker;
+      const entries = yield* broker.listAudit(limit);
+      return HttpServerResponse.jsonUnsafe({ entries } satisfies HomelabEgressAuditListResult, {
+        status: 200,
+      });
     }),
   ),
 );
@@ -1730,7 +1848,11 @@ export const homelabRoutesLayer = Layer.mergeAll(
   homelabSecretDeclineRouteLayer,
   homelabSecretScopeRouteLayer,
   homelabSecretDeleteRouteLayer,
+  homelabSecretBrokerPolicyRouteLayer,
   homelabSecretUpsertRouteLayer,
+  homelabEgressApprovalsRouteLayer,
+  homelabEgressApprovalDecideRouteLayer,
+  homelabEgressAuditRouteLayer,
   homelabSkillsCreateRouteLayer,
   homelabSkillsListRouteLayer,
   homelabSkillsPromoteRouteLayer,

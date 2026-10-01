@@ -23,6 +23,7 @@ import Migration0100 from "./Migrations/100_RuntimeRegistry.ts";
 import Migration0101 from "./Migrations/101_RuntimeTools.ts";
 import Migration0200 from "./Migrations/200_KnowledgeStore.ts";
 import Migration0300 from "./Migrations/300_HomelabSecrets.ts";
+import Migration0301 from "./Migrations/301_EgressBroker.ts";
 import Migration0400 from "./Migrations/400_AuthPasskeys.ts";
 
 /**
@@ -31,7 +32,8 @@ import Migration0400 from "./Migrations/400_AuthPasskeys.ts";
  * - foundation (1-99): migrations/import bookkeeping and `homelab_meta`.
  * - runtime (100-199): runtime registry and runtime tools.
  * - knowledge (200-299): graph knowledge, project memory, FTS.
- * - secrets (300-399): secret metadata (values stay in ServerSecretStore).
+ * - secrets (300-399): secret metadata (values stay in ServerSecretStore) and
+ *   the egress broker audit log.
  * - auth (400-499): fork sign-in state such as passkeys. Sessions themselves
  *   stay in upstream's `auth_sessions` in state.sqlite.
  */
@@ -52,7 +54,7 @@ type HomelabMigration = Effect.Effect<void, SqlError, SqlClient.SqlClient>;
  * id runs after everything already applied, even when a higher range shipped
  * first, so a migration may only depend on tables its own range created.
  */
-const homelabMigrationEntries: ReadonlyArray<
+export const homelabMigrationEntries: ReadonlyArray<
   readonly [id: number, name: string, migration: HomelabMigration]
 > = [
   [1, "Foundation", Migration0001],
@@ -60,6 +62,7 @@ const homelabMigrationEntries: ReadonlyArray<
   [101, "RuntimeTools", Migration0101],
   [200, "KnowledgeStore", Migration0200],
   [300, "HomelabSecrets", Migration0300],
+  [301, "EgressBroker", Migration0301],
   [400, "AuthPasskeys", Migration0400],
 ];
 

@@ -134,9 +134,17 @@ import {
 // actions already do.
 import { TerminalManager } from "../../terminal/Manager.ts";
 import { renderHomelabCliScript, renderHomelabSecretToFileScript } from "../homelabCliScripts.ts";
+import { HomelabEgressGateway } from "../../homelab/Services/HomelabEgressGateway.ts";
+import {
+  deliverableRuntimeSecrets,
+  RUNTIME_EGRESS_CA_INSTALL_SCRIPT,
+  runtimeEgressProxyShellLines,
+  runtimeEgressStaticEnv,
+} from "../../homelab/egress/runtimeEgressEnv.ts";
 import {
   resolveSecretsForProject,
   runtimeSecretEnv,
+  secretProjectIdForRuntimeRecord,
   syncProviderAuthIfNewer,
   writeRuntimeSecrets,
 } from "../RuntimeSecretDelivery.ts";
@@ -616,6 +624,13 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
 ) {
   const serverConfig = yield* ServerConfig;
   const providerCliStore = yield* Effect.serviceOption(ProviderCliStore);
+  // Optional like the CLI store: tests and hosts without it deliver brokered
+  // secrets nowhere (they are dropped, never delivered as real values).
+  const egressGateway = yield* Effect.serviceOption(HomelabEgressGateway);
+  /** Runtimes whose last delivery routed through the egress proxy. */
+  const egressRuntimeIds = new Set<string>();
+  /** `containerId|caFingerprint` pairs that already have the CA installed. */
+  const egressCaInstalledContainers = new Set<string>();
   const { cwd, stateDir } = serverConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1272,12 +1287,8 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
   const syncRuntimeControlEnvIntoRuntimeHome = Effect.fn(
     "threadRuntime.syncRuntimeControlEnvIntoRuntimeHome",
   )(function* (record: RuntimeRecord) {
-    const runtimeSecrets = yield* resolveSecretsForProject(
-      record.projectId !== null &&
-        record.runtimeKind !== "curator" &&
-        !resolveRuntimeIsStandalone(runtimeView(record))
-        ? record.projectId
-        : null,
+    const resolvedSecrets = yield* resolveSecretsForProject(
+      secretProjectIdForRuntimeRecord(record),
     ).pipe(
       Effect.mapError(
         (cause) =>
@@ -1289,6 +1300,25 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
     );
     const runtimeHomePath = homePathForThread(threadRuntimesDir, record.storageId);
     const runtimeNetworkPlan = yield* resolveRuntimeDockerNetworkPlan();
+    // Brokered secrets arrive as surrogates; with a live egress proxy the shim
+    // also routes HTTP(S) through it. Runtimes without brokered secrets get
+    // exactly the delivery they always had.
+    const runtimeSecrets = deliverableRuntimeSecrets(
+      resolvedSecrets,
+      Option.isSome(egressGateway) ? egressGateway.value.surrogateFor : undefined,
+      record.runtimeId,
+    );
+    const egressProxyPort =
+      Option.isSome(egressGateway) &&
+      egressGateway.value.proxyPort !== null &&
+      runtimeSecrets.some((secret) => secret.delivery === "brokered")
+        ? egressGateway.value.proxyPort
+        : undefined;
+    if (egressProxyPort === undefined) {
+      egressRuntimeIds.delete(String(record.runtimeId));
+    } else {
+      egressRuntimeIds.add(String(record.runtimeId));
+    }
     const controlEnv = buildRuntimeControlEnvironment({
       secretEnv: runtimeSecretEnv(runtimeSecrets),
       serverUrl: runtimeNetworkPlan.serverUrl,
@@ -1299,7 +1329,22 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             ? "scratch"
             : "project",
     });
-    yield* writeRuntimeSecrets({ runtimeHomePath, secrets: runtimeSecrets, env: controlEnv }).pipe(
+    yield* writeRuntimeSecrets({
+      runtimeHomePath,
+      secrets: runtimeSecrets,
+      env:
+        egressProxyPort === undefined
+          ? controlEnv
+          : { ...controlEnv, ...runtimeEgressStaticEnv(runtimeNetworkPlan.serverUrl) },
+      ...(egressProxyPort === undefined
+        ? {}
+        : {
+            envShellLines: runtimeEgressProxyShellLines({
+              serverUrl: runtimeNetworkPlan.serverUrl,
+              proxyPort: egressProxyPort,
+            }),
+          }),
+    }).pipe(
       Effect.mapError(
         (cause) =>
           new ThreadRuntimeError({
@@ -1307,6 +1352,52 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
             cause,
           }),
       ),
+    );
+  });
+
+  /**
+   * Puts the egress install CA in the running container's system trust store
+   * (as root) when the runtime uses the egress proxy. Idempotent: skipped when
+   * this container already got this CA from us, and the script itself is a
+   * no-op when the same certificate is installed. A recreated container has a
+   * new id, so it gets the CA again on its first start. Failures are logged,
+   * not fatal: the runtime still works, only intercepted HTTPS fails.
+   */
+  const ensureEgressCaInstalled = Effect.fn("threadRuntime.ensureEgressCaInstalled")(function* (
+    record: RuntimeRecord,
+    containerId: string | null,
+  ) {
+    if (Option.isNone(egressGateway) || !egressRuntimeIds.has(String(record.runtimeId))) {
+      return;
+    }
+    const ca = egressGateway.value.ca;
+    const installKey = `${containerId ?? record.containerName}|${ca.fingerprint256}`;
+    if (egressCaInstalledContainers.has(installKey)) {
+      return;
+    }
+    const result = yield* dockerRunner(
+      [
+        "exec",
+        "-i",
+        "-u",
+        "0",
+        record.containerName,
+        "/bin/sh",
+        "-c",
+        RUNTIME_EGRESS_CA_INSTALL_SCRIPT,
+      ],
+      { stdin: ca.certPem, timeoutMs: 60_000, maxBufferBytes: 256 * 1024 },
+    ).pipe(Effect.option);
+    if (Option.isSome(result) && result.value.code === 0) {
+      egressCaInstalledContainers.add(installKey);
+      return;
+    }
+    yield* Effect.logWarning("Failed to install the egress CA into a runtime container").pipe(
+      Effect.annotateLogs({
+        runtimeId: record.runtimeId,
+        containerName: record.containerName,
+        stderr: Option.isSome(result) ? result.value.stderr.slice(0, 500) : "docker exec failed",
+      }),
     );
   });
 
@@ -2321,6 +2412,7 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
         currentImageFingerprint,
         recreateBusyReason(runtimeId, bindings),
       );
+      yield* ensureEgressCaInstalled(record, inspect.Id?.trim() || null);
       const managedOpenCodeServer = readManagedOpenCodeServerEndpoint(inspect);
       if (!managedOpenCodeServer) {
         return yield* new ThreadRuntimeError({
@@ -2664,6 +2756,10 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
           yield* ensureRuntimeDirectories(record, []);
           yield* syncRuntimeControlEnvIntoRuntimeHome(record);
           yield* writeRuntimeShellInitFiles(record);
+          // A secret can become brokered while the container runs.
+          if (record.state === "running") {
+            yield* ensureEgressCaInstalled(record, record.containerId);
+          }
           return toDescriptor(record, binding);
         }),
       );

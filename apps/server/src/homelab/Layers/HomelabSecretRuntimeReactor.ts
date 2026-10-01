@@ -23,6 +23,10 @@ import {
  * Change bursts (e.g. a curator provisioning several secrets in a row) are
  * debounced into a single sweep. The debounce window keeps single-secret
  * latency low while coalescing the common batch case.
+ *
+ * On start, when any secret is brokered, one sweep runs right away: the
+ * egress proxy may be on a different port than before the restart, and
+ * running runtimes need their env shim to say so.
  */
 const SWEEP_DEBOUNCE = Duration.millis(150);
 
@@ -46,6 +50,16 @@ const make = Effect.gen(function* () {
 
   const start: HomelabSecretRuntimeReactorShape["start"] = () =>
     Effect.gen(function* () {
+      yield* Effect.forkScoped(
+        registry.listSecrets().pipe(
+          Effect.flatMap((secrets) =>
+            secrets.some((secret) => secret.delivery === "brokered")
+              ? refreshAllRuntimes
+              : Effect.void,
+          ),
+          Effect.catch(() => Effect.void),
+        ),
+      );
       yield* Effect.forkScoped(
         registry.changes.pipe(
           Stream.debounce(SWEEP_DEBOUNCE),

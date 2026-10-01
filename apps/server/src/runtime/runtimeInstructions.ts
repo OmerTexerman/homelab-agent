@@ -633,6 +633,13 @@ were already running. Secrets are also exported as environment variables in
 new shells, but a variable keeps the value its process started with. Some
 secrets are limited to specific projects, so another project may not see them.
 
+Secrets listed with \`"delivery": "brokered"\` hold a placeholder (\`hlsur_...\`)
+instead of the real value. It only works over HTTP(S) to that secret's
+\`allowedHosts\`: the shell's proxy swaps in the real value on the way out. Use
+the placeholder exactly as you would the real token (headers, URLs, \`curl -u\`),
+keep the proxy env in place, and expect a 403 from the proxy when a host isn't
+allowed or a write is denied. Never try to discover the real value.
+
 If \`homelab secrets\` is empty, or a useful credential is missing from the
 registry, create the missing secret references yourself instead of ending with
 "if you want, I can request them". Secret reference creation is normal work.

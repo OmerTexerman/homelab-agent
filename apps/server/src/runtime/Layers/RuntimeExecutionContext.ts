@@ -768,14 +768,23 @@ export function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function renderSecretEnvFile(env: Readonly<Record<string, string>>): string {
+/**
+ * The env shim: one quoted `export` per entry, then `trailingLines` (shell
+ * evaluated when sourced; the egress proxy URL is built from the caller's
+ * token this way).
+ */
+export function renderSecretEnvFile(
+  env: Readonly<Record<string, string>>,
+  trailingLines: ReadonlyArray<string> = [],
+): string {
   const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
-  if (entries.length === 0) {
+  if (entries.length === 0 && trailingLines.length === 0) {
     return "# managed by homelab-agent\n";
   }
   return [
     "# managed by homelab-agent",
     ...entries.map(([key, value]) => `export ${key}=${shQuote(value)}`),
+    ...trailingLines,
     "",
   ].join("\n");
 }
