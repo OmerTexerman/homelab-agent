@@ -95,8 +95,8 @@ Run Docker-backed runtime coverage when Docker socket access is available
 pnpm run smoke:runtime -- --with-runtime
 ```
 
-`--no-browser` skips browser pairing, `--ui-checks` adds the legacy UI
-assertions, `--keep` keeps the disposable home and containers for debugging.
+`--no-browser` skips browser pairing, `--ui-checks` also checks the
+home page and command palette, `--keep` keeps the disposable home and containers for debugging.
 See [runtime-follow-ups.md](./runtime-follow-ups.md#full-server-and-web-runtime-smoke)
 for what the smoke verifies.
 

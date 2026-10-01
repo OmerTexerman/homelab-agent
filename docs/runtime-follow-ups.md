@@ -98,7 +98,7 @@ pnpm run smoke:runtime -- --no-browser     # server only, no Docker
 ```
 
 Flags: `--with-runtime` (Docker checks), `--no-browser` (skip pairing),
-`--ui-checks` (legacy UI assertions, stale since the 2026-09 upstream UI),
+`--ui-checks` (home page, Start box, command palette, phone-width overflow),
 `--headed`, `--artifacts-dir <dir>` (screenshots from `--ui-checks`), and
 `--keep` (keep the disposable home and containers).
 
@@ -141,8 +141,6 @@ What it verifies:
 
 Remaining follow-ups:
 
-- Rewrite the `--ui-checks` assertions against the current sidebar and command
-  palette, then make them the default.
 - Add deeper visual regression coverage for project/thread sidebar states,
   settings panels, and Runtime Workspace.
 - Add end-to-end provider prompt coverage once Codex/Claude auth fixtures are

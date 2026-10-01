@@ -65,7 +65,20 @@ interface BrowserContextLike {
   close(): Promise<void>;
 }
 
+interface LocatorLike {
+  first(): LocatorLike;
+  last(): LocatorLike;
+  getByRole(role: string, options?: { readonly name?: string | RegExp }): LocatorLike;
+  isVisible(): Promise<boolean>;
+  click(): Promise<void>;
+}
+
 interface PageLike {
+  url(): string;
+  locator(selector: string): LocatorLike;
+  getByRole(role: string, options?: { readonly name?: string | RegExp }): LocatorLike;
+  waitForTimeout(ms: number): Promise<void>;
+  readonly keyboard: { press(key: string): Promise<void> };
   goto(
     url: string,
     options?: { readonly waitUntil?: "domcontentloaded" | "networkidle" },
@@ -1050,29 +1063,23 @@ async function runBrowserSmoke(input: {
     await page.waitForURL((url) => !url.pathname.startsWith("/pair"), { timeout: 30_000 });
     log("Browser paired");
 
-    // Legacy UI assertions (home overview landing, old sidebar test ids) predate
-    // the 2026-09 upstream UI; kept behind --ui-checks until rewritten.
     if (!input.options.uiChecks) {
       return;
     }
-    await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
-    await page.waitForSelector('[data-testid="new-thread-button"]', { timeout: 30_000 });
-
-    const newThreadLabels = await page.evaluate(() => {
-      const browserGlobal = globalThis as unknown as {
-        readonly document: {
-          querySelectorAll(selector: string): ArrayLike<{
-            getAttribute(name: string): string | null;
-          }>;
-        };
-      };
-      return Array.from(
-        browserGlobal.document.querySelectorAll('[data-testid="new-thread-button"]'),
-      ).map((element) => element.getAttribute("aria-label") ?? "");
-    }, undefined);
-    if (!newThreadLabels.some((label) => label.includes("New thread in Project Runtime"))) {
-      throw new Error("Sidebar is missing the shared Project Runtime thread creation affordance.");
+    // A fresh smoke home is a first run, so the welcome wizard comes first.
+    for (let step = 0; step < 20 && new URL(page.url()).pathname !== "/"; step += 1) {
+      const next = page
+        .getByRole("dialog")
+        .getByRole("button", { name: /continue|skip|finish|done/i })
+        .last();
+      if (await next.isVisible().catch(() => false)) await next.click();
+      await page.waitForTimeout(1_000);
     }
+    // In-app navigation, so a full load's bootstrap-thread redirect can't apply.
+    await page.locator('[aria-label="Go home"]').first().click();
+    await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
+    await page.waitForSelector('[data-testid="home-start"] textarea', { timeout: 30_000 });
+    log("Home page renders with the Start box");
 
     if (input.options.artifactsDir) {
       NodeFS.mkdirSync(input.options.artifactsDir, { recursive: true });
@@ -1125,11 +1132,8 @@ async function runBrowserSmoke(input: {
         ""
       );
     }, undefined);
-    for (const requiredAction of [
-      "New project",
-      "New standalone thread",
-      "New isolated standalone thread",
-    ]) {
+    // "Pair a device" needs an admin session; the smoke pairs with standard access.
+    for (const requiredAction of ["Home", "New scratch thread"]) {
       if (!commandPaletteText.includes(requiredAction)) {
         throw new Error(`Command palette is missing "${requiredAction}".`);
       }
@@ -1141,8 +1145,8 @@ async function runBrowserSmoke(input: {
       });
     }
 
+    await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 390, height: 820 });
-    await page.goto(input.webBaseUrl, { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-testid="home-overview"]', { timeout: 30_000 });
     const narrowOverflow = await page.evaluate(() => {
       const browserGlobal = globalThis as unknown as {
