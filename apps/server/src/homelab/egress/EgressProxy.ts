@@ -21,7 +21,7 @@
  * - Destinations on loopback are refused, so the proxy can't reach services
  *   bound to the server host's own loopback.
  */
-import * as NodeDns from "node:dns/promises";
+import * as NodeDnsPromises from "node:dns/promises";
 import * as NodeHttp from "node:http";
 import * as NodeHttps from "node:https";
 import * as NodeNet from "node:net";
@@ -155,7 +155,7 @@ async function resolveDestination(host: string, allowLoopback: boolean): Promise
   const addresses =
     NodeNet.isIP(bare) !== 0
       ? [bare]
-      : (await NodeDns.lookup(bare, { all: true })).map((entry) => entry.address);
+      : (await NodeDnsPromises.lookup(bare, { all: true })).map((entry) => entry.address);
   if (addresses.length === 0) {
     throw new Error(`${host} did not resolve.`);
   }

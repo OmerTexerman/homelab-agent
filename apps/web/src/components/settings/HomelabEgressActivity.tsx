@@ -79,10 +79,9 @@ export function HomelabEgressActivity() {
                 </span>
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate font-mono text-2xs",
+                    "min-w-0 flex-1 font-mono text-2xs break-all",
                     blocked ? "text-destructive" : "text-muted-foreground",
                   )}
-                  title={describeEgressTarget(entry)}
                 >
                   {describeEgressTarget(entry)}
                 </span>
@@ -92,7 +91,6 @@ export function HomelabEgressActivity() {
                 </span>
                 <time
                   dateTime={entry.at}
-                  title={new Date(entry.at).toLocaleString()}
                   className="w-16 text-right text-2xs tabular-nums text-muted-foreground"
                 >
                   {formatRelativeTimeLabel(entry.at)}

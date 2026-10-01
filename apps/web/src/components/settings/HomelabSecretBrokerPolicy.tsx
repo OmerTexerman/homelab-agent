@@ -76,7 +76,7 @@ export function BrokerPolicyFields(props: {
           onValueChange={(value) => {
             if (value === "file" || value === "brokered") onChange({ ...draft, delivery: value });
           }}
-          className="grid gap-2 sm:grid-cols-2"
+          className="grid sm:grid-cols-2"
         >
           {DELIVERY_OPTIONS.map((option) => (
             <label
