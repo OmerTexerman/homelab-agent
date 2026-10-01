@@ -44,6 +44,10 @@ import {
   type HomelabSecretRegistryShape,
 } from "../Services/HomelabSecretRegistry.ts";
 import { HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
+import {
+  HomelabEgressBroker,
+  type HomelabEgressBrokerShape,
+} from "../Services/HomelabEgressBroker.ts";
 import { HomelabSkills, type HomelabSkillsShape } from "../Services/HomelabSkills.ts";
 import { KnowledgeGraph, type KnowledgeGraphShape } from "../Services/KnowledgeGraph.ts";
 import { ProjectMemory, type ProjectMemoryShape } from "../Services/ProjectMemory.ts";
@@ -54,6 +58,7 @@ export interface HomelabServerTestLayerOverrides {
   readonly threadWorkspace?: Partial<ThreadWorkspaceShape>;
   readonly projectRuntimeLifecycle?: Partial<ProjectRuntimeLifecycleShape>;
   readonly homelabSecretRegistry?: Partial<HomelabSecretRegistryShape>;
+  readonly homelabEgressBroker?: Partial<HomelabEgressBrokerShape>;
   readonly runtimeBootstrapRegistry?: Partial<RuntimeBootstrapRegistryShape>;
   readonly runtimeRegistry?: Partial<RuntimeRegistryShape>;
   readonly knowledgeGraph?: Partial<KnowledgeGraphShape>;
@@ -182,6 +187,13 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
       materializeSecrets: () => Effect.succeed([]),
       changes: Stream.empty,
       ...overrides.homelabSecretRegistry,
+    }),
+    Layer.mock(HomelabEgressBroker)({
+      listApprovals: () => Effect.succeed([]),
+      decideApproval: () => Effect.succeed(false),
+      approvalChanges: Stream.empty,
+      listAudit: () => Effect.succeed([]),
+      ...overrides.homelabEgressBroker,
     }),
     Layer.mock(RuntimeBootstrapRegistry)({
       recordMutation: (mutation) =>

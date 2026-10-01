@@ -16,6 +16,10 @@
  * `~/.homelab/secrets/.manifest.json` is written last and records each
  * delivered key's `valueUpdatedAt`, so the CLI can tell when a rotated value
  * has landed.
+ *
+ * Brokered secrets arrive here already carrying their surrogate as the value
+ * (see docs/internals/egress-broker.md); the real value never reaches a
+ * runtime home.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -31,7 +35,12 @@ import {
   type MaterializedHomelabSecret,
 } from "../homelab/Services/HomelabSecretRegistry.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { isCuratorProjectId, isStandaloneProjectId } from "./ProjectRuntimePolicy.ts";
+import {
+  isCuratorProjectId,
+  isStandaloneProjectId,
+  isStandaloneRuntimeId,
+} from "./ProjectRuntimePolicy.ts";
+import type { RuntimeRecord } from "./RuntimeRegistry.ts";
 import {
   renderSecretEnvFile,
   type RuntimeAuthSyncEntry,
@@ -87,6 +96,21 @@ const resolveRuntimeProjectId = (runtime: {
     const projectId: ProjectId = thread.value.projectId;
     return isStandaloneProjectId(projectId) || isCuratorProjectId(projectId) ? null : projectId;
   });
+
+/**
+ * The project whose scoped secrets the runtime behind `record` receives.
+ * Curator and standalone (scratch) runtimes, and runtimes without a project,
+ * get null (global secrets only). Shared by delivery and the egress broker,
+ * so both agree on which secrets a runtime holds.
+ */
+export function secretProjectIdForRuntimeRecord(
+  record: Pick<RuntimeRecord, "runtimeId" | "projectId" | "runtimeKind" | "isStandalone">,
+): ProjectId | null {
+  if (record.projectId === null || record.runtimeKind === "curator") {
+    return null;
+  }
+  return (record.isStandalone ?? isStandaloneRuntimeId(record.runtimeId)) ? null : record.projectId;
+}
 
 /** The secrets a runtime should receive now. Empty when no registry is wired in. */
 export const resolveRuntimeSecrets = Effect.fn("RuntimeSecretDelivery.resolveRuntimeSecrets")(
@@ -147,6 +171,8 @@ export function writeRuntimeSecretsSync(input: {
   readonly runtimeHomePath: string;
   readonly secrets: ReadonlyArray<MaterializedHomelabSecret>;
   readonly env: Readonly<Record<string, string>>;
+  /** Shell evaluated when the shim is sourced (the egress proxy env). */
+  readonly envShellLines?: ReadonlyArray<string>;
 }): void {
   const secretsDir = runtimeSecretsDirPath(input.runtimeHomePath);
   NodeFS.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
@@ -167,7 +193,7 @@ export function writeRuntimeSecretsSync(input: {
 
   writeFileAtomicSync(
     runtimeSecretEnvPath(input.runtimeHomePath),
-    renderSecretEnvFile(input.env),
+    renderSecretEnvFile(input.env, input.envShellLines),
     0o600,
   );
   writeFileAtomicSync(
@@ -184,12 +210,15 @@ export function writeRuntimeSecretsSync(input: {
 
 /**
  * Delivers `secrets` into a runtime home: per-key files, the env shim with
- * `env` (which already includes the secrets), then the manifest.
+ * `env` (which already includes the secrets), then the manifest. Brokered
+ * secrets must already carry their surrogate as `value`
+ * (see `deliverableRuntimeSecrets`).
  */
 export const writeRuntimeSecrets = (input: {
   readonly runtimeHomePath: string;
   readonly secrets: ReadonlyArray<MaterializedHomelabSecret>;
   readonly env: Readonly<Record<string, string>>;
+  readonly envShellLines?: ReadonlyArray<string>;
 }) =>
   Effect.try({
     try: () => writeRuntimeSecretsSync(input),
