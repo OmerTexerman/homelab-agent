@@ -11,7 +11,7 @@ fork tables in `state.sqlite` here, one owner at a time:
 | P4    | runtime    | 100–199  | `thread-runtimes.json`, `project-runtime-lifecycle.json`              |
 | P4b   | runtime    | 101      | nothing; adds `runtime_tools` and the recreate columns on `runtimes`  |
 | P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)          |
-| P6    | secrets    | 300–399  | `homelab-secrets.json` metadata                                       |
+| P6    | secrets    | 300–399  | `homelab-secrets.json` metadata; 301 adds the egress broker           |
 | auth  | auth       | 400–499  | nothing; adds `auth_passkeys` (migration 400)                         |
 
 A separate file keeps the two migration histories apart. Upstream's Effect
@@ -225,6 +225,27 @@ with a warning). After that:
   refuses writes, so a later successful import never has to merge.
 
 The JSON file is never written, moved, or deleted.
+
+### Egress broker (301)
+
+Migration 301 adds the broker policy to `homelab_secrets` and the egress audit
+log (see [egress-broker.md](./egress-broker.md)). Existing rows get the
+defaults, so every secret keeps plain file delivery until someone changes it.
+
+- `homelab_secrets.delivery`: `file` (default) or `brokered`.
+- `homelab_secrets.allowed_hosts`: JSON array of host patterns, `[]` by
+  default. The registry refuses `brokered` with no hosts.
+- `homelab_secrets.approve_writes`: 0/1, default 0.
+- `homelab_secrets.upstream_tls`: `verify` (default) or `insecure`.
+- `egress_audit`: one row per secret per proxied request that carried a
+  brokered secret's surrogate: `id` (rowid), `at`, `runtime_id`, `thread_id`,
+  `secret_key`, `method`, `host` (with `:port` when non-default), `path`
+  (without query), `decision` (`substituted`, `approved`, `blocked`,
+  `denied`), `upstream_status` (null when the request never got a response).
+  Each insert prunes to the newest 5000 rows. No foreign key to
+  `homelab_secrets`, so rows outlive a deleted secret.
+
+Pending write approvals are in memory only and are not stored here.
 
 ## Auth (400)
 
