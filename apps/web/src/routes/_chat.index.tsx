@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
+import { HomelabHomeOverview } from "../components/homelab/HomelabHomeOverview";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -28,7 +29,9 @@ function ChatIndexRouteView() {
     if (environments.length === 0) return <HostedStaticOnboardingState />;
   }
 
-  return <IndexDraftLanding />;
+  // Homelab fork: land on the home page; upstream's draft landing only covers
+  // the no-projects case (its add-project hero).
+  return <HomelabHomeOverview emptyState={<IndexDraftLanding />} />;
 }
 
 /**
