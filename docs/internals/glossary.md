@@ -29,6 +29,14 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Runtime tools | System packages an agent recorded with `homelab tools add`, baked into a derived runtime image so they survive recreates. |
 | Recreate      | Replacing a runtime's container (`docker rm` + `run`). Deferred while the runtime is busy; its reason is recorded.        |
 
+## Homelab sign-in
+
+| Term            | Meaning                                                                                                        |
+| --------------- | -------------------------------------------------------------------------------------------------------------- |
+| Sliding session | A browser session whose expiry moves forward one TTL when it is used past half its TTL. See `homelab-auth.md`. |
+| Passkey         | A WebAuthn credential in `auth_passkeys` that signs in with the scopes of the session that registered it.      |
+| Quick pairing   | The sidebar/palette "Pair a device" dialog: a one-time pairing link as a QR code, for admin sessions on web.   |
+
 ## Orchestration
 
 | Term                    | Meaning                                                                                      |

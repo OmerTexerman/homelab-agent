@@ -86,7 +86,7 @@ const makeHomelabApp = (
     Layer.provideMerge(
       EnvironmentAuth.layer.pipe(
         Layer.provideMerge(SqlitePersistenceMemory),
-        Layer.provide(ServerSecretStore.layer),
+        Layer.provideMerge(ServerSecretStore.layer),
         Layer.provide(
           Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
             getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-homelab-test")),

@@ -26,6 +26,10 @@ upstream t3code documentation tree.
 - [user/home.md](./user/home.md)
   The home page: what needs you, running work, projects, and starting a thread.
 - [internals/homelab-storage.md](./internals/homelab-storage.md)
+- [internals/homelab-auth.md](./internals/homelab-auth.md)
+  Sliding browser sessions, passkey sign-in, and quick pairing.
+- [user/signing-in.md](./user/signing-in.md)
+  Signing in with a passkey, pairing a device from a QR code, and session renewal.
 - [internals/runtime-lifecycle.md](./internals/runtime-lifecycle.md)
   The fork's own `homelab.sqlite`: migration id ranges, one-shot JSON imports,
   the additive-schema rule, and backups.

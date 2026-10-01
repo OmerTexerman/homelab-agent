@@ -23,13 +23,24 @@ import Migration0100 from "./Migrations/100_RuntimeRegistry.ts";
 import Migration0101 from "./Migrations/101_RuntimeTools.ts";
 import Migration0200 from "./Migrations/200_KnowledgeStore.ts";
 import Migration0300 from "./Migrations/300_HomelabSecrets.ts";
+import Migration0400 from "./Migrations/400_AuthPasskeys.ts";
 
-/** Id range each owner adds migrations in. Ranges never overlap or move. */
+/**
+ * Id range each owner adds migrations in. Ranges never overlap or move.
+ *
+ * - foundation (1-99): migrations/import bookkeeping and `homelab_meta`.
+ * - runtime (100-199): runtime registry and runtime tools.
+ * - knowledge (200-299): graph knowledge, project memory, FTS.
+ * - secrets (300-399): secret metadata (values stay in ServerSecretStore).
+ * - auth (400-499): fork sign-in state such as passkeys. Sessions themselves
+ *   stay in upstream's `auth_sessions` in state.sqlite.
+ */
 export const HOMELAB_MIGRATION_RANGES = {
   foundation: { min: 1, max: 99 },
   runtime: { min: 100, max: 199 },
   knowledge: { min: 200, max: 299 },
   secrets: { min: 300, max: 399 },
+  auth: { min: 400, max: 499 },
 } as const;
 
 export type HomelabMigrationOwner = keyof typeof HOMELAB_MIGRATION_RANGES;
@@ -49,6 +60,7 @@ const homelabMigrationEntries: ReadonlyArray<
   [101, "RuntimeTools", Migration0101],
   [200, "KnowledgeStore", Migration0200],
   [300, "HomelabSecrets", Migration0300],
+  [400, "AuthPasskeys", Migration0400],
 ];
 
 export const homelabMigrationManifest = homelabMigrationEntries.map(

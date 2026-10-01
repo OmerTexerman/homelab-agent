@@ -35,7 +35,6 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { NoProjectsHero } from "../NoProjectsHero";
 import { Button } from "../ui/button";
-import { Kbd } from "../ui/kbd";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
@@ -365,9 +364,6 @@ function HomeStartPrompt({
           <Button type="submit" size="sm" disabled={selected === null || starting}>
             <ArrowUpIcon className="size-4" />
             {copy.startAction}
-            <Kbd className="hidden bg-primary-foreground/15 text-primary-foreground sm:inline-flex">
-              ⏎
-            </Kbd>
           </Button>
         </div>
       </div>
