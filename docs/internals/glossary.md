@@ -31,6 +31,7 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Brokered secret | A secret whose runtimes get a surrogate instead of the value; the egress proxy swaps it in for allowed hosts. See `egress-broker.md`. |
 | Surrogate       | The `hlsur_…` stand-in for one revision of a brokered secret in one runtime. Useless anywhere else.                                   |
 | Egress proxy    | The server's authenticated HTTP(S) forward proxy that substitutes surrogates, holds approved writes, and audits.                      |
+| Homelab tools   | The `homelab_*` MCP tools on `/mcp`: the agent-facing CLI, scoped like the thread's runtime token. See `homelab-mcp-tools.md`.        |
 
 ## Homelab sign-in
 

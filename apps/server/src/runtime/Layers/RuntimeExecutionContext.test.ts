@@ -478,7 +478,12 @@ describe("runtime wrapper execution", () => {
     const outToken = NodePath.join(dir, "token");
     NodeChildProcess.execFileSync(codex.filePath, ["--version"], {
       cwd: dir,
-      env: { PATH: process.env.PATH ?? "", OUT_ARGS: outArgs, OUT_TOKEN: outToken },
+      env: {
+        PATH: process.env.PATH ?? "",
+        OUT_ARGS: outArgs,
+        OUT_TOKEN: outToken,
+        T3_MCP_BEARER_TOKEN: "mcp-token-b",
+      },
     });
     const args = NodeFS.readFileSync(outArgs, "utf8").split("\n");
     expect(args.slice(0, 4)).toEqual(["exec", "-i", "-w", "/workspace/service-b"]);
@@ -486,6 +491,16 @@ describe("runtime wrapper execution", () => {
     expect(args).toContain("HOMELAB_AGENT_RUNTIME_TOKEN");
     expect(args.join(" ")).not.toContain("secret-token-b");
     expect(NodeFS.readFileSync(outToken, "utf8")).toBe("secret-token-b");
+    // Codex's MCP bearer token is forwarded by name, never in argv.
+    expect(args).toContain("T3_MCP_BEARER_TOKEN");
+    expect(args.join(" ")).not.toContain("mcp-token-b");
+
+    // Without the token in the caller's env, nothing is forwarded.
+    NodeChildProcess.execFileSync(codex.filePath, ["--version"], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "", OUT_ARGS: outArgs, OUT_TOKEN: outToken },
+    });
+    expect(NodeFS.readFileSync(outArgs, "utf8").split("\n")).not.toContain("T3_MCP_BEARER_TOKEN");
     NodeFS.rmSync(dir, { recursive: true, force: true });
   });
 });

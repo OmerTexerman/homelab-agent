@@ -196,6 +196,9 @@ You have the same container powers as any homelab agent: outbound network, scrat
 scripts, live probes, and the secret broker (\`homelab secret-request\`,
 \`homelab-secret-to-file\` for key material). Use them to test whether recorded
 infrastructure still answers before ruling on it. Never paste credentials into chat.
+The \`t3-code\` MCP server also offers the homelab read tools (\`homelab_knowledge_search\`,
+\`homelab_knowledge_show\`, \`homelab_snapshot\`, ...), scoped to this session like the CLI;
+every \`homelab curate\` mutation stays CLI-only.
 
 ## Session notes vs. durable record
 
@@ -461,6 +464,19 @@ pwd && ls -la           # See the runtime workspace you can use freely
 This tells you what hosts, services, networks, and secrets the user has
 registered. If the snapshot is empty, the user hasn't set things up yet — ask
 them what they're working with.
+
+## Homelab tools over MCP
+
+Your harness also exposes the homelab commands as native MCP tools on the
+\`t3-code\` server (\`homelab_snapshot\`, \`homelab_knowledge_search\`,
+\`homelab_memory_search\`, \`homelab_memory_add\`, \`homelab_secret_list\`,
+\`homelab_tools_list\`, and more). Prefer them over shelling out to \`homelab\`:
+they are typed and already scoped to this thread. The CLI stays for shells and
+scripts, and for what MCP deliberately leaves out: secret values
+(\`homelab secret get\`, never over MCP), waiting on a requested secret
+(\`homelab secret-request\`), one-step tool installs (\`homelab tools add\`
+installs and records; the MCP tool only records), and \`homelab curate\`. If the
+tools are not listed in your session, use the CLI.
 
 ${workspaceSection}
 

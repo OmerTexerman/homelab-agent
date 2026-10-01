@@ -21,6 +21,7 @@ import {
 } from "../../runtime/Services/ThreadRuntime.ts";
 import { runtimeClaudeBinaryPath, runtimeCodexBinaryPath } from "../../runtime/launchers.ts";
 import { buildProviderRuntimeEnvironment } from "../../runtime/Layers/ProviderRuntimeEnvironment.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ProviderAdapterProcessError } from "../Errors.ts";
 import type { CodexSessionRuntimeOptions } from "./CodexSessionRuntime.ts";
 
@@ -98,9 +99,42 @@ export const resolveProviderRuntimeEnvironment = Effect.fn("provider.resolveRunt
   },
 );
 
+/** The server's MCP endpoint as reachable from inside the runtime container, when known. */
+export function runtimeMcpEndpoint(
+  context: Pick<ThreadRuntimeLaunchContext, "serverUrl">,
+): string | undefined {
+  const base = context.serverUrl?.trim().replace(/\/+$/, "");
+  return base ? `${base}/mcp` : undefined;
+}
+
+/**
+ * Provider sessions are issued the server's loopback MCP endpoint, which is
+ * not the server from inside a runtime container. Points the thread's stored
+ * MCP session at the runtime-reachable endpoint, so an adapter that reads it
+ * after its launch hook (Claude) configures that one. Returns the endpoint
+ * when the thread has an MCP session.
+ */
+const pointMcpSessionAtRuntime = (threadId: ThreadId, context: ThreadRuntimeLaunchContext) =>
+  Effect.sync(() => {
+    const session = McpProviderSession.readMcpProviderSession(threadId);
+    const endpoint = runtimeMcpEndpoint(context);
+    if (!session || !endpoint) {
+      return undefined;
+    }
+    if (session.endpoint !== endpoint) {
+      McpProviderSession.setMcpProviderSession({ ...session, endpoint });
+    }
+    return endpoint;
+  });
+
+const CODEX_MCP_URL_ARG_PREFIX = "mcp_servers.t3-code.url=";
+
 /**
  * Rewrite upstream Codex app-server options to run through the runtime
  * wrapper. The host `homePath` is dropped: CODEX_HOME comes from the runtime.
+ * Codex reads its MCP session before this hook, so the `t3-code` server URL
+ * in its config overrides is rewritten here too; the bearer token env var
+ * reaches the container through the Codex wrapper.
  */
 export const withCodexRuntimeLaunch = Effect.fn("provider.withCodexRuntimeLaunch")(function* (
   options: CodexSessionRuntimeOptions,
@@ -113,9 +147,19 @@ export const withCodexRuntimeLaunch = Effect.fn("provider.withCodexRuntimeLaunch
   if (!runtime) {
     return options;
   }
-  const { homePath: _hostHomePath, ...rest } = options;
+  const mcpEndpoint = yield* pointMcpSessionAtRuntime(options.threadId, runtime.launchContext);
+  const { homePath: _hostHomePath, appServerArgs, ...rest } = options;
   return {
     ...rest,
+    ...(appServerArgs
+      ? {
+          appServerArgs: appServerArgs.map((arg) =>
+            mcpEndpoint && arg.startsWith(CODEX_MCP_URL_ARG_PREFIX)
+              ? `${CODEX_MCP_URL_ARG_PREFIX}${mcpEndpoint}`
+              : arg,
+          ),
+        }
+      : {}),
     binaryPath: runtime.commandPath,
     cwd: runtime.providerCwd,
     processCwd: runtime.processCwd,
@@ -137,6 +181,8 @@ export const resolveClaudeRuntimeLaunch = Effect.fn("provider.resolveClaudeRunti
     if (!runtime) {
       return undefined;
     }
+    // The adapter builds its `t3-code` MCP server config after this hook.
+    yield* pointMcpSessionAtRuntime(threadId, runtime.launchContext);
     return {
       executablePath: runtime.commandPath,
       queryCwd: runtime.processCwd,

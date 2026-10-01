@@ -599,6 +599,9 @@ export function buildRuntimeShellInitFileSpecs(input: {
   ];
 }
 
+/** Env var the Codex adapter names as `mcp_servers.t3-code.bearer_token_env_var`. */
+export const CODEX_MCP_BEARER_TOKEN_ENV = "T3_MCP_BEARER_TOKEN";
+
 /**
  * The provider and shell wrappers for one thread. Each wrapper `docker exec`s
  * with that thread's cwd and env and, when `tokenFilePath` is set, forwards
@@ -644,6 +647,9 @@ export function buildRuntimeWrapperScriptSpecs(input: {
         ...base,
         command: CODEX_RUNTIME_WRAPPER,
         interactive: false,
+        // Codex reads its MCP bearer token from this env var (the adapter sets
+        // `bearer_token_env_var`), so it has to reach the container.
+        forwardEnvNames: [CODEX_MCP_BEARER_TOKEN_ENV],
       }),
       mode: 0o755,
     },
@@ -870,6 +876,8 @@ export function renderDockerExecWrapper(input: {
   readonly tokenFilePath?: string;
   /** Take the token file path from `HOMELAB_AGENT_RUNTIME_TOKEN_FILE` at exec time. */
   readonly tokenFileFromEnv?: boolean;
+  /** Caller env vars forwarded into the exec by name (values never reach argv), when set. */
+  readonly forwardEnvNames?: ReadonlyArray<string>;
 }): string {
   const staticEnvEntries = Object.entries(input.runtime.env)
     .filter(
@@ -912,6 +920,9 @@ export function renderDockerExecWrapper(input: {
           "fi",
         ]
       : []),
+    ...(input.forwardEnvNames ?? []).map(
+      (name) => `if [ -n "\${${name}:-}" ]; then docker_args+=(-e ${name}); fi`,
+    ),
   ];
 
   const commandLine = input.sourceEnvFilePath
