@@ -25,6 +25,9 @@ upstream t3code documentation tree.
   env vars, Docker runtime access, pairing, reverse proxy, and known gaps.
 - [user/home.md](./user/home.md)
   The home page: what needs you, running work, projects, and starting a thread.
+- [user/projects.md](./user/projects.md)
+  A project's page: its runtime and controls, threads, memory, secrets, tools,
+  and egress activity.
 - [user/chat-export.md](./user/chat-export.md)
   Exporting a thread as a Markdown transcript or JSON.
 - [internals/homelab-storage.md](./internals/homelab-storage.md)

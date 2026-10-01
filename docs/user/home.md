@@ -51,8 +51,8 @@ after a turn ends.
 Every project, most recently active first. Each row shows the project's runtime
 state (Running, Awake, Sleeping, Not started, Failed), how many threads it has, how
 many are running or waiting on you, queued work, and when it was last active.
-Select a row to open the project's latest thread, or **+** to start a new thread in
-it.
+Select a row to open the [project's page](./projects.md), or **+** to start a new
+thread in it.
 
 ## Recent threads
 
