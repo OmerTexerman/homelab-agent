@@ -142,7 +142,9 @@ export type SidebarListMarker =
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
   | "snoozed-header"
-  | "settled-header";
+  | "settled-header"
+  /** Fork: project group headers in the active section (homelab/sidebarProjectGroups.ts). */
+  | `homelab-group-${string}`;
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;

@@ -134,6 +134,8 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { readThreadShell, useAllEnvironmentProjectSnapshotsReady } from "../state/entities";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../homelab/visibleProjects";
 import { useCreateStandaloneThread } from "../homelab/useCreateStandaloneThread";
+import { isHomelabSidebarGroupMarker } from "../homelab/sidebarProjectGroups";
+import { useHomelabSidebarProjectGroups } from "./sidebar/useHomelabSidebarProjectGroups";
 import { HOMELAB_PRODUCT_COPY } from "../productCapabilities";
 import { homelabThreadMenuItems } from "./sidebar/homelabThreadMenu.logic";
 import { useStandaloneThreadMoveDialogs } from "./sidebar/StandaloneThreadMoveDialogs";
@@ -2565,7 +2567,7 @@ export default function Sidebar() {
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
-    activeThreads,
+    activeThreads: upstreamActiveThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -2667,6 +2669,16 @@ export default function Sidebar() {
       snoozeNow: preciseNow,
     };
   }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  // Fork: the active section is grouped by project (homelab/sidebarProjectGroups.ts).
+  const homelabGroups = useHomelabSidebarProjectGroups({
+    projectGroups,
+    threads,
+    activeThreads: upstreamActiveThreads,
+    scopeKey: projectScopeKey,
+    routeThreadKey,
+  });
+  const activeThreads = homelabGroups.activeThreads;
+  const visibleActive = homelabGroups.visibleActiveThreads;
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -2690,7 +2702,7 @@ export default function Sidebar() {
       new Map(threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const)),
     [threadSearch.matches],
   );
-  const threadSearchResults = useMemo(
+  const upstreamThreadSearchResults = useMemo(
     () =>
       searchSidebarThreads(
         searchableThreads,
@@ -2699,6 +2711,11 @@ export default function Sidebar() {
       ),
     [searchableThreads, threadSearchQuery, threadSearchMatchByKey],
   );
+  const threadSearchGroups = useMemo(
+    () => homelabGroups.groupSearchResults(upstreamThreadSearchResults),
+    [homelabGroups, upstreamThreadSearchResults],
+  );
+  const threadSearchResults = threadSearchGroups.results;
   const threadSearchResultOrderKey = threadSearchResults
     .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
     .join("\0");
@@ -2811,8 +2828,8 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [...pinnedThreads, ...visibleActive, ...visibleSnoozedThreads, ...renderedSettledThreads],
+    [pinnedThreads, visibleActive, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3404,7 +3421,7 @@ export default function Sidebar() {
       });
     if (
       pinnedThreads.length +
-        activeThreads.length +
+        homelabGroups.activeListItems.length +
         snoozedThreads.length +
         settledThreads.length ===
       0
@@ -3415,7 +3432,7 @@ export default function Sidebar() {
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    const activeRows = homelabGroups.activeListItems;
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (snoozedThreads.length > 0) {
@@ -3428,7 +3445,7 @@ export default function Sidebar() {
     items.push(...settledRows);
     return items;
   }, [
-    activeThreads,
+    homelabGroups.activeListItems,
     pinnedThreads,
     renderedSettledThreads,
     settledThreads.length,
@@ -4633,7 +4650,7 @@ export default function Sidebar() {
                   aria-label="Thread search results"
                   className="flex flex-col gap-px"
                 >
-                  {threadSearchResults.map((thread, index) => {
+                  {homelabGroups.mapSearchResults(threadSearchGroups, (thread, index) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
@@ -4865,6 +4882,10 @@ export default function Sidebar() {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
+                        if (isHomelabSidebarGroupMarker(item.marker)) {
+                          items.push(homelabGroups.renderGroupHeader(item.marker));
+                          continue;
+                        }
                         switch (item.marker) {
                           case "pinned-header":
                             items.push(
@@ -4986,7 +5007,7 @@ export default function Sidebar() {
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
-            activeThreads.length +
+            homelabGroups.activeListItems.length +
             snoozedThreads.length +
             settledThreads.length ===
             0 ? (
