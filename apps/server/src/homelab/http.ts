@@ -54,13 +54,12 @@ import {
   RuntimeToolAddInput,
   RuntimeToolRemoveInput,
   type RuntimeSessionId,
-  type RuntimeTool,
   type RuntimeToolAddResult,
   type RuntimeToolListResult,
   type RuntimeToolRemoveResult,
   ThreadId,
 } from "@t3tools/contracts";
-import { Data, Effect, Layer, Option, Schema, SchemaIssue } from "effect";
+import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -84,28 +83,34 @@ import {
 } from "./Services/KnowledgeGraph.ts";
 import { ProjectMemory, ProjectMemoryError } from "./Services/ProjectMemory.ts";
 import { HomelabSkills, HomelabSkillsError } from "./Services/HomelabSkills.ts";
-import { promoteDiscoveries, recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
-import { isCuratorProjectId, isStandaloneProjectId } from "../runtime/ProjectRuntimePolicy.ts";
+import { recordPromotedDiscoveries } from "./PromotedDiscoveries.ts";
+import {
+  addRuntimeTool,
+  createProjectMemory,
+  forbiddenScope,
+  HomelabHttpError,
+  listCallerSecrets,
+  listCallerSkills,
+  listProjectMemory,
+  listRuntimeTools,
+  lookupActiveThreadProjectId,
+  promoteCallerSkill,
+  promoteProjectMemory,
+  removeRuntimeTool,
+  requestCallerSecret,
+  resolveHomelabCallerScope,
+  RUNTIME_TOKEN_SUBJECT_PREFIX,
+  searchProjectMemory,
+  showKnowledgeDocument,
+  upsertCallerSkill,
+  upsertHomelabEntity,
+  verifyHomelabEntity,
+} from "./HomelabCallerOperations.ts";
+import { isCuratorProjectId } from "../runtime/ProjectRuntimePolicy.ts";
 import { RuntimeBootstrapRegistry } from "../runtime/Services/RuntimeBootstrapRegistry.ts";
 import { runtimeBootstrapCatalogView } from "../runtime/RuntimeBootstrapCatalogView.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import {
-  RuntimeRegistry,
-  runtimeToolsListKeyFor,
-  type RuntimeToolRow,
-  type RuntimeToolsListKey,
-} from "../runtime/RuntimeRegistry.ts";
-import {
-  installCommandsForTool,
-  parseRuntimeToolSpec,
-  runtimeToolKindOf,
-} from "../runtime/RuntimeTools.ts";
 
-class HomelabHttpError extends Data.TaggedError("HomelabHttpError")<{
-  readonly message: string;
-  readonly status: number;
-  readonly cause?: unknown;
-}> {}
+export { type HomelabCallerScope, resolveHomelabCallerScope } from "./HomelabCallerOperations.ts";
 
 const decodeHomelabEntityId = Schema.decodeUnknownSync(HomelabEntityId);
 const decodeHomelabEntityKind = Schema.decodeUnknownSync(HomelabEntityKind);
@@ -224,147 +229,6 @@ function parseDelimitedQueryValues(value: string | null): ReadonlyArray<string> 
     .filter((entry) => entry.length > 0);
 }
 
-const SCRATCH_NO_PROJECT_DETAIL =
-  "This is a standalone (scratch) thread: there is no project to propose or promote into. " +
-  "Use 'homelab promote' to publish durable findings straight to the global homelab graph, " +
-  "or promote this thread to a project first.";
-
-const CURATOR_NO_PROJECT_DETAIL =
-  "This is a knowledge curator session: there is no project to propose or promote into. " +
-  "Correct the durable record directly with 'homelab curate' mutations, or upsert through " +
-  "'homelab promote'.";
-
-const requireProjectScopeForPromotion = (projectId: ProjectId) =>
-  isStandaloneProjectId(projectId)
-    ? Effect.fail(
-        new HomelabHttpError({
-          message: SCRATCH_NO_PROJECT_DETAIL,
-          status: 400,
-        }),
-      )
-    : isCuratorProjectId(projectId)
-      ? Effect.fail(
-          new HomelabHttpError({
-            message: CURATOR_NO_PROJECT_DETAIL,
-            status: 400,
-          }),
-        )
-      : Effect.void;
-
-const lookupActiveThreadProjectId = (threadId: ThreadId) =>
-  Effect.gen(function* () {
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new HomelabHttpError({
-            message: "Failed to resolve thread for homelab request.",
-            status: 500,
-            cause,
-          }),
-      ),
-    );
-    return Option.map(thread, (entry) => entry.projectId);
-  });
-
-// Subject of the in-container runtime bearer token, minted by ThreadRuntime.
-const RUNTIME_TOKEN_SUBJECT_PREFIX = "thread-runtime:";
-
-/**
- * Who is calling a project/thread-scoped homelab route. Human sessions are
- * `unrestricted`; runtime tokens are pinned to the project of the thread they were
- * minted for, and scratch/curator runtimes (always isolated) additionally to that thread.
- */
-export type HomelabCallerScope =
-  | { readonly kind: "unrestricted" }
-  | {
-      readonly kind: "runtime";
-      readonly threadId: ThreadId;
-      readonly projectId: ProjectId;
-      readonly threadScoped: boolean;
-    };
-
-const UNRESTRICTED_CALLER: HomelabCallerScope = { kind: "unrestricted" };
-
-export const resolveHomelabCallerScope = (session: Pick<AuthenticatedSession, "subject">) =>
-  Effect.gen(function* () {
-    if (!session.subject.startsWith(RUNTIME_TOKEN_SUBJECT_PREFIX)) {
-      return UNRESTRICTED_CALLER;
-    }
-    const threadId = ThreadId.make(session.subject.slice(RUNTIME_TOKEN_SUBJECT_PREFIX.length));
-    const projectId = yield* lookupActiveThreadProjectId(threadId);
-    if (Option.isNone(projectId)) {
-      return yield* new HomelabHttpError({
-        message: "Runtime token thread no longer exists.",
-        status: 403,
-      });
-    }
-    const caller: HomelabCallerScope = {
-      kind: "runtime",
-      threadId,
-      projectId: projectId.value,
-      threadScoped: isStandaloneProjectId(projectId.value) || isCuratorProjectId(projectId.value),
-    };
-    return caller;
-  });
-
-const forbiddenScope = (message: string) => new HomelabHttpError({ message, status: 403 });
-
-/**
- * Resolves the project (and effective thread) a memory/skill request operates on.
- * For runtime callers, request params may only narrow the token's scope, never widen it,
- * and thread-scoped (scratch/curator) runtimes always get their own thread applied.
- */
-const resolveMemoryRequestScope = (
-  caller: HomelabCallerScope,
-  input: {
-    readonly projectId?: ProjectId | undefined;
-    readonly threadId?: ThreadId | undefined;
-  },
-) =>
-  Effect.gen(function* () {
-    if (caller.kind === "runtime") {
-      if (input.projectId !== undefined && input.projectId !== caller.projectId) {
-        return yield* forbiddenScope("Runtime tokens may only access their own project.");
-      }
-      if (caller.threadScoped) {
-        if (input.threadId !== undefined && input.threadId !== caller.threadId) {
-          return yield* forbiddenScope("Runtime tokens may only access their own thread.");
-        }
-        return { projectId: caller.projectId, threadId: caller.threadId };
-      }
-      // Shared project runtimes serve several threads with one token; any of them is fine.
-      if (input.threadId !== undefined && input.threadId !== caller.threadId) {
-        const threadProjectId = yield* lookupActiveThreadProjectId(input.threadId);
-        if (Option.isNone(threadProjectId) || threadProjectId.value !== caller.projectId) {
-          return yield* forbiddenScope("Runtime tokens may only access their own project.");
-        }
-      }
-      return { projectId: caller.projectId, threadId: input.threadId };
-    }
-
-    if (input.projectId) {
-      return { projectId: input.projectId, threadId: input.threadId };
-    }
-    if (!input.threadId) {
-      return yield* new HomelabHttpError({
-        message: "Project memory requests must include projectId or threadId.",
-        status: 400,
-      });
-    }
-    const projectId = yield* lookupActiveThreadProjectId(input.threadId);
-    if (Option.isNone(projectId)) {
-      return yield* new HomelabHttpError({
-        message: "Project memory thread not found.",
-        status: 404,
-      });
-    }
-    return { projectId: projectId.value, threadId: input.threadId };
-  });
-
-const optionalThreadId = (threadId: ThreadId | undefined) =>
-  threadId !== undefined ? { threadId } : {};
-
 const parseKindsFromUrl = (url: URL) =>
   Effect.try({
     try: () => {
@@ -444,10 +308,7 @@ export const homelabSecretsRouteLayer = HttpRouter.add(
     Effect.gen(function* () {
       const session = yield* authenticateHomelabRead;
       const caller = yield* resolveHomelabCallerScope(session);
-      const registry = yield* HomelabSecretRegistry;
-      const secrets = yield* registry.listSecrets(
-        caller.kind === "runtime" ? { projectId: caller.projectId } : undefined,
-      );
+      const secrets = yield* listCallerSecrets(caller);
       return HttpServerResponse.jsonUnsafe({ secrets } satisfies HomelabSecretsListResult, {
         status: 200,
       });
@@ -462,18 +323,10 @@ export const homelabSecretRequestsRouteLayer = HttpRouter.add(
     Effect.gen(function* () {
       const session = yield* authenticateHomelabOperate;
       const caller = yield* resolveHomelabCallerScope(session);
-      const registry = yield* HomelabSecretRegistry;
       const input = yield* HttpServerRequest.schemaBodyJson(HomelabSecretRequestInput).pipe(
         secretBodyError("request"),
       );
-      // A runtime can only ask on behalf of the thread its token was minted for.
-      const threadId = caller.kind === "runtime" ? caller.threadId : input.threadId;
-      const secret = yield* registry.requestSecret({
-        key: input.key,
-        ...(input.label !== undefined ? { label: input.label } : {}),
-        ...(input.summary !== undefined ? { summary: input.summary } : {}),
-        ...(threadId !== undefined ? { threadId } : {}),
-      });
+      const secret = yield* requestCallerSecret(caller, input);
       return HttpServerResponse.jsonUnsafe(secret, { status: 201 });
     }),
   ),
@@ -837,24 +690,7 @@ export const homelabKnowledgeShowRouteLayer = HttpRouter.add(
     if (!id) {
       return yield* new HomelabHttpError({ message: "Missing id.", status: 400 });
     }
-    const knowledgeGraph = yield* KnowledgeGraph;
-    const result = yield* knowledgeGraph.getDocument(id);
-    const notFound = new HomelabHttpError({
-      message: "Knowledge document not found.",
-      status: 404,
-    });
-    if (!result) {
-      return yield* notFound;
-    }
-    const { doc } = result;
-    if (caller.kind === "runtime" && doc.scope !== "global") {
-      const inScope =
-        doc.projectId === String(caller.projectId) &&
-        (!caller.threadScoped || doc.threadId === String(caller.threadId));
-      if (!inScope) {
-        return yield* notFound;
-      }
-    }
+    const result = yield* showKnowledgeDocument(caller, id);
     return HttpServerResponse.jsonUnsafe(result satisfies HomelabKnowledgeShowResult, {
       status: 200,
     });
@@ -890,13 +726,7 @@ export const homelabProjectMemoryListRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const scope = yield* resolveMemoryRequestScope(caller, input);
-    const projectMemory = yield* ProjectMemory;
-    const entries = yield* projectMemory.list({
-      ...input,
-      projectId: scope.projectId,
-      ...optionalThreadId(scope.threadId),
-    });
+    const entries = yield* listProjectMemory(caller, input);
     return HttpServerResponse.jsonUnsafe(
       {
         entries,
@@ -924,13 +754,7 @@ export const homelabProjectMemorySearchRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const scope = yield* resolveMemoryRequestScope(caller, input);
-    const projectMemory = yield* ProjectMemory;
-    const results = yield* projectMemory.search({
-      ...input,
-      projectId: scope.projectId,
-      ...optionalThreadId(scope.threadId),
-    });
+    const results = yield* searchProjectMemory(caller, input);
     return HttpServerResponse.jsonUnsafe(
       {
         results,
@@ -960,19 +784,7 @@ export const homelabProjectMemoryCreateRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const scope = yield* resolveMemoryRequestScope(caller, {
-      projectId: input.projectId,
-      threadId: input.sourceThreadId,
-    });
-    if (input.promotionStatus === "proposed") {
-      yield* requireProjectScopeForPromotion(scope.projectId);
-    }
-    const projectMemory = yield* ProjectMemory;
-    const entry = yield* projectMemory.create({
-      ...input,
-      projectId: scope.projectId,
-      ...(scope.threadId !== undefined ? { sourceThreadId: scope.threadId } : {}),
-    });
+    const entry = yield* createProjectMemory(caller, input);
     return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(
     Effect.catchTag("ProjectMemoryError", respondToProjectMemoryError),
@@ -1002,18 +814,7 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
         });
       }),
     );
-    const { projectId } = yield* resolveMemoryRequestScope(caller, input);
-    yield* requireProjectScopeForPromotion(projectId);
-    // Graph entries, memory status, secret placeholders and bootstrap mutations
-    // commit together or not at all.
-    const { recorded, entry } = yield* promoteDiscoveries({
-      promotion: input.promotion,
-      memory: {
-        memoryId: input.memoryId,
-        projectId,
-        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-      },
-    });
+    const { recorded, entry } = yield* promoteProjectMemory(caller, input);
     return HttpServerResponse.jsonUnsafe(
       {
         entry,
@@ -1027,27 +828,6 @@ export const homelabProjectMemoryPromoteRouteLayer = HttpRouter.add(
     Effect.catchTag("HomelabHttpError", respondToHomelabHttpError),
   ),
 );
-
-const resolveSkillContext = (
-  caller: HomelabCallerScope,
-  input: {
-    readonly projectId?: ProjectId | undefined;
-    readonly threadId?: ThreadId | undefined;
-  },
-) =>
-  Effect.gen(function* () {
-    const { projectId, threadId } = yield* resolveMemoryRequestScope(caller, input);
-    if (isStandaloneProjectId(projectId)) {
-      if (!threadId) {
-        return yield* new HomelabHttpError({
-          message: "Scratch skill requests must include threadId.",
-          status: 400,
-        });
-      }
-      return { kind: "scratch", threadId } as const;
-    }
-    return { kind: "project", projectId } as const;
-  });
 
 const respondToHomelabSkillsError = (error: HomelabSkillsError) =>
   respondToHomelabHttpError(
@@ -1079,9 +859,7 @@ export const homelabSkillsListRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(caller, input);
-    const skills = yield* HomelabSkills;
-    const entries = yield* skills.listForContext(context);
+    const entries = yield* listCallerSkills(caller, input);
     return HttpServerResponse.jsonUnsafe({ skills: entries }, { status: 200 });
   }).pipe(
     Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
@@ -1106,14 +884,7 @@ export const homelabSkillsCreateRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(caller, input);
-    const skills = yield* HomelabSkills;
-    const entry = yield* skills.upsert({
-      context,
-      name: input.name,
-      description: input.description,
-      body: input.body,
-    });
+    const entry = yield* upsertCallerSkill(caller, input);
     return HttpServerResponse.jsonUnsafe(entry, { status: 201 });
   }).pipe(
     Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
@@ -1138,9 +909,7 @@ export const homelabSkillsPromoteRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    const context = yield* resolveSkillContext(caller, input);
-    const skills = yield* HomelabSkills;
-    const entry = yield* skills.promote({ context, name: input.name, to: input.to });
+    const entry = yield* promoteCallerSkill(caller, input);
     return HttpServerResponse.jsonUnsafe(entry, { status: 200 });
   }).pipe(
     Effect.catchTag("HomelabSkillsError", respondToHomelabSkillsError),
@@ -1535,45 +1304,17 @@ export const homelabCuratorSkillDeleteRouteLayer = HttpRouter.add(
   ),
 );
 
-function normalizedEntityName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
 export const homelabEntityUpsertRouteLayer = HttpRouter.add(
   "POST",
   "/api/homelab/entity",
   Effect.gen(function* () {
     yield* authenticateHomelabOperate;
-    const knowledgeGraph = yield* KnowledgeGraph;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabEntityUpsertInput).pipe(
       Effect.mapError(
         (cause) => new HomelabHttpError({ message: "Invalid entity payload.", status: 400, cause }),
       ),
     );
-    const now = new Date().toISOString();
-    const slug = normalizedEntityName(input.name).replace(/\s+/g, "-");
-    const id = decodeHomelabEntityId(`${input.kind}:${slug}`);
-    // Preserve createdAt across re-captures (id or natural-key match).
-    const existing =
-      (yield* knowledgeGraph.getEntity(id)) ??
-      (yield* knowledgeGraph.findEntity({ kind: input.kind, name: input.name }));
-    const entity: HomelabEntity = {
-      id,
-      kind: input.kind,
-      name: input.name,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.summary !== undefined ? { summary: input.summary } : {}),
-      ...(input.status !== undefined ? { status: input.status } : {}),
-      ...(input.aliases !== undefined ? { aliases: input.aliases } : {}),
-      ...(input.tags !== undefined ? { tags: input.tags } : {}),
-      ...(input.properties !== undefined ? { properties: input.properties } : {}),
-      confidence: input.confidence ?? existing?.confidence ?? 0.7,
-      observedAt: now,
-      lastVerifiedAt: now,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    };
-    yield* knowledgeGraph.upsertEntity(entity);
+    const entity = yield* upsertHomelabEntity(input);
     return HttpServerResponse.jsonUnsafe(entity satisfies HomelabEntity, { status: 200 });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
@@ -1586,37 +1327,12 @@ export const homelabEntityVerifyRouteLayer = HttpRouter.add(
   "/api/homelab/entity/verify",
   Effect.gen(function* () {
     yield* authenticateHomelabOperate;
-    const knowledgeGraph = yield* KnowledgeGraph;
     const input = yield* HttpServerRequest.schemaBodyJson(HomelabEntityVerifyInput).pipe(
       Effect.mapError(
         (cause) => new HomelabHttpError({ message: "Invalid verify payload.", status: 400, cause }),
       ),
     );
-    const match = yield* knowledgeGraph.findEntity({ kind: input.kind, name: input.name });
-    if (!match) {
-      return yield* respondToHomelabHttpError(
-        new HomelabHttpError({
-          message: `No entity named '${input.name}' to verify.`,
-          status: 404,
-        }),
-      );
-    }
-    const now = new Date().toISOString();
-    const priorConfidence = match.confidence ?? 0.5;
-    const confidence = input.reachable
-      ? Math.min(1, priorConfidence + 0.2)
-      : Math.max(0, priorConfidence - 0.3);
-    const verified: HomelabEntity = {
-      ...match,
-      // A single failed probe drops confidence but does not force "deprecated";
-      // a reachable probe confirms the entity is active.
-      ...(input.reachable ? { status: "active" as const } : {}),
-      confidence,
-      lastVerifiedAt: now,
-      observedAt: now,
-      updatedAt: now,
-    };
-    yield* knowledgeGraph.upsertEntity(verified);
+    const verified = yield* verifyHomelabEntity(input);
     return HttpServerResponse.jsonUnsafe(verified satisfies HomelabEntity, { status: 200 });
   }).pipe(
     Effect.catchTag("KnowledgeGraphError", respondToKnowledgeGraphError),
@@ -1628,90 +1344,6 @@ export const homelabEntityVerifyRouteLayer = HttpRouter.add(
 // Runtime tools (`homelab tools`, Settings -> Project Runtime)
 // ---------------------------------------------------------------------------
 
-const runtimeToolsStoreError = (cause: unknown) =>
-  new HomelabHttpError({ message: "Failed to access the runtime tools list.", status: 500, cause });
-
-/**
- * The tools list a request operates on. A runtime token always gets the list
- * of the runtime its thread is bound to (its project's shared list, or an
- * isolated clone's own) and can't name another project or runtime. Human
- * callers name the project, and optionally one of its runtimes.
- */
-const resolveRuntimeToolsKey = (
-  caller: HomelabCallerScope,
-  input: {
-    readonly projectId?: ProjectId | undefined;
-    readonly runtimeId?: RuntimeSessionId | undefined;
-  },
-) =>
-  Effect.gen(function* () {
-    const registry = yield* RuntimeRegistry;
-    if (caller.kind === "runtime") {
-      if (input.projectId !== undefined && input.projectId !== caller.projectId) {
-        return yield* forbiddenScope("Runtime tokens may only manage their own project's tools.");
-      }
-      const binding = yield* registry
-        .getBinding(caller.threadId)
-        .pipe(Effect.mapError(runtimeToolsStoreError));
-      if (Option.isNone(binding)) {
-        return yield* forbiddenScope("This thread is not bound to a runtime.");
-      }
-      if (input.runtimeId !== undefined && input.runtimeId !== binding.value.runtimeId) {
-        return yield* forbiddenScope("Runtime tokens may only manage their own runtime's tools.");
-      }
-      const record = yield* registry
-        .getRuntime(binding.value.runtimeId)
-        .pipe(Effect.mapError(runtimeToolsStoreError));
-      if (
-        Option.isNone(record) ||
-        (record.value.projectId !== null && record.value.projectId !== caller.projectId)
-      ) {
-        return yield* forbiddenScope("Runtime tokens may only manage their own project's tools.");
-      }
-      const key = runtimeToolsListKeyFor({ ...record.value, projectId: caller.projectId });
-      if (key === undefined) {
-        return yield* forbiddenScope("This runtime has no tools list.");
-      }
-      return key;
-    }
-    if (input.projectId === undefined) {
-      return yield* new HomelabHttpError({
-        message: "Runtime tools requests must include projectId.",
-        status: 400,
-      });
-    }
-    if (input.runtimeId === undefined) {
-      const key: RuntimeToolsListKey = { projectId: input.projectId, runtimeId: null };
-      return key;
-    }
-    const record = yield* registry
-      .getRuntime(input.runtimeId)
-      .pipe(Effect.mapError(runtimeToolsStoreError));
-    const key = Option.isSome(record) ? runtimeToolsListKeyFor(record.value) : undefined;
-    if (key === undefined || key.projectId !== input.projectId) {
-      return yield* new HomelabHttpError({
-        message: "That runtime does not belong to this project.",
-        status: 404,
-      });
-    }
-    return key;
-  });
-
-const toRuntimeToolView = (row: RuntimeToolRow): RuntimeTool | undefined => {
-  const kind = runtimeToolKindOf(row.spec);
-  return kind === undefined
-    ? undefined
-    : {
-        projectId: row.projectId,
-        runtimeId: row.runtimeId,
-        spec: row.spec,
-        kind,
-        reason: row.reason,
-        addedByThreadId: row.addedByThreadId,
-        createdAt: row.createdAt,
-      };
-};
-
 const invalidRuntimeToolPayload = (cause: unknown) =>
   new HomelabHttpError({ message: "Invalid runtime tool payload.", status: 400, cause });
 
@@ -1721,30 +1353,13 @@ export const homelabRuntimeToolsListRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     const caller = yield* authenticateHomelabRead.pipe(Effect.flatMap(resolveHomelabCallerScope));
     const url = yield* getRequestUrl;
-    const projectId = url.searchParams.get("projectId") ?? undefined;
-    const runtimeId = url.searchParams.get("runtimeId") ?? undefined;
-    const registry = yield* RuntimeRegistry;
-    // A human caller without a project gets every list (the settings overview).
-    const rows =
-      caller.kind === "unrestricted" && projectId === undefined
-        ? yield* registry.listTools().pipe(Effect.mapError(runtimeToolsStoreError))
-        : yield* resolveRuntimeToolsKey(caller, {
-            projectId: projectId as ProjectId | undefined,
-            runtimeId: runtimeId as RuntimeSessionId | undefined,
-          }).pipe(
-            Effect.flatMap((key) =>
-              registry.listTools(key).pipe(Effect.mapError(runtimeToolsStoreError)),
-            ),
-          );
-    return HttpServerResponse.jsonUnsafe(
-      {
-        tools: rows.flatMap((row) => {
-          const view = toRuntimeToolView(row);
-          return view ? [view] : [];
-        }),
-      } satisfies RuntimeToolListResult,
-      { status: 200 },
-    );
+    const tools = yield* listRuntimeTools(caller, {
+      projectId: (url.searchParams.get("projectId") ?? undefined) as ProjectId | undefined,
+      runtimeId: (url.searchParams.get("runtimeId") ?? undefined) as RuntimeSessionId | undefined,
+    });
+    return HttpServerResponse.jsonUnsafe({ tools } satisfies RuntimeToolListResult, {
+      status: 200,
+    });
   }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
 );
 
@@ -1758,34 +1373,10 @@ export const homelabRuntimeToolsAddRouteLayer = HttpRouter.add(
     const input = yield* HttpServerRequest.schemaBodyJson(RuntimeToolAddInput).pipe(
       Effect.mapError(invalidRuntimeToolPayload),
     );
-    const parsed = parseRuntimeToolSpec(input.spec);
-    if (!parsed.ok) {
-      return yield* new HomelabHttpError({ message: parsed.error, status: 400 });
-    }
-    const key = yield* resolveRuntimeToolsKey(caller, input);
-    const registry = yield* RuntimeRegistry;
-    const row: RuntimeToolRow = {
-      projectId: key.projectId,
-      runtimeId: key.runtimeId ?? null,
-      spec: parsed.tool.spec,
-      reason: input.reason.trim(),
-      addedByThreadId: caller.kind === "runtime" ? caller.threadId : null,
-      createdAt: new Date().toISOString(),
-    };
-    // The list only shapes the next image; it never triggers a recreate by itself.
-    const created = yield* registry.upsertTool(row).pipe(Effect.mapError(runtimeToolsStoreError));
-    const tool = toRuntimeToolView(row);
-    if (tool === undefined) {
-      return yield* new HomelabHttpError({ message: "Invalid runtime tool spec.", status: 400 });
-    }
-    return HttpServerResponse.jsonUnsafe(
-      {
-        tool,
-        created,
-        installCommands: installCommandsForTool(parsed.tool).map((command) => [...command]),
-      } satisfies RuntimeToolAddResult,
-      { status: created ? 201 : 200 },
-    );
+    const result = yield* addRuntimeTool(caller, input);
+    return HttpServerResponse.jsonUnsafe(result satisfies RuntimeToolAddResult, {
+      status: result.created ? 201 : 200,
+    });
   }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
 );
 
@@ -1799,20 +1390,12 @@ export const homelabRuntimeToolsRemoveRouteLayer = HttpRouter.add(
     const input = yield* HttpServerRequest.schemaBodyJson(RuntimeToolRemoveInput).pipe(
       Effect.mapError(invalidRuntimeToolPayload),
     );
-    const key = yield* resolveRuntimeToolsKey(caller, input);
-    const parsed = parseRuntimeToolSpec(input.spec);
-    // Stored specs are canonical; an unparseable one is matched verbatim.
-    const spec = parsed.ok ? parsed.tool.spec : input.spec.trim();
-    const registry = yield* RuntimeRegistry;
-    const removed = yield* registry
-      .deleteTool(key, spec)
-      .pipe(Effect.mapError(runtimeToolsStoreError));
+    const removed = yield* removeRuntimeTool(caller, input);
     return HttpServerResponse.jsonUnsafe({ removed } satisfies RuntimeToolRemoveResult, {
       status: 200,
     });
   }).pipe(Effect.catchTag("HomelabHttpError", respondToHomelabHttpError)),
 );
-
 /**
  * Fork-owned composite of every homelab HTTP route. Keeping the `Layer.mergeAll`
  * here (rather than re-listing all routes in the upstream `server.ts`) shrinks
