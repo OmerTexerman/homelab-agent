@@ -94,6 +94,7 @@ export function PairingRouteSurface({
         description={describeAuthGate(auth.bootstrapMethods)}
       />
 
+      <HomelabPasskeySignIn />
       <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
         <div className="space-y-2">
           <label className="text-sm font-medium" htmlFor="pairing-token">
@@ -133,7 +134,6 @@ export function PairingRouteSurface({
           </Button>
         </div>
       </form>
-      <HomelabPasskeySignIn />
 
       <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
         {describeSupportedMethods(auth.bootstrapMethods)}

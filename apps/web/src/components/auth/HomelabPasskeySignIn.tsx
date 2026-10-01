@@ -1,7 +1,8 @@
 /**
- * "Sign in with passkey" on the pairing screen. Rendered by upstream's
- * `PairingRouteSurface` with one line; renders nothing unless this browser can
- * use passkeys here and the server has one registered for this host name.
+ * "Sign in with passkey" at the top of the pairing screen, as its primary
+ * action. Rendered by upstream's `PairingRouteSurface` with one line; renders
+ * nothing unless this browser can use passkeys here and the server has one
+ * registered for this host name.
  */
 import { KeyRoundIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -45,19 +46,14 @@ export function HomelabPasskeySignIn() {
   };
 
   return (
-    <div className="mt-6 space-y-3 border-t border-border/60 pt-6">
-      <Button
-        disabled={isSigningIn}
-        onClick={() => void handleSignIn()}
-        size="sm"
-        variant="outline"
-      >
+    <div className="mt-6 space-y-3 border-b border-border/60 pb-6">
+      <Button disabled={isSigningIn} onClick={() => void handleSignIn()}>
         <KeyRoundIcon aria-hidden />
         {isSigningIn ? "Waiting for passkey..." : "Sign in with passkey"}
       </Button>
       <p className="text-xs text-muted-foreground">
         Use a passkey you added in Settings on this server, for example with Face ID, Touch ID,
-        Windows Hello, or a security key.
+        Windows Hello, or a security key. No passkey on this device? Paste a pairing token below.
       </p>
       {errorMessage ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
