@@ -88,7 +88,9 @@ export function runtimeEgressProxyShellLines(input: {
     '  HTTPS_PROXY="$HTTP_PROXY"',
     '  http_proxy="$HTTP_PROXY"',
     '  https_proxy="$HTTP_PROXY"',
-    "  export HTTP_PROXY HTTPS_PROXY http_proxy https_proxy",
+    // Node's built-in fetch ignores HTTP(S)_PROXY unless this is set (Node 24+).
+    "  NODE_USE_ENV_PROXY=1",
+    "  export HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NODE_USE_ENV_PROXY",
     "fi",
   ];
 }

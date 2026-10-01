@@ -185,6 +185,88 @@ const SMOKE_CLEANUP_LABEL = "homelab.runtime-smoke.cleanup";
 const RUNTIME_IMAGE =
   process.env.HOMELAB_AGENT_RUNTIME_IMAGE?.trim() || "homelab-agent-runtime:local";
 const SMOKE_SECRET_KEY = "RUNTIME_SMOKE_SECRET";
+const SMOKE_BROKERED_SECRET_KEY = "RUNTIME_SMOKE_BROKERED_TOKEN";
+
+interface EgressEchoUpstream {
+  readonly host: string;
+  readonly port: number;
+  /** Authorization headers the upstream received, in order. */
+  seenAuthorization(): string[];
+  close(): void;
+}
+
+/**
+ * The echo server, run in its own process: runtime checks run synchronously
+ * (`execFileSync`), so a server in this process could not answer while one waits.
+ * Prints its port, then appends each request's Authorization header as a JSON line.
+ */
+const EGRESS_ECHO_SERVER_SOURCE = `
+const fs = require("node:fs");
+const https = require("node:https");
+const [host, keyPath, certPath, logPath] = process.argv.slice(1);
+const server = https.createServer(
+  { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) },
+  (request, response) => {
+    fs.appendFileSync(logPath, JSON.stringify(request.headers.authorization ?? "") + "\\n");
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("egress-upstream-ok");
+  },
+);
+server.listen(0, host, () => console.log(server.address().port));
+`;
+
+/**
+ * A self-signed HTTPS server on the Docker bridge gateway, the stand-in for a
+ * homelab API that a brokered secret is allowed to reach. The egress proxy
+ * (on the host) dials it directly; containers only reach it through the proxy.
+ */
+async function startEgressEchoUpstream(): Promise<EgressEchoUpstream> {
+  const gateway = docker([
+    "network",
+    "inspect",
+    "bridge",
+    "--format",
+    "{{(index .IPAM.Config 0).Gateway}}",
+  ]).stdout.trim();
+  assert(gateway.length > 0, "Could not read the Docker bridge gateway address");
+  const workDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "runtime-smoke-egress-"));
+  const keyPath = NodePath.join(workDir, "key.pem");
+  const certPath = NodePath.join(workDir, "cert.pem");
+  const logPath = NodePath.join(workDir, "seen.jsonl");
+  NodeChildProcess.execFileSync(
+    "openssl",
+    [
+      ...["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"],
+      ...["-keyout", keyPath, "-out", certPath, "-days", "1", "-subj", `/CN=${gateway}`],
+      ...["-addext", `subjectAltName=IP:${gateway}`],
+    ],
+    { stdio: "ignore" },
+  );
+  NodeFS.writeFileSync(logPath, "");
+  const child = NodeChildProcess.spawn(
+    process.execPath,
+    ["-e", EGRESS_ECHO_SERVER_SOURCE, gateway, keyPath, certPath, logPath],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  const port = await new Promise<number>((resolvePromise, rejectPromise) => {
+    child.once("error", rejectPromise);
+    child.once("exit", (code) => rejectPromise(new Error(`Egress upstream exited (${code})`)));
+    child.stdout.once("data", (chunk: Buffer) => resolvePromise(Number(chunk.toString().trim())));
+  });
+  return {
+    host: gateway,
+    port,
+    seenAuthorization: () =>
+      NodeFS.readFileSync(logPath, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as string),
+    close: () => {
+      child.kill();
+      NodeFS.rmSync(workDir, { recursive: true, force: true });
+    },
+  };
+}
 
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const serverBinPath = NodePath.resolve(repoRoot, "apps/server/src/bin.ts");
@@ -794,6 +876,8 @@ async function verifyRuntimes(input: {
     runtimeId: RuntimeSessionId.make(input.isolatedRuntimeId),
   };
   const secretValue = `smoke-secret-${Date.now().toString(36)}`;
+  const brokeredValue = `smoke-brokered-${Date.now().toString(36)}`;
+  let egressUpstream: EgressEchoUpstream | null = null;
 
   if (input.withRuntime) {
     // Scoped to the project, so its runtimes receive it at materialization.
@@ -805,6 +889,22 @@ async function verifyRuntimes(input: {
       body: { key: SMOKE_SECRET_KEY, value: secretValue, projectIds: [input.projectId] },
     });
     log(`Created project secret ${SMOKE_SECRET_KEY}`);
+    egressUpstream = await startEgressEchoUpstream();
+    await apiJson({
+      serverBaseUrl: input.serverBaseUrl,
+      bearerToken: input.bearerToken,
+      path: "/api/homelab/secrets",
+      method: "POST",
+      body: {
+        key: SMOKE_BROKERED_SECRET_KEY,
+        value: brokeredValue,
+        projectIds: [input.projectId],
+        delivery: "brokered",
+        allowedHosts: [`${egressUpstream.host}:${egressUpstream.port}`],
+        upstreamTls: "insecure",
+      },
+    });
+    log(`Created brokered secret ${SMOKE_BROKERED_SECRET_KEY} for ${egressUpstream.host}`);
   }
 
   const wsUrl = await issueWebSocketUrl(input.serverBaseUrl, input.bearerToken);
@@ -919,6 +1019,68 @@ async function verifyRuntimes(input: {
     cli("homelab tools list", "homelab tools list", (stdout) =>
       stdout.includes("No tools recorded"),
     );
+
+    // Egress broker: the agent only ever holds a stand-in; the proxy injects
+    // the real value for the allowed host and blocks the stand-in elsewhere.
+    assert(egressUpstream !== null, "Egress upstream was not started");
+    const upstream = egressUpstream;
+    const upstreamUrl = `https://${upstream.host}:${upstream.port}/echo`;
+    const surrogate = cli(
+      "brokered secret is a stand-in",
+      `printf %s "$${SMOKE_BROKERED_SECRET_KEY}"`,
+      (stdout) => stdout.startsWith("hlsur_") && stdout !== brokeredValue,
+    );
+    const expectInjected = (label: string, script: string) => {
+      const before = upstream.seenAuthorization().length;
+      cli(label, script, (stdout) => stdout.includes("egress-upstream-ok"));
+      assertEqual(
+        upstream.seenAuthorization().at(-1),
+        `Bearer ${brokeredValue}`,
+        `${label}: the upstream received the real value`,
+      );
+      assert(upstream.seenAuthorization().length === before + 1, `${label}: one upstream request`);
+    };
+    expectInjected(
+      "curl through the egress proxy",
+      `curl -sS --fail --max-time 20 ${upstreamUrl} -H "Authorization: Bearer $${SMOKE_BROKERED_SECRET_KEY}"`,
+    );
+    expectInjected(
+      "python urllib through the egress proxy",
+      `python3 -c "import os,urllib.request as u; r=u.Request('${upstreamUrl}', headers={'Authorization': 'Bearer '+os.environ['${SMOKE_BROKERED_SECRET_KEY}']}); print(u.urlopen(r, timeout=20).read().decode())"`,
+    );
+    expectInjected(
+      "node fetch through the egress proxy",
+      `node -e "fetch('${upstreamUrl}', {headers: {authorization: 'Bearer ' + process.env.${SMOKE_BROKERED_SECRET_KEY}}}).then((r) => r.text()).then(console.log)"`,
+    );
+    const seenBeforeLeak = upstream.seenAuthorization().length;
+    cli(
+      "stand-in sent to another host is blocked",
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://${upstream.host}:9/ -H "X-Leak: $${SMOKE_BROKERED_SECRET_KEY}"`,
+      (stdout) => stdout === "403",
+    );
+    assertEqual(
+      upstream.seenAuthorization().length,
+      seenBeforeLeak,
+      "No upstream request on a leak",
+    );
+    assert(
+      !upstream.seenAuthorization().some((value) => value.includes(surrogate)),
+      "The upstream never saw the stand-in",
+    );
+    const audit = await apiJson<{ readonly entries: ReadonlyArray<{ readonly decision: string }> }>(
+      {
+        serverBaseUrl: input.serverBaseUrl,
+        bearerToken: input.bearerToken,
+        path: "/api/homelab/egress/audit?limit=50",
+      },
+    );
+    const decisions = new Set(audit.entries.map((entry) => entry.decision));
+    assert(
+      decisions.has("substituted") && decisions.has("blocked"),
+      `Egress audit is missing substituted/blocked rows: ${JSON.stringify(audit.entries)}`,
+    );
+    log("Egress broker ok: stand-in held, real value injected, leak blocked, audited");
+    upstream.close();
 
     // Sleep then wake keeps the container, its /workspace, and its writable layer.
     const persistToken = `persist-${Date.now().toString(36)}`;
