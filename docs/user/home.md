@@ -18,21 +18,28 @@ starts a one-off thread with its own runtime and no project.
 
 Everything waiting on you, most urgent first:
 
-1. Threads asking for approval.
-2. Threads waiting for your answer to a question.
-3. Secrets an agent requested. Selecting one opens **Settings → Secrets**, where you
+1. Write approvals: an agent's request using a brokered secret, held until you
+   decide (see [Secrets](./secrets.md#write-approvals)). Each shows the method, host
+   and path, the secret, the thread that sent it, and the time left before it is
+   denied, with **Approve once**, **Approve 15 min**, and **Deny** right in the row.
+   The one running out of time first is on top.
+2. Threads asking for approval.
+3. Threads waiting for your answer to a question.
+4. Secrets an agent requested. Selecting one opens **Settings → Secrets**, where you
    can provide or decline it.
-4. Project Runtimes that failed.
-5. Threads whose last turn failed. Settle the thread to clear it from this list.
-6. Plans ready for your review.
-7. Project Runtimes with a rebuild waiting. These rebuild on their own the next time
+5. Project Runtimes that failed.
+6. Threads whose last turn failed. Settle the thread to clear it from this list.
+7. Plans ready for your review.
+8. Project Runtimes with a rebuild waiting. These rebuild on their own the next time
    the runtime is idle; the entry is for your information.
 
 Selecting a thread entry opens that thread. Selecting a runtime entry opens the
-project's latest thread, where the runtime panel shows details.
+project's latest thread, where the runtime panel shows details. A write approval
+opens the thread that sent it (or **Settings → Secrets** when that thread isn't
+known). The waiting thread can also show under **Running**.
 
-While Home is still checking runtimes and secret requests, the section says so
-instead of showing an empty list.
+While Home is still checking runtimes, write approvals, and secret requests, the
+section says so instead of showing an empty list.
 
 ## Running
 

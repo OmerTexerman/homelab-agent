@@ -172,6 +172,22 @@ Runtime tokens get 403 on the read routes even though they hold the read
 scope. There is no push channel: clients poll the approvals list while
 visible; it is served from memory.
 
+## Web client
+
+- Reads and writes go over HTTP (`apps/web/src/lib/homelabEgressReactQuery.ts`,
+  `setHomelabSecretBrokerPolicyRequest` in `homelabSecretsReactQuery.ts`).
+  Pure helpers (host parsing, policy validation, countdown, labels) live in
+  `apps/web/src/homelab/egressBroker.ts`; host validation reuses the contracts'
+  `homelabEgressAllowedHostReason`.
+- One approvals query (`homelabEgressApprovalsQueryOptions`) is shared by
+  Home's "Needs you" (`egress-approval`, ranked first), the global prompt
+  (`HomelabEgressApprovalCoordinator`, only for sessions with
+  `homelab:secrets-admin`), and the thread banner under the runtime strip
+  (`ThreadEgressApprovalBanner`, via `homelabChatView.tsx`). It polls every 5 s
+  while visible, 2 s while something is pending, never in hidden tabs.
+- Settings → Secrets edits policy per secret through `broker-policy` and
+  lists the audit log (`HomelabEgressActivity`, newest 100, manual refresh).
+
 ## Threat model
 
 Protects against: an injected agent reading a brokered secret's value from

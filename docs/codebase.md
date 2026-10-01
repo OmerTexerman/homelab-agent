@@ -73,6 +73,9 @@ yourself is to ignore most of the root and start from the active product slices.
   File tree, download, and inline text editing for thread workspaces.
 - `apps/web/src/components/HomelabSecretRequestCoordinator.tsx`
   Secret request modal flow driven by missing secret refs.
+- `apps/web/src/components/HomelabEgressApprovalCoordinator.tsx`
+  Global prompt for egress write approvals. Both prompts mount through
+  `HomelabRootCoordinators.tsx`, the one seam in upstream's `routes/__root.tsx`.
 
 ### Settings and Data Hooks
 
@@ -80,6 +83,7 @@ yourself is to ignore most of the root and start from the active product slices.
   User-facing settings panels and homelab secrets UI.
 - `apps/web/src/lib/homelabReactQuery.ts`
 - `apps/web/src/lib/homelabSecretsReactQuery.ts`
+- `apps/web/src/lib/homelabEgressReactQuery.ts`
 - `apps/web/src/lib/threadWorkspaceReactQuery.ts`
   Query bindings for the new homelab/runtime surfaces.
 
