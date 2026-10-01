@@ -16,7 +16,9 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
+  ProviderInstanceId,
   ThreadId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
@@ -29,6 +31,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { SYNTHETIC_CLAUDE_MODEL_CATALOG } from "../ClaudeModelCatalog.testFixtures.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
@@ -172,6 +175,52 @@ describe("ClaudeAdapter homelab hooks", () => {
         harness.layer.pipe(Layer.provideMerge(makeThreadRuntimeTestLayer(launchContext))),
       ),
       Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+    );
+  });
+
+  it.effect("points the t3-code MCP server at the runtime-reachable server URL", () => {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "claude-runtime-mcp-"));
+    const launchContext = {
+      ...makeThreadRuntimeLaunchContext({ baseDir, threadId: THREAD_ID }),
+      serverUrl: "http://host.docker.internal:3773",
+    };
+    NodeFS.mkdirSync(launchContext.hostBinDir, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(launchContext.hostBinDir, "claude"), "#!/bin/sh\n");
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("environment-claude-homelab"),
+      threadId: THREAD_ID,
+      providerSessionId: "provider-session-claude-homelab",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      endpoint: "http://127.0.0.1:3773/mcp",
+      authorizationHeader: "Bearer mcp-token",
+      capabilities: new Set(),
+    });
+    const harness = makeHarness({ binaryPath: "server-claude" });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: CLAUDE,
+        cwd: "/host/project",
+        runtimeMode: "full-access",
+      });
+      const server = harness.getLastCreateQueryInput()?.options.mcpServers?.["t3-code"];
+      assert.deepStrictEqual(server, {
+        type: "http",
+        url: "http://host.docker.internal:3773/mcp",
+        headers: { Authorization: "Bearer mcp-token" },
+      });
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(Layer.provideMerge(makeThreadRuntimeTestLayer(launchContext))),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          McpProviderSession.clearAllMcpProviderSessions();
+          NodeFS.rmSync(baseDir, { recursive: true, force: true });
+        }),
+      ),
     );
   });
 

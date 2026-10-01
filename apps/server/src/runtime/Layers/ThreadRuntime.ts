@@ -3244,7 +3244,19 @@ const makeThreadRuntime = Effect.fn("makeThreadRuntime")(function* (
       ),
     resolveLaunchContext: (threadId) =>
       resolveBound(threadId).pipe(
-        Effect.map(({ record, binding }) => launchContextFor(record, binding)),
+        Effect.flatMap(({ record, binding }) =>
+          resolveRuntimeDockerNetworkPlan().pipe(
+            Effect.map((plan) => ({
+              ...launchContextFor(record, binding),
+              serverUrl: plan.serverUrl,
+            })),
+            // The plan is cached once any runtime has started; without it the
+            // launch still works, only the in-container MCP endpoint is unknown.
+            Effect.catchTag("ThreadRuntimeError", () =>
+              Effect.succeed(launchContextFor(record, binding)),
+            ),
+          ),
+        ),
       ),
     streamEvents: Stream.fromPubSub(events),
   } satisfies ThreadRuntimeShape;

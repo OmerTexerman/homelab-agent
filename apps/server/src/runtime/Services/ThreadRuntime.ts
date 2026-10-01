@@ -142,6 +142,12 @@ export interface ThreadRuntimeLaunchContext {
   /** This thread's host-only runtime token file (for the shared shell's env). */
   readonly runtimeTokenPath?: string | undefined;
   readonly managedOpenCodeServer?: ThreadRuntimeManagedOpenCodeServerEndpoint | undefined;
+  /**
+   * The server's base URL as reachable from inside the runtime container (the
+   * runtime network plan's `serverUrl`, never loopback). Provider launch hooks
+   * point the provider's MCP endpoint at it.
+   */
+  readonly serverUrl?: string | undefined;
 }
 
 export interface ThreadRuntimeEvent {
