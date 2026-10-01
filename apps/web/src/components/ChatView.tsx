@@ -378,6 +378,7 @@ import { resolveComposerTimelineInset, resolveScrollToEndClearance } from "./com
 import { ChatHeader } from "./chat/ChatHeader";
 import { useHomelabChatView } from "./chat/homelabChatView";
 import { withoutProviderInterruptionActivities } from "../homelabWorkLogFilters";
+import { useDraftAutoSend } from "../homelab/draftAutoSend";
 import { homelabProjectDisplayTitle } from "../homelab/projectDisplayTitle";
 import { shouldShowPrimarySourceControlUi } from "../productCapabilities";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
@@ -9413,6 +9414,19 @@ export default function ChatView(props: ChatViewProps) {
     setDraftThreadContext,
     workLocallyResendReady,
   ]);
+  // Homelab: the home page's Start box sends its prompt once this draft can send.
+  useDraftAutoSend(
+    draftId,
+    isLocalDraftThread &&
+      !isSendBusy &&
+      !isConnecting &&
+      !threadDetailLoading &&
+      clientSettingsHydrated &&
+      !needsLoadBalancing &&
+      !activeEnvironmentUnavailable &&
+      !sendInFlightRef.current,
+    () => onSendRef.current(),
+  );
 
   const onStartFromOriginChange = (nextStartFromOrigin: boolean) => {
     if (canOverrideServerThreadEnvMode && activeThread) {

@@ -21,6 +21,7 @@ import {
   type HomeThreadRow,
 } from "../../homelab/homeOverview";
 import { queryDisplayState } from "../../homelab/queryDisplayState";
+import { requestDraftAutoSend } from "../../homelab/draftAutoSend";
 import { useCreateStandaloneThread } from "../../homelab/useCreateStandaloneThread";
 import { useUserVisibleProjects, useUserVisibleThreadShells } from "../../homelab/visibleProjects";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -234,8 +235,9 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
 }
 
 /**
- * "Start a thread in <project>": opens a new draft in the chosen project with
- * the typed text in its composer, ready to review and send.
+ * "Start a thread in <project>": opens a new thread in the chosen project and
+ * sends the typed text as its first message. With no text it opens an empty
+ * draft.
  */
 function HomeStartPrompt({
   projects,
@@ -278,10 +280,11 @@ function HomeStartPrompt({
       const opened = await startThreadIn(
         scopeProjectRef(selected.project.environmentId, selected.project.id),
       );
-      // Upstream's hand-off pattern: the text lands in the draft's composer
-      // to read over and send, with the model picker right there.
+      // The prompt goes through the draft's own composer send, so the thread
+      // gets exactly the model and modes a send from the thread would.
       if (opened !== null && prompt.trim().length > 0) {
         useComposerDraftStore.getState().setPrompt(opened.draftId, prompt);
+        requestDraftAutoSend(opened.draftId);
       }
     } finally {
       startingRef.current = false;
