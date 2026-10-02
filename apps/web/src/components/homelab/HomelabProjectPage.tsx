@@ -32,6 +32,7 @@ import {
   homelabEgressApprovalsQueryOptions,
   homelabEgressAuditQueryOptions,
 } from "../../lib/homelabEgressReactQuery";
+import { homelabChecksQueryOptions } from "../../lib/homelabChecksReactQuery";
 import { homelabProjectMemoryQueryOptions } from "../../lib/homelabReactQuery";
 import { homelabRuntimeToolsQueryOptions } from "../../lib/homelabRuntimeToolsReactQuery";
 import { homelabSecretsQueryOptions } from "../../lib/homelabSecretsReactQuery";
@@ -61,6 +62,7 @@ import {
   combineRuntimeStates,
   useStartThreadIn,
 } from "./HomelabHomeOverview";
+import { ProjectChecksSection } from "./ProjectChecksSection";
 
 const copy = HOMELAB_PRODUCT_COPY.projectPage;
 const homeCopy = HOMELAB_PRODUCT_COPY.homeOverview;
@@ -175,8 +177,13 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
     homelabEgressApprovalsQueryOptions({ environmentId: primaryEnvironmentId }),
   );
 
+  // Shares the cache entry (and polling) of Home's "Needs you".
+  const checksQuery = useQuery(homelabChecksQueryOptions({ environmentId: primaryEnvironmentId }));
+
   const secretsData = secretsQuery.data;
   const secretsStatus = secretsQuery.status;
+  const checksData = checksQuery.data;
+  const checksStatus = checksQuery.status;
   const egressData = egressApprovalsQuery.data;
   const egressStatus = egressApprovalsQuery.status;
   const model = useMemo(
@@ -207,6 +214,16 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
                 ),
                 approvals: egressData?.approvals ?? [],
               },
+        checks:
+          primaryEnvironmentId === null
+            ? null
+            : {
+                environmentId: primaryEnvironmentId,
+                state: queryDisplayState({ status: checksStatus, data: checksData }, (data) =>
+                  data.checks.every((check) => !check.needsAttention),
+                ),
+                checks: checksData?.checks ?? [],
+              },
         limits: {
           attention: expanded.has("attention") ? Infinity : undefined,
           running: expanded.has("running") ? Infinity : undefined,
@@ -215,6 +232,8 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
       }),
     [
       bootstrapped,
+      checksData,
+      checksStatus,
       egressData,
       egressStatus,
       expanded,
@@ -401,6 +420,9 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
         projectId={primary.id}
         projectKey={group.projectKey}
       />
+      {primaryEnvironmentId !== null && primary.environmentId === primaryEnvironmentId ? (
+        <ProjectChecksSection environmentId={primaryEnvironmentId} projectId={primary.id} />
+      ) : null}
       {primaryEnvironmentId !== null && primaryEnvironmentProjectIds.size > 0 ? (
         <>
           <ProjectSecretsSection

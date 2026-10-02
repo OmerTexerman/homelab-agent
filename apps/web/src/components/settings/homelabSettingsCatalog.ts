@@ -16,12 +16,14 @@ import type { SettingsPath, SettingsSearchItem } from "./settingsSearch";
 
 export type HomelabSettingsPath =
   | "/settings/secrets"
+  | "/settings/notifications"
   | "/settings/project-runtime"
   | "/settings/memory"
   | "/settings/advanced";
 
 export const HOMELAB_SETTINGS_SECTION_LABELS: Readonly<Record<HomelabSettingsPath, string>> = {
   "/settings/secrets": "Secrets",
+  "/settings/notifications": "Notifications",
   "/settings/project-runtime": HOMELAB_PRODUCT_COPY.projectRuntime.title,
   "/settings/memory": HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge,
   "/settings/advanced": HOMELAB_PRODUCT_COPY.settings.advanced,
@@ -39,6 +41,7 @@ const HOMELAB_SETTINGS_NAV: ReadonlyArray<{ readonly to: SettingsPath; readonly 
     { to: "/settings/projects" },
     { to: "/settings/providers" },
     { to: "/settings/secrets" },
+    { to: "/settings/notifications" },
     { to: "/settings/connections", label: HOMELAB_PRODUCT_COPY.settings.devicesAndSessions },
     { to: "/settings/project-runtime" },
     { to: "/settings/memory" },
@@ -126,6 +129,14 @@ export const HOMELAB_SETTINGS_SEARCH_ITEMS: ReadonlyArray<SettingsSearchItem> = 
     ],
   },
   {
+    id: "notifications",
+    title: "Notifications",
+    to: "/settings/notifications",
+    searchTerms: [
+      "ntfy push alerts phone approvals questions failed turns scheduled checks time zone",
+    ],
+  },
+  {
     id: "project-runtime",
     title: HOMELAB_PRODUCT_COPY.projectRuntime.title,
     to: "/settings/project-runtime",
@@ -162,6 +173,7 @@ export function withHomelabSettingsSearchItems(
 /** Fork pages are server-global; they have no project/environment scope to pick. */
 export const HOMELAB_UNSCOPED_SETTINGS_PATHS: ReadonlyArray<HomelabSettingsPath> = [
   "/settings/secrets",
+  "/settings/notifications",
   "/settings/project-runtime",
   "/settings/memory",
   "/settings/advanced",

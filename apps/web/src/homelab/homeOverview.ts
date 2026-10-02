@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   HomelabEgressApproval,
   HomelabSecretDescriptor,
+  ProjectCheck,
   ProjectRuntimeDetail,
   ProjectRuntimeLifecycleState,
   ScopedProjectRef,
@@ -34,6 +35,9 @@ import { filterUserVisibleProjects, filterUserVisibleThreads } from "./visiblePr
  * - `projects`: every project with its runtime state and last activity.
  * - `recent`: the remaining recent threads.
  *
+ * Scheduled checks whose last result needs attention (and wasn't acknowledged)
+ * are attention items too, linking to the check's thread.
+ *
  * A thread's own row appears in at most one of attention / running / recent.
  * Egress write approvals are separate attention items, so a running thread
  * whose request is held also shows under Running.
@@ -63,6 +67,14 @@ export interface HomeEgressApprovalsInput {
   readonly environmentId: EnvironmentId | null;
 }
 
+export interface HomeChecksInput {
+  /** `queryDisplayState` of the checks list; "empty" means none needs attention. */
+  readonly state: QueryDisplayState;
+  readonly checks: readonly ProjectCheck[];
+  /** The environment the checks belong to (the primary one). */
+  readonly environmentId: EnvironmentId | null;
+}
+
 export interface HomeOverviewInput {
   /** False until every environment's shell snapshot has arrived. */
   readonly bootstrapped: boolean;
@@ -74,6 +86,8 @@ export interface HomeOverviewInput {
   readonly secrets: HomeSecretsInput | null;
   /** Null (or absent) when this client cannot read egress approvals. */
   readonly egressApprovals?: HomeEgressApprovalsInput | null;
+  /** Null (or absent) when this client cannot read scheduled checks. */
+  readonly checks?: HomeChecksInput | null;
   readonly limits?: Partial<Record<"attention" | "running" | "projects" | "recent", number>>;
 }
 
@@ -84,6 +98,7 @@ export type HomeAttentionKind =
   | "secret-request"
   | "runtime-failed"
   | "thread-failed"
+  | "check-attention"
   | "plan-ready"
   | "runtime-rebuild-pending";
 
@@ -96,8 +111,9 @@ export const HOME_ATTENTION_RANK: Record<HomeAttentionKind, number> = {
   "secret-request": 3,
   "runtime-failed": 4,
   "thread-failed": 5,
-  "plan-ready": 6,
-  "runtime-rebuild-pending": 7,
+  "check-attention": 6,
+  "plan-ready": 7,
+  "runtime-rebuild-pending": 8,
 };
 
 export type HomeTarget =
@@ -120,6 +136,10 @@ export interface HomeAttentionItem {
   readonly target: HomeTarget;
   /** Set for "egress-approval": the held request, for inline decisions and its countdown. */
   readonly egressApproval?: HomelabEgressApproval;
+  /** Set for "check-attention": the check, for its inline Acknowledge. */
+  readonly check?: ProjectCheck;
+  /** The environment `check` lives on. */
+  readonly checkEnvironmentId?: EnvironmentId;
 }
 
 export interface HomeThreadRow {
@@ -417,6 +437,37 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
     }
   }
 
+  if (input.checks && input.checks.environmentId !== null) {
+    const environmentId = input.checks.environmentId;
+    for (const check of input.checks.checks) {
+      if (!check.needsAttention) continue;
+      const projectKey = homeProjectKey({ environmentId, projectId: check.projectId });
+      const project = projectByKey.get(projectKey);
+      // Checks of a project this client doesn't show (removed, hidden) stay off Home.
+      if (!project) continue;
+      attentionByProject.set(projectKey, (attentionByProject.get(projectKey) ?? 0) + 1);
+      attentionItems.push({
+        id: `check:${environmentId}:${check.id}`,
+        kind: "check-attention",
+        title: check.name,
+        reason:
+          check.lastSummary ?? (check.lastStatus === "failed" ? "Check failed" : "Needs attention"),
+        context: project.title,
+        timestamp: check.lastRunAt ?? check.updatedAt,
+        target:
+          check.threadId !== null
+            ? { kind: "thread", ref: scopeThreadRef(environmentId, check.threadId) }
+            : {
+                kind: "project",
+                ref: scopeProjectRef(environmentId, check.projectId),
+                latestThreadRef: null,
+              },
+        check,
+        checkEnvironmentId: environmentId,
+      });
+    }
+  }
+
   const orderedProjects = homeProjectsInDisplayOrder(projects, threads);
   let runtimeLoading = false;
   const projectRows = orderedProjects.map((project): HomeProjectRow => {
@@ -504,7 +555,8 @@ export function deriveHomeOverview(input: HomeOverviewInput): HomeOverviewModel 
         input.bootstrapped &&
         !runtimeLoading &&
         input.secrets?.state !== "loading" &&
-        input.egressApprovals?.state !== "loading",
+        input.egressApprovals?.state !== "loading" &&
+        input.checks?.state !== "loading",
     },
     running: bound(sortRows(running), limits.running),
     projects: bound(projectRows, limits.projects),

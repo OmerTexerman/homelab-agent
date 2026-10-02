@@ -24,6 +24,7 @@ import { Route as SettingsProvidersRouteImport } from './routes/settings.provide
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsProjectRuntimeRouteImport } from './routes/settings.project-runtime'
 import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/settings.open-source-licenses'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsMemoryRouteImport } from './routes/settings.memory'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
@@ -114,6 +115,11 @@ const SettingsOpenSourceLicensesRoute =
     path: '/open-source-licenses',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsMemoryRoute = SettingsMemoryRouteImport.update({
   id: '/memory',
   path: '/memory',
@@ -205,6 +211,7 @@ export interface FileRoutesByFullPath {
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -234,6 +241,7 @@ export interface FileRoutesByTo {
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -266,6 +274,7 @@ export interface FileRoutesById {
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/project-runtime': typeof SettingsProjectRuntimeRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -299,6 +308,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
+    | '/settings/notifications'
     | '/settings/open-source-licenses'
     | '/settings/project-runtime'
     | '/settings/projects'
@@ -328,6 +338,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
+    | '/settings/notifications'
     | '/settings/open-source-licenses'
     | '/settings/project-runtime'
     | '/settings/projects'
@@ -359,6 +370,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
+    | '/settings/notifications'
     | '/settings/open-source-licenses'
     | '/settings/project-runtime'
     | '/settings/projects'
@@ -489,6 +501,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsOpenSourceLicensesRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/memory': {
       id: '/settings/memory'
       path: '/memory'
@@ -617,6 +636,7 @@ interface SettingsRouteChildren {
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsMemoryRoute: typeof SettingsMemoryRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
   SettingsOpenSourceLicensesRoute: typeof SettingsOpenSourceLicensesRoute
   SettingsProjectRuntimeRoute: typeof SettingsProjectRuntimeRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
@@ -638,6 +658,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsMemoryRoute: SettingsMemoryRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpenSourceLicensesRoute: SettingsOpenSourceLicensesRoute,
   SettingsProjectRuntimeRoute: SettingsProjectRuntimeRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,

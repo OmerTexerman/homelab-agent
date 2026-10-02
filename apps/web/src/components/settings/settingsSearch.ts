@@ -860,6 +860,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/connections": "connections",
   "/settings/archived": "project-defaults",
   "/settings/secrets": null,
+  "/settings/notifications": null,
   "/settings/project-runtime": null,
   "/settings/memory": null,
   "/settings/advanced": null,
