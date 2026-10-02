@@ -146,7 +146,7 @@ export const HOMELAB_SETTINGS_SEARCH_ITEMS: ReadonlyArray<SettingsSearchItem> = 
     id: "memory-and-knowledge",
     title: HOMELAB_PRODUCT_COPY.settings.memoryAndKnowledge,
     to: "/settings/memory",
-    searchTerms: ["curator knowledge graph memory skills estate bootstrap"],
+    searchTerms: ["curator knowledge graph memory skills estate bootstrap tidy schedule"],
   },
   {
     id: "advanced",

@@ -1,7 +1,8 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { Settings2Icon, SquarePenIcon } from "lucide-react";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { ClipboardCheckIcon, RadarIcon, Settings2Icon, SquarePenIcon } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
@@ -16,7 +17,13 @@ import {
   homeProjectsInDisplayOrder,
   type HomeRuntimeDetailState,
 } from "../../homelab/homeOverview";
+import { CHECK_TEMPLATES } from "../../homelab/projectChecks";
 import { homelabProjectDisplayTitle } from "../../homelab/projectDisplayTitle";
+import {
+  ONBOARDING_CHECK_TEMPLATE_ID,
+  shouldShowProjectOnboarding,
+} from "../../homelab/projectOnboarding";
+import { useStartProjectSurvey } from "../../homelab/useStartProjectSurvey";
 import {
   deriveProjectPageOverview,
   projectPageEgressActivity,
@@ -33,6 +40,7 @@ import {
   homelabEgressAuditQueryOptions,
 } from "../../lib/homelabEgressReactQuery";
 import { homelabChecksQueryOptions } from "../../lib/homelabChecksReactQuery";
+import { homelabProjectDescriptionQueryOptions } from "../../lib/homelabOnboardingReactQuery";
 import { homelabProjectMemoryQueryOptions } from "../../lib/homelabReactQuery";
 import { homelabRuntimeToolsQueryOptions } from "../../lib/homelabRuntimeToolsReactQuery";
 import { homelabSecretsQueryOptions } from "../../lib/homelabSecretsReactQuery";
@@ -62,7 +70,7 @@ import {
   combineRuntimeStates,
   useStartThreadIn,
 } from "./HomelabHomeOverview";
-import { ProjectChecksSection } from "./ProjectChecksSection";
+import { type CheckEditorTarget, ProjectChecksSection } from "./ProjectChecksSection";
 
 const copy = HOMELAB_PRODUCT_COPY.projectPage;
 const homeCopy = HOMELAB_PRODUCT_COPY.homeOverview;
@@ -142,6 +150,8 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const startThreadIn = useStartThreadIn();
   const [expanded, setExpanded] = useState<ReadonlySet<ExpandableSection>>(() => new Set());
+  // Lifted so the Onboarding card can open the checks editor on a template.
+  const [checkEditor, setCheckEditor] = useState<CheckEditorTarget | null>(null);
   const members = group.memberProjects;
   const title = homelabProjectDisplayTitle(group, group.displayName);
   // The representative member: the runtime the controls act on and the memory shown.
@@ -350,6 +360,25 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
         />
       </header>
 
+      {primaryEnvironmentId !== null && primary.environmentId === primaryEnvironmentId ? (
+        <ProjectOnboardingCard
+          environmentId={primaryEnvironmentId}
+          projectId={primary.id}
+          checksState={queryDisplayState(
+            { status: checksStatus, data: checksData },
+            (data) => !data.checks.some((check) => check.projectId === primary.id),
+          )}
+          onAddCheck={() =>
+            setCheckEditor({
+              kind: "new",
+              template:
+                CHECK_TEMPLATES.find((template) => template.id === ONBOARDING_CHECK_TEMPLATE_ID) ??
+                null,
+            })
+          }
+        />
+      ) : null}
+
       <HomeStartPrompt
         projects={startOptions}
         startThreadIn={startThreadIn}
@@ -421,7 +450,12 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
         projectKey={group.projectKey}
       />
       {primaryEnvironmentId !== null && primary.environmentId === primaryEnvironmentId ? (
-        <ProjectChecksSection environmentId={primaryEnvironmentId} projectId={primary.id} />
+        <ProjectChecksSection
+          environmentId={primaryEnvironmentId}
+          projectId={primary.id}
+          editor={checkEditor}
+          onEditorChange={setCheckEditor}
+        />
       ) : null}
       {primaryEnvironmentId !== null && primaryEnvironmentProjectIds.size > 0 ? (
         <>
@@ -441,6 +475,79 @@ function ProjectPageContent({ group }: { readonly group: SidebarProjectSnapshot 
         </>
       ) : null}
     </ProjectPageShell>
+  );
+}
+
+/**
+ * Shown while the project has no memory and no checks: start its survey (from
+ * the description given at creation, when there is one) or add a first check.
+ */
+function ProjectOnboardingCard(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly checksState: QueryDisplayState;
+  readonly onAddCheck: () => void;
+}) {
+  // Same cache entry as the Memory section below.
+  const memoryQuery = useQuery(
+    homelabProjectMemoryQueryOptions({
+      environmentId: props.environmentId,
+      projectId: props.projectId,
+    }),
+  );
+  const show = shouldShowProjectOnboarding({
+    memory: queryDisplayState(memoryQuery, (data) => data.entries.length === 0),
+    checks: props.checksState,
+  });
+  const descriptionQuery = useQuery(
+    homelabProjectDescriptionQueryOptions({
+      environmentId: props.environmentId,
+      projectId: props.projectId,
+      enabled: show,
+    }),
+  );
+  const startSurvey = useStartProjectSurvey();
+  const [starting, setStarting] = useState(false);
+  if (!show) return null;
+  const description = descriptionQuery.data?.description ?? null;
+  return (
+    <section
+      data-testid="project-onboarding"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+    >
+      <div className="flex flex-col gap-1">
+        <h2 className="text-sm font-medium text-foreground">{copy.onboardingTitle}</h2>
+        <p className="text-sm text-muted-foreground">{copy.onboardingDescription}</p>
+      </div>
+      {description !== null ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">{copy.onboardingDescribedAs}</span>
+          <blockquote className="border-l-2 border-border pl-3 text-sm whitespace-pre-wrap text-foreground">
+            {description}
+          </blockquote>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          disabled={starting}
+          onClick={() => {
+            setStarting(true);
+            void startSurvey({
+              environmentId: props.environmentId,
+              projectId: props.projectId,
+            }).finally(() => setStarting(false));
+          }}
+        >
+          <RadarIcon className="size-4" />
+          {copy.onboardingSurveyAction}
+        </Button>
+        <Button size="sm" variant="outline" onClick={props.onAddCheck}>
+          <ClipboardCheckIcon className="size-4" />
+          {copy.onboardingCheckAction}
+        </Button>
+      </div>
+    </section>
   );
 }
 

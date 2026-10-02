@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import {
   CHECK_TEMPLATES,
   type CheckDraft,
+  type CheckTemplate,
   checkDraftFrom,
   checkDraftFromTemplate,
   checkInputFromDraft,
@@ -99,9 +100,17 @@ const SCHEDULE_KIND_LABELS: Record<ScheduleKind, string> = {
   weekly: "Weekly",
 };
 
+/** What the editor is open on: a check to change, or a new one (blank or from a template). */
+export type CheckEditorTarget =
+  | { readonly kind: "edit"; readonly check: ProjectCheck }
+  | { readonly kind: "new"; readonly template: CheckTemplate | null };
+
 export function ProjectChecksSection(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
+  /** Controlled editor, so the page can open it (Onboarding's "Add a check"). */
+  readonly editor?: CheckEditorTarget | null;
+  readonly onEditorChange?: (editor: CheckEditorTarget | null) => void;
 }) {
   // The every-project list Home and the page's "Needs you" already poll, filtered here.
   const checksQuery = useQuery(homelabChecksQueryOptions({ environmentId: props.environmentId }));
@@ -111,7 +120,9 @@ export function ProjectChecksSection(props: {
   );
   const timeZone = checksQuery.data?.timeZone ?? null;
   const state = queryDisplayState(checksQuery, () => checks.length === 0);
-  const [editing, setEditing] = useState<ProjectCheck | "new" | null>(null);
+  const [ownEditor, setOwnEditor] = useState<CheckEditorTarget | null>(null);
+  const editing = props.editor !== undefined ? props.editor : ownEditor;
+  const setEditing = props.onEditorChange ?? setOwnEditor;
 
   return (
     <HomeSectionFrame
@@ -120,7 +131,11 @@ export function ProjectChecksSection(props: {
       total={checks.length}
       shown={checks.length}
       action={
-        <Button variant="ghost" size="compact" onClick={() => setEditing("new")}>
+        <Button
+          variant="ghost"
+          size="compact"
+          onClick={() => setEditing({ kind: "new", template: null })}
+        >
           <PlusIcon className="size-3.5" />
           {copy.addAction}
         </Button>
@@ -142,7 +157,7 @@ export function ProjectChecksSection(props: {
             key={check.id}
             check={check}
             environmentId={props.environmentId}
-            onEdit={() => setEditing(check)}
+            onEdit={() => setEditing({ kind: "edit", check })}
           />
         ))
       )}
@@ -150,7 +165,8 @@ export function ProjectChecksSection(props: {
         <CheckEditorDialog
           environmentId={props.environmentId}
           projectId={props.projectId}
-          check={editing === "new" ? null : editing}
+          check={editing.kind === "edit" ? editing.check : null}
+          template={editing.kind === "new" ? editing.template : null}
           timeZone={timeZone}
           onClose={() => setEditing(null)}
         />
@@ -284,11 +300,17 @@ function CheckEditorDialog(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly check: ProjectCheck | null;
+  /** A new check's starting point. */
+  readonly template: CheckTemplate | null;
   readonly timeZone: string | null;
   readonly onClose: () => void;
 }) {
   const [draft, setDraft] = useState<CheckDraft>(() =>
-    props.check === null ? EMPTY_CHECK_DRAFT : checkDraftFrom(props.check),
+    props.check !== null
+      ? checkDraftFrom(props.check)
+      : props.template !== null
+        ? checkDraftFromTemplate(EMPTY_CHECK_DRAFT, props.template)
+        : EMPTY_CHECK_DRAFT,
   );
   const [showErrors, setShowErrors] = useState(false);
   const result = checkInputFromDraft(draft);
