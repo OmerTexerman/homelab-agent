@@ -37,6 +37,10 @@ export const HOMELAB_PRODUCT_COPY = {
     newAction: "New project",
     createAction: "Create project",
     createPlaceholder: "Project name",
+    descriptionLabel: "What does this project cover?",
+    descriptionPlaceholder: "Jellyfin, Sonarr, Radarr on the media VM 192.168.1.40; NAS at nas.lan",
+    descriptionHint: "Optional. Hosts, services, addresses: whatever an agent should start from.",
+    surveyNowLabel: "Have an agent survey it now",
     searchDescription: "Project with its own Project Runtime",
     emptySidebarTitle: "No projects yet",
     emptySidebarDescription:
@@ -261,6 +265,12 @@ export const HOMELAB_PRODUCT_COPY = {
     notFoundHomeAction: "Go home",
     openProjectAction: "Open project",
     openProjectDescription: "Runtime, threads, memory, secrets, and tools",
+    onboardingTitle: "Onboarding",
+    onboardingDescription:
+      "Nothing is known about this project yet. Have an agent survey what it covers, or schedule a check.",
+    onboardingDescribedAs: "You described it as",
+    onboardingSurveyAction: "Survey this project",
+    onboardingCheckAction: "Add a check",
   },
   memoryKnowledge: {
     searchPlaceholder: "Search memory, transcripts, or global knowledge",

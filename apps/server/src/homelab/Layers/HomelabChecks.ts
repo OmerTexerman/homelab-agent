@@ -12,6 +12,11 @@
  *   turn path and the project runtime queue.
  * - A watcher on orchestration events ends the run when the turn leaves the
  *   running state. A run without a `homelab_check_report` call ends as failed.
+ * - The scheduled knowledge tidy is one more check, owned by the hidden curator
+ *   namespace (`CURATOR_TIDY_CHECK_ID`). Its runs differ only in how they
+ *   start: each is a new curator session (`thread.curator.create`, isolated
+ *   runtime), it waits while any curator session has a turn in flight, and it
+ *   is never listed with project checks.
  *
  * See docs/internals/scheduled-checks.md.
  *
@@ -21,6 +26,8 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   CommandId,
+  type CuratorTidyResult,
+  type CuratorTidyUpdateInput,
   type EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -31,13 +38,13 @@ import {
   type ProjectCheckRun,
   type ProjectCheckSchedule,
   type ProjectCheckStatus,
+  type ProjectCheckUpdateInput,
   ProjectId,
+  type RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
-import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
-import { resolveFallbackModelSelection } from "@t3tools/shared/homelabModelFallback";
+import { CURATOR_PROJECT_ID, isCuratorProjectId } from "@t3tools/shared/curatorProject";
 import { nextCheckRunAt, normalizeCheckSchedule } from "@t3tools/shared/projectCheckSchedule";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -50,10 +57,9 @@ import * as Stream from "effect/Stream";
 
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { HomelabSql } from "../../homelabPersistence/HomelabSql.ts";
+import { OrchestrationCommandReadModel } from "../../orchestration/Services/OrchestrationCommandReadModel.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   type CheckRecord,
   clearCheckThread,
@@ -75,9 +81,12 @@ import {
   type HomelabChecksShape,
 } from "../Services/HomelabChecks.ts";
 import { HomelabNotifier } from "../Services/HomelabNotifier.ts";
+import { makeHomelabTurnDefaults } from "../turnDefaults.ts";
 
 const MINUTE_MS = 60_000;
 const DEFAULT_RUN_TIMEOUT_MS = 60 * MINUTE_MS;
+/** A tidy walks the whole knowledge estate, so it gets longer than a check. */
+const DEFAULT_CURATOR_RUN_TIMEOUT_MS = 180 * MINUTE_MS;
 /** A scheduled run that finds the check's thread busy tries again after this. */
 const DEFAULT_BUSY_RETRY_MS = 5 * MINUTE_MS;
 /** The scheduler never sleeps longer than this, so a changed clock or zone catches up. */
@@ -86,6 +95,37 @@ const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 50;
 
 export const CHECK_REPORT_TOOL = "homelab_check_report";
+
+/** The scheduled knowledge tidy's row in `project_checks`. */
+export const CURATOR_TIDY_CHECK_ID = "curator-tidy";
+export const CURATOR_TIDY_NAME = "Knowledge tidy";
+/** Each tidy run is a new curator session with this title. */
+export const CURATOR_TIDY_THREAD_TITLE = "Scheduled knowledge tidy";
+
+/**
+ * What a scheduled tidy asks the curator to do. Unlike the hand-started
+ * session's kickoff, nobody is there to approve changes, so it fixes what is
+ * clearly safe, leaves judgment calls for a human, and says which is which.
+ */
+export const CURATOR_TIDY_PROMPT = [
+  "Tidy the homelab's shared knowledge: the knowledge graph (entities, relations, observations), every project's memory, and the skills library.",
+  "",
+  "Nobody is watching this session, so don't wait for a go-ahead. Make the changes that are clearly safe:",
+  "- merge duplicate and overlapping entries into one canonical entry",
+  "- fix vague, misnamed, or badly tagged entries so realistic searches find them",
+  "- normalize drifting entity and relation kinds",
+  "- re-verify stale facts that are cheap to probe from here, and record what answered",
+  "- retire entries that are plainly superseded by newer ones",
+  "",
+  "Don't delete or rewrite anything where the right answer is a judgment call (conflicting facts you can't verify, entries that might still matter). List those instead.",
+  "",
+  "Take inventory first (`homelab curate overview`, `homelab snapshot`, `homelab curate memory --all`, `homelab curate skills`), then work through it systematically.",
+  "",
+  "When you report, status ok means the tidy is done and nothing needs a human; attention means you left judgment calls for a human; failed means you couldn't do the tidy. The summary says what you changed and, briefly, what you left for a human.",
+].join("\n");
+
+const isCuratorTidy = (check: Pick<CheckRecord, "projectId">) =>
+  isCuratorProjectId(check.projectId);
 
 /** The message a run sends: a short preamble, then the check's prompt. */
 export function checkRunMessage(check: Pick<CheckRecord, "name" | "prompt">): string {
@@ -98,6 +138,7 @@ export function checkRunMessage(check: Pick<CheckRecord, "name" | "prompt">): st
 
 export interface HomelabChecksOptions {
   readonly runTimeoutMs?: number;
+  readonly curatorRunTimeoutMs?: number;
   readonly busyRetryMs?: number;
   /** Receipt after every scheduler pass, with how long it will sleep. Tests wait on it. */
   readonly onTick?: (sleepMs: number) => Effect.Effect<void>;
@@ -106,6 +147,7 @@ export interface HomelabChecksOptions {
 interface ActiveRun {
   run: RunRecord;
   readonly startedAtMs: number;
+  readonly timeoutMs: number;
   /** The turn reached "running"; leaving it ends the run. */
   seenRunning: boolean;
 }
@@ -172,6 +214,12 @@ const toRun = (run: RunRecord): ProjectCheckRun => ({
   finishedAt: run.finishedAt,
 });
 
+/** ntfy priority for a result: the tidy is routine unless it failed. */
+export const resultPriority = (
+  check: Pick<CheckRecord, "projectId">,
+  status: ProjectCheckStatus,
+): 2 | 4 => (status === "ok" || (status === "attention" && isCuratorTidy(check)) ? 2 : 4);
+
 const STATUS_LABEL: Record<ProjectCheckStatus, string> = {
   ok: "OK",
   attention: "Needs attention",
@@ -185,11 +233,13 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
   const notifier = yield* HomelabNotifier;
   const engine = yield* OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery;
-  const serverSettings = yield* ServerSettingsService;
-  // Optional so the checks layer can run without providers (tests, tooling).
-  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry);
+  const commandReadModel = yield* OrchestrationCommandReadModel;
+  const turnDefaults = yield* makeHomelabTurnDefaults;
   const serverEnvironment = yield* Effect.serviceOption(ServerEnvironment);
   const runTimeoutMs = options?.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+  const curatorRunTimeoutMs = options?.curatorRunTimeoutMs ?? DEFAULT_CURATOR_RUN_TIMEOUT_MS;
+  const timeoutFor = (check: Pick<CheckRecord, "projectId">) =>
+    isCuratorTidy(check) ? curatorRunTimeoutMs : runTimeoutMs;
   const busyRetryMs = options?.busyRetryMs ?? DEFAULT_BUSY_RETRY_MS;
 
   // Every write to a check or run goes through this lock, so the scheduler,
@@ -281,7 +331,7 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
           kind: "check-report",
           title: `${STATUS_LABEL[status]}: ${check.name}`,
           body: summary,
-          priority: status === "ok" ? 2 : 4,
+          priority: resultPriority(check, status),
           tags: [status === "ok" ? "white_check_mark" : status === "attention" ? "warning" : "x"],
           // Every run is its own result; the policy above is what keeps it quiet.
           dedupKey: `${check.id}:${now}`,
@@ -334,61 +384,111 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       return run;
     });
 
-  const resolveModelSelection = (
-    check: CheckRecord,
-    project: Parameters<typeof resolveProjectSettings>[2],
-    threadModel: ModelSelection | null,
-  ) =>
-    Effect.gen(function* () {
-      const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(storage));
-      const resolved = resolveProjectSettings(
-        settings,
-        ProjectId.make(check.projectId),
-        project,
-      ).settings;
-      const chosen =
-        check.modelSelection ??
-        resolved.defaultModelSelection ??
-        settings.defaultModelSelection ??
-        threadModel;
-      // Nothing picked one: use the best usable provider, as new threads do.
-      const modelSelection =
-        chosen ??
-        (Option.isSome(providerRegistry)
-          ? resolveFallbackModelSelection(yield* providerRegistry.value.getProviders)
-          : null);
-      return { modelSelection, runtimeMode: resolved.defaultRuntimeMode };
-    });
+  /** True while any curator session (hand-started or a tidy) has a turn in flight. */
+  const curatorSessionBusy = commandReadModel
+    .getReadModel()
+    .pipe(
+      Effect.map((readModel) =>
+        readModel.threads.some(
+          (thread) =>
+            isCuratorProjectId(thread.projectId) &&
+            thread.deletedAt === null &&
+            thread.session?.activeTurnId != null,
+        ),
+      ),
+    );
 
   type StartOutcome =
     | { readonly type: "started"; readonly run: RunRecord }
     | { readonly type: "failed"; readonly run: RunRecord }
     | { readonly type: "busy" };
 
+  const dispatchFailed = (message: string) => (cause: unknown) =>
+    new HomelabChecksError({ message, reason: "storage", cause });
+
+  /**
+   * Opens the thread a run's turn goes to. A project check reuses its own
+   * thread (created on its first run); a tidy is a new curator session every
+   * run, exactly like Settings' "Start curator session".
+   */
+  const openRunThread = (
+    check: CheckRecord,
+    project: { readonly id: ProjectId } | undefined,
+    existingThreadId: ThreadId | null,
+    modelSelection: ModelSelection,
+    runtimeMode: RuntimeMode,
+    now: string,
+  ) =>
+    Effect.gen(function* () {
+      if (isCuratorTidy(check)) {
+        const threadId = ThreadId.make(NodeCrypto.randomUUID());
+        yield* engine
+          .dispatch({
+            type: "thread.curator.create",
+            commandId: CommandId.make(`homelab-check:${NodeCrypto.randomUUID()}`),
+            threadId,
+            title: CURATOR_TIDY_THREAD_TITLE,
+            modelSelection,
+            runtimeMode,
+            interactionMode: "default",
+            createdAt: now,
+          })
+          .pipe(Effect.mapError(dispatchFailed("Couldn't start a curator session.")));
+        return threadId;
+      }
+      if (existingThreadId !== null) return existingThreadId;
+      const threadId = ThreadId.make(NodeCrypto.randomUUID());
+      yield* engine
+        .dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`homelab-check:${NodeCrypto.randomUUID()}`),
+          threadId,
+          projectId: project?.id ?? ProjectId.make(check.projectId),
+          title: `Check: ${check.name}`,
+          modelSelection,
+          runtimeMode,
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        })
+        .pipe(Effect.mapError(dispatchFailed("Couldn't create the check's thread.")));
+      return threadId;
+    });
+
   /** Starts a run of `check`. Callers hold the lock and checked that none is active. */
   const startRun = (check: CheckRecord, trigger: "schedule" | "manual") =>
     Effect.gen(function* () {
+      const tidy = isCuratorTidy(check);
       const project = yield* snapshots
         .getProjectShellById(ProjectId.make(check.projectId))
         .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(storage));
-      if (project === undefined) {
+      // The curator namespace is created by its first session, so it may not exist yet.
+      if (project === undefined && !tidy) {
         const run = yield* recordFailedStart(check, trigger, "The check's project was not found.");
         return { type: "failed", run } satisfies StartOutcome;
       }
       const existingThread =
-        check.threadId === null
+        check.threadId === null || tidy
           ? undefined
           : yield* snapshots
               .getThreadShellById(ThreadId.make(check.threadId))
               .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(storage));
-      if (existingThread?.session?.activeTurnId != null) {
+      const busy = tidy ? yield* curatorSessionBusy : existingThread?.session?.activeTurnId != null;
+      if (busy) {
         return { type: "busy" } satisfies StartOutcome;
       }
-      const { modelSelection, runtimeMode } = yield* resolveModelSelection(
-        check,
+      const defaults = yield* turnDefaults({
+        projectId: check.projectId,
         project,
-        existingThread?.modelSelection ?? null,
-      );
+        // A tidy runs on the curator's remembered model, the one Settings' "Start
+        // curator session" also starts from (the namespace project's own default).
+        explicit: check.modelSelection ?? (tidy ? (project?.defaultModelSelection ?? null) : null),
+        threadModel: existingThread?.modelSelection ?? null,
+      }).pipe(Effect.mapError(storage));
+      const { modelSelection } = defaults;
+      // Curator sessions always run full-access, as the Settings button starts them.
+      const runtimeMode: RuntimeMode = tidy ? "full-access" : defaults.runtimeMode;
       if (modelSelection === null) {
         const run = yield* recordFailedStart(
           check,
@@ -400,34 +500,14 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
 
       const nowMs = yield* Clock.currentTimeMillis;
       const now = iso(nowMs);
-      let threadId = existingThread?.id ?? null;
-      if (threadId === null) {
-        threadId = ThreadId.make(NodeCrypto.randomUUID());
-        yield* engine
-          .dispatch({
-            type: "thread.create",
-            commandId: CommandId.make(`homelab-check:${NodeCrypto.randomUUID()}`),
-            threadId,
-            projectId: project.id,
-            title: `Check: ${check.name}`,
-            modelSelection,
-            runtimeMode,
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new HomelabChecksError({
-                  message: "Couldn't create the check's thread.",
-                  reason: "storage",
-                  cause,
-                }),
-            ),
-          );
-      }
+      const threadId = yield* openRunThread(
+        check,
+        project,
+        existingThread?.id ?? null,
+        modelSelection,
+        runtimeMode,
+        now,
+      );
 
       const run: RunRecord = {
         id: NodeCrypto.randomUUID(),
@@ -442,7 +522,12 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       };
       yield* db(saveCheckRecord({ ...check, threadId, lastRunAt: now, updatedAt: now }));
       yield* db(insertRunRecord(run));
-      active.set(check.id, { run, startedAtMs: nowMs, seenRunning: false });
+      active.set(check.id, {
+        run,
+        startedAtMs: nowMs,
+        timeoutMs: timeoutFor(check),
+        seenRunning: false,
+      });
       busyUntil.delete(check.id);
 
       const sent = yield* engine
@@ -453,7 +538,8 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
           message: {
             messageId: MessageId.make(NodeCrypto.randomUUID()),
             role: "user",
-            text: checkRunMessage(check),
+            // The tidy always runs the current prompt, whatever an older row stored.
+            text: checkRunMessage(tidy ? { name: check.name, prompt: CURATOR_TIDY_PROMPT } : check),
             attachments: [],
           },
           modelSelection,
@@ -491,7 +577,7 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
     for (const check of checks) {
       const running = active.get(check.id);
       if (running !== undefined) {
-        const deadline = running.startedAtMs + runTimeoutMs;
+        const deadline = running.startedAtMs + running.timeoutMs;
         if (deadline <= now) {
           yield* locked(timeOutRun(check));
         } else {
@@ -526,7 +612,7 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
         busyUntil.set(check.id, now + busyRetryMs);
         wakeAt = Math.min(wakeAt, now + busyRetryMs);
       } else if (outcome?.type === "started") {
-        wakeAt = Math.min(wakeAt, now + runTimeoutMs);
+        wakeAt = Math.min(wakeAt, now + timeoutFor(check));
       }
     }
     return Math.max(0, wakeAt - now);
@@ -536,7 +622,7 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
     Effect.gen(function* () {
       const entry = active.get(check.id);
       if (entry === undefined) return;
-      const minutes = Math.round(runTimeoutMs / MINUTE_MS);
+      const minutes = Math.round(entry.timeoutMs / MINUTE_MS);
       yield* finishActiveRun(check.id, `Timed out after ${minutes} minutes without a report.`);
       if (entry.run.threadId !== null) {
         yield* engine
@@ -688,7 +774,11 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       const records = yield* db(
         listCheckRecords(filter?.projectId !== undefined ? { projectId: filter.projectId } : {}),
       );
-      return { checks: records.map((record) => toCheck(record, timeZone)), timeZone };
+      // The tidy is a curator job, not a project's: only its own route shows it.
+      const checks = records
+        .filter((record) => filter?.projectId !== undefined || !isCuratorTidy(record))
+        .map((record) => toCheck(record, timeZone));
+      return { checks, timeZone };
     });
 
   const create: HomelabChecksShape["create"] = (projectId, input) =>
@@ -731,38 +821,104 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       }),
     );
 
+  const requireProjectCheck = (checkId: string) =>
+    requireCheck(checkId).pipe(
+      Effect.filterOrFail(
+        (check) => !isCuratorTidy(check),
+        () => invalid("Change the knowledge tidy in Settings → Memory & Knowledge."),
+      ),
+    );
+
+  /** Saves an edit. Changing the schedule or switching it on restarts the count. */
+  const applyUpdate = (check: CheckRecord, input: ProjectCheckUpdateInput) =>
+    Effect.gen(function* () {
+      const checkId = check.id;
+      const now = iso(yield* Clock.currentTimeMillis);
+      const schedule =
+        input.schedule === undefined ? check.schedule : normalizeCheckSchedule(input.schedule);
+      const enabled = input.enabled ?? check.enabled;
+      const scheduleChanged =
+        !sameSchedule(schedule, check.schedule) || (enabled && !check.enabled);
+      const updated: CheckRecord = {
+        ...check,
+        name: input.name ?? check.name,
+        prompt: input.prompt ?? check.prompt,
+        schedule,
+        enabled,
+        notifyPolicy: input.notifyPolicy ?? check.notifyPolicy,
+        modelSelection:
+          input.modelSelection === undefined ? check.modelSelection : input.modelSelection,
+        scheduleAnchorAt: scheduleChanged ? now : check.scheduleAnchorAt,
+        updatedAt: now,
+      };
+      yield* db(saveCheckRecord(updated));
+      if (scheduleChanged) busyUntil.delete(checkId);
+      yield* signal;
+      return updated;
+    });
+
   const update: HomelabChecksShape["update"] = (checkId, input) =>
     locked(
+      requireProjectCheck(checkId).pipe(
+        Effect.flatMap((check) => applyUpdate(check, input)),
+        Effect.flatMap(present),
+      ),
+    );
+
+  const getCuratorTidy: HomelabChecksShape["getCuratorTidy"] = () =>
+    Effect.gen(function* () {
+      const timeZone = yield* notifier.checkTimeZone();
+      const record = yield* db(getCheckRecord(CURATOR_TIDY_CHECK_ID));
+      return {
+        check: Option.isSome(record) ? toCheck(record.value, timeZone) : null,
+        timeZone,
+      } satisfies CuratorTidyResult;
+    });
+
+  const setCuratorTidy: HomelabChecksShape["setCuratorTidy"] = (input: CuratorTidyUpdateInput) =>
+    locked(
       Effect.gen(function* () {
-        const check = yield* requireCheck(checkId);
-        const now = iso(yield* Clock.currentTimeMillis);
-        const schedule =
-          input.schedule === undefined ? check.schedule : normalizeCheckSchedule(input.schedule);
-        const enabled = input.enabled ?? check.enabled;
-        const scheduleChanged =
-          !sameSchedule(schedule, check.schedule) || (enabled && !check.enabled);
-        const updated: CheckRecord = {
-          ...check,
-          name: input.name ?? check.name,
-          prompt: input.prompt ?? check.prompt,
-          schedule,
-          enabled,
-          notifyPolicy: input.notifyPolicy ?? check.notifyPolicy,
-          modelSelection:
-            input.modelSelection === undefined ? check.modelSelection : input.modelSelection,
-          scheduleAnchorAt: scheduleChanged ? now : check.scheduleAnchorAt,
-          updatedAt: now,
-        };
-        yield* db(saveCheckRecord(updated));
-        if (scheduleChanged) busyUntil.delete(checkId);
-        yield* signal;
-        return yield* present(updated);
+        const existing = yield* db(getCheckRecord(CURATOR_TIDY_CHECK_ID));
+        if (Option.isSome(existing)) {
+          yield* applyUpdate(existing.value, {
+            schedule: input.schedule,
+            enabled: input.enabled,
+            prompt: CURATOR_TIDY_PROMPT,
+          });
+        } else if (input.enabled) {
+          const now = iso(yield* Clock.currentTimeMillis);
+          yield* db(
+            saveCheckRecord({
+              id: CURATOR_TIDY_CHECK_ID,
+              projectId: CURATOR_PROJECT_ID,
+              name: CURATOR_TIDY_NAME,
+              prompt: CURATOR_TIDY_PROMPT,
+              schedule: normalizeCheckSchedule(input.schedule),
+              enabled: true,
+              // Every tidy reports: low priority when done, high when it failed.
+              notifyPolicy: "always",
+              // The curator namespace's default: the model last picked in Settings.
+              modelSelection: null,
+              threadId: null,
+              scheduleAnchorAt: now,
+              createdAt: now,
+              updatedAt: now,
+              lastRunAt: null,
+              lastStatus: null,
+              lastSummary: null,
+              acknowledgedAt: null,
+            }),
+          );
+          yield* signal;
+        }
+        return yield* getCuratorTidy();
       }),
     );
 
   const remove: HomelabChecksShape["remove"] = (checkId) =>
     locked(
       Effect.gen(function* () {
+        yield* requireProjectCheck(checkId);
         const deleted = yield* db(deleteCheckRecord(checkId));
         if (!deleted) return yield* notFound(checkId);
         active.delete(checkId);
@@ -864,6 +1020,8 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
     acknowledge,
     history,
     report,
+    getCuratorTidy,
+    setCuratorTidy,
     isCheckThread: (threadId) =>
       db(getCheckRecordByThread(threadId)).pipe(
         Effect.map(Option.isSome),

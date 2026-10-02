@@ -1,4 +1,6 @@
 import type {
+  CuratorTidyResult,
+  CuratorTidyUpdateInput,
   EnvironmentId,
   ProjectCheckCreateInput,
   ProjectCheckListResult,
@@ -18,6 +20,8 @@ export const homelabChecksQueryKeys = {
     ["homelab", "checks", environmentId, projectId ?? "all"] as const,
   runs: (environmentId: EnvironmentId | null, checkId: string) =>
     ["homelab", "checks", environmentId, "runs", checkId] as const,
+  curatorTidy: (environmentId: EnvironmentId | null) =>
+    ["homelab", "checks", environmentId, "curator-tidy"] as const,
 };
 
 // Results land on a schedule, with no push channel: poll while visible,
@@ -141,5 +145,41 @@ export function acknowledgeHomelabCheckRequest(input: {
     environmentId: input.environmentId,
     pathname: checkPath(input.checkId, "acknowledge"),
     body: {},
+  });
+}
+
+/** The scheduled knowledge tidy (Settings → Memory & Knowledge). Needs `homelab:curate`. */
+export function homelabCuratorTidyQueryOptions(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: homelabChecksQueryKeys.curatorTidy(input.environmentId),
+    queryFn: ({ signal }) => {
+      if (input.environmentId === null) {
+        throw new Error("No primary environment is connected.");
+      }
+      return homelabFetch<CuratorTidyResult>({
+        environmentId: input.environmentId,
+        pathname: "/api/homelab/curator/tidy",
+        signal,
+      });
+    },
+    enabled: (input.enabled ?? true) && input.environmentId !== null,
+    staleTime: 5_000,
+    refetchInterval: (query) =>
+      query.state.data?.check?.running === true ? RUNNING_CHECKS_POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function updateHomelabCuratorTidyRequest(input: {
+  readonly environmentId: EnvironmentId;
+  readonly tidy: CuratorTidyUpdateInput;
+}): Promise<CuratorTidyResult> {
+  return homelabFetch<CuratorTidyResult>({
+    environmentId: input.environmentId,
+    pathname: "/api/homelab/curator/tidy",
+    body: input.tidy,
   });
 }

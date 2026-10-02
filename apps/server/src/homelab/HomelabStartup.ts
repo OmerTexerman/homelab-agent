@@ -14,13 +14,14 @@ import type * as Scope from "effect/Scope";
 import { HomelabNotificationReactor } from "./Layers/HomelabNotificationReactor.ts";
 import { CuratorSessionReaper } from "./Services/CuratorSessionReaper.ts";
 import { HomelabChecks } from "./Services/HomelabChecks.ts";
+import { HomelabOnboarding } from "./Services/HomelabOnboarding.ts";
 import { HomelabSecretRuntimeReactor } from "./Services/HomelabSecretRuntimeReactor.ts";
 import { HomelabViewRuntimeReactor } from "./Services/HomelabViewRuntimeReactor.ts";
 
 export interface HomelabStartupShape {
   /**
    * Start the curator session reaper, the secret/view runtime reactors, the
-   * notification reactor, and the scheduled-check scheduler.
+   * notification reactor, the scheduled-check scheduler, and onboarding cleanup.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }
@@ -35,6 +36,7 @@ export const make = Effect.gen(function* () {
   const homelabViewRuntimeReactor = yield* HomelabViewRuntimeReactor;
   const homelabNotificationReactor = yield* HomelabNotificationReactor;
   const homelabChecks = yield* HomelabChecks;
+  const homelabOnboarding = yield* HomelabOnboarding;
   return HomelabStartup.of({
     start: () =>
       Effect.all(
@@ -44,6 +46,7 @@ export const make = Effect.gen(function* () {
           homelabViewRuntimeReactor.start(),
           homelabNotificationReactor.start(),
           homelabChecks.start(),
+          homelabOnboarding.start(),
         ],
         { discard: true },
       ),

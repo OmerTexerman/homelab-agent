@@ -1,8 +1,11 @@
 # Scheduled checks and notifications
 
 Two fork-owned services: `HomelabChecks` runs per-project agent investigations on a
-schedule, and `HomelabNotifier` pushes events that need a human to ntfy. User docs:
-[checks](../user/checks.md), [notifications](../user/notifications.md).
+schedule (and the weekly knowledge tidy), and `HomelabNotifier` pushes events that
+need a human to ntfy. `HomelabOnboarding`, next to them, starts project surveys.
+User docs: [checks](../user/checks.md), [notifications](../user/notifications.md),
+[memory and knowledge](../user/memory-and-knowledge.md),
+[projects](../user/projects.md#creating-a-project).
 
 ## Where it lives
 
@@ -12,6 +15,8 @@ schedule, and `HomelabNotifier` pushes events that need a human to ntfy. User do
 | Schedule math (shared with the editor) | `packages/shared/src/projectCheckSchedule.ts`                                                                         |
 | Check store                            | `apps/server/src/homelab/checks/ProjectChecksStore.ts`                                                                |
 | Scheduler, runs, report backend        | `apps/server/src/homelab/Layers/HomelabChecks.ts`                                                                     |
+| Model and runtime mode of a run        | `apps/server/src/homelab/turnDefaults.ts` (shared with surveys)                                                       |
+| Surveys and project descriptions       | `apps/server/src/homelab/Layers/HomelabOnboarding.ts`, `onboarding/`                                                  |
 | Notifier and ntfy sink                 | `apps/server/src/homelab/Layers/HomelabNotifier.ts`, `notifications/`                                                 |
 | Event → notification                   | `apps/server/src/homelab/Layers/HomelabNotificationReactor.ts`                                                        |
 | HTTP routes                            | `apps/server/src/homelab/automationHttp.ts`                                                                           |
@@ -76,8 +81,10 @@ queue the send behind the project runtime's single-writer lock like any other tu
   `thread.create` makes one in the project, titled `Check: <name>`, sharing the
   project runtime. The explicit title keeps first-turn title generation off.
 - The model is the check's `modelSelection`, else the project's default, else the
-  server default, else the thread's last model. With none, the run is recorded as
-  failed without a turn. The runtime mode is the project's default.
+  server default, else the thread's last model, else the best usable provider
+  (`resolveFallbackModelSelection`). With none, the run is recorded as failed
+  without a turn. The runtime mode is the project's default. `turnDefaults.ts`
+  holds this order.
 - The message is a preamble, then the check's prompt:
 
   > This is a scheduled check ("<name>"). Investigate, then call the
@@ -128,6 +135,54 @@ Notify policy:
   need attention. A check that keeps failing notifies once, until it's
   acknowledged or reports OK.
 
+## The knowledge tidy
+
+The scheduled knowledge tidy is one more row in `project_checks`, with id
+`curator-tidy` and `project_id` `system:curator`. It goes through the same
+scheduler, due-time math, missed-run policy, run history, restart recovery, report
+tool, and notifications as a project check. Only these differ (each keyed on
+`isCuratorProjectId(check.projectId)`):
+
+- **Where a run goes.** Every run dispatches `thread.curator.create` (titled
+  "Scheduled knowledge tidy", `full-access`, an isolated runtime), exactly what
+  Settings' "Start curator session" does, then the turn in that new thread. The
+  row's `thread_id` moves to the newest session, so `homelab_check_report` only
+  works there. The curator namespace project is created by its first session, so a
+  missing project shell isn't a failure.
+- **Overlap.** It is busy while any non-deleted curator thread has an active turn
+  (read from `OrchestrationCommandReadModel`), not just its own: a scheduled run
+  waits the busy-retry time, Run now answers 409.
+- **Model.** The row's `modelSelection` is null; a run uses the curator project's
+  own `defaultModelSelection` (what the Settings button remembers), then the usual
+  order.
+- **Prompt.** Always the current `CURATOR_TIDY_PROMPT`, behind the usual preamble:
+  apply clearly safe fixes without waiting for approval, list judgment calls, report
+  ok (done), attention (judgment calls left), or failed.
+- **Timeout.** Three hours instead of one.
+- **Notifications.** Notify policy `always`; failed is high priority (4), ok and
+  attention are low (2) (`resultPriority`).
+- **Visibility.** `list()` without a project filter leaves it out, so Home, Needs
+  you, and project pages never show it. `update` and `remove` refuse it (400);
+  `getCuratorTidy` and `setCuratorTidy` are its only editors. Switching it off keeps
+  the row and history; the first switch-on creates the row.
+
+## Project surveys
+
+`HomelabOnboarding.startSurvey(projectId, { description? })` stores a given
+description (blank deletes it), else reads the stored one, then dispatches
+`thread.create` ("Survey: <project>", shared project runtime) and a
+`thread.turn.start` with `buildProjectSurveyPrompt` (`onboarding/surveyPrompt.ts`),
+on `turnDefaults`' model and runtime mode. The prompt asks for a read-only survey
+from inside the runtime, asking the user instead of guessing, recording with
+`homelab_memory_add`, `homelab_entity_record`, and `homelab_entity_verify`, and a
+closing summary. It refuses the hidden namespaces and unknown projects.
+Descriptions live in `project_descriptions` (migration 502); `start()` deletes a
+project's row on `project.deleted`.
+
+The web client calls it from the New project dialog (when "Have an agent survey it
+now" is checked) and from the project page's Onboarding card, then waits for the
+thread shell and opens it (`homelab/useStartProjectSurvey.ts`).
+
 ## Notifier
 
 `notify` never fails and never waits on delivery. It drops the notification when
@@ -165,21 +220,27 @@ server doesn't track which thread a client has open.
 ## HTTP
 
 Human sessions only: runtime tokens get 403 on every route, so an agent can't
-schedule work for itself or redirect notifications.
+schedule or start work for itself or redirect notifications. A curator runtime holds
+`homelab:curate` but is still refused the tidy routes for that reason.
 
-| Route                                           | Scope                   |
-| ----------------------------------------------- | ----------------------- |
-| `GET /api/homelab/checks[?projectId=]`          | orchestration read      |
-| `GET /api/homelab/projects/:projectId/checks`   | orchestration read      |
-| `POST /api/homelab/projects/:projectId/checks`  | orchestration operate   |
-| `POST /api/homelab/checks/:checkId` (update)    | orchestration operate   |
-| `POST /api/homelab/checks/:checkId/delete`      | orchestration operate   |
-| `POST /api/homelab/checks/:checkId/run`         | orchestration operate   |
-| `POST /api/homelab/checks/:checkId/acknowledge` | orchestration operate   |
-| `GET /api/homelab/checks/:checkId/runs?limit=`  | orchestration read      |
-| `GET /api/homelab/notifications/settings`       | orchestration read      |
-| `POST /api/homelab/notifications/settings`      | `homelab:secrets-admin` |
-| `POST /api/homelab/notifications/test`          | `homelab:secrets-admin` |
+| Route                                               | Scope                   |
+| --------------------------------------------------- | ----------------------- |
+| `GET /api/homelab/checks[?projectId=]`              | orchestration read      |
+| `GET /api/homelab/projects/:projectId/checks`       | orchestration read      |
+| `POST /api/homelab/projects/:projectId/checks`      | orchestration operate   |
+| `POST /api/homelab/checks/:checkId` (update)        | orchestration operate   |
+| `POST /api/homelab/checks/:checkId/delete`          | orchestration operate   |
+| `POST /api/homelab/checks/:checkId/run`             | orchestration operate   |
+| `POST /api/homelab/checks/:checkId/acknowledge`     | orchestration operate   |
+| `GET /api/homelab/checks/:checkId/runs?limit=`      | orchestration read      |
+| `GET /api/homelab/curator/tidy`                     | `homelab:curate`        |
+| `POST /api/homelab/curator/tidy`                    | `homelab:curate`        |
+| `GET /api/homelab/projects/:projectId/description`  | orchestration read      |
+| `POST /api/homelab/projects/:projectId/description` | orchestration operate   |
+| `POST /api/homelab/projects/:projectId/survey`      | orchestration operate   |
+| `GET /api/homelab/notifications/settings`           | orchestration read      |
+| `POST /api/homelab/notifications/settings`          | `homelab:secrets-admin` |
+| `POST /api/homelab/notifications/test`              | `homelab:secrets-admin` |
 
 Creating a check in `system:standalone` or `system:curator` is a 400. The web client
 reads the every-project list once (`homelabChecksQueryOptions`), shared by Home, the

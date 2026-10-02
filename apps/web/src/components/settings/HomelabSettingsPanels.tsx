@@ -59,6 +59,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { ScopeRequiredNotice } from "../homelab/ScopeRequiredNotice";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { CuratorTidyRow } from "./CuratorTidyRow";
 import { HomelabSecretsSection } from "./HomelabSecretsSection";
 import { KnowledgeEstateBrowser } from "./KnowledgeEstateBrowser";
 import { RuntimeCliUpdatesSection } from "./RuntimeCliUpdatesSection";
@@ -434,6 +435,9 @@ export function MemoryKnowledgeSettingsPanel() {
             />
           ) : null}
         </SettingsRow>
+        {canCurate && primaryEnvironmentId !== null ? (
+          <CuratorTidyRow environmentId={primaryEnvironmentId} />
+        ) : null}
         <SettingsRow
           title="Knowledge estate"
           description="Everything the homelab durably knows: graph entities, relations, observations, every project's memory, and all skills. Search, filter, and expand any record."

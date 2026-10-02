@@ -25,14 +25,15 @@ Changing notification settings needs the same permission as changing secrets.
 
 Each can be turned off on its own:
 
-| Event             | When                                                                                  | Priority               |
-| ----------------- | ------------------------------------------------------------------------------------- | ---------------------- |
-| Approval requests | An agent asks to run a command or change a file.                                      | High                   |
-| Questions         | An agent asks you something and waits for the answer.                                 | High                   |
-| Write approvals   | A request using a brokered secret is held for you.                                    | Urgent                 |
-| Secret requests   | An agent asks for a secret that isn't set yet.                                        | High                   |
-| Failed turns      | A thread's turn ends with an error.                                                   | Default                |
-| Scheduled checks  | A [check](./checks.md) needs attention or fails (or every run, if the check says so). | High (OK results: low) |
+| Event             | When                                                                                                                                               | Priority               |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| Approval requests | An agent asks to run a command or change a file.                                                                                                   | High                   |
+| Questions         | An agent asks you something and waits for the answer.                                                                                              | High                   |
+| Write approvals   | A request using a brokered secret is held for you.                                                                                                 | Urgent                 |
+| Secret requests   | An agent asks for a secret that isn't set yet.                                                                                                     | High                   |
+| Failed turns      | A thread's turn ends with an error.                                                                                                                | Default                |
+| Scheduled checks  | A [check](./checks.md) needs attention or fails (or every run, if the check says so).                                                              | High (OK results: low) |
+| Knowledge tidy    | A [scheduled knowledge tidy](./memory-and-knowledge.md#tidy-knowledge-automatically) finishes, with its summary. Uses the Scheduled checks switch. | Low (failed: high)     |
 
 **Push notifications** at the top turns them all off without losing your settings.
 

@@ -5,15 +5,15 @@ Fork-owned durable state lives in its own SQLite database,
 next to upstream's `state.sqlite`. The fork is moving its JSON stores and its
 fork tables in `state.sqlite` here, one owner at a time:
 
-| Phase | Owner      | Id range | Moves                                                                 |
-| ----- | ---------- | -------- | --------------------------------------------------------------------- |
-| P3    | foundation | 1–99     | nothing; adds `homelab_migrations`, `homelab_imports`, `homelab_meta` |
-| P4    | runtime    | 100–199  | `thread-runtimes.json`, `project-runtime-lifecycle.json`              |
-| P4b   | runtime    | 101      | nothing; adds `runtime_tools` and the recreate columns on `runtimes`  |
-| P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)          |
-| P6    | secrets    | 300–399  | `homelab-secrets.json` metadata; 301 adds the egress broker           |
-| auth  | auth       | 400–499  | nothing; adds `auth_passkeys` (migration 400)                         |
-| auto  | automation | 500–599  | nothing; adds notification settings (500) and scheduled checks (501)  |
+| Phase | Owner      | Id range | Moves                                                                                             |
+| ----- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
+| P3    | foundation | 1–99     | nothing; adds `homelab_migrations`, `homelab_imports`, `homelab_meta`                             |
+| P4    | runtime    | 100–199  | `thread-runtimes.json`, `project-runtime-lifecycle.json`                                          |
+| P4b   | runtime    | 101      | nothing; adds `runtime_tools` and the recreate columns on `runtimes`                              |
+| P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)                                      |
+| P6    | secrets    | 300–399  | `homelab-secrets.json` metadata; 301 adds the egress broker                                       |
+| auth  | auth       | 400–499  | nothing; adds `auth_passkeys` (migration 400)                                                     |
+| auto  | automation | 500–599  | nothing; adds notification settings (500), scheduled checks (501), and project descriptions (502) |
 
 A separate file keeps the two migration histories apart. Upstream's Effect
 migrator skips every id at or below the latest applied one, and upstream syncs
@@ -292,7 +292,13 @@ Migration 501 adds two tables:
 
 No foreign key ties a check to upstream's projects or threads; the scheduler deletes
 a project's checks on `project.deleted` and forgets a deleted thread on
-`thread.deleted`.
+`thread.deleted`. The knowledge tidy is the one row whose `project_id` is
+`system:curator` (id `curator-tidy`).
+
+Migration 502 adds `project_descriptions`: `project_id` (primary key),
+`description` (what the user said the project covers; never blank, a blank one
+deletes the row), `updated_at`. `HomelabOnboarding` deletes the row on
+`project.deleted`.
 
 ## Backups and smoke
 

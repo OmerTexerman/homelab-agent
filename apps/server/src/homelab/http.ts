@@ -185,7 +185,7 @@ const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
 export const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
 export const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
 // Curator surface: only human UI clients and curator RUNTIME tokens hold this scope.
-const authenticateHomelabCurate = authenticateHomelabScope(AuthHomelabCurateScope);
+export const authenticateHomelabCurate = authenticateHomelabScope(AuthHomelabCurateScope);
 // Setting/deleting secret values: human UI clients only; no runtime token holds this.
 export const authenticateHomelabSecretsAdmin = authenticateHomelabScope(
   AuthHomelabSecretsAdminScope,

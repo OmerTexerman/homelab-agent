@@ -35,6 +35,8 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Check           | A project's scheduled agent investigation. Each run is a turn in the check's own thread. See `scheduled-checks.md`.                   |
 | Check run       | One run of a check: a turn that ends with `homelab_check_report` (ok, attention, or failed), or fails without one.                    |
 | Notifier        | `HomelabNotifier`: the queue that pushes events needing a human (approvals, questions, check results) to ntfy without blocking.       |
+| Knowledge tidy  | The curator namespace's one scheduled check: each run is a new unattended curator session. See `scheduled-checks.md`.                 |
+| Survey          | A project's "Survey: <project>" thread, started by `HomelabOnboarding` from the stored project description.                           |
 
 ## Homelab sign-in
 

@@ -202,6 +202,7 @@ describe("HomelabSql", () => {
       assert.deepEqual(yield* runHomelabMigrations(sql), [
         [500, "AutomationSettings"],
         [501, "ProjectChecks"],
+        [502, "ProjectDescriptions"],
       ]);
       assert.includeMembers(yield* tableNames(sql), [
         "automation_settings",

@@ -1,4 +1,6 @@
 import type {
+  CuratorTidyResult,
+  CuratorTidyUpdateInput,
   ProjectCheck,
   ProjectCheckCreateInput,
   ProjectCheckListResult,
@@ -25,7 +27,7 @@ export class HomelabChecksError extends Schema.TaggedError<HomelabChecksError>()
 ) {}
 
 export interface HomelabChecksShape {
-  /** Every check, or one project's. */
+  /** Every project check (never the knowledge tidy), or one project's. */
   readonly list: (filter?: {
     readonly projectId?: ProjectId;
   }) => Effect.Effect<ProjectCheckListResult, HomelabChecksError>;
@@ -34,11 +36,12 @@ export interface HomelabChecksShape {
     projectId: ProjectId,
     input: ProjectCheckCreateInput,
   ) => Effect.Effect<ProjectCheck, HomelabChecksError>;
+  /** Fails with `invalid-input` for the knowledge tidy, which `setCuratorTidy` edits. */
   readonly update: (
     checkId: string,
     input: ProjectCheckUpdateInput,
   ) => Effect.Effect<ProjectCheck, HomelabChecksError>;
-  /** Deletes the check and its history. Its thread stays. */
+  /** Deletes the check and its history. Its thread stays. Not for the knowledge tidy. */
   readonly remove: (checkId: string) => Effect.Effect<void, HomelabChecksError>;
   /** Starts a run now. Fails with `conflict` while one is in flight. */
   readonly runNow: (checkId: string) => Effect.Effect<ProjectCheckRunNowResult, HomelabChecksError>;
@@ -57,6 +60,12 @@ export interface HomelabChecksShape {
     threadId: ThreadId,
     input: ProjectCheckReportInput,
   ) => Effect.Effect<ProjectCheckReportResult, HomelabChecksError>;
+  /** The scheduled knowledge tidy (the curator namespace's one check). */
+  readonly getCuratorTidy: () => Effect.Effect<CuratorTidyResult, HomelabChecksError>;
+  /** Switches the tidy on or off and sets its weekly schedule; created on first switch-on. */
+  readonly setCuratorTidy: (
+    input: CuratorTidyUpdateInput,
+  ) => Effect.Effect<CuratorTidyResult, HomelabChecksError>;
   /** True when `threadId` is some check's own thread. */
   readonly isCheckThread: (threadId: ThreadId) => Effect.Effect<boolean>;
   /** Starts the scheduler and the turn watcher in the given scope. */

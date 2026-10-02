@@ -46,6 +46,7 @@ import { HomelabChecksLive } from "./Layers/HomelabChecks.ts";
 import { HomelabEgressGatewayLive } from "./Layers/HomelabEgressGateway.ts";
 import { HomelabNotificationReactorLive } from "./Layers/HomelabNotificationReactor.ts";
 import { HomelabNotifierLive } from "./Layers/HomelabNotifier.ts";
+import { HomelabOnboardingLive } from "./Layers/HomelabOnboarding.ts";
 import { HomelabSecretRegistryLive } from "./Layers/HomelabSecretRegistry.ts";
 import { HomelabSecretRuntimeReactorLive } from "./Layers/HomelabSecretRuntimeReactor.ts";
 import { HomelabSkillsLive } from "./Layers/HomelabSkills.ts";
@@ -109,8 +110,11 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
     Layer.mergeAll(
       // Egress proxy policy: caller resolution, substitution, approvals, audit.
       HomelabEgressBrokerLive,
-      // Scheduled checks: CRUD, the scheduler, and the report tool's backend.
+      // Scheduled checks (and the knowledge tidy): CRUD, the scheduler, and the
+      // report tool's backend.
       HomelabChecksLive,
+      // Project descriptions and survey threads.
+      HomelabOnboardingLive,
     ),
   ),
 );

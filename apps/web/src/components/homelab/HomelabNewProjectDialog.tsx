@@ -1,7 +1,9 @@
 /**
  * Homelab "New project": a logical project named by the user, rooted at
  * `homelab://project/<id>` (its Project Runtime is created on demand), then a
- * first thread in it. Upstream's add-project flow browses host folders or
+ * first thread in it. With a description and "Have an agent survey it now",
+ * that first thread is the project's survey ("Survey: <project>"), started on
+ * the server. Upstream's add-project flow browses host folders or
  * clones repositories; while both are hidden, the command palette hands the
  * request here instead (`requestHomelabNewProject`).
  */
@@ -17,8 +19,15 @@ import { createLogicalProjectWorkspaceRoot } from "@t3tools/shared/workspace";
 import { useState } from "react";
 import { create } from "zustand";
 
+import { describeHomelabError } from "../../homelab/homelabFetch";
+import {
+  normalizeProjectDescriptionInput,
+  resolveSurveyChoice,
+} from "../../homelab/projectOnboarding";
+import { useStartProjectSurvey } from "../../homelab/useStartProjectSurvey";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { resolveFallbackModelSelection } from "../../lib/defaultModelSelection";
+import { setHomelabProjectDescriptionRequest } from "../../lib/homelabOnboardingReactQuery";
 import { newProjectId } from "../../lib/utils";
 import {
   HOMELAB_PRODUCT_COPY,
@@ -29,6 +38,7 @@ import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -39,6 +49,8 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 const useHomelabNewProjectStore = create<{ environmentId: EnvironmentId | null }>(() => ({
@@ -66,7 +78,12 @@ export function requestHomelabNewProject(environmentId: EnvironmentId): boolean 
 export function HomelabNewProjectDialog() {
   const environmentId = useHomelabNewProjectStore((state) => state.environmentId);
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  // Null until the user touches the checkbox: then it follows the description.
+  const [pickedSurvey, setPickedSurvey] = useState<boolean | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const startSurvey = useStartProjectSurvey();
+  const survey = resolveSurveyChoice(description, pickedSurvey);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const { handleNewThread } = useHandleNewThread();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
@@ -75,6 +92,8 @@ export function HomelabNewProjectDialog() {
   const close = () => {
     useHomelabNewProjectStore.setState({ environmentId: null });
     setTitle("");
+    setDescription("");
+    setPickedSurvey(null);
   };
 
   const submit = async () => {
@@ -104,7 +123,31 @@ export function HomelabNewProjectDialog() {
         }
         return;
       }
+      const projectDescription = normalizeProjectDescriptionInput(description);
+      const surveyNow = survey;
       close();
+      if (surveyNow) {
+        // On failure the hook toasts; fall through to the usual first thread.
+        if (await startSurvey({ environmentId, projectId, description: projectDescription })) {
+          return;
+        }
+      } else if (projectDescription !== null) {
+        try {
+          await setHomelabProjectDescriptionRequest({
+            environmentId,
+            projectId,
+            description: projectDescription,
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Project created, but its description wasn't saved",
+              description: describeHomelabError(error),
+            }),
+          );
+        }
+      }
       const threadResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(environmentId, projectId)),
       );
@@ -138,20 +181,45 @@ export function HomelabNewProjectDialog() {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <Input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
-            aria-label={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
-            autoFocus
-            spellCheck={false}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-          />
+          <div className="flex flex-col gap-4">
+            <Input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
+              aria-label={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
+              autoFocus
+              spellCheck={false}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
+            />
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="homelab-new-project-description">
+                {HOMELAB_PRODUCT_COPY.project.descriptionLabel}
+              </Label>
+              <Textarea
+                id="homelab-new-project-description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder={HOMELAB_PRODUCT_COPY.project.descriptionPlaceholder}
+                spellCheck={false}
+                rows={3}
+              />
+              <span className="text-xs text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.project.descriptionHint}
+              </span>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+              <Checkbox
+                checked={survey}
+                onCheckedChange={(checked) => setPickedSurvey(checked === true)}
+              />
+              {HOMELAB_PRODUCT_COPY.project.surveyNowLabel}
+            </label>
+          </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={close}>
