@@ -32,6 +32,7 @@ import {
   verifyHomelabEntity,
 } from "../../../homelab/HomelabCallerOperations.ts";
 import { recordPromotedDiscoveries } from "../../../homelab/PromotedDiscoveries.ts";
+import { HomelabChecks } from "../../../homelab/Services/HomelabChecks.ts";
 import { HomelabSecretRegistry } from "../../../homelab/Services/HomelabSecretRegistry.ts";
 import { HomelabSkills } from "../../../homelab/Services/HomelabSkills.ts";
 import { KnowledgeGraph } from "../../../homelab/Services/KnowledgeGraph.ts";
@@ -76,6 +77,7 @@ const toToolError = (error: { readonly message: string }) =>
 const make = Effect.gen(function* () {
   // The MCP runner hands handlers only the invocation; the homelab services
   // come from the server layer this toolkit is registered in.
+  const checks = yield* HomelabChecks;
   const services = yield* Effect.context<
     | HomelabSecretRegistry
     | HomelabSkills
@@ -204,6 +206,12 @@ const make = Effect.gen(function* () {
     homelab_tools_remove: (input) =>
       asCaller((caller) =>
         removeRuntimeTool(caller, input).pipe(Effect.map((removed) => ({ removed }))),
+      ),
+    // Scoped by the check, not the project: only the check's own thread may report.
+    homelab_check_report: (input) =>
+      McpInvocationContext.McpInvocationContext.pipe(
+        Effect.flatMap((invocation) => checks.report(invocation.threadId, input)),
+        Effect.mapError(toToolError),
       ),
   });
 });

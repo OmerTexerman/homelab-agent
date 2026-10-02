@@ -38,10 +38,14 @@ import { ThreadWorkspaceLive } from "../runtime/Layers/ThreadWorkspace.ts";
 import { ProjectRuntimeQueueLive } from "../runtime/ProjectRuntimeQueue.ts";
 import { ProviderCliStoreLive, ProviderCliStoreSyncLive } from "../runtime/ProviderCliStore.ts";
 import * as HomelabStartup from "./HomelabStartup.ts";
+import { homelabAutomationRoutesLayer } from "./automationHttp.ts";
 import { homelabRoutesLayer } from "./http.ts";
 import { CuratorSessionReaperLive } from "./Layers/CuratorSessionReaper.ts";
 import { HomelabEgressBrokerLive } from "./Layers/HomelabEgressBroker.ts";
+import { HomelabChecksLive } from "./Layers/HomelabChecks.ts";
 import { HomelabEgressGatewayLive } from "./Layers/HomelabEgressGateway.ts";
+import { HomelabNotificationReactorLive } from "./Layers/HomelabNotificationReactor.ts";
+import { HomelabNotifierLive } from "./Layers/HomelabNotifier.ts";
 import { HomelabSecretRegistryLive } from "./Layers/HomelabSecretRegistry.ts";
 import { HomelabSecretRuntimeReactorLive } from "./Layers/HomelabSecretRuntimeReactor.ts";
 import { HomelabSkillsLive } from "./Layers/HomelabSkills.ts";
@@ -64,6 +68,8 @@ export const HomelabRuntimeServicesLive = Layer.mergeAll(
   ProjectMemoryLive,
   HomelabSkillsLive,
   RuntimeProviderVersionManifestLive,
+  // ntfy delivery; settings in homelab.sqlite, token in ServerSecretStore.
+  HomelabNotifierLive,
 ).pipe(
   // Egress proxy socket, surrogate key, and install CA; ThreadRuntime delivers
   // surrogates and proxy env with it.
@@ -87,8 +93,6 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
   RuntimeProviderVersionReconcilerLive,
   // Keeps a runtime from idling out while a provider turn is in flight.
   RuntimeTurnKeepaliveLive,
-  // Egress proxy policy: caller resolution, substitution, approvals, audit.
-  HomelabEgressBrokerLive,
   // Started by serverRuntimeStartup in its reactor scope.
   HomelabStartup.layer.pipe(
     Layer.provide(
@@ -96,7 +100,17 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
         CuratorSessionReaperLive,
         HomelabSecretRuntimeReactorLive,
         HomelabViewRuntimeReactorLive,
+        HomelabNotificationReactorLive,
       ),
+    ),
+  ),
+).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      // Egress proxy policy: caller resolution, substitution, approvals, audit.
+      HomelabEgressBrokerLive,
+      // Scheduled checks: CRUD, the scheduler, and the report tool's backend.
+      HomelabChecksLive,
     ),
   ),
 );
@@ -108,6 +122,7 @@ export const HomelabRuntimeConsumersLive = Layer.mergeAll(
  */
 export const HomelabRoutesLive = Layer.mergeAll(
   homelabRoutesLayer,
+  homelabAutomationRoutesLayer,
   HomelabToolkitRegistrationLive,
   threadWorkspaceFileRouteLayer,
   homelabPasskeyRoutesLayer,

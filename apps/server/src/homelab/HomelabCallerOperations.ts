@@ -56,6 +56,7 @@ import {
   runtimeToolKindOf,
 } from "../runtime/RuntimeTools.ts";
 import { promoteDiscoveries } from "./PromotedDiscoveries.ts";
+import { HomelabNotifier } from "./Services/HomelabNotifier.ts";
 import { HomelabSecretRegistry } from "./Services/HomelabSecretRegistry.ts";
 import { HomelabSkills } from "./Services/HomelabSkills.ts";
 import { KnowledgeGraph } from "./Services/KnowledgeGraph.ts";
@@ -385,11 +386,48 @@ export const requestCallerSecret = (caller: HomelabCallerScope, input: HomelabSe
     const registry = yield* HomelabSecretRegistry;
     // A runtime can only ask on behalf of its own thread.
     const threadId = caller.kind === "runtime" ? caller.threadId : input.threadId;
-    return yield* registry.requestSecret({
+    const secret = yield* registry.requestSecret({
       key: input.key,
       ...(input.label !== undefined ? { label: input.label } : {}),
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       ...(threadId !== undefined ? { threadId } : {}),
+    });
+    if (secret.pending) yield* notifySecretRequested(secret.key, input, threadId);
+    return secret;
+  });
+
+/** Tells the user a secret is waiting for a value. Never fails the request. */
+const notifySecretRequested = (
+  key: string,
+  input: HomelabSecretRequestInput,
+  threadId: ThreadId | undefined,
+) =>
+  Effect.gen(function* () {
+    const notifier = yield* Effect.serviceOption(HomelabNotifier);
+    if (Option.isNone(notifier)) return;
+    const snapshots = yield* Effect.serviceOption(ProjectionSnapshotQuery);
+    const thread =
+      threadId === undefined || Option.isNone(snapshots)
+        ? undefined
+        : yield* snapshots.value.getThreadShellById(threadId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+          );
+    const about = input.label ?? input.summary;
+    yield* notifier.value.notify({
+      kind: "secret-request",
+      title: `Secret requested: ${key}`,
+      body: [
+        about,
+        thread ? `Requested by ${thread.title}.` : undefined,
+        "Add it in Settings → Secrets.",
+      ]
+        .filter((part) => part !== undefined)
+        .join(" "),
+      priority: 4,
+      tags: ["key"],
+      dedupKey: `${threadId ?? "-"}:${key}`,
+      path: "/settings/secrets",
     });
   });
 

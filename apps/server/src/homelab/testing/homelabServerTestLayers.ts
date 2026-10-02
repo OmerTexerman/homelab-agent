@@ -48,6 +48,8 @@ import {
   HomelabEgressBroker,
   type HomelabEgressBrokerShape,
 } from "../Services/HomelabEgressBroker.ts";
+import { HomelabChecks, type HomelabChecksShape } from "../Services/HomelabChecks.ts";
+import { HomelabNotifier, type HomelabNotifierShape } from "../Services/HomelabNotifier.ts";
 import { HomelabSkills, type HomelabSkillsShape } from "../Services/HomelabSkills.ts";
 import { KnowledgeGraph, type KnowledgeGraphShape } from "../Services/KnowledgeGraph.ts";
 import { ProjectMemory, type ProjectMemoryShape } from "../Services/ProjectMemory.ts";
@@ -64,6 +66,8 @@ export interface HomelabServerTestLayerOverrides {
   readonly knowledgeGraph?: Partial<KnowledgeGraphShape>;
   readonly projectMemory?: Partial<ProjectMemoryShape>;
   readonly homelabSkills?: Partial<HomelabSkillsShape>;
+  readonly homelabChecks?: Partial<HomelabChecksShape>;
+  readonly homelabNotifier?: Partial<HomelabNotifierShape>;
 }
 
 const decodeHomelabSnapshot = Schema.decodeUnknownSync(HomelabSnapshot);
@@ -222,4 +226,15 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
     }),
     Layer.mock(ProjectMemory)({ changes: Stream.empty, ...overrides.projectMemory }),
     Layer.mock(HomelabSkills)({ changes: Stream.empty, ...overrides.homelabSkills }),
+    Layer.mock(HomelabChecks)({
+      list: () => Effect.succeed({ checks: [], timeZone: "UTC" }),
+      isCheckThread: () => Effect.succeed(false),
+      ...overrides.homelabChecks,
+    }),
+    Layer.mock(HomelabNotifier)({
+      notify: () => Effect.void,
+      drain: () => Effect.void,
+      checkTimeZone: () => Effect.succeed("UTC"),
+      ...overrides.homelabNotifier,
+    }),
   );

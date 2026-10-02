@@ -31,6 +31,8 @@ import {
   HomelabSkillPromoteInput,
   HomelabSnapshot,
   IsoDateTime,
+  ProjectCheckReportInput,
+  ProjectCheckReportResult,
   ProjectMemoryCreateInput,
   ProjectMemoryEntry,
   ProjectMemoryId,
@@ -320,6 +322,17 @@ const ToolsRemoveTool = Tool.make("homelab_tools_remove", {
   dependencies,
 }).annotateMerge(writeHints("Remove runtime tool", { destructive: true, idempotent: true }));
 
+const CheckReportTool = Tool.make("homelab_check_report", {
+  description:
+    "Only in a scheduled check's own thread: record this run's result. Call it exactly once per run, after investigating, with status ok (nothing needs a human), attention (a human should look), or failed (the check couldn't be completed), and a one-paragraph summary of what you checked and found. Fails in any other thread.",
+  parameters: ProjectCheckReportInput,
+  success: ProjectCheckReportResult,
+  failure: HomelabToolError,
+  dependencies,
+}).annotateMerge(
+  writeHints("Report scheduled check result", { destructive: false, idempotent: false }),
+);
+
 export const HomelabToolkit = Toolkit.make(
   SnapshotTool,
   KnowledgeSearchTool,
@@ -339,4 +352,5 @@ export const HomelabToolkit = Toolkit.make(
   ToolsListTool,
   ToolsAddTool,
   ToolsRemoveTool,
+  CheckReportTool,
 );

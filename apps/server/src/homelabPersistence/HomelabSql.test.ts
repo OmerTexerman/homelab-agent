@@ -12,6 +12,10 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config.ts";
+import {
+  DEFAULT_AUTOMATION_SETTINGS,
+  readAutomationSettings,
+} from "../homelab/notifications/automationSettings.ts";
 import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
 import * as HomelabMetaRepository from "./HomelabMetaRepository.ts";
 import {
@@ -180,6 +184,43 @@ describe("HomelabSql", () => {
         UPDATE homelab_secrets SET delivery = 'smuggled' WHERE key = 'OLD_TOKEN'
       `.pipe(Effect.flip);
       assert.isDefined(badDelivery);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("adds automation settings and checks to an existing database", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runHomelabMigrations(
+        sql,
+        homelabMigrationEntries.filter(([id]) => id < 500),
+      );
+      yield* sql`
+        INSERT INTO homelab_meta (key, value, updated_at)
+        VALUES ('kept', 'yes', '2026-01-01T00:00:00.000Z')
+      `;
+
+      assert.deepEqual(yield* runHomelabMigrations(sql), [
+        [500, "AutomationSettings"],
+        [501, "ProjectChecks"],
+      ]);
+      assert.includeMembers(yield* tableNames(sql), [
+        "automation_settings",
+        "project_check_runs",
+        "project_checks",
+      ]);
+      // Existing rows survive, and the settings read as defaults until saved.
+      const kept = yield* sql<{ readonly value: string }>`
+        SELECT value FROM homelab_meta WHERE key = 'kept'
+      `;
+      assert.equal(kept[0]?.value, "yes");
+      assert.deepEqual(
+        yield* readAutomationSettings.pipe(Effect.provideService(HomelabSql, sql)),
+        DEFAULT_AUTOMATION_SETTINGS,
+      );
+      const second = yield* sql`
+        INSERT INTO automation_settings (id, updated_at) VALUES (2, 'x')
+      `.pipe(Effect.flip);
+      assert.isDefined(second);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 

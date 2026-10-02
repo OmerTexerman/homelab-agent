@@ -25,6 +25,8 @@ import Migration0200 from "./Migrations/200_KnowledgeStore.ts";
 import Migration0300 from "./Migrations/300_HomelabSecrets.ts";
 import Migration0301 from "./Migrations/301_EgressBroker.ts";
 import Migration0400 from "./Migrations/400_AuthPasskeys.ts";
+import Migration0500 from "./Migrations/500_AutomationSettings.ts";
+import Migration0501 from "./Migrations/501_ProjectChecks.ts";
 
 /**
  * Id range each owner adds migrations in. Ranges never overlap or move.
@@ -36,6 +38,7 @@ import Migration0400 from "./Migrations/400_AuthPasskeys.ts";
  *   the egress broker audit log.
  * - auth (400-499): fork sign-in state such as passkeys. Sessions themselves
  *   stay in upstream's `auth_sessions` in state.sqlite.
+ * - automation (500-599): notification settings and scheduled checks.
  */
 export const HOMELAB_MIGRATION_RANGES = {
   foundation: { min: 1, max: 99 },
@@ -43,6 +46,7 @@ export const HOMELAB_MIGRATION_RANGES = {
   knowledge: { min: 200, max: 299 },
   secrets: { min: 300, max: 399 },
   auth: { min: 400, max: 499 },
+  automation: { min: 500, max: 599 },
 } as const;
 
 export type HomelabMigrationOwner = keyof typeof HOMELAB_MIGRATION_RANGES;
@@ -64,6 +68,8 @@ export const homelabMigrationEntries: ReadonlyArray<
   [300, "HomelabSecrets", Migration0300],
   [301, "EgressBroker", Migration0301],
   [400, "AuthPasskeys", Migration0400],
+  [500, "AutomationSettings", Migration0500],
+  [501, "ProjectChecks", Migration0501],
 ];
 
 export const homelabMigrationManifest = homelabMigrationEntries.map(

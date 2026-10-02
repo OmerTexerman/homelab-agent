@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   ProjectId,
+  ProjectCheckId,
   ProjectMemoryId,
   ProviderInstanceId,
   ThreadId,
@@ -22,6 +23,7 @@ import { HomelabSqlMemory } from "../../../homelabPersistence/HomelabSql.ts";
 import { KnowledgeGraphLive } from "../../../homelab/Layers/KnowledgeGraph.ts";
 import { ProjectMemoryLive } from "../../../homelab/Layers/ProjectMemory.ts";
 import { HomelabSecretRegistry } from "../../../homelab/Services/HomelabSecretRegistry.ts";
+import { HomelabChecks, HomelabChecksError } from "../../../homelab/Services/HomelabChecks.ts";
 import { HomelabSkills } from "../../../homelab/Services/HomelabSkills.ts";
 import { ProjectMemory } from "../../../homelab/Services/ProjectMemory.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -89,6 +91,23 @@ const TestServices = Layer.mergeAll(
       }),
   }),
   Layer.mock(HomelabSkills)({}),
+  Layer.mock(HomelabChecks)({
+    // threadA is a check's own thread; every other thread is refused.
+    report: (threadId, input) =>
+      threadId === threadA
+        ? Effect.succeed({
+            checkId: ProjectCheckId.make("check-a"),
+            checkName: "Disk & backups",
+            status: input.status,
+            runId: "run-a",
+          })
+        : Effect.fail(
+            new HomelabChecksError({
+              message: "homelab_check_report only works in a scheduled check's own thread.",
+              reason: "invalid-input",
+            }),
+          ),
+  }),
   Layer.mock(RuntimeBootstrapRegistry)({}),
   Layer.effect(RuntimeRegistry, makeRuntimeRegistry),
   Layer.mergeAll(ProjectMemoryLive, KnowledgeGraphLive),
@@ -191,6 +210,7 @@ const HOMELAB_TOOL_NAMES = [
   "homelab_tools_list",
   "homelab_tools_add",
   "homelab_tools_remove",
+  "homelab_check_report",
 ];
 
 it.layer(TestLayer)("homelab MCP toolkit", (it) => {
@@ -218,6 +238,34 @@ it.layer(TestLayer)("homelab MCP toolkit", (it) => {
       );
       assert.notInclude(properties, "projectId");
       assert.notInclude(properties, "sourceThreadId");
+    }),
+  );
+
+  it.effect("reports a check result only from the check's own thread", () =>
+    Effect.gen(function* () {
+      const reported = yield* call(threadA, "homelab_check_report", {
+        status: "attention",
+        summary: "Backups are two days old.",
+      });
+      assert.isFalse(reported.isError);
+      assert.deepInclude(decodeJson(textOf(reported)) as object, {
+        checkId: "check-a",
+        status: "attention",
+      });
+
+      const refused = yield* call(threadB, "homelab_check_report", {
+        status: "ok",
+        summary: "All good.",
+      });
+      assert.isTrue(refused.isError);
+      assert.include(textOf(refused), "scheduled check's own thread");
+
+      // Anything but ok, attention, or failed is rejected before the handler runs.
+      const invalid = yield* call(threadA, "homelab_check_report", {
+        status: "fine",
+        summary: "x",
+      }).pipe(Effect.flip);
+      assert.include(String(invalid), "Invalid parameters");
     }),
   );
 

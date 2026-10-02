@@ -219,6 +219,10 @@
       "types": "./src/curatorProject.ts",
       "import": "./src/curatorProject.ts"
     },
+    "./projectCheckSchedule": {
+      "types": "./src/projectCheckSchedule.ts",
+      "import": "./src/projectCheckSchedule.ts"
+    },
     "./standaloneProject": {
       "types": "./src/standaloneProject.ts",
       "import": "./src/standaloneProject.ts"
