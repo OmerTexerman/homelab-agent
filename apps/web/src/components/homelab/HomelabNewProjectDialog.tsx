@@ -180,44 +180,46 @@ export function HomelabNewProjectDialog() {
             {HOMELAB_PRODUCT_COPY.project.emptySidebarDescription}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-4">
-          <Input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
-            aria-label={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
-            autoFocus
-            spellCheck={false}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-          />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="homelab-new-project-description">
-              {HOMELAB_PRODUCT_COPY.project.descriptionLabel}
-            </Label>
-            <Textarea
-              id="homelab-new-project-description"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder={HOMELAB_PRODUCT_COPY.project.descriptionPlaceholder}
+        <DialogPanel>
+          <div className="flex flex-col gap-4">
+            <Input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
+              aria-label={HOMELAB_PRODUCT_COPY.project.createPlaceholder}
+              autoFocus
               spellCheck={false}
-              rows={3}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
             />
-            <span className="text-xs text-muted-foreground">
-              {HOMELAB_PRODUCT_COPY.project.descriptionHint}
-            </span>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="homelab-new-project-description">
+                {HOMELAB_PRODUCT_COPY.project.descriptionLabel}
+              </Label>
+              <Textarea
+                id="homelab-new-project-description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder={HOMELAB_PRODUCT_COPY.project.descriptionPlaceholder}
+                spellCheck={false}
+                rows={3}
+              />
+              <span className="text-xs text-muted-foreground">
+                {HOMELAB_PRODUCT_COPY.project.descriptionHint}
+              </span>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+              <Checkbox
+                checked={survey}
+                onCheckedChange={(checked) => setPickedSurvey(checked === true)}
+              />
+              {HOMELAB_PRODUCT_COPY.project.surveyNowLabel}
+            </label>
           </div>
-          <Label className="flex items-center gap-2 font-normal">
-            <Checkbox
-              checked={survey}
-              onCheckedChange={(checked) => setPickedSurvey(checked === true)}
-            />
-            {HOMELAB_PRODUCT_COPY.project.surveyNowLabel}
-          </Label>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={close}>
