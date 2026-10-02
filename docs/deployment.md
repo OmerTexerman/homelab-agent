@@ -74,7 +74,8 @@ Before putting a persistent instance behind a reverse proxy:
 
 ## Host Auto-Deploy From Main
 
-The production instance (Proxmox LXC) deploys the CI-gated `prod` branch using
+The production instance (Proxmox LXC) deploys the `prod` branch, which only
+advances to `main` commits that passed both `CI` and `Runtime smoke`, using
 separate release directories, a real-data smoke, drain, health check, and
 rollback. See [deploy/proxmox/README.md](../deploy/proxmox/README.md). Prefer
 that flow for any long-lived host; the simpler `deploy-main.sh` path below

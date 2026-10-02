@@ -90,10 +90,15 @@ Candidate slices:
 ## Full Server And Web Runtime Smoke
 
 `scripts/runtime-smoke.ts` (`pnpm run smoke:runtime`) is the only automated
-check that runs real Docker runtime containers. CI does not run it.
+check that runs real Docker runtime containers. The `Runtime smoke` workflow
+(`.github/workflows/runtime-smoke.yml`) runs it with `--with-runtime
+--ui-checks` on every pull request and `main` push, and `prod` only advances
+to commits where it passed. On failure the run uploads the screenshots
+(including `failure.png` of the page when a UI check failed) and the full smoke
+log, server output included.
 
 ```bash
-pnpm run smoke:runtime -- --with-runtime   # full run, about 30 seconds
+pnpm run smoke:runtime -- --with-runtime   # full run, about a minute
 pnpm run smoke:runtime -- --no-browser     # server only, no Docker
 ```
 
@@ -115,8 +120,10 @@ How it runs:
   the newest build under `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
 - On exit, pass or fail (and on Ctrl-C), it stops the process groups it
   spawned, removes the containers labelled with its runtime ids, and deletes
-  the disposable home. It never touches other containers or images, and it
-  uses the existing runtime image.
+  the disposable home. It never touches other containers or images. Locally
+  the server builds the runtime image as usual; the workflow builds it first
+  with a GitHub Actions layer cache, stamps the build-context fingerprint
+  label the server expects, and sets `HOMELAB_AGENT_RUNTIME_AUTO_BUILD=0`.
 
 What it verifies:
 

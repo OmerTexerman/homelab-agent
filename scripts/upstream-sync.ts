@@ -100,6 +100,7 @@ function lines(output: string): string[] {
 const FORK_ACTIVE_WORKFLOWS = new Set([
   ".github/workflows/ci.yml",
   ".github/workflows/promote-prod.yml",
+  ".github/workflows/runtime-smoke.yml",
   ".github/workflows/upstream-sync-report.yml",
 ]);
 
