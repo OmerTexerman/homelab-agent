@@ -43,6 +43,7 @@ would give them a separate, unserved `McpServer`.
 | `homelab_tools_list`       | `homelab tools list`               |
 | `homelab_tools_add`        | `homelab tools add --no-install`   |
 | `homelab_tools_remove`     | `homelab tools remove`             |
+| `homelab_check_report`     | none (scheduled checks only)       |
 
 Not exposed, on purpose:
 
@@ -73,6 +74,10 @@ call is scoped exactly like the CLI in that thread's runtime:
 - `homelab_knowledge_show` treats an out-of-scope memory note as not found.
 - The global graph (snapshot, search, promote, record, verify) is shared, like
   it is for runtime tokens.
+
+`homelab_check_report` is scoped by check instead: it records the result on the
+check whose own thread is the caller, and fails in every other thread. See
+[scheduled-checks.md](./scheduled-checks.md#homelab_check_report).
 
 Tool inputs never take a `projectId` or `threadId`. The scope always comes from
 the credential. Errors carry the message the HTTP route would return.

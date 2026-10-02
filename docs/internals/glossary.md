@@ -32,6 +32,9 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Surrogate       | The `hlsur_…` stand-in for one revision of a brokered secret in one runtime. Useless anywhere else.                                   |
 | Egress proxy    | The server's authenticated HTTP(S) forward proxy that substitutes surrogates, holds approved writes, and audits.                      |
 | Homelab tools   | The `homelab_*` MCP tools on `/mcp`: the agent-facing CLI, scoped like the thread's runtime token. See `homelab-mcp-tools.md`.        |
+| Check           | A project's scheduled agent investigation. Each run is a turn in the check's own thread. See `scheduled-checks.md`.                   |
+| Check run       | One run of a check: a turn that ends with `homelab_check_report` (ok, attention, or failed), or fails without one.                    |
+| Notifier        | `HomelabNotifier`: the queue that pushes events needing a human (approvals, questions, check results) to ntfy without blocking.       |
 
 ## Homelab sign-in
 

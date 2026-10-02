@@ -29,8 +29,11 @@ Everything waiting on you, most urgent first:
    can provide or decline it.
 5. Project Runtimes that failed.
 6. Threads whose last turn failed. Settle the thread to clear it from this list.
-7. Plans ready for your review.
-8. Project Runtimes with a rebuild waiting. These rebuild on their own the next time
+7. [Scheduled checks](./checks.md) whose last run needs attention or failed, with
+   the agent's summary. Selecting one opens the check's thread; **Acknowledge**
+   clears it until a later run needs attention again.
+8. Plans ready for your review.
+9. Project Runtimes with a rebuild waiting. These rebuild on their own the next time
    the runtime is idle; the entry is for your information.
 
 Selecting a thread entry opens that thread. Selecting a runtime entry opens the
