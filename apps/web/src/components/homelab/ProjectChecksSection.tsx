@@ -17,6 +17,7 @@ import {
   checkDraftFromTemplate,
   checkInputFromDraft,
   checkStatusBadge,
+  describeNextRun,
   EMPTY_CHECK_DRAFT,
   NOTIFY_POLICY_OPTIONS,
   type ScheduleKind,
@@ -191,7 +192,7 @@ function CheckRow(props: {
   const meta = [
     describeCheckSchedule(check.schedule),
     check.lastRunAt ? formatRelativeTimeLabel(check.lastRunAt) : copy.never,
-    check.nextRunAt ? `${copy.nextRun} ${formatRelativeTimeLabel(check.nextRunAt)}` : null,
+    check.nextRunAt ? `${copy.nextRun} ${describeNextRun(check.nextRunAt)}` : null,
   ]
     .filter((part) => part !== null)
     .join(" · ");

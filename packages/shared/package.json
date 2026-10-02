@@ -27,6 +27,10 @@
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"
     },
+    "./homelabModelFallback": {
+      "types": "./src/homelabModelFallback.ts",
+      "import": "./src/homelabModelFallback.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

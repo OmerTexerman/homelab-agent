@@ -209,3 +209,22 @@ export function checkStatusBadge(check: Pick<ProjectCheck, "running" | "lastStat
       return { label: check.enabled ? "Not run yet" : "Off", variant: "outline" };
   }
 }
+
+/**
+ * When a check runs next, in words: "today 09:00", "tomorrow 09:00",
+ * "Mon 09:00" within a week, else "Oct 12 09:00". `formatRelativeTimeLabel`
+ * only handles past times, so a future one would read "just now".
+ */
+export function describeNextRun(nextRunAt: string, now: Date = new Date()): string {
+  const next = new Date(nextRunAt);
+  if (Number.isNaN(next.getTime())) return "";
+  const time = next.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (next.getTime() <= now.getTime()) return "due now";
+  const startOfDay = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((startOfDay(next) - startOfDay(now)) / 86_400_000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days < 7) return `${next.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+  return `${next.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
+}

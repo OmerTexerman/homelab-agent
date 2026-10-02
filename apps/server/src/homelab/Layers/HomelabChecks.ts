@@ -35,6 +35,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { isCuratorProjectId } from "@t3tools/shared/curatorProject";
+import { resolveFallbackModelSelection } from "@t3tools/shared/homelabModelFallback";
 import { nextCheckRunAt, normalizeCheckSchedule } from "@t3tools/shared/projectCheckSchedule";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { isStandaloneProjectId } from "@t3tools/shared/standaloneProject";
@@ -51,6 +52,7 @@ import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { HomelabSql } from "../../homelabPersistence/HomelabSql.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   type CheckRecord,
@@ -184,6 +186,8 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
   const engine = yield* OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery;
   const serverSettings = yield* ServerSettingsService;
+  // Optional so the checks layer can run without providers (tests, tooling).
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry);
   const serverEnvironment = yield* Effect.serviceOption(ServerEnvironment);
   const runTimeoutMs = options?.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   const busyRetryMs = options?.busyRetryMs ?? DEFAULT_BUSY_RETRY_MS;
@@ -250,9 +254,10 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
 
   /**
    * Records a result on the check and notifies per its policy. With
-   * `attention`, a result notifies only when the check didn't already need
-   * attention, so a check that keeps failing notifies once until someone
-   * acknowledges it or a run reports ok.
+   * `attention`, a result notifies when the check didn't already need
+   * attention or its status changed (failed → attention is news), so a check
+   * that keeps failing the same way notifies once until someone acknowledges
+   * it or a run reports ok.
    */
   const applyResult = (check: CheckRecord, status: ProjectCheckStatus, summary: string) =>
     Effect.gen(function* () {
@@ -267,7 +272,9 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       yield* db(saveCheckRecord(updated));
       const shouldNotify =
         check.notifyPolicy === "always" ||
-        (check.notifyPolicy === "attention" && status !== "ok" && !needsAttention(check));
+        (check.notifyPolicy === "attention" &&
+          status !== "ok" &&
+          (!needsAttention(check) || check.lastStatus !== status));
       if (shouldNotify) {
         const path = yield* threadPath(check.threadId);
         yield* notifier.notify({
@@ -332,24 +339,26 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
     project: Parameters<typeof resolveProjectSettings>[2],
     threadModel: ModelSelection | null,
   ) =>
-    serverSettings.getSettings.pipe(
-      Effect.mapError(storage),
-      Effect.map((settings) => {
-        const resolved = resolveProjectSettings(
-          settings,
-          ProjectId.make(check.projectId),
-          project,
-        ).settings;
-        return {
-          modelSelection:
-            check.modelSelection ??
-            resolved.defaultModelSelection ??
-            settings.defaultModelSelection ??
-            threadModel,
-          runtimeMode: resolved.defaultRuntimeMode,
-        };
-      }),
-    );
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(storage));
+      const resolved = resolveProjectSettings(
+        settings,
+        ProjectId.make(check.projectId),
+        project,
+      ).settings;
+      const chosen =
+        check.modelSelection ??
+        resolved.defaultModelSelection ??
+        settings.defaultModelSelection ??
+        threadModel;
+      // Nothing picked one: use the best usable provider, as new threads do.
+      const modelSelection =
+        chosen ??
+        (Option.isSome(providerRegistry)
+          ? resolveFallbackModelSelection(yield* providerRegistry.value.getProviders)
+          : null);
+      return { modelSelection, runtimeMode: resolved.defaultRuntimeMode };
+    });
 
   type StartOutcome =
     | { readonly type: "started"; readonly run: RunRecord }

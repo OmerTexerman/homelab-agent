@@ -21,6 +21,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HomelabSql, HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { layerTest as ServerSettingsLayerTest } from "../../serverSettings.ts";
 import { HomelabChecks } from "../Services/HomelabChecks.ts";
 import { type HomelabNotification, HomelabNotifier } from "../Services/HomelabNotifier.ts";
@@ -101,6 +102,20 @@ const withChecks = <A, E>(
         sendTest: () => Effect.die("unused"),
         checkTimeZone: () => Effect.succeed("UTC"),
         drain: () => Effect.void,
+      }),
+      // Only Claude is usable here, so a check with no model anywhere falls back to it.
+      Layer.mock(ProviderRegistry)({
+        getProviders: Effect.succeed([
+          {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            driver: "claudeAgent",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            models: [{ slug: "claude-fable-5", isDefault: true }],
+          } as never,
+        ]),
       }),
       ServerSettingsLayerTest(),
     );
@@ -198,6 +213,21 @@ describe("HomelabChecks scheduler", () => {
         assert.isTrue(listed?.running);
         assert.equal(listed?.threadId, turn.threadId);
         assert.equal(listed?.lastRunAt, "2026-05-01T09:00:00.000Z");
+      }),
+    ),
+  );
+
+  it.effect("runs a check with no model anywhere on the best usable provider", () =>
+    withChecks((harness) =>
+      Effect.gen(function* () {
+        yield* createDaily("09:00", { modelSelection: null });
+        yield* startScheduler(harness);
+        yield* TestClock.adjust(Duration.hours(1));
+        const turn = yield* harness.nextTurnStart;
+        assert.deepEqual(turn.modelSelection, {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-fable-5",
+        });
       }),
     ),
   );
@@ -396,6 +426,28 @@ describe("HomelabChecks runs and reports", () => {
         // Acknowledge clears it until the next attention result.
         const acknowledged = yield* checks.acknowledge(check.id);
         assert.isFalse(acknowledged.needsAttention);
+      }),
+    ),
+  );
+
+  it.effect("notifies again when an unacknowledged failure turns into attention", () =>
+    withChecks((harness) =>
+      Effect.gen(function* () {
+        const checks = yield* HomelabChecks;
+        const check = yield* createDaily();
+        yield* startScheduler(harness);
+        yield* checks.runNow(check.id);
+        const first = yield* harness.nextTurnStart;
+        yield* harness.emitSession(first.threadId, "running");
+        yield* harness.emitSession(first.threadId, "ready");
+        yield* harness.nextTick;
+        assert.equal(harness.notifications.length, 1);
+
+        yield* checks.runNow(check.id);
+        const second = yield* harness.nextTurnStart;
+        yield* checks.report(second.threadId, { status: "attention", summary: "Disk at 91%." });
+        assert.equal(harness.notifications.length, 2);
+        assert.equal(harness.notifications[1]?.title, "Needs attention: Disk & backups");
       }),
     ),
   );

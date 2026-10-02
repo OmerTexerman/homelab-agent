@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  describeNextRun,
   CHECK_TEMPLATES,
   checkDraftFromTemplate,
   checkInputFromDraft,
@@ -75,5 +76,21 @@ describe("checkStatusBadge", () => {
     expect(checkStatusBadge({ running: false, lastStatus: null, enabled: false }).label).toBe(
       "Off",
     );
+  });
+});
+
+describe("describeNextRun", () => {
+  const now = new Date(2026, 9, 2, 14, 0);
+  const at = (day: number, hour: number) => new Date(2026, 9, day, hour, 0).toISOString();
+
+  it("never reads a future run as past", () => {
+    expect(describeNextRun(at(3, 9), now)).toMatch(/^tomorrow /);
+    expect(describeNextRun(at(2, 18), now)).toMatch(/^today /);
+    expect(describeNextRun(at(6, 9), now)).not.toMatch(/today|tomorrow|now/);
+    expect(describeNextRun(at(20, 9), now)).not.toMatch(/today|tomorrow|now/);
+  });
+
+  it("says a run in the past is due now", () => {
+    expect(describeNextRun(at(2, 9), now)).toBe("due now");
   });
 });
