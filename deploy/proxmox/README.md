@@ -74,6 +74,86 @@ block an automatic rollback (see `docs/internals/homelab-storage.md`). To
 restore either database, stop the service and copy its `*.backup.sqlite` from
 the backup over the live file, deleting the live `-wal` and `-shm` siblings.
 
+## Alerts, health checks, and restore drills
+
+Everything here runs on the Proxmox host, not in the app, so alerts still go
+out when the app or the whole LXC is down. Alerts go to an
+[ntfy](https://ntfy.sh) topic (ntfy.sh or self-hosted); subscribe to it in the
+ntfy phone app.
+
+- `homelab-agent-notify` sends one alert. With `--key`, an alert is a
+  condition: the same key is sent at most once every `NOTIFY_REPEAT_HOURS`
+  (default 12), again right away if its priority goes up or its `--id`
+  changes, and a "Resolved" message follows once the condition clears. State
+  lives in `/var/lib/homelab-agent/notify/`. It never fails its caller.
+- `homelab-agent-deploy-ai-agent.sh` alerts on:
+  - **high**: a commit that failed build/smoke 3 times (once per commit), a
+    failed pre-deploy backup (deploy skipped), a rollback after an unhealthy
+    restart
+  - **urgent**: unhealthy with no previous release, unhealthy with a
+    migration (no rollback), rollback also unhealthy
+  - **low**: each successful deploy (short sha + commit subject)
+
+  Runs that fail without one of these alerts (fetch errors, script errors) are
+  counted in `/var/lib/homelab-agent/deploy-failures`; the health check alerts
+  after 3 in a row. The pre-deploy backup now refuses to run when
+  `/mnt/pve/nas-backups` is not mounted, instead of filling the host disk.
+
+- `homelab-agent-health` (every 15 minutes) checks: the LXC is running; its
+  root disk (high at 85%, urgent at 95%); `t3code.service` is active, answers
+  `/api/auth/session`, and is not auto-restarting; the public URL answers from
+  the host; the NAS backup mount is present and writable and the newest backup
+  is under 8 days old; the certificate `ai.texerman.com:443` actually serves
+  has 14+ days left (read with `openssl s_client`, so a renewed cert the proxy
+  never reloaded still alerts); the autodeploy timer is active; and Docker
+  images plus build cache inside the LXC stay under 20 GB with fewer than 10
+  dangling images (low priority). Service checks are skipped while a deploy
+  holds the deploy lock. Thresholds are `HEALTH_*` lines in `notify.env`.
+- `homelab-agent-restore-drill` (monthly, or by hand) proves the newest backup
+  restores: it reads the whole tarball, checks free space in the LXC (refuses
+  when short), extracts the top-level `.t3/userdata` files into a scratch dir
+  under `/var/tmp` in the LXC, runs `PRAGMA integrity_check` on `state.sqlite`
+  and `homelab.sqlite` (read-only) and counts projects, threads, secrets, and
+  knowledge docs, then boots the current release against that copy with
+  `scripts/prod-smoke.ts --seed-from` (loopback port, Docker disabled). It
+  holds the deploy lock, deletes the scratch dir, and notifies the result.
+  Live state is never touched. `--no-boot` skips the boot; `--backup PATH`
+  drills a specific tarball.
+
+Install or update them on the Proxmox host, from a checkout of this repo:
+
+```bash
+install -m 0755 deploy/proxmox/homelab-agent-notify.sh /usr/local/sbin/homelab-agent-notify
+install -m 0755 deploy/proxmox/homelab-agent-health.sh /usr/local/sbin/homelab-agent-health
+install -m 0755 deploy/proxmox/homelab-agent-restore-drill.sh /usr/local/sbin/homelab-agent-restore-drill
+install -m 0755 deploy/proxmox/homelab-agent-deploy.sh /usr/local/sbin/homelab-agent-deploy-ai-agent.sh
+install -m 0644 deploy/proxmox/homelab-agent-health.{service,timer} /etc/systemd/system/
+install -m 0644 deploy/proxmox/homelab-agent-restore-drill.{service,timer} /etc/systemd/system/
+
+mkdir -p /etc/homelab-agent /var/lib/homelab-agent
+# Only the first time; then set NTFY_URL (and NTFY_TOKEN for a protected topic):
+[ -e /etc/homelab-agent/notify.env ] || install -m 0600 deploy/proxmox/notify.env.example /etc/homelab-agent/notify.env
+"${EDITOR:-nano}" /etc/homelab-agent/notify.env
+
+homelab-agent-notify --title "Homelab Agent test" "Alerts from $(hostname) work."
+systemctl daemon-reload
+systemctl enable --now homelab-agent-health.timer homelab-agent-restore-drill.timer
+systemctl start homelab-agent-health.service && journalctl -u homelab-agent-health.service -n 30
+homelab-agent-restore-drill        # first drill by hand; takes a few minutes
+```
+
+Without `/etc/homelab-agent/notify.env` (or with `NTFY_URL` empty) every
+script still runs and logs `alerts disabled` instead of sending.
+
+| Task                         | Command (on the Proxmox host)                                    |
+| ---------------------------- | ---------------------------------------------------------------- |
+| Health check now             | `systemctl start homelab-agent-health.service`                   |
+| Health log                   | `journalctl -u homelab-agent-health.service -n 100`              |
+| Restore drill now            | `homelab-agent-restore-drill` (`--no-boot` for the quick checks) |
+| See raised alerts            | `ls /var/lib/homelab-agent/notify/`                              |
+| Forget an alert (re-sends)   | `rm /var/lib/homelab-agent/notify/<key>.state`                   |
+| Clear the deploy fail streak | `rm /var/lib/homelab-agent/deploy-failures`                      |
+
 ## Installing or updating
 
 The files here are copies of what's installed; keep them in sync.
@@ -102,3 +182,5 @@ The files here are copies of what's installed; keep them in sync.
    install -m 0755 deploy/proxmox/homelab-agent-deploy.sh /usr/local/sbin/homelab-agent-deploy-ai-agent.sh
    rm /etc/homelab-agent/deploy.paused
    ```
+5. Install alerts, health checks, and the restore drill (see
+   [Alerts, health checks, and restore drills](#alerts-health-checks-and-restore-drills)).

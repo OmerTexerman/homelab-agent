@@ -67,7 +67,8 @@ Before putting a persistent instance behind a reverse proxy:
 - Create a new pairing link from Settings -> Devices & Sessions and verify a
   second browser can pair.
 - Add provider CLI auth on the host for the providers you intend to use.
-- Configure backups for the full `T3CODE_HOME`, not just SQLite.
+- Configure backups for the full `T3CODE_HOME`, not just SQLite, and test a
+  restore (the Proxmox flow ships `homelab-agent-restore-drill` for this).
 - Put the app behind HTTPS and a trusted network boundary before exposing it
   outside a private LAN or VPN.
 
@@ -78,6 +79,16 @@ separate release directories, a real-data smoke, drain, health check, and
 rollback. See [deploy/proxmox/README.md](../deploy/proxmox/README.md). Prefer
 that flow for any long-lived host; the simpler `deploy-main.sh` path below
 builds in place and has no rollback.
+
+That host also runs its own monitoring, independent of the app: deploy
+failures, rollbacks, and successful deploys, plus a 15-minute health check
+(LXC disk, service and HTTP health, public URL, served TLS certificate expiry,
+NAS backup mount and backup age, autodeploy timer, Docker storage) alert to an
+ntfy topic with per-condition dedup and "resolved" messages. A monthly restore
+drill extracts the newest backup into a scratch dir, integrity-checks both
+databases, and boots the current release against the copy with Docker
+disabled. Install steps and thresholds are in
+[deploy/proxmox/README.md](../deploy/proxmox/README.md#alerts-health-checks-and-restore-drills).
 
 For a homelab host, the simplest low-maintenance deploy path is a local
 systemd timer that polls `origin/main`, fast-forwards the deployment checkout,
