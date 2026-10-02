@@ -80,6 +80,11 @@ if [[ -r "$config_file" ]]; then
     esac
   done < <(grep -E '^[A-Z_]+=' "$config_file")
 fi
+# The example file's topic is public on ntfy.sh; never send to it.
+if [[ "$NTFY_URL" == *replace-with-a-long-random-topic* ]]; then
+  log "alerts disabled: NTFY_URL in $config_file is still the example topic"
+  NTFY_URL=""
+fi
 if [[ -z "$NTFY_URL" ]]; then
   log "alerts disabled (no NTFY_URL in $config_file); would have sent: ${title:-resolve $key}"
   exit 0
@@ -112,6 +117,7 @@ send() {
   [[ -n "$click" ]] && args+=(-H "Click: $click")
   [[ -n "$NTFY_TOKEN" ]] && args+=(-H "Authorization: Bearer $NTFY_TOKEN")
   if printf '%s' "$body" | curl "${args[@]}" --data-binary @- "$NTFY_URL"; then
+    log "sent \"$send_title\" ($send_priority)"
     return 0
   fi
   log "failed to send \"$send_title\" to ntfy"

@@ -222,6 +222,17 @@ describe("homelab-agent-notify", () => {
     expect(curlSends(fixture)).toEqual([]);
   });
 
+  it("never sends to the example file's public topic", () => {
+    NodeFS.copyFileSync(
+      new URL("../../deploy/proxmox/notify.env.example", import.meta.url),
+      fixture.env.HOMELAB_AGENT_NOTIFY_ENV!,
+    );
+    const result = alert();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("still the example topic");
+    expect(curlSends(fixture)).toEqual([]);
+  });
+
   it("sends ntfy headers and the body", () => {
     configure();
     expect(alert(["--click", "https://ai.example"]).status).toBe(0);
