@@ -46,6 +46,8 @@ interface Harness {
   readonly ticks: Queue.Queue<number>;
   readonly notifications: Array<HomelabNotification>;
   readonly threads: Map<string, OrchestrationThreadShell>;
+  /** Project shells besides project-a, by id. */
+  readonly projects: Map<string, unknown>;
   /** Emits a domain event and waits for the scheduler pass the watcher's change causes. */
   readonly emitSession: (
     threadId: string,
@@ -73,6 +75,7 @@ const withChecks = <A, E>(
     const ticks = yield* Queue.unbounded<number>();
     const notifications: Array<HomelabNotification> = [];
     const threads = new Map<string, OrchestrationThreadShell>();
+    const projects = new Map<string, unknown>();
 
     const mocks = Layer.mergeAll(
       Layer.mock(OrchestrationEngineService)({
@@ -111,7 +114,7 @@ const withChecks = <A, E>(
                   title: "Project A",
                   defaultModelSelection: null,
                 } as never)
-              : Option.none(),
+              : Option.fromNullishOr(projects.get(id) as never),
           ),
         getThreadShellById: (id) => Effect.succeed(Option.fromNullishOr(threads.get(id))),
       }),
@@ -146,6 +149,7 @@ const withChecks = <A, E>(
       ticks,
       notifications,
       threads,
+      projects,
       nextTick,
       emitSession: (threadId, status, lastError) =>
         Effect.gen(function* () {
@@ -582,6 +586,24 @@ describe("HomelabChecks knowledge tidy", () => {
         const next = yield* Queue.take(harness.commands);
         assert.equal(next.type, "thread.curator.create");
         assert.notEqual(next.type === "thread.curator.create" ? next.threadId : "", turn.threadId);
+      }),
+    ),
+  );
+
+  it.effect("runs on the curator's remembered model", () =>
+    withChecks((harness) =>
+      Effect.gen(function* () {
+        harness.projects.set(CURATOR_PROJECT_ID, {
+          id: CURATOR_PROJECT_ID,
+          title: "Knowledge Curator",
+          defaultModelSelection: model,
+        });
+        const checks = yield* HomelabChecks;
+        yield* checks.setCuratorTidy({ enabled: true, schedule: weeklyTidy });
+        yield* startScheduler(harness);
+        yield* checks.runNow(CURATOR_TIDY_CHECK_ID);
+        const turn = yield* harness.nextTurnStart;
+        assert.deepEqual(turn.modelSelection, model);
       }),
     ),
   );

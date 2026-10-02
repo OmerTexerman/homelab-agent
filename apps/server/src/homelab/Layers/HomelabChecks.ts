@@ -481,7 +481,9 @@ export const makeHomelabChecks = Effect.fn("makeHomelabChecks")(function* (
       const defaults = yield* turnDefaults({
         projectId: check.projectId,
         project,
-        explicit: check.modelSelection,
+        // A tidy runs on the curator's remembered model, the one Settings' "Start
+        // curator session" also starts from (the namespace project's own default).
+        explicit: check.modelSelection ?? (tidy ? (project?.defaultModelSelection ?? null) : null),
         threadModel: existingThread?.modelSelection ?? null,
       }).pipe(Effect.mapError(storage));
       const { modelSelection } = defaults;
