@@ -1,11 +1,15 @@
-# Fast-forwards `prod` to a main commit once CI passes on it. Deployment hosts
-# track `prod`, so a red commit never ships. Use the manual trigger (with a sha
-# already on main) only to ship an urgent fix while CI itself is broken.
+# Fast-forwards `prod` to a main commit once both CI and Runtime smoke pass on
+# it. Deployment hosts track `prod`, so a red commit never ships. Each
+# workflow's completion triggers this; the run checks that the other workflow
+# also succeeded for the same sha, and otherwise exits without promoting (the
+# other's completion triggers it again). Use the manual trigger (with a sha
+# already on main) only to ship an urgent fix while CI itself is broken; it
+# skips both gates.
 name: Promote to prod
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [CI, Runtime smoke]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -16,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: promote-prod
@@ -27,20 +32,55 @@ jobs:
       github.repository == 'OmerTexerman/homelab-agent' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push'))
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-24.04
     steps:
+      - name: Require both workflows to pass
+        id: gate
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          case "$TRIGGER" in
+            CI) other=runtime-smoke.yml ;;
+            "Runtime smoke") other=ci.yml ;;
+            *) echo "Unexpected workflow $TRIGGER" >&2; exit 1 ;;
+          esac
+          # Latest attempt of each main push run of the other workflow for this sha.
+          states="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$other/runs?head_sha=$SHA&event=push&branch=main&per_page=20" \
+            --jq '.workflow_runs[] | "\(.status) \(.conclusion)"')"
+          echo "$other runs for $SHA: ${states:-none}"
+          if grep -qx 'completed success' <<<"$states"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Not promoting $SHA: $other has not succeeded for it (yet)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v6
+        if: github.event_name == 'workflow_dispatch' || steps.gate.outputs.ready == 'true'
         with:
           fetch-depth: 0
+
       - name: Fast-forward prod
+        if: github.event_name == 'workflow_dispatch' || steps.gate.outputs.ready == 'true'
         env:
           SHA: ${{ inputs.sha || github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           git fetch --quiet origin main
+          SHA="$(git rev-parse --verify "$SHA^{commit}")"
           git merge-base --is-ancestor "$SHA" origin/main || { echo "$SHA is not on main" >&2; exit 1; }
           if git fetch --quiet origin prod 2>/dev/null; then
+            # Both workflows trigger this, and runs for older shas can finish late.
+            if git merge-base --is-ancestor "$SHA" origin/prod; then
+              echo "prod already includes $SHA"
+              exit 0
+            fi
             git merge-base --is-ancestor origin/prod "$SHA" || { echo "prod is not an ancestor of $SHA" >&2; exit 1; }
           fi
           git push origin "$SHA:refs/heads/prod"

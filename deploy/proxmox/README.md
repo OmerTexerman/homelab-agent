@@ -6,8 +6,11 @@ minutes.
 
 ## Flow
 
-1. CI passes on a `main` commit, and `.github/workflows/promote-prod.yml`
-   fast-forwards `prod` to it. Deploys track `prod`, never `main`.
+1. `CI` and `Runtime smoke` (real runtime containers plus a Chromium pass over
+   the web app) both pass on a `main` commit, and
+   `.github/workflows/promote-prod.yml` fast-forwards `prod` to it. Each
+   workflow's completion runs the promotion, which waits for the other one to
+   have succeeded for the same commit. Deploys track `prod`, never `main`.
 2. The host script runs `scripts/deploy/release.sh` taken from the `prod`
    commit, inside the container:
    - `prepare`: `git worktree add` the commit into
@@ -40,7 +43,7 @@ minutes.
 | Logs                    | `journalctl -u homelab-agent-ai-agent-autodeploy.service -n 200`                                                                                                                                                                                       |
 | Roll back               | `touch /etc/homelab-agent/deploy.paused`, then `pct exec 201 -- runuser -u t3code -- env HOME=/home/t3code bash /home/t3code/homelab-agent-releases/current/scripts/deploy/release.sh rollback` and `pct exec 201 -- systemctl restart t3code.service` |
 | Retry a failed commit   | `pct exec 201 -- rm /home/t3code/homelab-agent-releases/<sha>.attempts`                                                                                                                                                                                |
-| Ship while CI is broken | `gh workflow run promote-prod.yml -f sha=<main sha>`                                                                                                                                                                                                   |
+| Ship while CI is broken | `gh workflow run promote-prod.yml -f sha=<main sha>` (skips both the CI and Runtime smoke gates)                                                                                                                                                       |
 
 ### Break-glass pairing
 
@@ -78,8 +81,9 @@ the backup over the live file, deleting the live `-wal` and `-shm` siblings.
 
 The files here are copies of what's installed; keep them in sync.
 
-1. Make sure `prod` exists and contains `scripts/deploy/release.sh` (CI green
-   on `main` after this change, or a manual `promote-prod.yml` run).
+1. Make sure `prod` exists and contains `scripts/deploy/release.sh` (CI and
+   Runtime smoke green on `main` after this change, or a manual
+   `promote-prod.yml` run).
 2. On the Proxmox host, back up the current script and unit, then install:
    ```bash
    cp /usr/local/sbin/homelab-agent-deploy-ai-agent.sh{,.bak}
