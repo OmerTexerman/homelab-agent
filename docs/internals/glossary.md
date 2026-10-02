@@ -19,24 +19,24 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 
 ## Homelab runtimes
 
-| Term            | Meaning                                                                                                                                |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime         | One container a project's or an isolated thread's work runs in, with one record in `homelab.sqlite`.                                   |
-| Binding         | A thread's link to a runtime, with the thread's own cwd, env, exec wrappers, and runtime token.                                        |
-| Materialize     | Writing a runtime's shared files (auth, secret env, instructions, skills, CLI) atomically, skipping unchanged ones.                    |
-| Tombstone       | The `deleting_at` mark set before a runtime's container and data are removed; the reconciler finishes the deletion.                    |
-| Retired         | An isolated runtime whose thread was deleted: stopped, kept for the retention window, then destroyed.                                  |
-| Runtime tools   | System packages an agent recorded with `homelab tools add`, baked into a derived runtime image so they survive recreates.              |
-| Recreate        | Replacing a runtime's container (`docker rm` + `run`). Deferred while the runtime is busy; its reason is recorded.                     |
-| Brokered secret | A secret whose runtimes get a surrogate instead of the value; the egress proxy swaps it in for allowed hosts. See `egress-broker.md`.  |
-| Surrogate       | The `hlsur_…` stand-in for one revision of a brokered secret in one runtime. Useless anywhere else.                                    |
-| Egress proxy    | The server's authenticated HTTP(S) forward proxy that substitutes surrogates, holds approved writes, and audits.                       |
-| Homelab tools   | The `homelab_*` MCP tools on `/mcp`: the agent-facing CLI, scoped like the thread's runtime token. See `homelab-mcp-tools.md`.         |
-| Check           | A project's scheduled agent investigation. Each run is a turn in the check's own thread. See `scheduled-checks.md`.                    |
-| Check run       | One run of a check: a turn that ends with `homelab_check_report` (ok, attention, or failed), or fails without one.                     |
-| Notifier        | `HomelabNotifier`: the queue that pushes events needing a human (approvals, questions, check results) to ntfy without blocking.        |
-| Knowledge tidy  | The curator namespace's one scheduled check (`curator-tidy`): each run is a new unattended curator session. See `scheduled-checks.md`. |
-| Survey          | A project's "Survey: <project>" thread, started by `HomelabOnboarding` from the project's stored description.                          |
+| Term            | Meaning                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime         | One container a project's or an isolated thread's work runs in, with one record in `homelab.sqlite`.                                  |
+| Binding         | A thread's link to a runtime, with the thread's own cwd, env, exec wrappers, and runtime token.                                       |
+| Materialize     | Writing a runtime's shared files (auth, secret env, instructions, skills, CLI) atomically, skipping unchanged ones.                   |
+| Tombstone       | The `deleting_at` mark set before a runtime's container and data are removed; the reconciler finishes the deletion.                   |
+| Retired         | An isolated runtime whose thread was deleted: stopped, kept for the retention window, then destroyed.                                 |
+| Runtime tools   | System packages an agent recorded with `homelab tools add`, baked into a derived runtime image so they survive recreates.             |
+| Recreate        | Replacing a runtime's container (`docker rm` + `run`). Deferred while the runtime is busy; its reason is recorded.                    |
+| Brokered secret | A secret whose runtimes get a surrogate instead of the value; the egress proxy swaps it in for allowed hosts. See `egress-broker.md`. |
+| Surrogate       | The `hlsur_…` stand-in for one revision of a brokered secret in one runtime. Useless anywhere else.                                   |
+| Egress proxy    | The server's authenticated HTTP(S) forward proxy that substitutes surrogates, holds approved writes, and audits.                      |
+| Homelab tools   | The `homelab_*` MCP tools on `/mcp`: the agent-facing CLI, scoped like the thread's runtime token. See `homelab-mcp-tools.md`.        |
+| Check           | A project's scheduled agent investigation. Each run is a turn in the check's own thread. See `scheduled-checks.md`.                   |
+| Check run       | One run of a check: a turn that ends with `homelab_check_report` (ok, attention, or failed), or fails without one.                    |
+| Notifier        | `HomelabNotifier`: the queue that pushes events needing a human (approvals, questions, check results) to ntfy without blocking.       |
+| Knowledge tidy  | The curator namespace's one scheduled check: each run is a new unattended curator session. See `scheduled-checks.md`.                 |
+| Survey          | A project's "Survey: <project>" thread, started by `HomelabOnboarding` from the stored project description.                           |
 
 ## Homelab sign-in
 
