@@ -1,0 +1,11 @@
+# Proxmox host: /etc/systemd/system/homelab-agent-health.timer
+[Unit]
+Description=Run Homelab Agent health checks every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

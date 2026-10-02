@@ -1,0 +1,12 @@
+# Proxmox host: /etc/systemd/system/homelab-agent-health.service
+# Host-side health checks for the Homelab Agent LXC; alerts go to ntfy.
+[Unit]
+Description=Homelab Agent health checks
+After=network-online.target pve-container@201.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-agent-health
+TimeoutStartSec=10min
+Nice=10

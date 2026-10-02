@@ -1,0 +1,14 @@
+# Proxmox host: /etc/systemd/system/homelab-agent-restore-drill.service
+# Restores the newest backup into a scratch dir inside the LXC, verifies it,
+# boots it with Docker disabled, then cleans up. Never touches live state.
+[Unit]
+Description=Homelab Agent backup restore drill
+After=network-online.target pve-container@201.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-agent-restore-drill
+TimeoutStartSec=45min
+Nice=15
+IOSchedulingClass=idle
