@@ -1218,8 +1218,9 @@ async function runBrowserSmoke(input: {
 }): Promise<void> {
   const browser = await launchChromium(!input.options.headed);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let page: PageLike | undefined;
   try {
-    const page = await context.newPage();
+    page = await context.newPage();
     await page.goto(input.pairUrl, { waitUntil: "domcontentloaded" });
     // Pairing redirects away from /pair once the bearer session is stored.
     await page.waitForURL((url) => !url.pathname.startsWith("/pair"), { timeout: 30_000 });
@@ -1327,6 +1328,18 @@ async function runBrowserSmoke(input: {
         fullPage: true,
       });
     }
+  } catch (error) {
+    // What the page showed when a check failed, for CI runs nobody watched.
+    if (input.options.artifactsDir && page) {
+      NodeFS.mkdirSync(input.options.artifactsDir, { recursive: true });
+      await page
+        .screenshot({
+          path: NodePath.resolve(input.options.artifactsDir, "failure.png"),
+          fullPage: true,
+        })
+        .catch(() => undefined);
+    }
+    throw error;
   } finally {
     await context.close();
     await browser.close();

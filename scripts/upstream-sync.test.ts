@@ -74,6 +74,7 @@ describe("upstream-sync", () => {
       unexpectedActiveWorkflows([
         { path: ".github/workflows/ci.yml", state: "active" },
         { path: ".github/workflows/promote-prod.yml", state: "active" },
+        { path: ".github/workflows/runtime-smoke.yml", state: "active" },
         { path: ".github/workflows/upstream-sync-report.yml", state: "active" },
         { path: ".github/workflows/windows-tests.yml", state: "active" },
         { path: ".github/workflows/release.yml", state: "disabled_manually" },

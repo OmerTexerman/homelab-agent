@@ -1,0 +1,104 @@
+# Homelab fork: runs scripts/runtime-smoke.ts against real Docker runtime
+# containers and a real Chromium (pairing, welcome wizard, Home, command
+# palette, phone width). promote-prod.yml only advances `prod` when this and CI
+# both succeeded for the same main commit.
+name: Runtime smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "ci/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Runtime smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      # Built (and labelled with its build-context fingerprint) below; the
+      # server's own rebuild would not hit the layer cache.
+      HOMELAB_AGENT_RUNTIME_IMAGE: homelab-agent-runtime:local
+      HOMELAB_AGENT_RUNTIME_AUTO_BUILD: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Fingerprint the runtime build context
+        id: runtime_image
+        run: |
+          fingerprint="$(node --input-type=module -e "import { fingerprintBuildContext } from './apps/server/src/runtime/image.ts'; process.stdout.write(fingerprintBuildContext('docker/runtime') ?? '')")"
+          test -n "$fingerprint"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The server only reuses a container whose image carries the current
+      # fingerprint label, the same label its own build stamps.
+      - name: Build runtime image
+        uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: docker/runtime
+          tags: ${{ env.HOMELAB_AGENT_RUNTIME_IMAGE }}
+          labels: homelab.runtime.fingerprint=${{ steps.runtime_image.outputs.fingerprint }}
+          load: true
+          cache-from: type=gha,scope=runtime-image
+          cache-to: type=gha,scope=runtime-image,mode=max
+
+      - name: Resolve Playwright version
+        id: playwright
+        run: |
+          core="$(find node_modules/.pnpm -maxdepth 1 -name 'playwright-core@*' -printf '%f\n' | sort -V | tail -n1)"
+          test -n "$core"
+          echo "cli=node_modules/.pnpm/$core/node_modules/playwright-core/cli.js" >> "$GITHUB_OUTPUT"
+          echo "version=${core#playwright-core@}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright Chromium
+        run: node "${{ steps.playwright.outputs.cli }}" install --with-deps --only-shell chromium
+
+      - name: Run runtime smoke
+        env:
+          ARTIFACTS_DIR: ${{ runner.temp }}/runtime-smoke
+        run: |
+          set -o pipefail
+          mkdir -p "$ARTIFACTS_DIR"
+          node scripts/runtime-smoke.ts --with-runtime --ui-checks --artifacts-dir "$ARTIFACTS_DIR" \
+            2>&1 | tee "$ARTIFACTS_DIR/runtime-smoke.log"
+
+      - name: Upload smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-smoke-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-smoke
+          if-no-files-found: ignore
+          retention-days: 14

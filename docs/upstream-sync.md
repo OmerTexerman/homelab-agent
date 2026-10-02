@@ -26,10 +26,11 @@ node scripts/upstream-sync.ts --merge   # sync/upstream-<date> + checkpoint bran
 node scripts/upstream-sync.ts --verify  # fork invariants + typecheck
 ```
 
-The merge branch goes through CI like any change. `main` only reaches prod after
-CI passes (see `deploy/proxmox/README.md`). For changes near runtimes, also run
+The merge branch goes through CI and the `Runtime smoke` workflow like any
+change. `main` only reaches prod after both pass (see `deploy/proxmox/README.md`).
+To iterate on runtime changes before pushing, run
 `node scripts/runtime-smoke.ts --with-runtime` on a machine with Docker; it
-checks real containers end to end in under a minute.
+checks real containers end to end in about a minute.
 
 ## Resolution rules
 
@@ -52,8 +53,9 @@ checks real containers end to end in under a minute.
 6. **CI runners and workflows:** `--merge` rewrites upstream's Blacksmith
    runners in `ci.yml` to GitHub-hosted ones. Upstream-only workflows stay
    disabled with `gh workflow disable` (never deleted). New upstream workflows
-   arrive enabled, so the report lists every active workflow besides `ci.yml`
-   and `promote-prod.yml` with the command to disable it.
+   arrive enabled, so the report lists every active workflow besides the
+   fork's (`ci.yml`, `promote-prod.yml`, `runtime-smoke.yml`,
+   `upstream-sync-report.yml`) with the command to disable it.
 7. Keep the fork's `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and
    `docs/README.md`.
 
