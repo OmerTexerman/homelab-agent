@@ -13,6 +13,7 @@ fork tables in `state.sqlite` here, one owner at a time:
 | P5    | knowledge  | 200–299  | `homelab-graph.json`, `project_memory_entries` (FTS5 search)          |
 | P6    | secrets    | 300–399  | `homelab-secrets.json` metadata; 301 adds the egress broker           |
 | auth  | auth       | 400–499  | nothing; adds `auth_passkeys` (migration 400)                         |
+| auto  | automation | 500–599  | nothing; adds notification settings (500) and scheduled checks (501)  |
 
 A separate file keeps the two migration histories apart. Upstream's Effect
 migrator skips every id at or below the latest applied one, and upstream syncs
@@ -261,6 +262,37 @@ upstream's `auth_sessions` in `state.sqlite`; nothing here is a secret.
 - `scopes`: JSON array of the scopes a sign-in grants, copied from the
   registering session. `created_by_session_id` records that session.
 - `created_at`, `last_used_at`.
+
+## Automation (500-599)
+
+Notification settings and scheduled checks. See
+[scheduled-checks.md](./scheduled-checks.md).
+
+Migration 500 adds `automation_settings`, one row (`id` = 1, enforced by a check):
+`enabled`, `ntfy_url`, `public_base_url`, `time_zone` (null means the server's zone),
+`events_json` (per-event switches someone turned off or on; a missing key is on), and
+`updated_at`. No row means the defaults. The ntfy token is not here: it is
+`homelab-ntfy-token` in `ServerSecretStore`. `HOMELAB_AGENT_NTFY_URL`,
+`HOMELAB_AGENT_NTFY_TOKEN`, `HOMELAB_AGENT_PUBLIC_URL`, and `HOMELAB_AGENT_CHECKS_TZ`
+override at read time and are never copied in.
+
+Migration 501 adds two tables:
+
+- `project_checks`: `id`, `project_id` (indexed), `name`, `prompt`, `schedule_json`
+  (the normalized `ProjectCheckSchedule`), `enabled`, `notify_policy`
+  (`attention`, `always`, `never`), `model_selection_json` (null means the project's
+  default), `thread_id` (the check's thread; unique when set), `schedule_anchor_at`
+  (last schedule change or enable; the next run counts from the later of this and
+  `last_run_at`), `created_at`, `updated_at`, `last_run_at`, `last_status`
+  (`ok`, `attention`, `failed`), `last_summary`, `acknowledged_at`.
+- `project_check_runs`: `id`, `check_id` (cascades on delete), `thread_id`,
+  `trigger` (`schedule`, `manual`, `thread`), `status` (`running` until a report or
+  the end of the turn), `summary`, `reported` (0/1), `started_at`, `finished_at` (null
+  while in flight). Each insert keeps the newest 50 finished runs per check.
+
+No foreign key ties a check to upstream's projects or threads; the scheduler deletes
+a project's checks on `project.deleted` and forgets a deleted thread on
+`thread.deleted`.
 
 ## Backups and smoke
 

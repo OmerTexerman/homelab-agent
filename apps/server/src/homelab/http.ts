@@ -119,7 +119,7 @@ const decodeHomelabSkillListInput = Schema.decodeUnknownEffect(HomelabSkillListI
 const decodeCuratorMemoryListInput = Schema.decodeUnknownEffect(CuratorMemoryListInput);
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
-const respondToHomelabHttpError = (error: HomelabHttpError) =>
+export const respondToHomelabHttpError = (error: HomelabHttpError) =>
   Effect.gen(function* () {
     if (error.status >= 500) {
       yield* Effect.logError("homelab http route failed", {
@@ -182,14 +182,16 @@ const authenticateHomelabScope = (requiredScope: AuthEnvironmentScope) =>
     return session;
   });
 
-const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
-const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
+export const authenticateHomelabRead = authenticateHomelabScope(AuthOrchestrationReadScope);
+export const authenticateHomelabOperate = authenticateHomelabScope(AuthOrchestrationOperateScope);
 // Curator surface: only human UI clients and curator RUNTIME tokens hold this scope.
 const authenticateHomelabCurate = authenticateHomelabScope(AuthHomelabCurateScope);
 // Setting/deleting secret values: human UI clients only; no runtime token holds this.
-const authenticateHomelabSecretsAdmin = authenticateHomelabScope(AuthHomelabSecretsAdminScope);
+export const authenticateHomelabSecretsAdmin = authenticateHomelabScope(
+  AuthHomelabSecretsAdminScope,
+);
 
-const getRequestUrl = Effect.gen(function* () {
+export const getRequestUrl = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const url = HttpServerRequest.toURL(request);
   if (Option.isNone(url)) {

@@ -28,6 +28,12 @@ upstream t3code documentation tree.
 - [user/projects.md](./user/projects.md)
   A project's page: its runtime and controls, threads, memory, secrets, tools,
   and egress activity.
+- [user/checks.md](./user/checks.md)
+  Scheduled checks: an agent re-investigating a project on a schedule.
+- [user/notifications.md](./user/notifications.md)
+  Push notifications through ntfy when an agent needs you.
+- [internals/scheduled-checks.md](./internals/scheduled-checks.md)
+  The check scheduler, missed-run policy, the report tool, and the notifier.
 - [user/chat-export.md](./user/chat-export.md)
   Exporting a thread as a Markdown transcript or JSON.
 - [user/project-sidebar.md](./user/project-sidebar.md)

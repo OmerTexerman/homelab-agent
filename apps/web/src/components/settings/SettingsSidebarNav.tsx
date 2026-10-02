@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  BellIcon,
   BlocksIcon,
   BotIcon,
   BrainIcon,
@@ -93,6 +94,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/connections": Link2Icon,
   "/settings/archived": ArchiveIcon,
   "/settings/secrets": KeyRoundIcon,
+  "/settings/notifications": BellIcon,
   "/settings/project-runtime": ServerIcon,
   "/settings/memory": BrainIcon,
   "/settings/advanced": WrenchIcon,

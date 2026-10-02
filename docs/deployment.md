@@ -285,6 +285,23 @@ Without an override:
   `HOMELAB_AGENT_RUNTIME_SERVER_URL` if the server is not reachable by the
   detected address on that network.
 
+## Notifications And Scheduled Checks
+
+Push notifications go to an ntfy topic. Set it in Settings → Notifications, or
+pin it on the server (these win over the UI and are never written to the
+database):
+
+| Variable                   | Meaning                                                                    |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `HOMELAB_AGENT_NTFY_URL`   | ntfy topic URL, e.g. `https://ntfy.sh/<topic>`.                            |
+| `HOMELAB_AGENT_NTFY_TOKEN` | ntfy access token, sent as `Authorization: Bearer`.                        |
+| `HOMELAB_AGENT_PUBLIC_URL` | Base URL for notification links (`https://ai.texerman.com` in production). |
+| `HOMELAB_AGENT_CHECKS_TZ`  | IANA time zone daily and weekly checks run in. Default: the server's zone. |
+
+The server must reach the ntfy host over HTTPS. Delivery failures are logged as
+`homelab.notifications.delivery-failed` and never affect agents. See
+[internals/scheduled-checks.md](./internals/scheduled-checks.md).
+
 ## Provider Auth
 
 Provider CLIs run inside Project Runtime containers through generated wrappers.

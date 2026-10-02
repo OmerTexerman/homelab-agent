@@ -23,9 +23,12 @@ The page shows, from top to bottom:
   thread opens in this project with your text sent as its first message. You can
   pick another project next to **in**.
 - **Needs you**: approvals, questions, secret requests, and write approvals from
-  this project's threads, plus runtime failures and waiting rebuilds.
+  this project's threads, plus runtime failures, waiting rebuilds, and checks that
+  need attention.
 - **Running**: this project's threads with an agent working right now.
 - **Threads**: every thread in the project that isn't archived, newest first.
+- **Checks**: the project's [scheduled checks](./checks.md), with each one's
+  schedule, last result, and next run. **New check** adds one.
 - **Memory**: the most recently updated entries in the project's memory. **All
   memory** opens **Settings → Memory & Knowledge** filtered to this project.
 - **Secrets**: the secrets this project's runtime receives, both global ones and

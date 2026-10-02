@@ -27,6 +27,12 @@ import { useUserVisibleProjects, useUserVisibleThreadShells } from "../../homela
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { homeLogicalProjectKeys } from "../../homelab/projectPage";
 import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
+import { useHomelabMutation } from "../../homelab/useHomelabMutation";
+import {
+  acknowledgeHomelabCheckRequest,
+  homelabChecksQueryKeys,
+  homelabChecksQueryOptions,
+} from "../../lib/homelabChecksReactQuery";
 import { homelabEgressApprovalsQueryOptions } from "../../lib/homelabEgressReactQuery";
 import { homelabSecretsQueryOptions } from "../../lib/homelabSecretsReactQuery";
 import { projectRuntimeDetailQueryOptions } from "../../lib/projectRuntimeReactQuery";
@@ -104,6 +110,9 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
     homelabEgressApprovalsQueryOptions({ environmentId: primaryEnvironmentId }),
   );
 
+  // Scheduled checks whose last result needs attention.
+  const checksQuery = useQuery(homelabChecksQueryOptions({ environmentId: primaryEnvironmentId }));
+
   const runtimeDetails = useMemo(() => {
     const details = new Map<string, HomeRuntimeDetailState>();
     trackedProjects.forEach((project, index) => {
@@ -142,6 +151,19 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
     };
   }, [egressData, egressStatus, primaryEnvironmentId]);
 
+  const checksData = checksQuery.data;
+  const checksStatus = checksQuery.status;
+  const checks = useMemo(() => {
+    if (primaryEnvironmentId === null) return null;
+    return {
+      environmentId: primaryEnvironmentId,
+      state: queryDisplayState({ status: checksStatus, data: checksData }, (data) =>
+        data.checks.every((check) => !check.needsAttention),
+      ),
+      checks: checksData?.checks ?? [],
+    };
+  }, [checksData, checksStatus, primaryEnvironmentId]);
+
   const model = useMemo(
     () =>
       deriveHomeOverview({
@@ -151,6 +173,7 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
         runtimeDetails,
         secrets,
         egressApprovals,
+        checks,
         limits: {
           attention: expanded.has("attention") ? Infinity : HOME_SECTION_LIMIT,
           running: expanded.has("running") ? Infinity : HOME_SECTION_LIMIT,
@@ -158,7 +181,7 @@ export function HomelabHomeOverview({ emptyState }: { readonly emptyState?: Reac
           recent: expanded.has("recent") ? Infinity : HOME_SECTION_LIMIT,
         },
       }),
-    [bootstrapped, egressApprovals, expanded, projects, runtimeDetails, secrets, threads],
+    [bootstrapped, checks, egressApprovals, expanded, projects, runtimeDetails, secrets, threads],
   );
 
   const toggle = useCallback((section: ExpandableSection) => {
@@ -514,6 +537,16 @@ export function AttentionRow({
       />
     );
   }
+  if (item.check && item.checkEnvironmentId) {
+    return (
+      <CheckAttentionRow
+        item={item}
+        checkId={item.check.id}
+        environmentId={item.checkEnvironmentId}
+        startThreadIn={startThreadIn}
+      />
+    );
+  }
   const body = (
     <>
       <StatusDot className={ATTENTION_DOT[item.kind]} />
@@ -567,6 +600,51 @@ function EgressApprovalAttentionRow({
         />
       </TargetLink>
       <EgressApprovalActions approval={approval} decision={decision} className="pl-5" />
+    </div>
+  );
+}
+
+/**
+ * A scheduled check whose last result needs attention: the row opens the
+ * check's thread, and Acknowledge clears it until the next attention result.
+ */
+function CheckAttentionRow({
+  item,
+  checkId,
+  environmentId,
+  startThreadIn,
+}: {
+  readonly item: HomeAttentionItem;
+  readonly checkId: string;
+  readonly environmentId: NonNullable<HomeAttentionItem["checkEnvironmentId"]>;
+  readonly startThreadIn: StartThreadIn;
+}) {
+  const acknowledge = useHomelabMutation({
+    mutationFn: () => acknowledgeHomelabCheckRequest({ environmentId, checkId }),
+    invalidate: [homelabChecksQueryKeys.all],
+    errorToast: "Couldn't acknowledge the check",
+  });
+  return (
+    <div data-testid="home-check-attention" className="flex min-w-0 items-center gap-1">
+      <TargetLink target={item.target} startThreadIn={startThreadIn} className="flex-1">
+        <StatusDot className={ATTENTION_DOT[item.kind]} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-foreground">{item.title}</span>
+          <span className="mt-0.5 flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground">
+            <span className={cn("truncate", ATTENTION_TEXT[item.kind])}>{item.reason}</span>
+            {item.context ? <span className="shrink-0 truncate">{item.context}</span> : null}
+          </span>
+        </span>
+        {item.timestamp ? <RowTime iso={item.timestamp} /> : null}
+      </TargetLink>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={acknowledge.isPending}
+        onClick={() => void acknowledge.submit()}
+      >
+        Acknowledge
+      </Button>
     </div>
   );
 }
@@ -762,6 +840,7 @@ const ATTENTION_DOT: Record<HomeAttentionKind, string> = {
   "secret-request": AMBER_DOT,
   "runtime-failed": "bg-destructive",
   "thread-failed": "bg-destructive",
+  "check-attention": AMBER_DOT,
   "plan-ready": "bg-violet-500 dark:bg-violet-300/90",
   "runtime-rebuild-pending": "bg-muted-foreground/50",
 };
@@ -773,6 +852,7 @@ const ATTENTION_TEXT: Record<HomeAttentionKind, string> = {
   "secret-request": AMBER_TEXT,
   "runtime-failed": "text-destructive",
   "thread-failed": "text-destructive",
+  "check-attention": AMBER_TEXT,
   "plan-ready": "text-violet-600 dark:text-violet-300/90",
   "runtime-rebuild-pending": "",
 };

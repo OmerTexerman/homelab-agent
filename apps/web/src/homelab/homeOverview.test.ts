@@ -1,5 +1,6 @@
 import type {
   HomelabEgressApproval,
+  ProjectCheck,
   HomelabSecretDescriptor,
   ProjectRuntimeDetail,
   RuntimeSessionId,
@@ -484,5 +485,65 @@ describe("deriveHomeOverview", () => {
       );
       expect(failed.attention.complete).toBe(true);
     });
+  });
+});
+
+describe("scheduled checks on Home", () => {
+  const check = (id: string, overrides: Partial<ProjectCheck> = {}): ProjectCheck =>
+    ({
+      id: id as ProjectCheck["id"],
+      projectId: "media" as ProjectCheck["projectId"],
+      name: `Check ${id}`,
+      prompt: "p",
+      schedule: { kind: "daily", time: "09:00" },
+      enabled: true,
+      notifyPolicy: "attention",
+      modelSelection: null,
+      threadId: `check-thread-${id}` as ProjectCheck["threadId"],
+      createdAt: minutesAgo(500),
+      updatedAt: minutesAgo(5),
+      lastRunAt: minutesAgo(5),
+      lastStatus: "attention",
+      lastSummary: "Backups are two days old.",
+      acknowledgedAt: null,
+      needsAttention: true,
+      running: false,
+      nextRunAt: null,
+      ...overrides,
+    }) as ProjectCheck;
+
+  it("lists unacknowledged attention results, linking to the check's thread", () => {
+    const model = deriveHomeOverview(
+      input({
+        checks: {
+          state: "ready",
+          environmentId: ENVIRONMENT_ID,
+          checks: [
+            check("a"),
+            check("ok", { lastStatus: "ok", needsAttention: false }),
+            check("acked", { acknowledgedAt: minutesAgo(1), needsAttention: false }),
+            check("gone", { projectId: "removed" as ProjectCheck["projectId"] }),
+          ],
+        },
+      }),
+    );
+    expect(model.attention.items).toHaveLength(1);
+    expect(model.attention.items[0]).toMatchObject({
+      kind: "check-attention",
+      title: "Check a",
+      reason: "Backups are two days old.",
+      context: "media",
+      target: { kind: "thread" },
+    });
+    expect(model.attention.items[0]?.check?.id).toBe("a");
+    expect(model.projects.items[0]?.attentionCount).toBe(1);
+  });
+
+  it("keeps attention incomplete while checks load", () => {
+    expect(
+      deriveHomeOverview(
+        input({ checks: { state: "loading", checks: [], environmentId: ENVIRONMENT_ID } }),
+      ).attention.complete,
+    ).toBe(false);
   });
 });

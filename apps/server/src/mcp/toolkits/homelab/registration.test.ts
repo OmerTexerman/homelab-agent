@@ -18,6 +18,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import { HomelabSecretRegistry } from "../../../homelab/Services/HomelabSecretRegistry.ts";
 import { HomelabSkills } from "../../../homelab/Services/HomelabSkills.ts";
+import { HomelabChecks } from "../../../homelab/Services/HomelabChecks.ts";
 import { KnowledgeGraph } from "../../../homelab/Services/KnowledgeGraph.ts";
 import { ProjectMemory } from "../../../homelab/Services/ProjectMemory.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -72,6 +73,7 @@ const TestLayer = HttpRouter.serve(Routes, { disableListenLog: true, disableLogg
       Layer.mock(KnowledgeGraph)({}),
       Layer.mock(HomelabSecretRegistry)({}),
       Layer.mock(HomelabSkills)({}),
+      Layer.mock(HomelabChecks)({}),
       Layer.mock(RuntimeRegistry)({}),
       Layer.mock(RuntimeBootstrapRegistry)({}),
       Layer.mock(OrchestrationEngineService)({}),

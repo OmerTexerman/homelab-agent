@@ -14,6 +14,7 @@ import {
   homeProjectKey,
   homeThreadRow,
   threadActivityAt,
+  type HomeChecksInput,
   type HomeEgressApprovalsInput,
   type HomeOverviewModel,
   type HomeProjectRow,
@@ -88,6 +89,8 @@ export interface ProjectPageOverviewInput {
   readonly runtimeDetails: ReadonlyMap<string, HomeRuntimeDetailState>;
   readonly secrets: HomeSecretsInput | null;
   readonly egressApprovals: HomeEgressApprovalsInput | null;
+  /** The project's scheduled checks (filtered to its members here). */
+  readonly checks?: HomeChecksInput | null;
   /** Rows per section; omitted (or undefined) means `HOME_SECTION_LIMIT`. */
   readonly limits?: Partial<Record<"attention" | "running" | "threads", number | undefined>>;
 }
@@ -156,6 +159,14 @@ export function deriveProjectPageOverview(
       }
     : null;
 
+  const memberProjectIds = new Set<string>(members.map((member) => member.id));
+  const checks = input.checks
+    ? {
+        ...input.checks,
+        checks: input.checks.checks.filter((check) => memberProjectIds.has(check.projectId)),
+      }
+    : null;
+
   const limits = input.limits ?? {};
   const home = deriveHomeOverview({
     bootstrapped: input.bootstrapped,
@@ -164,6 +175,7 @@ export function deriveProjectPageOverview(
     runtimeDetails: input.runtimeDetails,
     secrets,
     egressApprovals,
+    checks,
     limits: {
       attention: limits.attention ?? HOME_SECTION_LIMIT,
       running: limits.running ?? HOME_SECTION_LIMIT,
