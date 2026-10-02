@@ -95,6 +95,7 @@ describe("settings navigation", () => {
       "Project",
       "Providers",
       "Secrets",
+      "Notifications",
       "Devices & Sessions",
       "Project Runtime",
       "Memory & Knowledge",
