@@ -49,6 +49,7 @@ import {
   type HomelabEgressBrokerShape,
 } from "../Services/HomelabEgressBroker.ts";
 import { HomelabChecks, type HomelabChecksShape } from "../Services/HomelabChecks.ts";
+import { HomelabOnboarding, type HomelabOnboardingShape } from "../Services/HomelabOnboarding.ts";
 import { HomelabNotifier, type HomelabNotifierShape } from "../Services/HomelabNotifier.ts";
 import { HomelabSkills, type HomelabSkillsShape } from "../Services/HomelabSkills.ts";
 import { KnowledgeGraph, type KnowledgeGraphShape } from "../Services/KnowledgeGraph.ts";
@@ -67,6 +68,7 @@ export interface HomelabServerTestLayerOverrides {
   readonly projectMemory?: Partial<ProjectMemoryShape>;
   readonly homelabSkills?: Partial<HomelabSkillsShape>;
   readonly homelabChecks?: Partial<HomelabChecksShape>;
+  readonly homelabOnboarding?: Partial<HomelabOnboardingShape>;
   readonly homelabNotifier?: Partial<HomelabNotifierShape>;
 }
 
@@ -231,6 +233,7 @@ export const makeHomelabServerTestLayers = (overrides: HomelabServerTestLayerOve
       isCheckThread: () => Effect.succeed(false),
       ...overrides.homelabChecks,
     }),
+    Layer.mock(HomelabOnboarding)({ start: () => Effect.void, ...overrides.homelabOnboarding }),
     Layer.mock(HomelabNotifier)({
       notify: () => Effect.void,
       drain: () => Effect.void,

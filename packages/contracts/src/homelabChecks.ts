@@ -35,6 +35,13 @@ export type ProjectCheckWeekday = typeof ProjectCheckWeekday.Type;
  * - `daily`: every day at `time`.
  * - `weekly`: every week on `weekday` at `time`.
  */
+export const ProjectCheckWeeklySchedule = Schema.Struct({
+  kind: Schema.Literal("weekly"),
+  weekday: ProjectCheckWeekday,
+  time: ProjectCheckTimeOfDay,
+});
+export type ProjectCheckWeeklySchedule = typeof ProjectCheckWeeklySchedule.Type;
+
 export const ProjectCheckSchedule = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("interval"),
@@ -44,11 +51,7 @@ export const ProjectCheckSchedule = Schema.Union([
     kind: Schema.Literal("daily"),
     time: ProjectCheckTimeOfDay,
   }),
-  Schema.Struct({
-    kind: Schema.Literal("weekly"),
-    weekday: ProjectCheckWeekday,
-    time: ProjectCheckTimeOfDay,
-  }),
+  ProjectCheckWeeklySchedule,
 ]);
 export type ProjectCheckSchedule = typeof ProjectCheckSchedule.Type;
 
@@ -180,3 +183,21 @@ export const ProjectCheckReportResult = Schema.Struct({
   runId: TrimmedNonEmptyString,
 });
 export type ProjectCheckReportResult = typeof ProjectCheckReportResult.Type;
+
+/**
+ * The scheduled knowledge tidy: a check owned by the hidden curator namespace
+ * (`system:curator`) whose runs are new curator sessions. Served at
+ * `/api/homelab/curator/tidy`; never listed with project checks.
+ */
+export const CuratorTidyResult = Schema.Struct({
+  /** Null until the tidy was first switched on. */
+  check: Schema.NullOr(ProjectCheck),
+  timeZone: Schema.String,
+});
+export type CuratorTidyResult = typeof CuratorTidyResult.Type;
+
+export const CuratorTidyUpdateInput = Schema.Struct({
+  enabled: Schema.Boolean,
+  schedule: ProjectCheckWeeklySchedule,
+});
+export type CuratorTidyUpdateInput = typeof CuratorTidyUpdateInput.Type;

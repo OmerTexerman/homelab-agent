@@ -8,6 +8,8 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import { CURATOR_PROJECT_ID } from "@t3tools/shared/curatorProject";
+import { nextCheckRunAt } from "@t3tools/shared/projectCheckSchedule";
 import { STANDALONE_PROJECT_ID } from "@t3tools/shared/standaloneProject";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -19,13 +21,21 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { HomelabSql, HomelabSqlMemory } from "../../homelabPersistence/HomelabSql.ts";
+import { OrchestrationCommandReadModel } from "../../orchestration/Services/OrchestrationCommandReadModel.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { layerTest as ServerSettingsLayerTest } from "../../serverSettings.ts";
 import { HomelabChecks } from "../Services/HomelabChecks.ts";
 import { type HomelabNotification, HomelabNotifier } from "../Services/HomelabNotifier.ts";
-import { type HomelabChecksOptions, makeHomelabChecksLive } from "./HomelabChecks.ts";
+import {
+  CURATOR_TIDY_CHECK_ID,
+  CURATOR_TIDY_PROMPT,
+  CURATOR_TIDY_THREAD_TITLE,
+  type HomelabChecksOptions,
+  makeHomelabChecksLive,
+  resultPriority,
+} from "./HomelabChecks.ts";
 
 const projectId = ProjectId.make("project-a");
 const model = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
@@ -68,10 +78,11 @@ const withChecks = <A, E>(
       Layer.mock(OrchestrationEngineService)({
         dispatch: (command) =>
           Effect.sync(() => {
-            if (command.type === "thread.create") {
+            if (command.type === "thread.create" || command.type === "thread.curator.create") {
               threads.set(command.threadId, {
                 id: command.threadId,
-                projectId: command.projectId,
+                projectId:
+                  command.type === "thread.create" ? command.projectId : CURATOR_PROJECT_ID,
                 title: command.title,
                 modelSelection: command.modelSelection,
                 session: null,
@@ -81,6 +92,15 @@ const withChecks = <A, E>(
             return { sequence: 1 };
           }),
         subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+      }),
+      Layer.mock(OrchestrationCommandReadModel)({
+        getReadModel: () =>
+          Effect.sync(
+            () =>
+              ({
+                threads: [...threads.values()].map((thread) => ({ deletedAt: null, ...thread })),
+              }) as never,
+          ),
       }),
       Layer.mock(ProjectionSnapshotQuery)({
         getProjectShellById: (id) =>
@@ -511,4 +531,141 @@ describe("HomelabChecks runs and reports", () => {
       }),
     ),
   );
+});
+
+const weeklyTidy = { kind: "weekly", weekday: 5, time: "09:00" } as const;
+
+describe("HomelabChecks knowledge tidy", () => {
+  it.effect("runs as a new curator session each week, off the project check list", () =>
+    withChecks((harness) =>
+      Effect.gen(function* () {
+        const checks = yield* HomelabChecks;
+        // Off with no row stays nothing.
+        const off = yield* checks.setCuratorTidy({ enabled: false, schedule: weeklyTidy });
+        assert.isNull(off.check);
+
+        // 2026-05-01 is a Friday: due at 09:00, from the same schedule math as checks.
+        const { check } = yield* checks.setCuratorTidy({ enabled: true, schedule: weeklyTidy });
+        assert.equal(check?.id, CURATOR_TIDY_CHECK_ID);
+        assert.equal(check?.projectId, CURATOR_PROJECT_ID);
+        assert.equal(Date.parse(check?.nextRunAt ?? ""), nextCheckRunAt(weeklyTidy, START, "UTC"));
+        assert.equal(check?.nextRunAt, "2026-05-01T09:00:00.000Z");
+        assert.deepEqual((yield* checks.list()).checks, []);
+
+        yield* startScheduler(harness);
+        yield* TestClock.adjust(Duration.hours(1));
+        const create = yield* Queue.take(harness.commands);
+        assert.equal(create.type, "thread.curator.create");
+        if (create.type !== "thread.curator.create") return;
+        assert.equal(create.title, CURATOR_TIDY_THREAD_TITLE);
+        assert.equal(create.runtimeMode, "full-access");
+        const turn = yield* harness.nextTurnStart;
+        assert.equal(turn.threadId, create.threadId);
+        assert.equal(turn.runtimeMode, "full-access");
+        assert.include(turn.message.text, "homelab_check_report");
+        assert.include(turn.message.text, CURATOR_TIDY_PROMPT);
+        // No curator default yet: the best usable provider, like new threads.
+        assert.equal(turn.modelSelection?.instanceId, ProviderInstanceId.make("claudeAgent"));
+        assert.isTrue((yield* checks.getCuratorTidy()).check?.running);
+
+        // Done: a low-priority notification with the summary.
+        yield* checks.report(turn.threadId, { status: "ok", summary: "Merged 3 duplicates." });
+        assert.equal(harness.notifications.length, 1);
+        assert.equal(harness.notifications[0]?.priority, 2);
+        assert.equal(harness.notifications[0]?.body, "Merged 3 duplicates.");
+        yield* harness.emitSession(turn.threadId, "running");
+        yield* harness.emitSession(turn.threadId, "ready");
+        yield* harness.nextTick;
+
+        // A week later: a fresh session, not another turn in the old one.
+        yield* TestClock.adjust(Duration.days(7));
+        const next = yield* Queue.take(harness.commands);
+        assert.equal(next.type, "thread.curator.create");
+        assert.notEqual(next.type === "thread.curator.create" ? next.threadId : "", turn.threadId);
+      }),
+    ),
+  );
+
+  it.effect("waits while any curator session has a turn in flight", () =>
+    withChecks(
+      (harness) =>
+        Effect.gen(function* () {
+          const checks = yield* HomelabChecks;
+          yield* checks.setCuratorTidy({ enabled: true, schedule: weeklyTidy });
+          const manual = ThreadId.make("curator-manual");
+          harness.threads.set(manual, {
+            id: manual,
+            projectId: CURATOR_PROJECT_ID,
+            title: "Curator session",
+            modelSelection: model,
+            session: { activeTurnId: "turn-1", status: "running" },
+          } as unknown as OrchestrationThreadShell);
+
+          const refused = yield* checks.runNow(CURATOR_TIDY_CHECK_ID).pipe(Effect.flip);
+          assert.equal(refused.reason, "conflict");
+
+          yield* startScheduler(harness);
+          yield* TestClock.adjust(Duration.hours(1));
+          assert.equal(yield* harness.nextTick, Duration.toMillis(Duration.minutes(10)));
+          assert.deepEqual(yield* harness.pending, []);
+
+          harness.threads.set(manual, { ...harness.threads.get(manual)!, session: null });
+          yield* TestClock.adjust(Duration.minutes(10));
+          const create = yield* Queue.take(harness.commands);
+          assert.equal(create.type, "thread.curator.create");
+        }),
+      { busyRetryMs: Duration.toMillis(Duration.minutes(10)) },
+    ),
+  );
+
+  it.effect("notifies at high priority when a tidy fails", () =>
+    withChecks((harness) =>
+      Effect.gen(function* () {
+        const checks = yield* HomelabChecks;
+        yield* checks.setCuratorTidy({ enabled: true, schedule: weeklyTidy });
+        yield* startScheduler(harness);
+        yield* checks.runNow(CURATOR_TIDY_CHECK_ID);
+        const turn = yield* harness.nextTurnStart;
+        yield* harness.emitSession(turn.threadId, "error", "provider crashed");
+        yield* harness.nextTick;
+        assert.equal(harness.notifications.length, 1);
+        assert.equal(harness.notifications[0]?.priority, 4);
+        assert.equal((yield* checks.getCuratorTidy()).check?.lastStatus, "failed");
+      }),
+    ),
+  );
+
+  it.effect("is edited only through its own setting", () =>
+    withChecks(() =>
+      Effect.gen(function* () {
+        const checks = yield* HomelabChecks;
+        yield* checks.setCuratorTidy({ enabled: true, schedule: weeklyTidy });
+        const update = yield* checks
+          .update(CURATOR_TIDY_CHECK_ID, { prompt: "Delete everything." })
+          .pipe(Effect.flip);
+        assert.equal(update.reason, "invalid-input");
+        const remove = yield* checks.remove(CURATOR_TIDY_CHECK_ID).pipe(Effect.flip);
+        assert.equal(remove.reason, "invalid-input");
+
+        // Off keeps the row and its history, with no next run.
+        const off = yield* checks.setCuratorTidy({ enabled: false, schedule: weeklyTidy });
+        assert.isFalse(off.check?.enabled);
+        assert.isNull(off.check?.nextRunAt);
+        const moved = yield* checks.setCuratorTidy({
+          enabled: true,
+          schedule: { kind: "weekly", weekday: 0, time: "03:30" },
+        });
+        assert.equal(moved.check?.nextRunAt, "2026-05-03T03:30:00.000Z");
+      }),
+    ),
+  );
+
+  it("keeps a tidy's attention result at low priority", () => {
+    const tidy = { projectId: CURATOR_PROJECT_ID };
+    const project = { projectId: "project-a" };
+    assert.equal(resultPriority(tidy, "ok"), 2);
+    assert.equal(resultPriority(tidy, "attention"), 2);
+    assert.equal(resultPriority(tidy, "failed"), 4);
+    assert.equal(resultPriority(project, "attention"), 4);
+  });
 });

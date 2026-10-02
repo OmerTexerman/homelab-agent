@@ -1,7 +1,8 @@
 /**
- * HTTP routes for scheduled checks and notification settings. Human clients
- * only: runtime tokens get 403, so an agent can't schedule work for itself or
- * redirect notifications (it reports results through `homelab_check_report`).
+ * HTTP routes for scheduled checks, the scheduled knowledge tidy, project
+ * onboarding, and notification settings. Human clients only: runtime tokens
+ * get 403, so an agent can't schedule or start work for itself or redirect
+ * notifications (it reports results through `homelab_check_report`).
  *
  * | Route                                          | Scope                   |
  * | ---------------------------------------------- | ----------------------- |
@@ -13,6 +14,11 @@
  * | `POST /api/homelab/checks/:checkId/run`        | orchestration operate   |
  * | `POST /api/homelab/checks/:checkId/acknowledge`| orchestration operate   |
  * | `GET  /api/homelab/checks/:checkId/runs`       | orchestration read      |
+ * | `GET  /api/homelab/curator/tidy`               | `homelab:curate`        |
+ * | `POST /api/homelab/curator/tidy`               | `homelab:curate`        |
+ * | `GET  /api/homelab/projects/:projectId/description` | orchestration read |
+ * | `POST /api/homelab/projects/:projectId/description` | orchestration operate |
+ * | `POST /api/homelab/projects/:projectId/survey` | orchestration operate   |
  * | `GET  /api/homelab/notifications/settings`     | orchestration read      |
  * | `POST /api/homelab/notifications/settings`     | `homelab:secrets-admin` |
  * | `POST /api/homelab/notifications/test`         | `homelab:secrets-admin` |
@@ -20,6 +26,8 @@
  * @module automationHttp
  */
 import {
+  type CuratorTidyResult,
+  CuratorTidyUpdateInput,
   HomelabNotificationSettingsUpdateInput,
   type HomelabNotificationSettings,
   type HomelabNotificationTestResult,
@@ -29,7 +37,11 @@ import {
   type ProjectCheckRunNowResult,
   type ProjectCheckRunsResult,
   ProjectCheckUpdateInput,
+  type ProjectDescriptionResult,
+  ProjectDescriptionUpdateInput,
   ProjectId,
+  ProjectSurveyInput,
+  type ProjectSurveyResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -42,6 +54,7 @@ import {
   RUNTIME_TOKEN_SUBJECT_PREFIX,
 } from "./HomelabCallerOperations.ts";
 import {
+  authenticateHomelabCurate,
   authenticateHomelabOperate,
   authenticateHomelabRead,
   authenticateHomelabSecretsAdmin,
@@ -50,6 +63,7 @@ import {
 } from "./http.ts";
 import { HomelabChecks, type HomelabChecksError } from "./Services/HomelabChecks.ts";
 import { HomelabNotifier, type HomelabNotifierError } from "./Services/HomelabNotifier.ts";
+import { HomelabOnboarding, type HomelabOnboardingError } from "./Services/HomelabOnboarding.ts";
 
 const humanOnly = <E, R>(authenticate: Effect.Effect<AuthenticatedSession, E, R>) =>
   Effect.flatMap(authenticate, (session) =>
@@ -63,6 +77,7 @@ const humanOnly = <E, R>(authenticate: Effect.Effect<AuthenticatedSession, E, R>
 const readSession = humanOnly(authenticateHomelabRead);
 const operateSession = humanOnly(authenticateHomelabOperate);
 const adminSession = humanOnly(authenticateHomelabSecretsAdmin);
+const curateSession = humanOnly(authenticateHomelabCurate);
 
 const CHECK_ERROR_STATUS: Record<HomelabChecksError["reason"], number> = {
   "not-found": 404,
@@ -74,13 +89,21 @@ const CHECK_ERROR_STATUS: Record<HomelabChecksError["reason"], number> = {
 const withErrors = <R>(
   effect: Effect.Effect<
     HttpServerResponse.HttpServerResponse,
-    HomelabHttpError | HomelabChecksError | HomelabNotifierError,
+    HomelabHttpError | HomelabChecksError | HomelabNotifierError | HomelabOnboardingError,
     R
   >,
 ) =>
   effect.pipe(
     Effect.catchTags({
       HomelabChecksError: (error) =>
+        respondToHomelabHttpError(
+          new HomelabHttpError({
+            message: error.message,
+            status: CHECK_ERROR_STATUS[error.reason],
+            cause: error.cause,
+          }),
+        ),
+      HomelabOnboardingError: (error) =>
         respondToHomelabHttpError(
           new HomelabHttpError({
             message: error.message,
@@ -235,6 +258,81 @@ export const checkRunsRouteLayer = HttpRouter.add(
   ),
 );
 
+export const curatorTidyRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/curator/tidy",
+  withErrors(
+    Effect.gen(function* () {
+      yield* curateSession;
+      const result = yield* (yield* HomelabChecks).getCuratorTidy();
+      return json(result satisfies CuratorTidyResult);
+    }),
+  ),
+);
+
+export const curatorTidyUpdateRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/curator/tidy",
+  withErrors(
+    Effect.gen(function* () {
+      yield* curateSession;
+      const input = yield* HttpServerRequest.schemaBodyJson(CuratorTidyUpdateInput).pipe(
+        Effect.mapError(invalidBody("knowledge tidy")),
+      );
+      const result = yield* (yield* HomelabChecks).setCuratorTidy(input);
+      return json(result satisfies CuratorTidyResult);
+    }),
+  ),
+);
+
+export const projectDescriptionRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/homelab/projects/:projectId/description",
+  withErrors(
+    Effect.gen(function* () {
+      yield* readSession;
+      const projectId = ProjectId.make(yield* pathParam("projectId"));
+      const description = yield* (yield* HomelabOnboarding).getDescription(projectId);
+      return json({ description } satisfies ProjectDescriptionResult);
+    }),
+  ),
+);
+
+export const projectDescriptionUpdateRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/projects/:projectId/description",
+  withErrors(
+    Effect.gen(function* () {
+      yield* operateSession;
+      const projectId = ProjectId.make(yield* pathParam("projectId"));
+      const input = yield* HttpServerRequest.schemaBodyJson(ProjectDescriptionUpdateInput).pipe(
+        Effect.mapError(invalidBody("project description")),
+      );
+      const description = yield* (yield* HomelabOnboarding).setDescription(
+        projectId,
+        input.description,
+      );
+      return json({ description } satisfies ProjectDescriptionResult);
+    }),
+  ),
+);
+
+export const projectSurveyRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/homelab/projects/:projectId/survey",
+  withErrors(
+    Effect.gen(function* () {
+      yield* operateSession;
+      const projectId = ProjectId.make(yield* pathParam("projectId"));
+      const input = yield* HttpServerRequest.schemaBodyJson(ProjectSurveyInput).pipe(
+        Effect.mapError(invalidBody("survey")),
+      );
+      const result = yield* (yield* HomelabOnboarding).startSurvey(projectId, input);
+      return json(result satisfies ProjectSurveyResult, 202);
+    }),
+  ),
+);
+
 export const notificationSettingsRouteLayer = HttpRouter.add(
   "GET",
   "/api/homelab/notifications/settings",
@@ -274,7 +372,7 @@ export const notificationTestRouteLayer = HttpRouter.add(
   ),
 );
 
-/** Every scheduled-check and notification route. */
+/** Every scheduled-check, knowledge-tidy, onboarding, and notification route. */
 export const homelabAutomationRoutesLayer = Layer.mergeAll(
   checksListRouteLayer,
   projectChecksListRouteLayer,
@@ -284,6 +382,11 @@ export const homelabAutomationRoutesLayer = Layer.mergeAll(
   checkRunRouteLayer,
   checkAcknowledgeRouteLayer,
   checkRunsRouteLayer,
+  curatorTidyRouteLayer,
+  curatorTidyUpdateRouteLayer,
+  projectDescriptionRouteLayer,
+  projectDescriptionUpdateRouteLayer,
+  projectSurveyRouteLayer,
   notificationSettingsRouteLayer,
   notificationSettingsUpdateRouteLayer,
   notificationTestRouteLayer,

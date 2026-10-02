@@ -6,6 +6,7 @@ export * from "./homelabCurator.ts";
 export * from "./homelabEgress.ts";
 export * from "./homelabHttp.ts";
 export * from "./homelabNotifications.ts";
+export * from "./homelabOnboarding.ts";
 export * from "./homelabPasskeys.ts";
 export * from "./homelabSecrets.ts";
 export * from "./homelabSkills.ts";
