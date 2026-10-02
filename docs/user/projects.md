@@ -5,6 +5,29 @@ A project is a long-lived piece of your homelab work, such as "media server" or
 memory, the secrets scoped to it, and the tools its agents installed. Threads are
 conversations inside a project.
 
+## Creating a project
+
+**New project** (in the sidebar header or the command palette) asks for a name and,
+optionally, **What does this project cover?**: the hosts and services it is about,
+such as "Jellyfin, Sonarr, Radarr on the media VM 192.168.1.40; NAS at nas.lan".
+
+With a description, **Have an agent survey it now** is on (you can turn it off, or
+turn it on without a description). Creating the project then opens a thread named
+**Survey: <project>** in which an agent, working from inside the project's runtime:
+
+- checks what it can reach of what you described: addresses, ports, running
+  services and their versions, and the configs and logs it can read,
+- asks you when it lacks access (a password, an SSH key) instead of guessing, and
+  requests credentials as [secrets](./secrets.md),
+- changes nothing,
+- records what it learns in the project's memory and the shared knowledge graph,
+  so later threads start from it,
+- ends with a short summary of what it found and what it couldn't reach.
+
+The survey runs on the project's default model, like any new thread. It keeps
+going if you close the browser. Without the survey, the project opens on an empty
+thread as usual. The description is saved with the project either way.
+
 ## The project page
 
 Every project has a page. Open it by selecting the project on [Home](./home.md),
@@ -19,6 +42,10 @@ The page shows, from top to bottom:
 - **The Project Runtime panel**, the same one a thread shows: queued work, rebuild
   notices, snapshots, and **Wake** or **Sleep**, **Reset**, **Cleanup**, and
   **Snapshot**. Reset and snapshots ask you to confirm first.
+- **Onboarding**, while the project has no memory and no checks: what you said the
+  project covers, **Survey this project** (starts the survey described above, from
+  that description), and **Add a check** (opens the check editor with the **Disk &
+  backups** template filled in). It goes away once the project has memory or a check.
 - **A start box.** Type what you want done and press `Enter` (or **Start**). The new
   thread opens in this project with your text sent as its first message. You can
   pick another project next to **in**.

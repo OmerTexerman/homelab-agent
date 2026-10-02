@@ -26,14 +26,17 @@ upstream t3code documentation tree.
 - [user/home.md](./user/home.md)
   The home page: what needs you, running work, projects, and starting a thread.
 - [user/projects.md](./user/projects.md)
-  A project's page: its runtime and controls, threads, memory, secrets, tools,
-  and egress activity.
+  Creating a project and its survey, and a project's page: its runtime and
+  controls, threads, memory, secrets, tools, and egress activity.
 - [user/checks.md](./user/checks.md)
   Scheduled checks: an agent re-investigating a project on a schedule.
+- [user/memory-and-knowledge.md](./user/memory-and-knowledge.md)
+  The knowledge curator and the weekly knowledge tidy.
 - [user/notifications.md](./user/notifications.md)
   Push notifications through ntfy when an agent needs you.
 - [internals/scheduled-checks.md](./internals/scheduled-checks.md)
-  The check scheduler, missed-run policy, the report tool, and the notifier.
+  The check scheduler, missed-run policy, the report tool, the notifier, the
+  knowledge tidy, and project surveys.
 - [user/chat-export.md](./user/chat-export.md)
   Exporting a thread as a Markdown transcript or JSON.
 - [user/project-sidebar.md](./user/project-sidebar.md)
